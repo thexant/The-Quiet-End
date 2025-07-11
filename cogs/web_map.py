@@ -89,6 +89,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         display_url = f"http://[SERVER_IP]:{self.port}"
         url_note = f"Connect to: {display_url}\n*Use `/webmap_set_ip <your_external_ip_or_domain>` to set the correct address*"
         return display_url, url_note
+        
     def _create_web_files(self):
         """Create the HTML template and static files"""
         # Create the main HTML template
@@ -1373,8 +1374,8 @@ class WebMapCog(commands.Cog, name="WebMap"):
         });'''
         
         with open("web/static/js/map.js", "w", encoding='utf-8') as f:
-            f.write(js_content)
-    
+            f.write(js_content)        
+        
     def _setup_fastapi(self):
         """Setup FastAPI application"""
         if not FASTAPI_AVAILABLE:
@@ -1980,7 +1981,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    async def _calculate_route(self, from_id: int, to_id: int) -> dict:
+async def _calculate_route(self, from_id: int, to_id: int) -> dict:
         """Calculate the shortest route between two locations using Dijkstra's algorithm"""
         
         # Get all active corridors
@@ -2067,6 +2068,6 @@ class WebMapCog(commands.Cog, name="WebMap"):
             "total_time": total_time,
             "total_fuel": total_fuel,
             "distance": len(path) - 1
-        }        
+        }
 async def setup(bot):
     await bot.add_cog(WebMapCog(bot))
