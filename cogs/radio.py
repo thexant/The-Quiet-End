@@ -58,40 +58,28 @@ class RadioCog(commands.Cog):
 
         # Handle corridor radio behavior
         if location_data['type'] == 'transit':
-            # Check if corridor is gated or ungated
-            corridor_name = location_data['corridor_name']
-            
-            if "Ungated" in corridor_name:
-                # Ungated corridors block radio transmission
-                await interaction.response.send_message(
-                    "📡 **Radio transmission failed**\n\nYour radio signal cannot escape the ungated corridor. The electromagnetic interference from unshielded space-time distortions blocks all communications.",
-                    ephemeral=True
-                )
-                return
-            else:
-                # Gated corridors relay from both gates
-                await self._handle_gated_corridor_radio(interaction, location_data, char_name, callsign, message)
-                return
+            await self._handle_transit_radio(interaction, location_data, char_name, callsign, message)
+            return
 
         # If we get here, they're at a normal location (including ships docked at locations)
-        current_location = location_data['location_id']
+        current_location_id = location_data['location_id'] # Use a different variable name to avoid confusion with the initial 'current_location' from char_data
         
         # Get sender's location and coordinates (use ship's physical location if applicable)
-        sender_location = self.db.execute_query(
+        sender_location_info = self.db.execute_query(
             "SELECT name, x_coord, y_coord, system_name FROM locations WHERE location_id = ?",
-            (current_location,),
+            (current_location_id,),
             fetch='one'
         )
         
-        if not sender_location:
+        if not sender_location_info:
             await interaction.response.send_message("Unable to determine your location for radio transmission.", ephemeral=True)
             return
         
-        sender_loc_name, sender_x, sender_y, sender_system = sender_location
+        sender_loc_name, sender_x, sender_y, sender_system = sender_location_info
         
         # Find all players who can receive this transmission
         recipients = await self._calculate_radio_propagation(
-            sender_x, sender_y, sender_system, message, interaction.guild.id
+            sender_x, sender_y, sender_system, message, interaction.guild.id, sender_corridor_type="normal"
         )
         
         if not recipients:
@@ -121,9 +109,12 @@ class RadioCog(commands.Cog):
             f"📡 Radio transmission sent!",
             ephemeral=True
         )
-    async def _handle_gated_corridor_radio(self, interaction: discord.Interaction, location_data: dict, 
+    
+    # Replace the _handle_gated_corridor_radio method with this new _handle_transit_radio method.
+    # It now correctly handles both gated and ungated transit based on corridor type.
+    async def _handle_transit_radio(self, interaction: discord.Interaction, location_data: dict, 
                                          char_name: str, callsign: str, message: str):
-        """Handle radio transmission from within a gated corridor"""
+        """Handle radio transmission from within any corridor (gated or ungated)"""
         
         corridor_name = location_data['corridor_name']
         origin_name = location_data['origin_name']
@@ -131,218 +122,90 @@ class RadioCog(commands.Cog):
         origin_id = location_data['origin_id']
         dest_id = location_data['dest_id']
         
-        # Get gate coordinates for both ends
-        origin_coords = self.db.execute_query(
+        # Determine if it's an ungated corridor (assume 'Ungated' in name for simplicity)
+        is_ungated = "Ungated" in corridor_name
+        corridor_display_type = "Ungated Transit" if is_ungated else "Gated Transit"
+        corridor_propagation_type = "ungated" if is_ungated else "gated"
+
+        # Get location info and coordinates for both ends of the corridor
+        origin_loc_info = self.db.execute_query(
             "SELECT x_coord, y_coord, system_name FROM locations WHERE location_id = ?",
             (origin_id,), fetch='one'
         )
-        dest_coords = self.db.execute_query(
+        dest_loc_info = self.db.execute_query(
             "SELECT x_coord, y_coord, system_name FROM locations WHERE location_id = ?",
             (dest_id,), fetch='one'
         )
         
-        if not origin_coords or not dest_coords:
-            await interaction.response.send_message("Unable to establish relay connection.", ephemeral=True)
+        if not origin_loc_info or not dest_loc_info:
+            await interaction.response.send_message("Unable to establish relay connection from corridor ends.", ephemeral=True)
             return
         
-        origin_x, origin_y, origin_system = origin_coords
-        dest_x, dest_y, dest_system = dest_coords
+        origin_x, origin_y, origin_system = origin_loc_info
+        dest_x, dest_y, dest_system = dest_loc_info
         
-        # Calculate propagation from both gates
+        # Calculate propagation from both ends of the corridor, applying specific corridor degradation
         recipients_from_origin = await self._calculate_radio_propagation(
-            origin_x, origin_y, origin_system, message, interaction.guild.id
+            origin_x, origin_y, origin_system, message, interaction.guild.id, sender_corridor_type=corridor_propagation_type
         )
         recipients_from_dest = await self._calculate_radio_propagation(
-            dest_x, dest_y, dest_system, message, interaction.guild.id
+            dest_x, dest_y, dest_system, message, interaction.guild.id, sender_corridor_type=corridor_propagation_type
         )
         
-        # Combine and deduplicate recipients
+        # Combine and deduplicate recipients, prioritizing stronger signals
         all_recipients = {}
+        
+        # Process recipients from origin side
         for recipient in recipients_from_origin:
-            all_recipients[recipient['user_id']] = recipient
+            user_id_rec = recipient['user_id']
             if 'relay_path' not in recipient:
                 recipient['relay_path'] = []
-            recipient['relay_path'].append(f"Gate: {origin_name}")
+            recipient['relay_path'].append(f"Relay via: {origin_name} (Origin Gate)")
+            all_recipients[user_id_rec] = recipient
         
+        # Process recipients from destination side, taking the stronger signal
         for recipient in recipients_from_dest:
-            user_id = recipient['user_id']
-            if user_id in all_recipients:
-                # User can receive from both gates - use the stronger signal
-                existing = all_recipients[user_id]
+            user_id_rec = recipient['user_id']
+            if user_id_rec in all_recipients:
+                existing = all_recipients[user_id_rec]
                 if recipient['signal_strength'] > existing['signal_strength']:
-                    recipient['relay_path'] = [f"Gate: {dest_name}"]
-                    all_recipients[user_id] = recipient
+                    recipient['relay_path'] = [f"Relay via: {dest_name} (Destination Gate)"]
+                    all_recipients[user_id_rec] = recipient
                 else:
-                    # Keep existing but note dual relay
-                    existing['relay_path'].append(f"Gate: {dest_name}")
+                    # If existing is stronger, just add the relay path
+                    existing['relay_path'].append(f"Relay via: {dest_name} (Destination Gate)")
             else:
                 if 'relay_path' not in recipient:
                     recipient['relay_path'] = []
-                recipient['relay_path'].append(f"Gate: {dest_name}")
-                all_recipients[user_id] = recipient
+                recipient['relay_path'].append(f"Relay via: {dest_name} (Destination Gate)")
+                all_recipients[user_id_rec] = recipient
         
         recipients = list(all_recipients.values())
         
         if not recipients:
             await interaction.response.send_message(
-                f"📡 **Signal relayed through corridor gates**\n\nTransmission relayed from **{origin_name}** and **{dest_name}** gates, but no players are in range to receive it.",
+                f"📡 **Signal relayed through corridor {corridor_display_type}**\n\nTransmission attempted from **{origin_name}** and **{dest_name}** ends, but no players are in range to receive it.",
                 ephemeral=True
             )
             return
         
-        # Group recipients by their current location and send to location channels
+        # Broadcast to relevant location channels
         await self._broadcast_to_location_channels(
             interaction.guild, char_name, callsign, f"Corridor Relay ({corridor_name})", 
-            f"Gated Transit", message, recipients
+            f"Corridor {corridor_display_type}", message, recipients
         )
         
-        # Special confirmation message for gated corridor transmission
-        gate_info = f"{origin_name}"
-        if origin_name != dest_name:
-            gate_info += f" and {dest_name}"
-        
+        # Confirmation message for the sender
         await interaction.response.send_message(
-            f"📡 **Transmission relayed through corridor gates**\n\nYour message has been broadcast from the **{gate_info}** gate(s). Signal reached {len(recipients)} recipient(s) across {len(set(r['location'] for r in recipients))} location(s).",
+            f"📡 **Transmission relayed through corridor {corridor_display_type}**\n\nYour message has been broadcast from the **{origin_name}** and **{dest_name}** corridor ends. Signal reached {len(recipients)} recipient(s) across {len(set(r['location_id'] for r in recipients))} location(s).",
             ephemeral=True
         )
-    @radio_group.command(name="repeater", description="Deploy a portable radio repeater at your location")
-    async def deploy_repeater(self, interaction: discord.Interaction):
-        # Check if user has a repeater in inventory
-        repeater_item = self.db.execute_query(
-            "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = 'Portable Radio Repeater'",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not repeater_item or repeater_item[1] <= 0:
-            await interaction.response.send_message("You don't have a Portable Radio Repeater to deploy!", ephemeral=True)
-            return
-        
-        # Get character location
-        char_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not char_location or not char_location[0]:
-            await interaction.response.send_message("You cannot deploy a repeater while stranded in space!", ephemeral=True)
-            return
-        
-        location_id = char_location[0]
-        
-        # Check if there's already a repeater at this location
-        existing_repeater = self.db.execute_query(
-            "SELECT repeater_id FROM repeaters WHERE location_id = ? AND is_active = 1",
-            (location_id,),
-            fetch='one'
-        )
-        
-        if existing_repeater:
-            await interaction.response.send_message("There is already an active repeater at this location!", ephemeral=True)
-            return
-        
-        # Deploy the repeater
-        self.db.execute_query(
-            '''INSERT INTO repeaters (location_id, owner_id, repeater_type, receive_range, transmit_range, is_active)
-               VALUES (?, ?, 'portable', 10, 8, 1)''',
-            (location_id, interaction.user.id)
-        )
-        
-        # Remove repeater from inventory
-        if repeater_item[1] == 1:
-            self.db.execute_query(
-                "DELETE FROM inventory WHERE item_id = ?",
-                (repeater_item[0],)
-            )
-        else:
-            self.db.execute_query(
-                "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = ?",
-                (repeater_item[0],)
-            )
-        
-        location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )[0]
-        
-        embed = discord.Embed(
-            title="📡 Repeater Deployed",
-            description=f"Successfully deployed portable radio repeater at **{location_name}**",
-            color=0x00ff00
-        )
-        embed.add_field(name="Receive Range", value="10 systems", inline=True)
-        embed.add_field(name="Transmit Range", value="8 systems", inline=True)
-        embed.add_field(name="Status", value="🟢 Active", inline=True)
-        embed.add_field(
-            name="📶 Effect",
-            value="This repeater will extend radio coverage for all players in the area!",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    
-    @radio_group.command(name="repeaters", description="View active repeaters in the galaxy")
-    async def list_repeaters(self, interaction: discord.Interaction):
-        repeaters = self.db.execute_query(
-            '''SELECT r.repeater_id, r.repeater_type, r.receive_range, r.transmit_range,
-                      l.name as location_name, l.system_name, c.name as owner_name
-               FROM repeaters r
-               JOIN locations l ON r.location_id = l.location_id
-               LEFT JOIN characters c ON r.owner_id = c.user_id
-               WHERE r.is_active = 1
-               ORDER BY r.repeater_type DESC, l.name''',
-            fetch='all'
-        )
-        
-        if not repeaters:
-            await interaction.response.send_message("No active repeaters found in the galaxy.", ephemeral=True)
-            return
-        
-        embed = discord.Embed(
-            title="📡 Active Radio Repeaters",
-            description="Current radio infrastructure across the galaxy",
-            color=0x4169E1
-        )
-        
-        # Group by type
-        built_in = []
-        portable = []
-        
-        for repeater in repeaters:
-            rep_id, rep_type, recv_range, trans_range, loc_name, system, owner = repeater
-            
-            if rep_type == 'built_in':
-                built_in.append(f"📡 **{loc_name}** ({system}) - R{recv_range}/T{trans_range}")
-            else:
-                owner_text = f" (Owned by {owner})" if owner else ""
-                portable.append(f"📻 **{loc_name}** ({system}) - R{recv_range}/T{trans_range}{owner_text}")
-        
-        if built_in:
-            embed.add_field(
-                name="🏢 Built-in Infrastructure",
-                value="\n".join(built_in[:10]),
-                inline=False
-            )
-        
-        if portable:
-            embed.add_field(
-                name="📻 Portable Repeaters",
-                value="\n".join(portable[:10]),
-                inline=False
-            )
-        
-        embed.add_field(
-            name="📶 Coverage Legend",
-            value="R = Receive Range | T = Transmit Range (in systems)",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    
+
+    # Modify _calculate_radio_propagation to accept the new corridor_type.
+    # Find the existing _calculate_radio_propagation method and modify its signature and content.
     async def _calculate_radio_propagation(self, sender_x: float, sender_y: float, 
-                                         sender_system: str, message: str, guild_id: int) -> List[Dict]:
+                                         sender_system: str, message: str, guild_id: int, 
+                                         sender_corridor_type: str = "normal") -> List[Dict]: # Added sender_corridor_type
         """Calculate radio signal propagation and recipients"""
         
         # Get all players and their locations
@@ -372,9 +235,9 @@ class RadioCog(commands.Cog):
             distance = math.sqrt((x - sender_x) ** 2 + (y - sender_y) ** 2)
             system_distance = int(distance / 10)  # Convert to "systems" (rough approximation)
             
-            if system_distance <= 10:  # Within max range
-                # Apply message degradation based on distance
-                degraded_message = self._degrade_message(message, system_distance)
+            if system_distance <= 10:  # Within max range (10 systems default for direct)
+                # Apply message degradation based on distance AND sender's corridor type
+                degraded_message = self._degrade_message(message, system_distance, sender_corridor_type) # Passed sender_corridor_type
                 
                 recipients.append({
                     'user_id': user_id,
@@ -389,13 +252,16 @@ class RadioCog(commands.Cog):
                     'relay_path': []
                 })
         
-        # Now check for repeaters and extended coverage
-        recipients = await self._extend_via_repeaters(sender_x, sender_y, message, recipients)
-        
+        # Now check for repeaters and extended coverage (pass sender_corridor_type down)
+        recipients = await self._extend_via_repeaters(sender_x, sender_y, message, recipients, sender_corridor_type) # Passed sender_corridor_type
+
         return recipients
     
+    # Modify _extend_via_repeaters to accept corridor_type.
+    # Find the existing _extend_via_repeaters method and modify its signature and content.
     async def _extend_via_repeaters(self, sender_x: float, sender_y: float, 
-                                  original_message: str, direct_recipients: List[Dict]) -> List[Dict]:
+                                  original_message: str, direct_recipients: List[Dict],
+                                  sender_corridor_type: str = "normal") -> List[Dict]: # Added sender_corridor_type
         """Extend radio coverage via repeaters"""
         
         # Get all active repeaters
@@ -412,102 +278,140 @@ class RadioCog(commands.Cog):
             return direct_recipients
         
         # Track all signal sources (original + repeaters that receive signal)
-        signal_sources = [{'x': sender_x, 'y': sender_y, 'message': original_message, 'distance': 0, 'name': 'Origin'}]
+        # Note: Original sender is now an implicit source from _calculate_radio_propagation's initial call
+        # Repeaters become "sources" if they can receive a signal from the original sender or other repeaters.
         
-        # Find repeaters that can receive the original signal
-        for repeater in repeaters:
-            rep_id, recv_range, trans_range, rep_x, rep_y, rep_name, rep_system = repeater
+        # For simplicity, let's treat the initial sender as a "source" and then repeaters that pick up that signal.
+        # This is a bit of a BFS-like approach for signal spread.
+        
+        # We need a clear set of unique recipients with their best signal
+        enhanced_recipients = {rec['user_id']: rec for rec in direct_recipients} # Start with direct recipients
+
+        # Create a queue of signal sources that need to propagate
+        # Each source is (x, y, message_at_source, distance_from_original_sender, transmission_range, source_name)
+        # The message_at_source already has degradation up to this point.
+        propagation_queue = []
+        
+        # Add original sender location as the initial propagation source
+        # This assumes the original message comes out from the sender's current location effectively.
+        propagation_queue.append({
+            'x': sender_x, 
+            'y': sender_y, 
+            'message': original_message, # This is the original, undegraded message
+            'total_degradation_distance': 0, # Total "distance" of degradation applied so far
+            'range': 10, # Default range for direct transmission
+            'name': 'Origin',
+            'sender_corridor_type': sender_corridor_type # Propagate sender's original corridor type
+        })
+
+        processed_sources = set() # To prevent infinite loops if repeaters form a loop
+
+        while propagation_queue:
+            current_source = propagation_queue.pop(0)
+            source_key = (current_source['x'], current_source['y'], current_source['name'])
             
-            # Check if repeater is in range of original signal
-            distance_to_repeater = math.sqrt((rep_x - sender_x) ** 2 + (rep_y - sender_y) ** 2)
-            system_distance = int(distance_to_repeater / 10)
-            
-            if system_distance <= recv_range:
-                # Repeater receives signal - add it as a new source
-                degraded_at_repeater = self._degrade_message(original_message, system_distance)
-                signal_sources.append({
-                    'x': rep_x, 
-                    'y': rep_y, 
-                    'message': degraded_at_repeater,
-                    'distance': system_distance,
-                    'range': trans_range,
-                    'name': f"Repeater @ {rep_name}"
-                })
-        
-        # Now recalculate coverage with all signal sources
-        enhanced_recipients = {}
-        
-        # Get all potential recipients again
-        all_players = self.db.execute_query(
-            '''SELECT c.user_id, c.name, c.callsign, l.location_id, l.name as loc_name,
-                      l.x_coord, l.y_coord, l.system_name
-               FROM characters c
-               JOIN locations l ON c.current_location = l.location_id
-               WHERE c.current_location IS NOT NULL''',
-            fetch='all'
-        )
-        
-        for player in all_players:
-            user_id, char_name, callsign, loc_id, loc_name, x, y, system = player
-            
-            # Skip sender
-            if x == sender_x and y == sender_y:
+            if source_key in processed_sources:
                 continue
-            
-            best_signal = None
-            
-            # Check signal from all sources
-            for source in signal_sources:
-                distance = math.sqrt((x - source['x']) ** 2 + (y - source['y']) ** 2)
-                system_distance = int(distance / 10)
+            processed_sources.add(source_key)
+
+            # Check for other repeaters that can pick up this signal
+            for repeater in repeaters:
+                rep_id, recv_range, trans_range, rep_x, rep_y, rep_name, rep_system = repeater
                 
-                # Check range (origin has 10, repeaters have their own range)
-                max_range = source.get('range', 10)
+                # Distance from current source to this repeater
+                distance_to_repeater = math.sqrt((rep_x - current_source['x']) ** 2 + (rep_y - current_source['y']) ** 2)
+                system_distance_to_repeater = int(distance_to_repeater / 10)
                 
-                if system_distance <= max_range:
-                    # Calculate final message degradation
-                    total_degradation = source['distance'] + system_distance
-                    final_message = self._degrade_message(original_message, total_degradation)
-                    signal_strength = max(0, 100 - (total_degradation * 10))
+                if system_distance_to_repeater <= recv_range: # If repeater can receive
+                    # Calculate total degradation distance through this path
+                    new_total_degradation_distance = current_source['total_degradation_distance'] + system_distance_to_repeater
                     
-                    # Keep the strongest signal
-                    if not best_signal or signal_strength > best_signal['signal_strength']:
-                        relay_path = [source['name']] if source['name'] != 'Origin' else []
-                        
-                        best_signal = {
-                            'user_id': user_id,
+                    # Create new propagation source for this repeater
+                    new_source_message = self._degrade_message(
+                        original_message, new_total_degradation_distance, current_source['sender_corridor_type'] # Degrade based on total distance and original sender's corridor type
+                    )
+                    
+                    new_source = {
+                        'x': rep_x, 
+                        'y': rep_y, 
+                        'message': new_source_message,
+                        'total_degradation_distance': new_total_degradation_distance,
+                        'range': trans_range, # Repeater transmits with its own range
+                        'name': f"Repeater @ {rep_name}",
+                        'sender_corridor_type': current_source['sender_corridor_type'] # Maintain original sender's corridor type for degradation calc
+                    }
+                    propagation_queue.append(new_source)
+
+            # Check all players for reception from this source
+            for player in all_players:
+                user_id_rec, char_name, callsign, loc_id, loc_name, x, y, system = player
+                
+                # Skip original sender (already handled, or not target)
+                if x == sender_x and y == sender_y and current_source['name'] == 'Origin':
+                    continue
+
+                # Distance from this current source to the player
+                distance_to_player = math.sqrt((x - current_source['x']) ** 2 + (y - current_source['y']) ** 2)
+                system_distance_to_player = int(distance_to_player / 10)
+                
+                if system_distance_to_player <= current_source['range']: # If player is in range of this source
+                    # Total degradation path: original_sender -> ... -> current_source -> player
+                    final_total_degradation_distance = current_source['total_degradation_distance'] + system_distance_to_player
+                    
+                    final_message = self._degrade_message(
+                        original_message, final_total_degradation_distance, current_source['sender_corridor_type'] # Degrade based on total path and original sender's corridor type
+                    )
+                    signal_strength = max(0, 100 - (final_total_degradation_distance * 10)) # Adjust multiplier as needed
+                    
+                    # Construct relay path for display
+                    relay_path_display = [current_source['name']] if current_source['name'] != 'Origin' else []
+                    
+                    # Update if this is a better (stronger) signal for this player
+                    if user_id_rec not in enhanced_recipients or signal_strength > enhanced_recipients[user_id_rec]['signal_strength']:
+                        enhanced_recipients[user_id_rec] = {
+                            'user_id': user_id_rec,
                             'char_name': char_name,
                             'callsign': callsign,
                             'location_id': loc_id,
                             'location': loc_name,
                             'system': system,
-                            'distance': system_distance,
+                            'distance': final_total_degradation_distance, # This is the total distance affecting degradation
                             'message': final_message,
                             'signal_strength': signal_strength,
-                            'relay_path': relay_path,
-                            'source': source['name']
+                            'relay_path': relay_path_display,
+                            'source': current_source['name'] # Debugging what source provided the signal
                         }
-            
-            if best_signal:
-                enhanced_recipients[user_id] = best_signal
         
         return list(enhanced_recipients.values())
     
-    def _degrade_message(self, message: str, system_distance: int) -> str:
-        """Apply signal degradation to message based on distance"""
+    # Modify _degrade_message to accept sender_corridor_type.
+    # Find the existing _degrade_message method and modify its signature and content.
+    def _degrade_message(self, message: str, system_distance: int, sender_corridor_type: str = "normal") -> str: # Added sender_corridor_type
+        """Apply signal degradation to message based on distance and corridor type"""
         
-        if system_distance <= 5:
-            return message  # Clear transmission
+        # Base degradation starts after 5 systems
+        degradation_start_threshold = 5
         
+        # Apply additional fixed degradation for ungated corridors
+        additional_ungated_degradation = 0
+        if sender_corridor_type == "ungated":
+            additional_ungated_degradation = 10 # Equivalent to an extra 10 systems distance in degradation
+
+        # Calculate total effective system distance for degradation
+        total_effective_distance = system_distance + additional_ungated_degradation
+
+        if total_effective_distance <= degradation_start_threshold:
+            return message  # Clear transmission or minimal degradation
+
         # Calculate degradation percentage
-        degradation_start = system_distance - 5  # Start degrading after 5 systems
-        degradation_percent = min(80, degradation_start * 15)  # 15% per system beyond 5, max 80%
+        degradation_factor_distance = total_effective_distance - degradation_start_threshold
+        degradation_percent = min(80, degradation_factor_distance * 15) # 15% per system beyond threshold, max 80%
         
         if degradation_percent <= 0:
             return message
         
         # Apply character-level corruption
-        corruption_chars = ['_', '-', '~', '#', '*', ' ']
+        corruption_chars = ['_', '-', '~', '#', '*', ' ', '%', '$', '@'] # Added more corruption chars
         result = list(message)
         
         for i, char in enumerate(result):
@@ -516,7 +420,8 @@ class RadioCog(commands.Cog):
                     result[i] = random.choice(corruption_chars)
         
         return ''.join(result)
-    
+
+    # Keep the _broadcast_to_location_channels method as is.
     async def _broadcast_to_location_channels(self, guild: discord.Guild, 
                                             sender_name: str, sender_callsign: str, 
                                             sender_location: str, sender_system: str,
@@ -538,6 +443,7 @@ class RadioCog(commands.Cog):
                 sender_location, sender_system, original_message, location_recipients
             )
     
+    # Keep the _send_location_radio_message method as is.
     async def _send_location_radio_message(self, guild: discord.Guild, location_id: int,
                                          sender_name: str, sender_callsign: str,
                                          sender_location: str, sender_system: str, 
@@ -546,7 +452,7 @@ class RadioCog(commands.Cog):
         
         # Get or create the location channel
         from utils.channel_manager import ChannelManager
-        channel_manager = ChannelManager(self.bot)
+        channel_manager = self.bot.get_cog('ChannelManager') or ChannelManager(self.bot)
         
         # We need at least one recipient to be at this location to get/create the channel
         if not recipients:
@@ -596,13 +502,13 @@ class RadioCog(commands.Cog):
         
         # Determine if location should be shown based on signal quality
         location_display = sender_location
-        if not clear_receivers and degraded_receivers:
-            # Only degraded reception - hide location
+        system_display = f", {sender_system}"
+
+        # If no clear receivers and only degraded, or if it's explicitly from transit where full location is ambiguous
+        if (not clear_receivers and degraded_receivers) or ("Corridor Relay" in sender_location):
             location_display = "[UNKNOWN LOCATION]"
             system_display = ""
-        else:
-            # Clear reception available - show location
-            system_display = f", {sender_system}"
+
 
         # Add transmission header
         embed.add_field(
