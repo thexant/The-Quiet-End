@@ -931,7 +931,7 @@ class EnhancedEventsCog(commands.Cog):
             
             await channel.send(embed=embed, view=view)
 
-async def _handle_scavenger_swarm(self, channel, user_id, event_data):
+    async def _handle_scavenger_swarm(self, channel, user_id, event_data):
         """Handle scavenger drone encounter"""
         embed = discord.Embed(
             title="🤖 Automated Scavenger Swarm",
