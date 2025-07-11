@@ -848,155 +848,134 @@ class CharacterCog(commands.Cog):
         
         return False
 
-    async def _execute_character_death(self, user_id: int, char_name: str, guild: discord.Guild):
-        """Execute automatic character death"""
-        
-        # Get ship info before deletion
-        ship_info = self.db.execute_query(
-            "SELECT ship_id FROM characters WHERE user_id = ?",
+    async def _execute_character_death(self, user_id: int, char_name: str, guild: discord.Guild, reason: str = "unknown"):
+        """Execute automatic character death with enhanced descriptions."""
+
+        # Get detailed character info for the obituary and death message
+        char_data = self.db.execute_query(
+            "SELECT c.current_location, c.current_ship_id, l.name as loc_name "
+            "FROM characters c "
+            "LEFT JOIN locations l ON c.current_location = l.location_id "
+            "WHERE c.user_id = ?",
             (user_id,),
             fetch='one'
         )
-        
-        # Get current location for announcement
-        location_info = self.db.execute_query(
-            "SELECT l.location_id, l.name, l.channel_id FROM characters c JOIN locations l ON c.current_location = l.location_id WHERE c.user_id = ?",
-            (user_id,),
-            fetch='one'
-        )
-        
+
+        location_id = None
+        ship_id = None
+        location_name = "Deep Space"
+        if char_data:
+            location_id, ship_id, location_name = char_data
+            if ship_id and not location_id:
+                ship_loc = self.db.execute_query(
+                    "SELECT docked_at_location FROM ships WHERE ship_id = ?",
+                    (ship_id,), fetch='one'
+                )
+                if ship_loc and ship_loc[0]:
+                    location_id = ship_loc[0]
+                    loc_name_result = self.db.execute_query(
+                        "SELECT name FROM locations WHERE location_id = ?",
+                        (location_id,), fetch='one'
+                    )
+                    if loc_name_result:
+                        location_name = loc_name_result[0]
+
+
+        # Post obituary FIRST, before deleting character data
+        news_cog = self.bot.get_cog('GalacticNewsCog')
+        if news_cog and location_id:
+            await news_cog.post_obituary_news(char_name, location_id, reason)
+
         # Delete character and associated data
         self.db.execute_query("DELETE FROM characters WHERE user_id = ?", (user_id,))
-
-        # Delete character identity (add this line) 
         self.db.execute_query("DELETE FROM character_identity WHERE user_id = ?", (user_id,))
-
-        if ship_info and ship_info[0]:
-            self.db.execute_query("DELETE FROM ships WHERE ship_id = ?", (ship_info[0],))
-        
-        # Cancel any active travel
+        if ship_id:
+             self.db.execute_query("DELETE FROM ships WHERE ship_id = ?", (ship_id,))
         self.db.execute_query(
             "UPDATE travel_sessions SET status = 'character_death' WHERE user_id = ? AND status = 'traveling'",
             (user_id,)
         )
-        
-        # Remove from any group
         self.db.execute_query("UPDATE characters SET group_id = NULL WHERE user_id = ?", (user_id,))
-        
-        # Cancel any jobs
         self.db.execute_query(
             "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL WHERE taken_by = ?",
             (user_id,)
         )
         
-        # Remove access from all location channels using channel manager
         from utils.channel_manager import ChannelManager
         channel_manager = ChannelManager(self.bot)
         
-        # Get current location for cleanup
-        current_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
-            (user_id,),
-            fetch='one'
-        )
-        
         member = guild.get_member(user_id)
-        if member and current_location and current_location[0]:
-            await channel_manager.remove_user_location_access(member, current_location[0])
-        
-        # Create death announcement
+        if member and location_id:
+            await channel_manager.remove_user_location_access(member, location_id)
+
+
+        # Create death announcement with gruesome descriptions
+        death_descriptions = [
+            f"The last transmission from **{char_name}** was a burst of static and a final, choked scream. Their vessel was later found vented to space, the crew lost to the cold vacuum.",
+            f"An emergency beacon from **{char_name}'s** ship was detected, but rescue crews arrived too late. The ship's log detailed a catastrophic life support failure. There were no survivors.",
+            f"**{char_name}**'s ship was found adrift, its hull breached by pirate munitions. The interior was a scene of violence and desperation. No one was left alive.",
+            f"A critical engine malfunction caused **{char_name}**'s vessel to explode during transit. Debris was scattered across several kilometers of space. The crew was lost instantly.",
+            f"After a hull breach during a firefight, **{char_name}** was exposed to hard vacuum. The body was later recovered, a frozen monument to the brutality of space.",
+        ]
+        obituary_text = random.choice(death_descriptions)
+
         embed = discord.Embed(
             title="💀 CHARACTER DEATH",
-            description=f"**{char_name}** has died and been lost to the void of space.",
+            description=obituary_text,
             color=0x000000
         )
-        
+
         embed.add_field(
             name="⚰️ Final Rest",
-            value=f"{char_name}'s health reached zero. Their story ends here.",
+            value=f"**{char_name}**'s journey has come to a violent end. Their story is now a cautionary tale whispered in station bars across the sector.",
             inline=False
         )
-        
+
         embed.add_field(
             name="🔄 Starting Over",
             value="You can create a new character with `/character create` to begin a new journey.",
             inline=False
         )
-        
-        # Notify the player
-        if member:
-            try:
-                await member.send(embed=embed)
-            except:
-                pass  # Failed to DM user
-        
-        # Announce in location channel if it exists
-        if location_info and location_info[2]:
-            location_channel = guild.get_channel(location_info[2])
-            if location_channel:
-                try:
-                    death_announcement = discord.Embed(
-                        title="💀 Tragedy Strikes",
-                        description=f"**{char_name}** has died at {location_info[1]}.",
-                        color=0x8b0000
-                    )
-                    death_announcement.add_field(
-                        name="⚰️ Memorial",
-                        value="Another soul lost to the dangers of space. May they find peace in the void.",
-                        inline=False
-                    )
-                    await location_channel.send(embed=death_announcement)
-                except:
-                    pass
-        # Post obituary news
-        news_cog = self.bot.get_cog('GalacticNewsCog')
-        if news_cog and location_info and location_info[0]:
-            await news_cog.post_obituary_news(char_name, location_info[0], "circumstances under investigation")
-        print(f"💀 Character death (automatic): {char_name} (ID: {user_id}) - HP reached 0")
 
-    # Add this method to check for death after HP changes
+        # Announce in location channel if it exists
+        if location_id:
+            location_channel_id_result = self.db.execute_query("SELECT channel_id FROM locations WHERE location_id = ?", (location_id,), fetch='one')
+            if location_channel_id_result and location_channel_id_result[0]:
+                location_channel = guild.get_channel(location_channel_id_result[0])
+                if location_channel:
+                    try:
+                        death_announcement = discord.Embed(
+                            title="💀 Tragedy Strikes",
+                            description=f"A grim discovery has been made at {location_name}. **{char_name}** is dead.",
+                            color=0x8b0000
+                        )
+                        death_announcement.add_field(
+                            name="Cause of Death",
+                            value=reason.title(),
+                            inline=False
+                        )
+                        death_announcement.set_footer(text="Another soul lost to the void.")
+                        await location_channel.send(embed=death_announcement)
+                    except Exception as e:
+                        print(f"Error sending death announcement to channel: {e}")
+
+        print(f"💀 Character death (automatic): {char_name} (ID: {user_id}) - {reason}")
+
     async def update_character_hp(self, user_id: int, hp_change: int, guild: discord.Guild, reason: str = ""):
         """Update character HP and check for death"""
-        # Update HP
         self.db.execute_query(
             "UPDATE characters SET hp = MAX(0, hp + ?) WHERE user_id = ?",
             (hp_change, user_id)
         )
+        return await self.check_character_death(user_id, guild, reason)
         
-        # Check if character died
-        died = await self.check_character_death(user_id, guild)
-        
-        if not died:
-            # Get new HP for feedback
-            new_hp = self.db.execute_query(
-                "SELECT hp FROM characters WHERE user_id = ?",
-                (user_id,),
-                fetch='one'
-            )
-            
-            if new_hp and new_hp[0] <= 10 and hp_change < 0:
-                # Character is critically injured but alive
-                member = guild.get_member(user_id)
-                if member:
-                    try:
-                        warning_embed = discord.Embed(
-                            title="⚠️ CRITICAL CONDITION",
-                            description=f"Your character is critically injured! HP: {new_hp[0]}/100",
-                            color=0xff0000
-                        )
-                        warning_embed.add_field(
-                            name="⚡ Immediate Action Required",
-                            value="Seek medical treatment immediately or risk death!",
-                            inline=False
-                        )
-                        if reason:
-                            warning_embed.add_field(name="Cause", value=reason, inline=False)
-                        
-                        await member.send(embed=warning_embed)
-                    except:
-                        pass
-        
-        return died
+    async def update_ship_hull(self, user_id: int, hull_change: int, guild: discord.Guild, reason: str = ""):
+        """Update ship hull and check for death"""
+        self.db.execute_query(
+            "UPDATE ships SET hull_integrity = MAX(0, hull_integrity + ?) WHERE owner_id = ?",
+            (hull_change, user_id)
+        )
+        return await self.check_ship_death(user_id, guild, reason)    
     @character_group.command(name="login", description="Log into the game and restore your character")
     async def login_character(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(

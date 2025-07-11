@@ -288,7 +288,12 @@ class CorridorEventsCog(commands.Cog):
                 "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
                 (base_ship_damage, user_id)
             )
-            
+            # Check for character death
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog:
+                died_from_hp = await char_cog.check_character_death(user_id, channel.guild, f"died from exposure to a {event_type.replace('_', ' ')}")
+                if not died_from_hp:
+                     await char_cog.check_ship_death(user_id, channel.guild, f"ship critically damaged by a {event_type.replace('_', ' ')}")
             # Show individual consequence
             embed = discord.Embed(
                 title="💀 FAILURE TO RESPOND",
@@ -703,7 +708,12 @@ class CorridorEventView(discord.ui.View):
                 "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
                 (ship_damage, user.id)
             )
-            
+            # Check for character death
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog and (outcome.get('critical_failure', False) or not outcome['success']):
+                died_from_hp = await char_cog.check_character_death(user.id, channel.guild, f"died from a {event_type.replace('_', ' ')} after a {response_type.replace('_',' ')}")
+                if not died_from_hp:
+                    await char_cog.check_ship_death(user.id, channel.guild, f"ship destroyed by a {event_type.replace('_', ' ')} after a {response_type.replace('_',' ')}")
             embed = discord.Embed(
                 title="💥 CATASTROPHIC CONSEQUENCES",
                 description=f"{user.mention} suffers severe consequences from the critical failure!",

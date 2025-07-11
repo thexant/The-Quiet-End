@@ -308,7 +308,13 @@ class CombatCog(commands.Cog):
         else:
             target['hp'] = max(0, target['hp'] - damage)
             damage_type = "HP"
-        
+
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            if combat['combat_type'] == 'ship':
+                await char_cog.check_ship_death(target['id'], channel.guild, f"destroyed in combat by {current_npc['name']}")
+            else:
+                await char_cog.check_character_death(target['id'], channel.guild, f"killed in combat by {current_npc['name']}")
         # Send action result
         member = channel.guild.get_member(target['id'])
         target_name = member.display_name if member else target['name']
@@ -392,7 +398,14 @@ class CombatCog(commands.Cog):
         else:
             target['hp'] = max(0, target['hp'] - damage)
             damage_type = "HP"
-        
+        # Check for death
+        if target['type'] == 'player':
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog:
+                if combat['combat_type'] == 'ship':
+                    await char_cog.check_ship_death(target['id'], channel.guild, f"ship destroyed in combat by {attacker['name']}")
+                else:
+                    await char_cog.check_character_death(target['id'], channel.guild, f"killed in combat by {attacker['name']}")
         # Send result
         attacker_member = channel.guild.get_member(attacker['id'])
         if target['type'] == 'player':
