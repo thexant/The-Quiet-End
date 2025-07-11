@@ -490,114 +490,112 @@ class CharacterCog(commands.Cog):
         else:
             await interaction.response.send_message(embed=embed, ephemeral=True)
     @character_group.command(name="ship", description="View detailed ship information")
-    async def view_ship(self, interaction: discord.Interaction):
-        ship_data = self.db.execute_query(
-            '''SELECT s.*, c.name as owner_name
-               FROM ships s
-               JOIN characters c ON s.owner_id = c.user_id
-               WHERE s.owner_id = ?''',
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not ship_data:
-            await interaction.response.send_message(
-                "You don't have a ship! Create a character first.",
-                ephemeral=True
+        async def view_ship(self, interaction: discord.Interaction):
+            ship_data = self.db.execute_query(
+                '''SELECT s.*, c.name as owner_name
+                   FROM ships s
+                   JOIN characters c ON s.owner_id = c.user_id
+                   WHERE s.owner_id = ?''',
+                (interaction.user.id,),
+                fetch='one'
             )
-            return
-        
-        # Fix the unpacking to match actual columns
-        # ship_id, owner_id, name, ship_type, fuel_capacity, current_fuel, fuel_efficiency,
-        # combat_rating, hull_integrity, max_hull, cargo_capacity, cargo_used,
-        # ship_hp, max_ship_hp, created_at, owner_name
-        (ship_id,
-         owner_id,
-         name,
-         ship_type,
-         fuel_capacity,
-         current_fuel,
-         fuel_efficiency,
-         combat_rating,
-         hull_integrity,
-         max_hull,
-         cargo_capacity,
-         cargo_used,
-         ship_hp,
-         max_ship_hp,
-         created_at,
-         ship_class,
-         upgrade_slots,
-         used_upgrade_slots,
-         exterior_description,
-         interior_description,
-         channel_id,
-         owner_name
-        ) = ship_data
-        
-        embed = discord.Embed(
-            title=name,
-            description=f"Class: {ship_type}",
-            color=0x2F4F4F
-        )
-        
-        # Status indicators
-        fuel_percent = (current_fuel / fuel_capacity) * 100 if fuel_capacity > 0 else 0
-        hull_percent = (hull_integrity / max_hull) * 100 if max_hull > 0 else 0
-        hp_percent = (ship_hp / max_ship_hp) * 100 if max_ship_hp > 0 else 0
-        cargo_percent = (cargo_used / cargo_capacity) * 100 if cargo_capacity > 0 else 0
-        
-        # Fuel status
-        fuel_emoji = "🟢" if fuel_percent > 70 else "🟡" if fuel_percent > 30 else "🔴"
-        embed.add_field(
-            name="Fuel",
-            value=f"{fuel_emoji} {current_fuel}/{fuel_capacity} ({fuel_percent:.0f}%)",
-            inline=True
-        )
-        
-        # Hull status
-        hull_emoji = "🟢" if hull_percent > 70 else "🟡" if hull_percent > 30 else "🔴"
-        embed.add_field(
-            name="Hull Integrity",
-            value=f"{hull_emoji} {hull_integrity}/{max_hull} ({hull_percent:.0f}%)",
-            inline=True
-        )
-        
-        # Ship HP
-        hp_emoji = "🟢" if hp_percent > 70 else "🟡" if hp_percent > 30 else "🔴"
-        embed.add_field(
-            name="Ship Health",
-            value=f"{hp_emoji} {ship_hp}/{max_ship_hp} ({hp_percent:.0f}%)",
-            inline=True
-        )
-        
-        # Cargo
-        cargo_emoji = "🟢" if cargo_percent < 70 else "🟡" if cargo_percent < 90 else "🔴"
-        embed.add_field(
-            name="Cargo",
-            value=f"{cargo_emoji} {cargo_used}/{cargo_capacity} ({cargo_percent:.0f}% full)",
-            inline=True
-        )
-        
-        # Performance stats
-        embed.add_field(name="Fuel Efficiency", value=f"{fuel_efficiency}/10", inline=True)
-        embed.add_field(name="Combat Rating", value=f"{combat_rating}/10", inline=True)
-        
-        # Add warning if ship needs attention
-        warnings = []
-        if fuel_percent < 30:
-            warnings.append("⚠️ Low fuel")
-        if hull_percent < 50:
-            warnings.append("⚠️ Hull damage")
-        if hp_percent < 50:
-            warnings.append("⚠️ Systems damaged")
-        if cargo_percent > 90:
-            warnings.append("⚠️ Cargo hold full")
-        
-        if warnings:
-            embed.add_field(name="Alerts", value="\n".join(warnings), inline=False)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+            if not ship_data:
+                await interaction.response.send_message(
+                    "You don't have a ship! Create a character first.",
+                    ephemeral=True
+                )
+                return
+            
+            # FIX: The unpacking now includes the `docked_at_location` column to match the database schema.
+            (ship_id,
+             owner_id,
+             name,
+             ship_type,
+             fuel_capacity,
+             current_fuel,
+             fuel_efficiency,
+             combat_rating,
+             hull_integrity,
+             max_hull,
+             cargo_capacity,
+             cargo_used,
+             ship_hp,
+             max_ship_hp,
+             created_at,
+             ship_class,
+             upgrade_slots,
+             used_upgrade_slots,
+             exterior_description,
+             interior_description,
+             channel_id,
+             docked_at_location, # This was the missing column
+             owner_name
+            ) = ship_data
+            
+            embed = discord.Embed(
+                title=name,
+                description=f"Class: {ship_type}",
+                color=0x2F4F4F
+            )
+            
+            # Status indicators
+            fuel_percent = (current_fuel / fuel_capacity) * 100 if fuel_capacity > 0 else 0
+            hull_percent = (hull_integrity / max_hull) * 100 if max_hull > 0 else 0
+            hp_percent = (ship_hp / max_ship_hp) * 100 if max_ship_hp > 0 else 0
+            cargo_percent = (cargo_used / cargo_capacity) * 100 if cargo_capacity > 0 else 0
+            
+            # Fuel status
+            fuel_emoji = "🟢" if fuel_percent > 70 else "🟡" if fuel_percent > 30 else "🔴"
+            embed.add_field(
+                name="Fuel",
+                value=f"{fuel_emoji} {current_fuel}/{fuel_capacity} ({fuel_percent:.0f}%)",
+                inline=True
+            )
+            
+            # Hull status
+            hull_emoji = "🟢" if hull_percent > 70 else "🟡" if hull_percent > 30 else "🔴"
+            embed.add_field(
+                name="Hull Integrity",
+                value=f"{hull_emoji} {hull_integrity}/{max_hull} ({hull_percent:.0f}%)",
+                inline=True
+            )
+            
+            # Ship HP
+            hp_emoji = "🟢" if hp_percent > 70 else "🟡" if hp_percent > 30 else "🔴"
+            embed.add_field(
+                name="Ship Health",
+                value=f"{hp_emoji} {ship_hp}/{max_ship_hp} ({hp_percent:.0f}%)",
+                inline=True
+            )
+            
+            # Cargo
+            cargo_emoji = "🟢" if cargo_percent < 70 else "🟡" if cargo_percent < 90 else "🔴"
+            embed.add_field(
+                name="Cargo",
+                value=f"{cargo_emoji} {cargo_used}/{cargo_capacity} ({cargo_percent:.0f}% full)",
+                inline=True
+            )
+            
+            # Performance stats
+            embed.add_field(name="Fuel Efficiency", value=f"{fuel_efficiency}/10", inline=True)
+            embed.add_field(name="Combat Rating", value=f"{combat_rating}/10", inline=True)
+            
+            # Add warning if ship needs attention
+            warnings = []
+            if fuel_percent < 30:
+                warnings.append("⚠️ Low fuel")
+            if hull_percent < 50:
+                warnings.append("⚠️ Hull damage")
+            if hp_percent < 50:
+                warnings.append("⚠️ Systems damaged")
+            if cargo_percent > 90:
+                warnings.append("⚠️ Cargo hold full")
+            
+            if warnings:
+                embed.add_field(name="Alerts", value="\n".join(warnings), inline=False)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
     @character_group.command(name="search", description="Search your current location for items")
     async def search_location(self, interaction: discord.Interaction):
         # Check character exists and get location
