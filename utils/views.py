@@ -349,7 +349,7 @@ class LocationView(discord.ui.View):
             if getattr(item, 'label', None) == "Travel":
                 item.disabled = (location_status == "docked")
             # Jobs, Shop & Services only when docked
-            if getattr(item, 'label', None) in ("Jobs", "Shop", "Services"):
+            if getattr(item, 'label', None) in ("Jobs", "Shop", "Services", "NPCs"):
                 item.disabled = (location_status != "docked")
                         # Sub-Areas only when docked
             if getattr(item, 'label', None) == "Sub-Areas":
@@ -1315,9 +1315,13 @@ class PersistentLocationView(discord.ui.View):
             self.add_item(self.shop_management)
             self.add_item(self.sub_areas)
             self.add_item(self.undock_button)
+            # ADD THIS LINE:
+            self.npc_interactions.disabled = False
         else:  # in_space
             self.add_item(self.travel_button)
             self.add_item(self.dock_button)
+            # ADD THIS LINE:
+            self.npc_interactions.disabled = True
     
     async def refresh_view(self, interaction: discord.Interaction = None):
         """Refresh the view when dock status changes"""
