@@ -372,31 +372,105 @@ class TravelCog(commands.Cog):
         view = JobCancellationConfirmView(self.bot, user_id, active_jobs)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         return False  # Don't proceed yet, wait for user confirmation
-    async def _start_travel_progress_tracking(self, transit_channel, user_id, corridor_id, travel_time, start_time, end_time, dest_name):
-        """Start auto-refreshing progress tracking in transit channel"""
+
+    async def _start_travel_progress_tracking(self, transit_channel, user_or_group_id, corridor_id, travel_time, start_time, end_time, dest_name, is_group=False):
+        """Start auto-refreshing progress tracking in transit channel for solo or group travel"""
         try:
             # Send initial progress embed
             embed = self._create_progress_embed(0, travel_time, start_time, end_time, dest_name)
             progress_message = await transit_channel.send(embed=embed)
-            
+
             # Track this message for auto-updates
-            session_key = f"{user_id}_{corridor_id}"
-            self.active_status_messages[session_key] = {
-                'message': progress_message,
-                'channel': transit_channel,
-                'start_time': start_time,
-                'end_time': end_time,
-                'travel_time': travel_time,
-                'dest_name': dest_name,
-                'user_id': user_id,
-                'corridor_id': corridor_id
-            }
-            
+            if is_group:
+                session_key = f"group_{user_or_group_id}_{corridor_id}"
+                session_data = {
+                    'message': progress_message,
+                    'channel': transit_channel,
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'travel_time': travel_time,
+                    'dest_name': dest_name,
+                    'group_id': user_or_group_id,
+                    'corridor_id': corridor_id
+                }
+            else:
+                session_key = f"{user_or_group_id}_{corridor_id}"
+                session_data = {
+                    'message': progress_message,
+                    'channel': transit_channel,
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'travel_time': travel_time,
+                    'dest_name': dest_name,
+                    'user_id': user_or_group_id,
+                    'corridor_id': corridor_id
+                }
+
+            self.active_status_messages[session_key] = session_data
+
             # Start auto-refresh loop
             asyncio.create_task(self._auto_refresh_progress(session_key))
-            
+
         except Exception as e:
             print(f"❌ Failed to start progress tracking: {e}")
+
+    async def _auto_refresh_progress(self, session_key):
+        """Auto-refresh progress embed every 30 seconds"""
+        try:
+            while session_key in self.active_status_messages:
+                await asyncio.sleep(30)  # Update every 30 seconds
+                
+                if session_key not in self.active_status_messages:
+                    break
+                
+                session_data = self.active_status_messages[session_key]
+                
+                # Check if travel is still active for solo or group
+                if 'group_id' in session_data:
+                    active_session = self.db.execute_query(
+                        "SELECT status FROM travel_sessions WHERE group_id = ? AND corridor_id = ? AND status = 'traveling' LIMIT 1",
+                        (session_data['group_id'], session_data['corridor_id']),
+                        fetch='one'
+                    )
+                else:
+                    active_session = self.db.execute_query(
+                        "SELECT status FROM travel_sessions WHERE user_id = ? AND corridor_id = ? AND status = 'traveling'",
+                        (session_data['user_id'], session_data['corridor_id']),
+                        fetch='one'
+                    )
+                
+                if not active_session:
+                    # Travel completed or cancelled, stop refreshing
+                    if session_key in self.active_status_messages:
+                        del self.active_status_messages[session_key]
+                    break
+                
+                # Calculate current progress
+                now = datetime.utcnow()
+                elapsed = (now - session_data['start_time']).total_seconds()
+                progress_percent = min(100, (elapsed / session_data['travel_time']) * 100) if session_data['travel_time'] > 0 else 100
+                
+                # Update embed
+                embed = self._create_progress_embed(
+                    progress_percent, 
+                    session_data['travel_time'],
+                    session_data['start_time'],
+                    session_data['end_time'],
+                    session_data['dest_name']
+                )
+                
+                try:
+                    await session_data['message'].edit(embed=embed)
+                except:
+                    # Message deleted or channel gone, stop refreshing
+                    if session_key in self.active_status_messages:
+                        del self.active_status_messages[session_key]
+                    break
+                    
+        except Exception as e:
+            print(f"❌ Error in auto-refresh: {e}")
+            if session_key in self.active_status_messages:
+                del self.active_status_messages[session_key]
 
     async def _auto_refresh_progress(self, session_key):
         """Auto-refresh progress embed every 30 seconds"""

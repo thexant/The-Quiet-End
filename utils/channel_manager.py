@@ -944,12 +944,12 @@ class ChannelManager:
             # Add permissions for travelers
             if isinstance(user_or_group, list):
                 # Group travel
-                for user_id in user_or_group:
-                    member = guild.get_member(user_id)
-                    if member:
+                for member in user_or_group:
+                    if isinstance(member, discord.Member):
                         overwrites[member] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
                 
-                channel_name = f"transit-group-{user_or_group[0]}"
+                # Use leader's ID for channel name to be consistent
+                channel_name = f"transit-group-{user_or_group[0].id}"
             else:
                 # Solo travel
                 overwrites[user_or_group] = discord.PermissionOverwrite(read_messages=True, send_messages=True)

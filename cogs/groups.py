@@ -991,7 +991,7 @@ class GroupsCog(commands.Cog):
             embed.add_field(name="Duration", value=f"{vote_data['duration_minutes']} minutes", inline=True)
             
             await interaction.followup.send(embed=embed)
-    
+
     async def _initiate_group_travel(self, group_id, corridor_id, vote_data, interaction):
         """Initiate group travel for all members"""
         from utils.channel_manager import ChannelManager
@@ -1138,8 +1138,9 @@ class GroupsCog(commands.Cog):
         if transit_channel:
             travel_cog = self.bot.get_cog('TravelCog')
             if travel_cog:
+                # Pass group_id instead of a single user_id
                 asyncio.create_task(travel_cog._start_travel_progress_tracking(
-                    transit_channel, members[0][0], corridor_id, actual_travel_time, start_time, end_time, dest_name
+                    transit_channel, group_id, corridor_id, actual_travel_time, start_time, end_time, dest_name, is_group=True
                 ))
         
         # Schedule completion
@@ -1147,7 +1148,6 @@ class GroupsCog(commands.Cog):
             group_id, members, destination_location, dest_name, transit_channel, 
             interaction.guild, actual_travel_time
         ))
-    # Add this new method to groups.py:
 
     async def _complete_group_travel(self, group_id, members, destination_location, dest_name, transit_channel, guild, travel_time):
         """Complete group travel after delay"""
