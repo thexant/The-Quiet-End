@@ -2212,18 +2212,19 @@ class GalaxyGeneratorCog(commands.Cog):
         gate_x = location['x_coord'] + distance * math.cos(angle)
         gate_y = location['y_coord'] + distance * math.sin(angle)
         
-        # Generate gate name
-        if gate_type == 'hub':
-            base_name = f"{location['name']} Hub"
-        else:
-            base_name = f"{location['name']} Gate"
-        
+        # Generate unique gate name
+        base_name = f"{location['name']} Gate"
         name = base_name
-        counter = 1
-        while name in used_names:
-            name = f"{base_name} {counter}"
-            counter += 1
         
+        # If the base name is already taken, create a more unique one
+        if name in used_names:
+            suffix = random.choice(self.location_names)
+            name = f"{location['name']}-{suffix} Gate"
+            # Ensure the new name is also unique
+            while name in used_names:
+                suffix = random.choice(self.location_names)
+                name = f"{location['name']}-{suffix} Gate"
+
         # Gates always have maintenance crews - ensure minimum population for NPCs
         gate_population = random.randint(15, 40)  # Small operational crew
         
