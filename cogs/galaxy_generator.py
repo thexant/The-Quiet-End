@@ -564,10 +564,11 @@ class GalaxyGeneratorCog(commands.Cog):
 
         # Static description for Earth
         description = (
-            f"The cradle of humanity, Earth is the administrative and cultural capital of human space. "
-            f"Established long before the Exodus, its shimmering orbital rings and sprawling megacities stand as a testament "
-            f"to centuries of history. Earth boasts the most advanced technology, the highest standard of living, and the "
-            f"most powerful corporate and political entities in the known galaxy."
+            "Earth still exists but is a hollowed-out symbol more than a power. Centuries of overuse, industrial exploitation, "
+            "and political decay have rendered the planet nearly uninhabitable to large populations. It supports a small civilian base "
+            "and a shrinking bureaucratic core. It survives only through imports from colonies, yet its ability to govern or support "
+            "those colonies is minimal. Some colonies remain loyal out of habit or necessity; others are functionally independent. "
+            "Earth’s influence now functions more like inertia than active control."
         )
 
         # Generate random coordinates for Earth's location on the map
