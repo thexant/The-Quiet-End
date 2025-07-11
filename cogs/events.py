@@ -16,6 +16,7 @@ class EventsCog(commands.Cog):
         self.enhanced_random_events.start()
         # Start variable corridor management
         self.corridor_management_task = self.bot.loop.create_task(self._start_corridor_management_loop()) # Store the task
+        self.shift_change_monitor.start()
 
     async def _start_corridor_management_loop(self):
         """Start variable interval corridor management"""
@@ -52,6 +53,7 @@ class EventsCog(commands.Cog):
         self.job_generation.cancel()
         self.micro_events.cancel()
         self.enhanced_random_events.cancel()
+        self.shift_change_monitor.cancel()
     async def corridor_management(self):
         """Periodically shift corridors and manage gate movements - now called randomly"""
         try:
@@ -354,15 +356,33 @@ class EventsCog(commands.Cog):
     
     @tasks.loop(hours=2)
     async def job_generation(self):
-        """Generate new jobs at locations with increased frequency and quantity"""
+        """Generate new jobs at locations, adjusted for time of day"""
         try:
-            # Get locations that can have jobs
+            # Get the time system to determine the current shift
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            current_time = time_system.calculate_current_ingame_time()
+
+            if not current_time:
+                print("⚠️ Cannot generate jobs, time system unavailable.")
+                return
+
+            hour = current_time.hour
+            # Determine job generation multiplier based on the shift
+            if 6 <= hour < 12:  # Morning Shift
+                job_multiplier = 1.2
+            elif 12 <= hour < 18:  # Day Shift
+                job_multiplier = 1.5
+            elif 18 <= hour < 24:  # Evening Shift
+                job_multiplier = 1.0
+            else:  # Night Shift
+                job_multiplier = 0.5
+
             locations = self.db.execute_query(
                 "SELECT location_id, wealth_level, location_type FROM locations WHERE has_jobs = 1",
                 fetch='all'
             )
             
-            # ADD THIS CHECK RIGHT HERE:
             if not locations:
                 print("⚠️ No locations available for job generation")
                 return
@@ -370,49 +390,96 @@ class EventsCog(commands.Cog):
             jobs_generated = 0
             
             for location_id, wealth, location_type in locations:
-                # Check current job count
                 current_jobs = self.db.execute_query(
                     "SELECT COUNT(*) FROM jobs WHERE location_id = ? AND is_taken = 0",
                     (location_id,),
                     fetch='one'
                 )[0]
                 
-                # Increased job limits based on wealth and type
+                # Adjust max jobs based on the shift multiplier
                 if location_type == 'space_station':
-                    max_jobs = max(6, wealth)  # 6-10 jobs for stations
+                    base_max = max(6, wealth)
                 elif location_type == 'colony':
-                    max_jobs = max(4, wealth // 2 + 3)  # 4-8 jobs for colonies
-                elif location_type == 'outpost':
-                    max_jobs = max(2, wealth // 3 + 1)  # 2-4 jobs for outposts
-                else:  # gates
-                    max_jobs = max(3, wealth // 2 + 1)  # 3-6 jobs for gates
+                    base_max = max(4, wealth // 2 + 3)
+                else:
+                    base_max = max(2, wealth // 3 + 1)
                 
-                # Generate multiple jobs if under limit
-                jobs_to_generate = min(max_jobs - current_jobs, 3)  # Generate up to 3 at once
+                max_jobs = int(base_max * job_multiplier)
+
+                jobs_to_generate = min(max_jobs - current_jobs, 3)
                 
-                if jobs_to_generate > 0 and random.random() < 0.8:  # 80% chance
+                if jobs_to_generate > 0 and random.random() < 0.8:
                     for _ in range(jobs_to_generate):
-                        if random.random() < 0.7:  # 70% chance for each job
+                        if random.random() < 0.7:
                             await self._generate_location_job(location_id, wealth, location_type)
                             jobs_generated += 1
             
-            # Random bonus job generation burst
-            if random.random() < 0.2:  # 20% chance for bonus generation
-                # CHANGE this line to ADD the check:
-                if locations:  # ADD THIS CHECK
-                    bonus_location = random.choice(locations)
-                    await self._generate_location_job(bonus_location[0], bonus_location[1], bonus_location[2])
-                    jobs_generated += 1
-                    print(f"🎲 Bonus job generated!")
-            
             if jobs_generated > 0:
-                print(f"Generated {jobs_generated} new jobs")
+                print(f"Generated {jobs_generated} new jobs (Multiplier: {job_multiplier}x)")
         
         except Exception as e:
             print(f"Error in job generation: {e}")
-            # ADD this line for better debugging:
             import traceback
             traceback.print_exc()
+    
+    @tasks.loop(hours=1)
+    async def shift_change_monitor(self):
+        """Monitors for in-game shift changes and sends announcements."""
+        try:
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            current_time = time_system.calculate_current_ingame_time()
+
+            if not current_time:
+                return
+
+            hour = current_time.hour
+            
+            # Check the last known shift from a simple file or database key
+            # to prevent spamming announcements every hour within the same shift.
+            last_shift_hour = -1
+            try:
+                with open("last_shift.txt", "r") as f:
+                    last_shift_hour = int(f.read())
+            except (FileNotFoundError, ValueError):
+                pass # First run or invalid file
+
+            current_shift_hour = -1
+            shift_name = ""
+            description = ""
+
+            if 6 <= hour < 12 and last_shift_hour < 6:
+                current_shift_hour = 6
+                shift_name = "Morning Shift"
+                description = "Sunrise over the colonies. Morning work shifts are beginning across human space. Expect an increase in local traffic and job availability."
+            elif 12 <= hour < 18 and last_shift_hour < 12:
+                current_shift_hour = 12
+                shift_name = "Day Shift"
+                description = "Mid-day operations are at peak efficiency. Corridors are experiencing maximum traffic. Prime time for trade and transport."
+            elif 18 <= hour < 24 and last_shift_hour < 18:
+                current_shift_hour = 18
+                shift_name = "Evening Shift"
+                description = "Systems are transitioning to night operations. Security patrols are increased and non-essential services are winding down."
+            elif hour < 6 and (last_shift_hour >= 18 or last_shift_hour == -1):
+                current_shift_hour = 0
+                shift_name = "Night Shift"
+                description = "A quiet descends on the galaxy. Most colonies are on standby. Low traffic offers opportunities for discreet travel."
+
+            if shift_name and current_shift_hour != last_shift_hour:
+                news_cog = self.bot.get_cog('GalacticNewsCog')
+                if news_cog:
+                    await news_cog.post_shift_change_news(shift_name, description)
+                    with open("last_shift.txt", "w") as f:
+                        f.write(str(current_shift_hour))
+                        print(f"📰 Shift change announced: {shift_name}")
+
+        except Exception as e:
+            print(f"Error in shift change monitor: {e}")
+
+    @shift_change_monitor.before_loop
+    async def before_shift_change_monitor(self):
+        await self.bot.wait_until_ready()
+        
     @commands.group(name="events", description="Event system management")
     async def events_group(self, ctx):
         if not ctx.author.guild_permissions.administrator:

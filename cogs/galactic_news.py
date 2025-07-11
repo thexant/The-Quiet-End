@@ -308,7 +308,25 @@ class GalacticNewsCog(commands.Cog):
                 description += f" Preliminary reports suggest {cause} may have been a factor."
             
             await self.queue_news(guild_id, 'obituary', title, description, location_id)
+    async def post_shift_change_news(self, shift_name: str, description: str):
+        """Post news about a galactic schedule shift change."""
+        guilds_with_updates = self.db.execute_query(
+            "SELECT guild_id FROM server_config WHERE galactic_updates_channel_id IS NOT NULL",
+            fetch='all'
+        )
 
+        title = f"Galactic Schedule Shift Change: {shift_name}"
+
+        for guild_tuple in guilds_with_updates:
+            guild_id = guild_tuple[0]
+            # Use a central location for system-wide announcements to ensure consistent, short delays
+            central_location = self.db.execute_query(
+                "SELECT location_id FROM locations ORDER BY location_id ASC LIMIT 1",
+                fetch='one'
+            )
+            location_id = central_location[0] if central_location else None
+            
+            await self.queue_news(guild_id, 'admin_announcement', title, description, location_id)
     async def generate_fluff_news(self):
         """Generate random fluff news to make the universe feel alive"""
         
