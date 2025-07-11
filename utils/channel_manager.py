@@ -604,20 +604,30 @@ class ChannelManager:
     
     async def give_user_location_access(self, user: discord.Member, location_id: int) -> bool:
         """Give a user access to a location's channel, creating it if necessary"""
-        channel = await self.get_or_create_location_channel(user.guild, location_id, user)
-        if not channel:
-            return False
-        
         try:
+            channel = await self.get_or_create_location_channel(user.guild, location_id, user)
+            if not channel:
+                print(f"❌ Could not create or find channel for location {location_id}")
+                return False
+            
+            # Set permissions
             await channel.set_permissions(user, read_messages=True, send_messages=True)
             await self._update_channel_activity(location_id)
             
             # Send personalized location status to the user
             await self.send_location_status(channel, user, location_id)
             
+            print(f"✅ Successfully gave {user.name} access to location {location_id}")
             return True
+            
+        except discord.Forbidden:
+            print(f"❌ Permission denied: Cannot give {user.name} access to location {location_id}")
+            return False
+        except discord.HTTPException as e:
+            print(f"❌ Discord HTTP error giving {user.name} access to location {location_id}: {e}")
+            return False
         except Exception as e:
-            print(f"❌ Failed to give {user.name} access to {channel.name}: {e}")
+            print(f"❌ Unexpected error giving {user.name} access to location {location_id}: {e}")
             return False
 
     async def remove_user_location_access(self, user: discord.Member, location_id: int) -> bool:

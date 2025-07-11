@@ -405,44 +405,44 @@ class LocationView(discord.ui.View):
         
         return {'owned': False}
     @discord.ui.button(label="Travel", style=discord.ButtonStyle.primary, emoji="🚀")
-        async def travel(self, interaction: discord.Interaction, button: discord.ui.Button):
-            # only the character owner can click
-            if interaction.user.id != self.user_id:
-                await interaction.response.send_message("🚫 This is not your character.", ephemeral=True)
-                return
+    async def travel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # only the character owner can click
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("🚫 This is not your character.", ephemeral=True)
+            return
 
-            # check if the character is currently docked
-            row = self.bot.db.execute_query(
-                "SELECT location_status FROM characters WHERE user_id = ?",
-                (interaction.user.id,),
-                fetch='one'
+        # check if the character is currently docked
+        row = self.bot.db.execute_query(
+            "SELECT location_status FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        if row and row[0] == "docked":
+            await interaction.response.send_message(
+                "❌ You must undock before travelling! Use `/character undock`.",
+                ephemeral=True
             )
-            if row and row[0] == "docked":
-                await interaction.response.send_message(
-                    "❌ You must undock before travelling! Use `/character undock`.",
-                    ephemeral=True
-                )
-                return
+            return
 
-            # check if already in a travel session
-            traveling = self.bot.db.execute_query(
-                "SELECT session_id FROM travel_sessions WHERE user_id = ? AND status = 'traveling'",
-                (interaction.user.id,),
-                fetch='one'
+        # check if already in a travel session
+        traveling = self.bot.db.execute_query(
+            "SELECT session_id FROM travel_sessions WHERE user_id = ? AND status = 'traveling'",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        if traveling:
+            await interaction.response.send_message(
+                "🚧 You’re already travelling along a corridor.",
+                ephemeral=True
             )
-            if traveling:
-                await interaction.response.send_message(
-                    "🚧 You’re already travelling along a corridor.",
-                    ephemeral=True
-                )
-                return
-                
-            # Get the travel cog and call the travel_go command
-            travel_cog = self.bot.get_cog('TravelCog')
-            if travel_cog:
-                await travel_cog.travel_go.callback(travel_cog, interaction)
-            else:
-                await interaction.response.send_message("Travel system is currently unavailable.", ephemeral=True)
+            return
+            
+        # Get the travel cog and call the travel_go command
+        travel_cog = self.bot.get_cog('TravelCog')
+        if travel_cog:
+            await travel_cog.travel_go.callback(travel_cog, interaction)
+        else:
+            await interaction.response.send_message("Travel system is currently unavailable.", ephemeral=True)
     
     @discord.ui.button(label="Jobs", style=discord.ButtonStyle.success, emoji="💼")
     async def jobs(self, interaction: discord.Interaction, button: discord.ui.Button):

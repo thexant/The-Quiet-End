@@ -2,6 +2,8 @@
 import discord
 from discord.ext import commands, tasks
 import random
+from views.jobview import JobView
+from cogs.jobs import StationaryJob, TransportJob
 import asyncio
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
@@ -526,6 +528,7 @@ class NPCCog(commands.Cog):
             "UPDATE dynamic_npcs SET last_location_action = ? WHERE npc_id = ?",
             (datetime.now().isoformat(), npc_id)
         )
+
 
     async def handle_corridor_collapse(self, corridor_id: int):
         """Handle dynamic NPC deaths in corridor collapses"""

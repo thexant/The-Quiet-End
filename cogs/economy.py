@@ -669,8 +669,8 @@ class EconomyCog(commands.Cog):
         # Determine job type from title and description
         title_lower = title.lower()
         desc_lower = description.lower()
-        is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger']) or \
-                          any(word in desc_lower for word in ['transport', 'deliver', 'courier'])
+        is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
+                          any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
 
         # Get player's current location
         player_location = self.db.execute_query(
@@ -1522,8 +1522,8 @@ class EconomyCog(commands.Cog):
         # Determine if this is a stationary job that needs tracking
         title_lower = title.lower()
         desc_lower = desc.lower()
-        is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger']) or \
-                          any(word in desc_lower for word in ['transport', 'deliver', 'courier'])
+        is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
+                          any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
         
         # Create job tracking record for stationary jobs
         if not is_transport_job:
@@ -1616,8 +1616,8 @@ class EconomyCog(commands.Cog):
         # Determine job type
         title_lower = title.lower()
         desc_lower = description.lower()
-        is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger']) or \
-                          any(word in desc_lower for word in ['transport', 'deliver', 'courier'])
+        is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
+                          any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
 
         taken_time = datetime.fromisoformat(taken_at)
         current_time = datetime.utcnow()

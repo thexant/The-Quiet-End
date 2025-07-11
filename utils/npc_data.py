@@ -60,10 +60,10 @@ RADIO_MESSAGES = [
     "{callsign} calling {location} Station, requesting priority docking for time-sensitive cargo.",
     "This is Captain {name} aboard {ship}, seeking trade opportunities at {location}.",
     "{callsign} to merchant vessels, anyone interested in bulk cargo exchange at {location}?",
-    "Trade beacon active! {callsign} offering competitive rates on manufactured goods.",
+    "Trading stop setup! {callsign} offering competitive rates on manufactured goods.",
     
     # Social and casual
-    "Good morning spacers! {callsign} broadcasting from {location}. Beautiful view of {system} today.",
+    "Good morning spacerfarers! {callsign} broadcasting from {location}. Beautiful view of {system} today.",
     "{callsign} here, taking a break at {location}. Great fuel prices and decent food!",
     "This is {callsign}, just wanted to say the staff at {location} are incredibly helpful.",
     "Any familiar voices out there? {callsign} getting lonely on these long hauls.",
@@ -93,7 +93,26 @@ RADIO_MESSAGES = [
     "{callsign} here, family sends their regards from the Core Worlds. Missing home today.",
     "Captain {name} logging personal note: {location} has the best coffee in three systems.",
     "{callsign} to old friends, still flying the trade routes. Hope to cross paths again soon.",
-    "This is {callsign}, teaching the new crew member about proper radio etiquette. Wave hello everyone!"
+    "This is {callsign}, teaching the new crew member about proper radio etiquette. Wave hello everyone!".
+    
+    "This is {callsign} to anyone on this frequency... My nav-computer is cycling, showing a corridor that shouldn't be here. Is... is anyone else seeing this?",
+    "{callsign} requesting updated corridor stability data. My last chart is three cycles old and I don't trust it. Anything more recent would be appreciated.",
+    "This is {callsign}, making my approach to {location}. Looks like another one of your docking lights is out. You guys should really get that fixed before someone clips the bay.",
+    "{callsign} here. If anyone's docked at {location} and has a compatible power socket, I'd trade a week's worth of rations for a few hours of charge.",
+    "This is {name} signing off for a sleep cycle. The silence out here... it gets to you. Stay sane, everyone.",
+    "{callsign} reporting heavy static fog building near {location}. Visibility is near zero. I'm going to hold my position until it clears."
+    "Mayday, Mayday, Mayday. This is {callsign}. Hull breach in sector... ... Life support failing. Anyone... .",
+    "To any vessel on this frequency, this is {ship}. Our navigator is dead—radiation exposure. We are flying blind. We don't know where this corridor will exit. Requesting... requesting any navigational assistance. Please.",
+    "We have a confirmed Vacuum Bloom outbreak in the cargo bay. We've sealed the doors, but the air smells sweet... rotten. We're requesting immediate decontamination protocols at {location}, assuming we make it that far.",
+    "My Geiger counter is screaming. The radiation in this corridor is off the charts. The hull is groaning... I think the shielding is failing. It's getting hot in here.",
+    "This is {callsign}. We're low on fuel, but we picked up a refugee pod. They're out of food and water. We don't have enough for everyone. I have to make a choice. I... I don't know what to do.",
+    "My contract at {location} was terminated. No pay. I'm out of fuel and options. I'll take any work. Anything. Please.",
+    "Reporting from {location}: Disease outbreak contained, but medical supplies are critically low. Send doctors or diagnostics. This is {callsign} signing off.",
+    "This is {callsign}, reports of unexpected Corridor collapse near the old {system} jump point. Verify your navigation data twice before jumping.",
+    "Witnessed a ship vanish mid-transit. Just... gone. This is {callsign} still shaking from the sight. Corridors are a fickle mistress.",
+    "Days blur into weeks out here. This is {callsign}, just a voice in the dark. Anyone else feel it? The quiet end.",
+    "Overheard some disturbing chatter from a pilot who spent too long in a storm. Mentioned 'voices in the static'."
+    "Emergency broadcast: This is {callsign}, my ship is adrift. Power failing. I'm dumping all non-essentials. If you hear explosions, it's just my life savings going out the airlock. Farewell."
 ]
 
 # Location-specific actions for dynamic NPCs

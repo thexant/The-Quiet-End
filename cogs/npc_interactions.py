@@ -104,7 +104,7 @@ class NPCInteractionsCog(commands.Cog):
                     description = f"Safely escort this NPC from their current location to {dest_name}. The journey is estimated to be {jumps} jumps."
                     reward = 150 * jumps + random.randint(50, 200)
                     danger = jumps + random.randint(0, 2)
-                    duration = 30 * jumps  # Rough duration estimate
+                    duration = 10 * jumps  # Rough duration estimate
 
                     self.db.execute_query(
                         '''INSERT INTO npc_jobs 
@@ -118,32 +118,32 @@ class NPCInteractionsCog(commands.Cog):
         # Job templates based on occupation
         job_templates = {
             "Farmer": [
-                ("Harvest Assistant Needed", "Help harvest crops during the busy season", 150, None, 0, 1, 30),
-                ("Livestock Care", "Tend to farm animals and ensure their health", 200, "medical", 5, 1, 45),
-                ("Equipment Maintenance", "Repair and maintain farming equipment", 250, "engineering", 8, 2, 60)
+                ("Harvest Assistant Needed", "Help harvest crops during the busy season", 150, None, 0, 1, 15),       # Was 30
+                ("Livestock Care", "Tend to farm animals and ensure their health", 200, "medical", 5, 1, 20),         # Was 45
+                ("Equipment Maintenance", "Repair and maintain farming equipment", 250, "engineering", 8, 2, 25)      # Was 60
             ],
             "Engineer": [
-                ("System Diagnostics", "Run diagnostics on critical station systems", 300, "engineering", 10, 2, 45),
-                ("Equipment Calibration", "Calibrate sensitive technical equipment", 400, "engineering", 15, 1, 60),
-                ("Emergency Repair", "Fix urgent system failures", 500, "engineering", 18, 3, 30)
+                ("System Diagnostics", "Run diagnostics on critical station systems", 300, "engineering", 10, 2, 20), # Was 45
+                ("Equipment Calibration", "Calibrate sensitive technical equipment", 400, "engineering", 15, 1, 25),   # Was 60
+                ("Emergency Repair", "Fix urgent system failures", 500, "engineering", 18, 3, 15)                     # Was 30
             ],
             "Medic": [
-                ("Medical Supply Inventory", "Organize and catalog medical supplies", 180, "medical", 5, 1, 30),
-                ("Health Screening", "Assist with routine health examinations", 220, "medical", 10, 1, 60),
-                ("Emergency Response", "Provide medical aid during emergencies", 400, "medical", 15, 2, 20)
+                ("Medical Supply Inventory", "Organize and catalog medical supplies", 180, "medical", 5, 1, 15),       # Was 30
+                ("Health Screening", "Assist with routine health examinations", 220, "medical", 10, 1, 25),            # Was 60
+                ("Emergency Response", "Provide medical aid during emergencies", 400, "medical", 15, 2, 10)            # Was 20
             ],
             "Merchant": [
-                ("Market Research", "Investigate trade opportunities", 200, "navigation", 8, 1, 60),
-                ("Cargo Escort", "Provide security for valuable shipments", 350, "combat", 12, 3, 90),
-                ("Price Negotiation", "Help negotiate better trade deals", 300, "navigation", 10, 1, 45)
+                ("Market Research", "Investigate trade opportunities", 200, "navigation", 8, 1, 20),                   # Was 60
+                ("Cargo Escort", "Provide security for valuable shipments", 350, "combat", 12, 3, 25),                # Was 90
+                ("Price Negotiation", "Help negotiate better trade deals", 300, "navigation", 10, 1, 15)              # Was 45
             ],
             "Security Guard": [
-                ("Patrol Duty", "Conduct security patrols of the facility", 180, "combat", 5, 2, 60),
-                ("Equipment Check", "Inspect and maintain security equipment", 200, "engineering", 8, 1, 30),
-                ("Threat Assessment", "Evaluate security risks and vulnerabilities", 300, "combat", 15, 2, 60)
+                ("Patrol Duty", "Conduct security patrols of the facility", 180, "combat", 5, 2, 20),                 # Was 60
+                ("Equipment Check", "Inspect and maintain security equipment", 200, "engineering", 8, 1, 15),         # Was 30
+                ("Threat Assessment", "Evaluate security risks and vulnerabilities", 300, "combat", 15, 2, 20)        # Was 60
             ],
             "Escort": [
-                ("Escort to {dest_name}", "Provide safe passage for an NPC to a new location.", 300, "combat", 10, 2, 60)
+                ("Escort to {dest_name}", "Provide safe passage for an NPC to a new location. The journey is estimated to be {jumps} jumps.", 150 * jumps + random.randint(50, 200), "combat", 10, jumps + random.randint(0, 2), 10 * jumps)  # Changed from 30 * jumps
             ]
         }
         
@@ -158,30 +158,27 @@ class NPCInteractionsCog(commands.Cog):
         templates = job_templates.get(occupation, default_jobs)
         
         # Generate 1-3 jobs
-        num_jobs = random.randint(1, 3)
+        num_jobs = random.randint(2, 4)
         for _ in range(num_jobs):
-            title, desc, base_reward, skill, min_skill, danger, duration = random.choice(templates)
+            template = random.choice(job_templates)
+            title, desc, base_reward, skill, min_skill, danger, duration = template
             
-            # Add some variation
+            # Add some randomization
             reward = base_reward + random.randint(-20, 50)
-            duration = duration + random.randint(-15, 30)
+            duration = duration + random.randint(-5, 10)  # Reduced from (-15, 30)
             
-            # Random rare item reward chance
-            reward_items = None
-            if random.random() < 0.15:  # 15% chance
-                rare_items = ItemConfig.get_items_by_rarity("rare") + ItemConfig.get_items_by_rarity("legendary")
-                if rare_items:
-                    reward_items = json.dumps([random.choice(rare_items)])
+            # Ensure reasonable duration limits for stationary jobs
+            duration = max(5, min(45, duration))  # Keep between 5-45 minutes
             
-            # Set expiration (1-7 days)
-            expires_at = datetime.now() + timedelta(days=random.randint(1, 7))
+            # Set expiration time (2-8 hours from now)
+            expire_hours = random.randint(2, 8)
             
-            self.db.execute_query(
+            self.bot.db.execute_query(
                 '''INSERT INTO npc_jobs 
-                   (npc_id, npc_type, job_title, job_description, reward_money, reward_items,
+                   (npc_id, npc_type, job_title, job_description, reward_money,
                     required_skill, min_skill_level, danger_level, duration_minutes, expires_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                (npc_id, npc_type, title, desc, reward, reward_items, skill, min_skill, danger, duration, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+{} hours'))'''.format(expire_hours),
+                (npc_id, npc_type, title, desc, reward, skill, min_skill, danger, duration)
             )
     async def _handle_general_conversation(self, interaction: discord.Interaction, npc_id: int, npc_type: str):
         """Handle general conversation with an NPC."""
@@ -711,19 +708,29 @@ class NPCJobSelectView(discord.ui.View):
             (char_location_id, title, desc, reward_money, required_skill, min_skill_level, danger_level, 
              duration_minutes, expire_time.isoformat(), interaction.user.id)
         )
-        
+        if 'escort' in title.lower():
+            # Extract destination from NPC job data if available
+            # This ensures transport logic works correctly
+            pass
         # Get the new job_id
         new_job_id = self.bot.db.execute_query(
             "SELECT last_insert_rowid()",
             fetch='one'
         )[0]
 
-        # Add to job_tracking for stationary jobs
-        self.bot.db.execute_query(
-            '''INSERT INTO job_tracking (job_id, user_id, start_location, required_duration)
-               VALUES (?, ?, ?, ?)''',
-            (new_job_id, interaction.user.id, char_location_id, duration_minutes)
-        )
+        # Determine if this is a stationary job that needs tracking
+        title_lower = title.lower()
+        desc_lower = desc.lower()
+        is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
+                          any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
+
+        # Add to job_tracking only for stationary jobs
+        if not is_transport_job:
+            self.bot.db.execute_query(
+                '''INSERT INTO job_tracking (job_id, user_id, start_location, required_duration, time_at_location, last_location_check)
+                   VALUES (?, ?, ?, ?, 0.0, datetime('now'))''',
+                (new_job_id, interaction.user.id, char_location_id, duration_minutes)
+            )
 
         # Record completion for tracking
         self.bot.db.execute_query(
