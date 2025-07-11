@@ -862,44 +862,48 @@ class TravelCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     
-    @travel_group.command(name="emergency_exit", description="Attempt an emergency exit from corridor (DANGEROUS)")
-    async def emergency_exit(self, interaction: discord.Interaction):
-        session = self.db.execute_query(
-            '''SELECT ts.*, c.danger_level
-               FROM travel_sessions ts
-               JOIN corridors c ON ts.corridor_id = c.corridor_id
-               WHERE ts.user_id = ? AND ts.status = 'traveling' ''',
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not session:
-            await interaction.response.send_message("You are not currently traveling.", ephemeral=True)
-            return
-        
-        embed = discord.Embed(
-            title="⚠️ EMERGENCY CORRIDOR EXIT",
-            description="**WARNING**: Emergency exits are extremely dangerous and may result in:\n\n• Ship damage from uncontrolled exit\n• Severe radiation exposure\n• Being stranded in deep space\n• Complete loss of ship and crew",
-            color=0xff0000
-        )
-        
-        danger_level = session[10]  # From corridor data
-        survival_chance = max(20, 80 - (danger_level * 15))  # Higher danger = lower survival
-        
-        embed.add_field(
-            name="Estimated Survival Chance",
-            value=f"{survival_chance}% (Danger Level {danger_level})",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="Recommendation",
-            value="Wait for normal transit completion unless facing imminent destruction",
-            inline=False
-        )
-        
-        view = EmergencyExitView(self.bot, interaction.user.id, session[0])
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    @travel_group.command(name="emergency_exit", description="Attempt an emergency exit from a corridor (EXTREMELY DANGEROUS)")
+        async def emergency_exit(self, interaction: discord.Interaction):
+            session = self.db.execute_query(
+                '''SELECT ts.*, c.danger_level, c.name as corridor_name
+                   FROM travel_sessions ts
+                   JOIN corridors c ON ts.corridor_id = c.corridor_id
+                   WHERE ts.user_id = ? AND ts.status = 'traveling' ''',
+                (interaction.user.id,),
+                fetch='one'
+            )
+
+            if not session:
+                await interaction.response.send_message("You are not currently traveling.", ephemeral=True)
+                return
+
+            corridor_name = session[11]
+            if "Approach" in corridor_name:
+                await interaction.response.send_message("You cannot perform an emergency exit in local space.", ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title="⚠️ EMERGENCY CORRIDOR EXIT",
+                description="**EXTREME WARNING**: This action has a high probability of resulting in **instant death**.\n\nSurviving the exit will cause catastrophic damage to your ship and severe injury. You will be end up in a random location.",
+                color=0xff0000
+            )
+
+            danger_level = session[10]
+            survival_chance = max(10, 50 - (danger_level * 10))  # High risk of death
+
+            embed.add_field(
+                name="Estimated Survival Chance",
+                value=f"**{survival_chance}%** (Danger Level: {danger_level})",
+                inline=False
+            )
+            embed.add_field(
+                name="Recommendation",
+                value="**DO NOT ATTEMPT** unless certain death is imminent. It is always safer to complete the journey.",
+                inline=False
+            )
+
+            view = EmergencyExitView(self.bot, interaction.user.id, session[0])
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
     @travel_group.command(name="fuel_estimate", description="Calculate fuel needed for various routes")
     async def fuel_estimate(self, interaction: discord.Interaction):
@@ -1387,148 +1391,112 @@ class EmergencyExitView(discord.ui.View):
             return
         
         danger_level = session[10]
-        survival_chance = max(20, 80 - (danger_level * 15))
+        survival_chance = max(10, 50 - (danger_level * 10))
         
         # Roll for survival
         roll = random.randint(1, 100)
         survived = roll <= survival_chance
         
         if survived:
-            # Successful but damaging exit
-            damage_roll = random.randint(1, 100)
+            # Survived the exit, now take massive damage
+            hp_loss = random.randint(40, 80)
+            hull_loss = random.randint(50, 90)
             
-            if damage_roll <= 30:  # 30% chance of minimal damage
-                damage_type = "minimal"
-                hp_loss = random.randint(5, 15)
-                hull_loss = random.randint(10, 25)
-                fuel_loss = random.randint(5, 20)
-            elif damage_roll <= 70:  # 40% chance of moderate damage
-                damage_type = "moderate"
-                hp_loss = random.randint(15, 35)
-                hull_loss = random.randint(25, 50)
-                fuel_loss = random.randint(20, 40)
-            else:  # 30% chance of severe damage
-                damage_type = "severe"
-                hp_loss = random.randint(35, 60)
-                hull_loss = random.randint(50, 80)
-                fuel_loss = random.randint(40, 70)
-            
-            # Apply damage
+            # Apply damage and check for death from damage
+            char_cog = self.bot.get_cog('CharacterCog')
+            died_from_damage = False
+            if char_cog:
+                died_from_damage = await char_cog.update_character_hp(
+                    self.user_id, -hp_loss, interaction.guild, "Emergency exit trauma"
+                )
+
+            if died_from_damage:
+                # Death is handled by update_character_hp, just end here
+                await interaction.response.edit_message(content="You survived the initial corridor exit, but the trauma was too much. Your vision fades to black...", view=None)
+                return
+
+            # Survived the damage, apply hull damage and relocate
             self.bot.db.execute_query(
-                "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                (hp_loss, self.user_id)
+                "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
+                (hull_loss, self.user_id)
             )
-            
-            self.bot.db.execute_query(
-                '''UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?),
-                   current_fuel = MAX(0, current_fuel - ?)
-                   WHERE owner_id = ?''',
-                (hull_loss, fuel_loss, self.user_id)
-            )
-            
-            # Return to origin location
-            self.bot.db.execute_query(
-                "UPDATE characters SET current_location = ? WHERE user_id = ?",
-                (session[3], self.user_id)  # origin_location
-            )
-            
-            # Update session status
-            self.bot.db.execute_query(
-                "UPDATE travel_sessions SET status = 'emergency_exit' WHERE session_id = ?",
-                (self.session_id,)
-            )
-            
-            # Clean up progress tracking
-            travel_cog = self.bot.get_cog('TravelCog')
-            if travel_cog:
-                session_key = f"{self.user_id}_{session[2]}"  # corridor_id
-                if session_key in travel_cog.active_status_messages:
-                    del travel_cog.active_status_messages[session_key]
-            
-            # Give access to origin location
-            origin_channel = self.bot.db.execute_query(
-                "SELECT channel_id FROM locations WHERE location_id = ?",
-                (session[3],),
+
+            # Relocate to a random, non-gate location
+            random_location = self.bot.db.execute_query(
+                "SELECT location_id, name FROM locations WHERE location_type != 'gate' ORDER BY RANDOM() LIMIT 1",
                 fetch='one'
             )
             
-            if origin_channel and origin_channel[0]:
-                channel = self.bot.get_channel(origin_channel[0])
-                if channel:
-                    await channel.set_permissions(interaction.user, read_messages=True, send_messages=True)
-            
-            # Clean up temp channel
-            if session[6]:  # temp_channel_id
-                temp_channel = self.bot.get_channel(session[6])
-                if temp_channel:
-                    try:
-                        await temp_channel.delete(reason="Emergency exit from corridor")
-                    except:
-                        pass
-            
-            embed = discord.Embed(
-                title="🚨 EMERGENCY EXIT SUCCESSFUL",
-                description=f"You have made an emergency exit from the corridor and returned to {session[11]}.",
-                color=0xff9900
-            )
-            
-            embed.add_field(name="Survival Roll", value=f"{roll}/{survival_chance} - SUCCESS", inline=True)
-            embed.add_field(name="Damage Level", value=damage_type.title(), inline=True)
-            embed.add_field(name="", value="", inline=True)
-            
-            embed.add_field(name="Health Lost", value=f"{hp_loss} HP", inline=True)
-            embed.add_field(name="Hull Damage", value=f"{hull_loss} integrity", inline=True)
-            embed.add_field(name="Fuel Lost", value=f"{fuel_loss} units", inline=True)
-            
-            embed.add_field(
-                name="⚠️ Immediate Actions Needed",
-                value="• Seek medical treatment\n• Repair ship damage\n• Refuel before next journey",
-                inline=False
-            )
-            
-        else:
-            # Failed exit - check for character death
-            char_cog = self.bot.get_cog('CharacterCog')
-            guild = interaction.guild
-            
-            if guild and char_cog:
-                # Deal massive damage that will likely kill the character
-                died = await char_cog.update_character_hp(
-                    self.user_id, -150, guild, f"Emergency exit failure"
+            if random_location:
+                new_location_id, new_location_name = random_location
+                self.bot.db.execute_query(
+                    "UPDATE characters SET current_location = ? WHERE user_id = ?",
+                    (new_location_id, self.user_id)
                 )
                 
-                if died:
-                    # Character death handled automatically by CharacterCog
-                    return
-            
-            # If somehow survived (shouldn't happen with -150 HP), strand in space
-            self.bot.db.execute_query(
-                "UPDATE characters SET current_location = NULL WHERE user_id = ?",
-                (self.user_id,)
+                # Update channel access
+                from utils.channel_manager import ChannelManager
+                channel_manager = ChannelManager(self.bot)
+                await channel_manager.give_user_location_access(interaction.user, new_location_id)
+
+                outcome_desc = f"You are violently thrown out of the corridor, your ship screaming in protest. You black out, only to awaken in an unknown system near **{new_location_name}**."
+                location_text = f"Stranded near {new_location_name}"
+            else:
+                # Fallback: stranded in deep space
+                self.bot.db.execute_query(
+                    "UPDATE characters SET current_location = NULL WHERE user_id = ?",
+                    (self.user_id,)
+                )
+                outcome_desc = "You are violently thrown out of the corridor into the blackness of deep space. Your ship is a wreck, and you are lost."
+                location_text = "Lost in Deep Space"
+
+            embed = discord.Embed(
+                title="🚨 EMERGENCY EXIT SURVIVAL",
+                description=outcome_desc,
+                color=0xff9900
             )
-            
-            self.bot.db.execute_query(
-                "UPDATE travel_sessions SET status = 'failed_exit' WHERE session_id = ?",
-                (self.session_id,)
-            )
+            embed.add_field(name="Survival Roll", value=f"{roll}/{survival_chance} - SUCCESS", inline=True)
+            embed.add_field(name="Health Lost", value=f"{hp_loss} HP", inline=True)
+            embed.add_field(name="Hull Damage", value=f"{hull_loss} integrity", inline=True)
+            embed.add_field(name="New Location", value=location_text, inline=False)
+            embed.add_field(name="⚠️ Critical Actions", value="Seek immediate medical attention and ship repairs.", inline=False)
+        else:
+            # Did not survive the exit
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog:
+                await char_cog.update_character_hp(self.user_id, -999, interaction.guild, "Failed emergency exit")
             
             embed = discord.Embed(
                 title="💀 EMERGENCY EXIT FAILED",
-                description="The emergency exit has gone catastrophically wrong.",
+                description="Your attempt to exit the corridor failed catastrophically. The ship was torn apart by the unstable energies of the corridor.",
                 color=0x8b0000
             )
-            
             embed.add_field(name="Survival Roll", value=f"{roll}/{survival_chance} - FAILED", inline=True)
-            embed.add_field(name="Status", value="CRITICAL", inline=True)
-            embed.add_field(name="Location", value="Deep Space", inline=True)
-            
-            embed.add_field(
-                name="🆘 Rescue Required",
-                value="You need immediate rescue by other players or admin intervention to survive.",
-                inline=False
-            )
+            embed.add_field(name="Status", value="Lost to the void", inline=False)
+
+        # Update travel session and clean up
+        self.db.execute_query(
+            "UPDATE travel_sessions SET status = 'emergency_exit' WHERE session_id = ?",
+            (self.session_id,)
+        )
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if session[6]:  # temp_channel_id
+            temp_channel = self.bot.get_channel(session[6])
+            if temp_channel:
+                try:
+                    await temp_channel.delete(reason="Emergency exit from corridor")
+                except:
+                    pass
+        
+        await interaction.response.edit_message(embed=embed, view=None)
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_exit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        await interaction.response.edit_message(content="Emergency exit cancelled. Your journey continues.", view=None)
     
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_exit(self, interaction: discord.Interaction, button: discord.ui.Button):
