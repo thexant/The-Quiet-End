@@ -922,39 +922,23 @@ class EconomyCog(commands.Cog):
         # Schedule automatic completion
         import asyncio
         asyncio.create_task(self._auto_complete_transport_job(interaction.user.id, job_id, title, reward, unloading_minutes))
-    async def _complete_job_immediately(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int, job_type: str):
-        # Fetch job details including karma_change
-        job_details = self.db.execute_query(
-            "SELECT reward_money, karma_change, location_id FROM jobs WHERE job_id = ?",
-            (job_id,),
-            fetch='one'
-        )
-        if not job_details:
-             # Job might have been cleaned up already, just log and exit
-            print(f"Could not find job {job_id} for completion.")
-            return
 
-        actual_reward, karma_change, location_id = job_details
-        
+    async def _complete_job_immediately(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int, job_type: str):
+        """Complete a job immediately with full reward, experience, skill, and karma effects."""
         # Give full reward
         self.db.execute_query(
             "UPDATE characters SET money = money + ? WHERE user_id = ?",
-            (actual_reward, interaction.user.id)
+            (reward, interaction.user.id)
         )
-
-        # Handle reputation change
-        if karma_change != 0:
-            reputation_cog = self.bot.get_cog('ReputationCog')
-            if reputation_cog:
-                await reputation_cog.update_reputation(interaction.user.id, location_id, karma_change)
-                print(f"Reputation updated for {interaction.user.id} by {karma_change} at location {location_id}")
-
-        # ... (rest of the existing logic for skill, experience, etc.) ...
         
-        # Clean up
-        self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, interaction.user.id))
+        # Experience gain
+        exp_gain = random.randint(25, 50)
+        self.db.execute_query(
+            "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+            (exp_gain, interaction.user.id)
+        )
         
+        # Create the response embed
         embed = discord.Embed(
             title="✅ Job Completed Successfully!",
             description=f"**{title}** has been completed!",
@@ -962,19 +946,45 @@ class EconomyCog(commands.Cog):
         )
         
         embed.add_field(name="✅ Success Roll", value=f"{roll}/{success_chance} - Success!", inline=True)
-        embed.add_field(name="💰 Reward", value=f"{actual_reward:,} credits", inline=True)
+        embed.add_field(name="💰 Reward", value=f"{reward:,} credits", inline=True)
         embed.add_field(name="⭐ Experience", value=f"+{exp_gain} EXP", inline=True)
         embed.add_field(name="📋 Job Type", value=job_type.title(), inline=True)
         
-        if skill_note:
-            embed.add_field(name="🎯 Skill Bonus", value=skill_note.strip(), inline=False)
+        # 15% chance for skill improvement
+        if random.random() < 0.15:
+            skill_to_improve = random.choice(['engineering', 'navigation', 'combat', 'medical'])
+            self.db.execute_query(
+                f"UPDATE characters SET {skill_to_improve} = {skill_to_improve} + 1 WHERE user_id = ?",
+                (interaction.user.id,)
+            )
+            embed.add_field(name="🎯 Skill Bonus", value=f"**{skill_to_improve.title()}** skill increased by 1!", inline=True)
+
+        # Handle karma/reputation change
+        job_details = self.db.execute_query(
+            "SELECT karma_change, location_id FROM jobs WHERE job_id = ?",
+            (job_id,),
+            fetch='one'
+        )
+
+        if job_details:
+            karma_change, location_id = job_details
+            if karma_change != 0:
+                reputation_cog = self.bot.get_cog('ReputationCog')
+                if reputation_cog:
+                    await reputation_cog.update_reputation(interaction.user.id, location_id, karma_change)
+                    karma_text = f"+{karma_change}" if karma_change > 0 else str(karma_change)
+                    embed.add_field(name="⚖️ Reputation Change", value=f"**{karma_text}** with local faction", inline=True)
+        
+        # Clean up job from the database
+        self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, interaction.user.id))
         
         # Check for level up
         char_cog = self.bot.get_cog('CharacterCog')
         if char_cog:
             await char_cog.level_up_check(interaction.user.id)
         
-        await interaction.followup.send(embed=embed, ephemeral=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def _complete_job_failed(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int):
         """Complete a failed job with partial reward"""
@@ -1119,6 +1129,71 @@ class EconomyCog(commands.Cog):
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=False)  # Make it public in the location channel
+    
+    federal_supply_group = app_commands.Group(name="federal_supply", description="Access the Federal Supply depot")
+    @federal_supply_group.command(name="list", description="View items available from the Federal Supply")
+    async def federal_supply_list(self, interaction: discord.Interaction):
+        # First, get the character's current location
+        char_info = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        if not char_info:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        current_location_id = char_info[0]
+
+        # Check if the location has a Federal Supply
+        location_info = self.db.execute_query(
+            "SELECT has_federal_supply, name, faction FROM locations WHERE location_id = ?",
+            (current_location_id,),
+            fetch='one'
+        )
+
+        if not location_info or not location_info[0]:
+            await interaction.response.send_message("No Federal Supply depot available at this location.", ephemeral=True)
+            return
+
+        # Get the character's reputation at this specific location
+        reputation_data = self.db.execute_query(
+            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            (interaction.user.id, current_location_id),
+            fetch='one'
+        )
+        current_reputation = reputation_data[0] if reputation_data else 0
+
+        # Fetch items from Federal Supply, checking reputation
+        items = self.db.execute_query(
+            '''SELECT item_name, item_type, price, stock, description, required_reputation
+               FROM federal_supply_items 
+               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= required_reputation
+               ORDER BY required_reputation ASC, price ASC''',
+            (current_location_id, current_reputation),
+            fetch='all'
+        )
+
+        embed = discord.Embed(
+            title=f"🛡️ Federal Supply Depot - {location_info[1]}",
+            description=f"Official equipment and supplies for trusted allies of the {location_info[2].title()} faction.",
+            color=0x4169E1
+        )
+        embed.set_footer(text=f"Your Local Reputation: {current_reputation}")
+
+        if items:
+            for item_name, item_type, price, stock, description, req_rep in items[:10]:
+                stock_text = f"({stock} in stock)" if stock != -1 else "(Unlimited)"
+                rep_text = f" [Rep: {req_rep}+]" if req_rep > 0 else ""
+                embed.add_field(
+                    name=f"{item_name} - {price:,} credits",
+                    value=f"_{description}_\n**Requirements:**{rep_text} {stock_text}",
+                    inline=False
+                )
+        else:
+            embed.add_field(name="Access Denied or No Stock", value="No items are available to you at this time. Improve your reputation with this faction or check back later.", inline=False)
+            
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     async def _generate_jobs_for_location(self, location_id: int):
         """Create jobs with heavy emphasis on travel between locations."""
         # 1) Remove all untaken jobs here

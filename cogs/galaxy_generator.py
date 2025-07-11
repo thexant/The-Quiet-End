@@ -730,113 +730,68 @@ class GalaxyGeneratorCog(commands.Cog):
         """Create location data with varied and flavorful descriptions"""
         import random, math
 
-        # Generate coordinates in a galaxy-like distribution
+        # Generate coordinates
         angle = random.uniform(0, 2 * math.pi)
         radius = random.uniform(10, 90)
-        
-        # Add spiral arm effect
-        spiral_factor = radius / 90.0
-        angle += spiral_factor * math.pi * 0.5
-        
+        angle += (radius / 90.0) * math.pi * 0.5
         x = radius * math.cos(angle)
         y = radius * math.sin(angle)
-        
+
+        # Assign Faction
         faction_roll = random.random()
-        if faction_roll < 0.05:
+        if faction_roll < 0.15:  # 15% chance for government
             faction = 'government'
-        elif faction_roll < 0.10:
+        elif faction_roll < 0.25: # 10% chance for bandit
             faction = 'bandit'
-        else:
+        else: # 75% chance for neutral
             faction = 'neutral'
-
-        # Check for derelict status first (5% chance)
+        
         is_derelict = random.random() < 0.05
-
         if is_derelict:
-            # Derelict locations have very low wealth and population
             wealth = random.randint(1, 3)
-            faction = 'neutral'
             population = 0
+            faction = 'neutral' # Derelict locations are neutral
             description = self._generate_derelict_description(name, loc_type, system, establishment_date)
         else:
             # Normal location generation
             if loc_type == 'colony':
                 wealth = random.randint(1, 8)
-                'faction': faction,
                 population = random.randint(80, 250) * (wealth + 2)
                 description = self._generate_colony_description(name, system, establishment_date, wealth, population)
             elif loc_type == 'space_station':
                 wealth = random.randint(4, 10)
-                'faction': faction,
                 population = random.randint(100, 300) * wealth
                 description = self._generate_station_description(name, system, establishment_date, wealth, population)
             else:  # outpost
                 wealth = random.randint(1, 5)
-                'faction': faction,
                 population = random.randint(10, 50)
                 description = self._generate_outpost_description(name, system, establishment_date, wealth, population)
-        if faction == 'bandit':
-            loc['has_black_market'] = True
-        # Build the dict with defaults
-        # Build the dict with derelict-aware defaults
-        if is_derelict:
-            # Derelict locations have minimal or no services
-            loc = {
-                'name': name,
-                'type': loc_type,
-                'x_coord': x,
-                'y_coord': y,
-                'system_name': system,
-                'description': description,
-                'wealth_level': wealth,
-                'population': population,
-                'established_date': establishment_date,
-                'has_jobs': False,
-                'has_shops': False,
-                'has_medical': False,
-                'has_repairs': random.random() < 0.1,  # 10% chance
-                'has_fuel': random.random() < 0.3,     # 30% chance
-                'has_upgrades': False,
-                'has_black_market': False,
-                'is_generated': True,
-                'is_derelict': True
-            }
-        else:
-            # Normal location defaults
-            loc = {
-                'name': name,
-                'type': loc_type,
-                'x_coord': x,
-                'y_coord': y,
-                'system_name': system,
-                'description': description,
-                'wealth_level': wealth,
-                'population': population,
-                'established_date': establishment_date,
-                'has_jobs': True,
-                'has_shops': True,
-                'has_medical': True,
-                'has_repairs': True,
-                'has_fuel': True,
-                'has_upgrades': False,
-                'has_black_market': False,
-                'is_generated': True,
-                'is_derelict': False
-            }
+
+        loc = {
+            'name': name, 'type': loc_type, 'x_coord': x, 'y_coord': y,
+            'system_name': system, 'description': description, 'wealth_level': wealth,
+            'population': population, 'established_date': establishment_date,
+            'has_jobs': not is_derelict, 'has_shops': not is_derelict, 'has_medical': not is_derelict,
+            'has_repairs': not is_derelict, 'has_fuel': True, 'has_upgrades': False,
+            'is_generated': True, 'is_derelict': is_derelict, 'faction': faction,
+            'has_black_market': False, 'has_federal_supply': False
+        }
+
+        # Assign special markets based on faction
+        if not is_derelict:
+            if faction == 'government' and wealth >= 7:
+                loc['has_federal_supply'] = True
+            elif faction == 'bandit' and wealth <= 4:
+                loc['has_black_market'] = True
         
-        # Apply random service removals
-        if loc_type == 'colony' and random.random() < 0.10:
-            loc['has_jobs'] = False
-        if loc_type == 'outpost' and random.random() < 0.20:
-            loc['has_shops'] = False
-        if loc_type == 'space_station' and random.random() < 0.05:
-            loc['has_medical'] = False
+        # Shipyard logic
         if loc_type == 'space_station' and wealth >= 6:
-            loc['has_shipyard'] = random.random() < 0.4  # 40% chance for wealthy stations
+            loc['has_shipyard'] = random.random() < 0.4
         elif loc_type == 'colony' and wealth >= 7:
-            loc['has_shipyard'] = random.random() < 0.3  # 30% chance for very wealthy colonies
+            loc['has_shipyard'] = random.random() < 0.3
         else:
             loc['has_shipyard'] = False
+            
         return loc
     def _generate_derelict_description(self, name: str, location_type: str, system: str, establishment_date: str) -> str:
         """Generate descriptions for abandoned/derelict locations"""
@@ -2468,17 +2423,18 @@ class GalaxyGeneratorCog(commands.Cog):
             '''INSERT INTO locations 
                (name, location_type, description, wealth_level, population,
                 x_coord, y_coord, system_name, established_date, has_jobs, has_shops, has_medical, 
-                has_repairs, has_fuel, has_upgrades, has_black_market, is_generated, is_derelict, faction) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                has_repairs, has_fuel, has_upgrades, has_black_market, is_generated, is_derelict, faction, has_federal_supply) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             (location['name'], location['type'], location['description'], 
              location['wealth_level'], location['population'], location['x_coord'], 
              location['y_coord'], location['system_name'], location.get('established_date'),
              location['has_jobs'], location['has_shops'], location['has_medical'], 
              location['has_repairs'], location['has_fuel'], location['has_upgrades'],
-             location.get('has_black_market', False), location['is_generated'], 
-             location.get('is_derelict', False), location['faction']) # ADD FACTION HERE
+             location.get('has_black_market', False), location['is_generated'],
+             location.get('is_derelict', False), location.get('faction', 'neutral'),
+             location.get('has_federal_supply', False))
         )
-            
+        
         return self.db.execute_query(
             "SELECT location_id FROM locations WHERE name = ? ORDER BY location_id DESC LIMIT 1",
             (location['name'],),

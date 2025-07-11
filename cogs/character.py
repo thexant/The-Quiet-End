@@ -285,7 +285,7 @@ class CharacterCog(commands.Cog):
         embed.add_field(name="Navigation", value=str(nav), inline=True)
         embed.add_field(name="Combat", value=str(combat_skill), inline=True)
         embed.add_field(name="Medical", value=str(medical_skill), inline=True)
-
+        embed.add_field(name="⚖️ Reputation", value="Use `/reputation` to view your standings.", inline=True)
         # Level & Experience
         embed.add_field(name="Level", value=str(level), inline=True)
         embed.add_field(name="Experience", value=f"{experience:,} EXP", inline=True)

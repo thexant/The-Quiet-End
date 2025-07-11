@@ -142,6 +142,27 @@ class Database:
                 legality TEXT DEFAULT 'illegal',
                 FOREIGN KEY (market_id) REFERENCES black_markets (market_id)
             )''',
+
+            # Federal Supply Market
+            '''CREATE TABLE IF NOT EXISTS federal_supply_items (
+                item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id INTEGER NOT NULL,
+                item_name TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                price INTEGER NOT NULL,
+                stock INTEGER DEFAULT -1,
+                description TEXT,
+                required_reputation INTEGER DEFAULT 0,
+                metadata TEXT,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id) ON DELETE CASCADE
+            )''',
+
+            # Add columns to locations table
+            '''ALTER TABLE locations ADD COLUMN faction TEXT DEFAULT 'neutral' ''',
+            '''ALTER TABLE locations ADD COLUMN has_federal_supply BOOLEAN DEFAULT 0''',
+
+            # Add karma change to jobs table
+            '''ALTER TABLE jobs ADD COLUMN karma_change INTEGER DEFAULT 0'''
             # Ships table (unchanged)
             '''CREATE TABLE IF NOT EXISTS ships (
                 ship_id INTEGER PRIMARY KEY AUTOINCREMENT,
