@@ -141,49 +141,30 @@ class RPGBot(commands.Bot):
         
         await self.process_commands(message)
     async def generate_location_income(self):
-        """Generate passive income for owned locations every hour"""
-        await self.wait_until_ready()
+        """Generate passive income for locations every hour"""
+        await self.wait_until_ready()  # Make sure bot is ready
         
-        while not self.is_closed():
+        while True:
             try:
-                # Get all owned locations with their upgrade data
-                owned_locations = self.db.execute_query(
-                    '''SELECT lo.location_id, lo.owner_id, l.wealth_level, l.population,
-                              l.location_type, l.name
-                       FROM location_ownership lo
-                       JOIN locations l ON lo.location_id = l.location_id''',
+                # Get all locations
+                locations = self.db.execute_query(
+                    "SELECT location_id, wealth_level FROM locations",
                     fetch='all'
                 )
                 
-                for location_data in owned_locations:
-                    location_id, owner_id, wealth_level, population, location_type, name = location_data
+                for location_id, wealth_level in locations:
+                    # Calculate base income (0-100 credits per hour based on wealth)
+                    base_income = wealth_level * 10 + random.randint(0, 20)
                     
-                    # Calculate base income
-                    base_income = wealth_level * 10 + (population // 100)
-                    
-                    # Get upgrade bonuses
-                    upgrades = self.db.execute_query(
-                        "SELECT upgrade_type, upgrade_level FROM location_upgrades WHERE location_id = ?",
-                        (location_id,),
-                        fetch='all'
-                    )
-                    
-                    income_multiplier = 1.0
-                    for upgrade_type, level in upgrades:
-                        if upgrade_type == 'wealth':
-                            income_multiplier += level * 0.2
-                        elif upgrade_type == 'population':
-                            income_multiplier += level * 0.1
-                    
-                    final_income = int(base_income * income_multiplier)
+                    # Add some randomness
+                    final_income = max(0, base_income + random.randint(-10, 25))
                     
                     if final_income > 0:
-                        # Record income
                         self.db.execute_query(
-                            '''INSERT INTO location_income_log 
-                               (location_id, income_type, amount)
-                               VALUES (?, 'passive', ?)''',
-                            (location_id, final_income)
+                            '''UPDATE locations 
+                               SET generated_income = generated_income + ? 
+                               WHERE location_id = ?''',
+                            (final_income, location_id)
                         )
                 
             except Exception as e:

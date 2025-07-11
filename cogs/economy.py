@@ -12,18 +12,24 @@ class EconomyCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
         self.job_tracking_task = None
-        # Start the background task when the cog is loaded
-        bot.loop.create_task(self.start_job_tracking())
         
     shop_group = app_commands.Group(name="shop", description="Buy and sell items")
     job_group  = app_commands.Group(name="job",  description="Find and complete jobs")
-    
+    async def cog_load(self):
+        """Called when the cog is loaded - safer place to start background tasks"""
+        await self.start_job_tracking()
     async def start_job_tracking(self):
         """Start the job tracking background task"""
         await self.bot.wait_until_ready()  # Wait for bot to be ready
         if self.job_tracking_task is None or self.job_tracking_task.done():
             self.job_tracking_task = self.bot.loop.create_task(self.job_tracking_loop())
             print("🔄 Job tracking task started")
+
+    async def cog_unload(self):
+        """Called when the cog is unloaded - clean up tasks"""
+        if self.job_tracking_task:
+            self.job_tracking_task.cancel()
+            print("🔄 Job tracking task stopped")
 
     async def job_tracking_loop(self):
         """The actual job tracking loop"""
