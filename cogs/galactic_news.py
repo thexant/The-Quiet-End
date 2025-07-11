@@ -19,7 +19,7 @@ class GalacticNewsCog(commands.Cog):
         """Clean up tasks when cog is unloaded"""
         self.news_delivery_loop.cancel()
 
-    @tasks.loop(minutes=5)  # Check every 5 minutes for news to deliver
+    @tasks.loop(seconds=30)  # Check every 30 seconds for news to deliver
     async def news_delivery_loop(self):
         """Deliver scheduled news that has reached its delivery time"""
         try:
@@ -28,7 +28,7 @@ class GalacticNewsCog(commands.Cog):
                 """SELECT news_id, guild_id, news_type, title, description, 
                           location_id, delay_hours, event_data
                    FROM news_queue 
-                   WHERE is_delivered = 0 AND scheduled_delivery <= datetime('now')
+                   WHERE is_delivered = 0 AND scheduled_delivery <= datetime('now', '+1 second')
                    ORDER BY scheduled_delivery ASC""",
                 fetch='all'
             )
@@ -308,25 +308,7 @@ class GalacticNewsCog(commands.Cog):
                 description += f" Preliminary reports suggest {cause} may have been a factor."
             
             await self.queue_news(guild_id, 'obituary', title, description, location_id)
-    async def post_shift_change_news(self, shift_name: str, description: str):
-        """Post news about a galactic schedule shift change."""
-        guilds_with_updates = self.db.execute_query(
-            "SELECT guild_id FROM server_config WHERE galactic_updates_channel_id IS NOT NULL",
-            fetch='all'
-        )
 
-        title = f"Galactic Schedule Shift Change: {shift_name}"
-
-        for guild_tuple in guilds_with_updates:
-            guild_id = guild_tuple[0]
-            # Use a central location for system-wide announcements to ensure consistent, short delays
-            central_location = self.db.execute_query(
-                "SELECT location_id FROM locations ORDER BY location_id ASC LIMIT 1",
-                fetch='one'
-            )
-            location_id = central_location[0] if central_location else None
-            
-            await self.queue_news(guild_id, 'admin_announcement', title, description, location_id)
     async def generate_fluff_news(self):
         """Generate random fluff news to make the universe feel alive"""
         
