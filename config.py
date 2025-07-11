@@ -6,7 +6,7 @@ Modify these values to customize your server experience
 
 # Bot Configuration
 BOT_CONFIG = {
-    'token': 'MTM5MTk4NjEzMzEzODY3MzY5NA.GxFmnb.qTjtOuWeUS4WzjLTNSdcDys9V9g9zrzwNNfNS4',  # REPLACE WITH YOUR ACTUAL TOKEN OR USE ENVIRONMENT VARIABLE
+    'token': 'YOUR_BOT_TOKEN',  # REPLACE WITH YOUR ACTUAL TOKEN OR USE ENVIRONMENT VARIABLE
     'command_prefix': '!',           # Prefix for text commands (slash commands don't use this)
     'description': 'A 27th century space RPG bot',
     'activity_name': 'in the void of space',  # Bot status message

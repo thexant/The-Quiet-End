@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Tuple, Any
 
 class Database:
-    def __init__(self, db_path="thequietenddev.db"):  # EDIT THIS TO CHANGE DATABASE NAME OR SWITCH BETWEEN "SAVES"
+    def __init__(self, db_path="thequietendALPHA.db"):  # EDIT THIS TO CHANGE DATABASE NAME OR SWITCH BETWEEN "SAVES"
         self.db_path = db_path
         self.lock = threading.Lock()
         self.init_database()
@@ -449,6 +449,7 @@ class Database:
             '''ALTER TABLE ships ADD COLUMN used_upgrade_slots INTEGER DEFAULT 0''',
             '''ALTER TABLE server_config ADD COLUMN pvp_enabled BOOLEAN DEFAULT 0''',
             '''ALTER TABLE server_config ADD COLUMN combat_channel_id INTEGER''',
+            '''ALTER TABLE server_config ADD COLUMN ship_interiors_category_id INTEGER''',
             #JOB STATUS
             '''ALTER TABLE jobs ADD COLUMN job_status TEXT DEFAULT 'available' ''',
             # Add establishment date to locations

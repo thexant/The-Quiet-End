@@ -36,39 +36,58 @@ class AdminCog(commands.Cog):
             return
         
         try:
-            # Create main GALAXY category first
+            # Find existing main GALAXY category first (created by auto-setup or previous runs)
             main_galaxy_category = None
             main_category_name = " ==== 🌌 GALAXY 🌌 ==== "
             
-            # Check if main galaxy category already exists
+            # Search for existing category
             for category in interaction.guild.categories:
-                if category.name == main_category_name:
+                if category.name.strip() == main_category_name.strip():
                     main_galaxy_category = category
                     break
             
-            if not main_galaxy_category:
+            if main_galaxy_category:
+                created_categories = [f"✅ Found existing main: {main_category_name}"]
+                print(f"Found existing main galaxy category: {main_galaxy_category.id}")
+            else:
                 try:
                     main_galaxy_category = await interaction.guild.create_category(
                         main_category_name,
                         reason="Setup - main galaxy category"
                     )
                     created_categories = [f"🆕 Created main: {main_category_name}"]
+                    print(f"Created new main galaxy category: {main_galaxy_category.id}")
                 except Exception as e:
                     await interaction.edit_original_response(content=f"❌ Failed to create main galaxy category: {e}")
                     return
-            else:
-                created_categories = [f"✅ Found existing main: {main_category_name}"]
             
-            # Create galactic news channel in the main galaxy category
+            # Find or create galactic news channel in the main galaxy category
             news_channel = None
             news_channel_name = "📡-galactic-news"
             
-            # Check if news channel already exists in the main category
-            for channel in main_galaxy_category.text_channels:
-                if channel.name == news_channel_name:
-                    news_channel = channel
-                    break
+            # First check database for existing configured channel
+            existing_news_config = self.db.execute_query(
+                "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = ?",
+                (interaction.guild.id,),
+                fetch='one'
+            )
             
+            if existing_news_config and existing_news_config[0]:
+                news_channel = interaction.guild.get_channel(existing_news_config[0])
+                if news_channel:
+                    created_categories.append(f"✅ Found configured news channel: {news_channel_name}")
+                    print(f"Found existing configured news channel: {news_channel.id}")
+            
+            # If no configured channel found, look for one in the main category
+            if not news_channel:
+                for channel in main_galaxy_category.text_channels:
+                    if channel.name == news_channel_name:
+                        news_channel = channel
+                        created_categories.append(f"✅ Found existing news channel: {news_channel_name}")
+                        print(f"Found existing news channel in category: {news_channel.id}")
+                        break
+            
+            # If still no news channel, create one
             if not news_channel:
                 try:
                     news_channel = await main_galaxy_category.create_text_channel(
@@ -77,10 +96,33 @@ class AdminCog(commands.Cog):
                         reason="RPG Bot setup - galactic news channel"
                     )
                     created_categories.append(f"🆕 Created news channel: {news_channel_name}")
+                    print(f"Created new news channel: {news_channel.id}")
+                    
+                    # Send welcome message to newly created channel
+                    welcome_embed = discord.Embed(
+                        title="🌌 Galactic News Network Online",
+                        description="Welcome to the Galactic News Network relay station. This channel will provide updates on major events across known space.",
+                        color=0x4169E1
+                    )
+                    welcome_embed.add_field(
+                        name="📡 News Coverage",
+                        value="• Corridor shifts and infrastructure changes\n• Major galactic events and discoveries\n• Character obituaries and memorials\n• Economic and trade updates\n• Emergency broadcasts",
+                        inline=False
+                    )
+                    welcome_embed.add_field(
+                        name="⏰ Transmission Delays",
+                        value="News reports experience realistic transmission delays based on distance from galactic communication hubs, simulating the time required for information to travel across space.",
+                        inline=False
+                    )
+                    welcome_embed.set_footer(text="Stay informed, stay alive. - Galactic News Network")
+                    
+                    try:
+                        await news_channel.send(embed=welcome_embed)
+                    except:
+                        pass  # Don't fail setup if we can't send the welcome message
+                        
                 except Exception as e:
                     created_categories.append(f"❌ Failed to create news channel: {e}")
-            else:
-                created_categories.append(f"✅ Found existing news channel: {news_channel_name}")
             
             # Create location categories as children of the main galaxy category
             categories = {}
@@ -97,7 +139,7 @@ class AdminCog(commands.Cog):
                 # Check if category already exists
                 existing_cat = None
                 for category in interaction.guild.categories:
-                    if category.name == cat_name:
+                    if category.name.strip() == cat_name.strip():
                         existing_cat = category
                         break
                 
@@ -125,7 +167,7 @@ class AdminCog(commands.Cog):
                         created_categories.append(f"❌ Failed to create {cat_name}: {e}")
                         categories[cat_type] = None
             
-            # Save configuration to database
+            # Save configuration to database - UPDATE OR REPLACE to handle existing basic config
             self.db.execute_query(
                 '''INSERT OR REPLACE INTO server_config 
                    (guild_id, colony_category_id, station_category_id, outpost_category_id, 
@@ -136,30 +178,6 @@ class AdminCog(commands.Cog):
                  categories.get('ship_interiors'), news_channel.id if news_channel else None)
             )
             
-            # Send a welcome message to the galactic news channel
-            if news_channel:
-                welcome_embed = discord.Embed(
-                    title="🌌 Galactic News Network Online",
-                    description="Welcome to the Galactic News Network relay station. This channel will provide updates on major events across known space.",
-                    color=0x4169E1
-                )
-                welcome_embed.add_field(
-                    name="📡 News Coverage",
-                    value="• Corridor shifts and infrastructure changes\n• Major galactic events and discoveries\n• Character obituaries and memorials\n• Economic and trade updates\n• Emergency broadcasts",
-                    inline=False
-                )
-                welcome_embed.add_field(
-                    name="⏰ Transmission Delays",
-                    value="News reports experience realistic transmission delays based on distance from galactic communication hubs, simulating the time required for information to travel across space.",
-                    inline=False
-                )
-                welcome_embed.set_footer(text="Stay informed, stay alive. - Galactic News Network")
-                
-                try:
-                    await news_channel.send(embed=welcome_embed)
-                except:
-                    pass  # Don't fail setup if we can't send the welcome message
-            
             # Create setup complete embed
             embed = discord.Embed(
                 title="✅ Server Setup Complete!",
@@ -168,20 +186,20 @@ class AdminCog(commands.Cog):
             )
             
             embed.add_field(
-                name="🌌 Galaxy Structure Created",
+                name="🌌 Galaxy Structure",
                 value="\n".join(created_categories),
                 inline=False
             )
             
             embed.add_field(
                 name="📡 Galactic News",
-                value=f"News channel: {news_channel.mention if news_channel else 'Failed to create'}\nAutomatically configured for galactic updates",
+                value=f"News channel: {news_channel.mention if news_channel else 'Failed to configure'}\nAutomatically configured for galactic updates",
                 inline=False
             )
             
             embed.add_field(
-                name="⚙️ Default Settings Applied",
-                value="• Max location channels: 50\n• Channel timeout: 48 hours\n• Auto-cleanup: Enabled",
+                name="⚙️ Settings Applied",
+                value="• Max location channels: 50\n• Channel timeout: 48 hours\n• Auto-cleanup: Enabled\n• Setup status: Completed",
                 inline=True
             )
             
@@ -212,13 +230,15 @@ class AdminCog(commands.Cog):
             
             await interaction.edit_original_response(content=None, embed=embed)
             
+            print(f"✅ Setup completed for {interaction.guild.name} - setup_completed flag set to 1")
+            
         except Exception as e:
-            error_embed = discord.Embed(
-                title="❌ Setup Failed",
-                description=f"An error occurred during setup: {str(e)}",
-                color=0xff0000
-            )
-            await interaction.edit_original_response(content=None, embed=error_embed)
+                error_embed = discord.Embed(
+                    title="❌ Setup Failed",
+                    description=f"An error occurred during setup: {str(e)}",
+                    color=0xff0000
+                )
+                await interaction.edit_original_response(content=None, embed=error_embed)
     
     async def _show_current_config(self, interaction: discord.Interaction):
         """Show current server configuration"""

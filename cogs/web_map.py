@@ -105,7 +105,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         <link rel="stylesheet" href="/static/css/map.css" />
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono:wght@400&family=Orbitron:wght@400;500;700;900&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono:wght@400&family=Tektur:wght@400;500;700;900&display=swap" rel="stylesheet">
     </head>
     <body>
         <div class="scanlines"></div>
@@ -163,6 +163,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         <button id="fit-bounds-btn" class="btn-secondary">CENTER</button>
                         <button id="toggle-labels-btn" class="btn-secondary">LABELS</button>
                         <button id="toggle-routes-btn" class="btn-secondary toggle-active">ROUTES</button>
+                        <button id="toggle-npcs-btn" class="btn-secondary toggle-active">NPCS</button>
                     </div>
                 </div>
             </div>
@@ -199,6 +200,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 <div class="legend-item"><span class="corridor gated"></span> GATED</div>
                 <div class="legend-item"><span class="corridor ungated"></span> UNGATED</div>
                 <div class="legend-item"><span class="player-indicator"></span> CONTACTS</div>
+                <div class="legend-item"><span class="npc-indicator"></span> NPCS</div>
             </div>
         </div>
 
@@ -482,13 +484,13 @@ class WebMapCog(commands.Cog, name="WebMap"):
         }
 
         .terminal-id {
-            font-family: 'Orbitron', monospace;
+            font-family: 'Tektur', monospace;
             font-weight: 700;
         }
 
         .header-brand h1 {
             margin: 0;
-            font-family: 'Orbitron', monospace;
+            font-family: 'Tektur', monospace;
             font-size: 1.6rem;
             font-weight: 700;
             color: var(--primary-color);
@@ -786,7 +788,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
 
         .panel-header h3 {
             margin: 0;
-            font-family: 'Orbitron', monospace;
+            font-family: 'Tektur', monospace;
             font-size: 1rem;
             font-weight: 700;
             text-shadow: 0 0 5px rgba(0, 0, 0, 0.8);
@@ -852,7 +854,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
             gap: 0.5rem;
             font-size: 0.75rem;
             color: var(--primary-color);
-            font-family: 'Orbitron', monospace;
+            font-family: 'Tektur', monospace;
             font-weight: 500;
             text-shadow: 0 0 8px var(--glow-primary);
         }
@@ -950,7 +952,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         }
 
         .loading-text {
-            font-family: 'Orbitron', monospace;
+            font-family: 'Tektur', monospace;
             color: var(--primary-color);
             font-size: 1.1rem;
             font-weight: 500;
@@ -1419,9 +1421,10 @@ class WebMapCog(commands.Cog, name="WebMap"):
         }
         
         .player-presence-indicator {
-            pointer-events: none; /* Allows clicks to pass through to the location marker */
+            pointer-events: none !important;
             animation: player-pulse 2.5s infinite ease-in-out;
             filter: drop-shadow(0 0 4px var(--success-color));
+            z-index: 1 !important;
         }
 
         @keyframes player-pulse {
@@ -1437,1017 +1440,1182 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 stroke-opacity: 0.6;
                 filter: drop-shadow(0 0 4px var(--success-color));
             }
+        }
+        /* Improve click targets for location markers */
+        .leaflet-interactive {
+            cursor: pointer !important;
+        }
+        
+        .leaflet-marker-icon {
+            cursor: pointer !important;
+        }
+        
+        /* Ensure player indicators don't block clicks */
+        .player-presence-indicator {
+            pointer-events: none !important;
+            z-index: 1 !important;
+        }
+        
+        /* Make sure location markers are above indicators */
+        .location-marker {
+            z-index: 10 !important;
+        }
+        .npc-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+            border: 2px solid var(--warning-color);
+            background: transparent;
+            position: relative;
+            animation: npc-pulse 2.5s infinite;
+        }
+
+        @keyframes npc-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 136, 0, 0.7); }
+            70% { box-shadow: 0 0 0 8px rgba(255, 136, 0, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 136, 0, 0); }
+        }
+        
+        .npc-presence-indicator {
+            pointer-events: none !important;
+            animation: npc-pulse-live 2.5s infinite ease-in-out;
+            filter: drop-shadow(0 0 4px var(--warning-color));
+            z-index: 1 !important;
+        }
+
+        @keyframes npc-pulse-live {
+            0% {
+                stroke-opacity: 0.6;
+                filter: drop-shadow(0 0 4px var(--warning-color));
+            }
+            50% {
+                stroke-opacity: 1;
+                filter: drop-shadow(0 0 10px var(--warning-color));
+            }
+            100% {
+                stroke-opacity: 0.6;
+                filter: drop-shadow(0 0 4px var(--warning-color));
+            }
         }'''
         with open("web/static/css/map.css", "w", encoding='utf-8') as f:
             f.write(css_content)
 
         # Create enhanced JavaScript file with color randomization and improved labels
-        js_content = js_content = '''class GalaxyMap {
-            constructor() {
-                this.map = null;
-                this.websocket = null;
-                this.locations = new Map();
-                this.corridors = new Map();
-                this.players = new Map();
-                this.selectedLocation = null;
-                this.routePolylines = [];
-                this.highlightedLocations = [];
-                this.currentRoute = null;
-                this.labels = new Map();
-                this.routeMode = false;
-                this.showLabels = false;
-                this.showRoutes = true;
-                this.headerExpanded = true;
-                this.reconnectAttempts = 0;
-                this.maxReconnectAttempts = 10;
-                this.reconnectDelay = 1000;
-                this.labelGrid = new Map();
-                
-                this.initializeColorScheme();
-                this.init();
-            }
-            
-            initializeColorScheme() {
-                const themes = ['blue', 'amber', 'green', 'red', 'purple'];
-                const selectedTheme = themes[Math.floor(Math.random() * themes.length)];
-                
-                document.body.className = `theme-${selectedTheme}`;
-                
-                console.log(`🎨 CRT Terminal initialized with ${selectedTheme.toUpperCase()} color scheme`);
-            }
-            
-            init() {
-                this.setupMap();
-                this.setupEventListeners();
-                this.connectWebSocket();
-                this.hideLoadingOverlay();
-            }
-            
-            setupMap() {
-                this.map = L.map('map', {
-                    crs: L.CRS.Simple,
-                    minZoom: -3,
-                    maxZoom: 6,
-                    zoomControl: false,
-                    attributionControl: false,
-                    maxBounds: [[-5000, -5000], [5000, 5000]],
-                    maxBoundsViscosity: 1.0
-                });
-                
-                L.control.zoom({
-                    position: 'bottomright'
-                }).addTo(this.map);
-                
-                this.map.setView([0, 0], 1);
-                
-                this.map.on('click', () => {
-                    this.hideLocationPanel();
-                });
-                
-                // Update labels when zoom changes
-                this.map.on('zoomend', () => {
-                    if (this.showLabels) {
-                        this.updateLabelsForZoom();
+        js_content = '''class GalaxyMap {
+                    constructor() {
+                        this.map = null;
+                        this.websocket = null;
+                        this.locations = new Map();
+                        this.corridors = new Map();
+                        this.players = new Map();
+                        this.npcs = new Map();  // ADD THIS LINE
+                        this.selectedLocation = null;
+                        this.routePolylines = [];
+                        this.highlightedLocations = [];
+                        this.currentRoute = null;
+                        this.labels = new Map();
+                        this.routeMode = false;
+                        this.showLabels = false;
+                        this.showRoutes = true;
+                        this.showNPCs = true;  // ADD THIS LINE
+                        this.headerExpanded = true;
+                        this.reconnectAttempts = 0;
+                        this.maxReconnectAttempts = 10;
+                        this.reconnectDelay = 1000;
+                        this.labelGrid = new Map();
+                        
+                        this.initializeColorScheme();
+                        this.init();
                     }
-                });
-                
-                this.map.on('moveend', () => {
-                    if (this.showLabels) {
-                        this.updateLabelsForZoom();
-                    }
-                });
-            }
-            
-            setupEventListeners() {
-                // Header toggle
-                const headerToggle = document.getElementById('header-toggle');
-                const header = document.getElementById('header');
-                const map = document.getElementById('map');
-                const locationPanel = document.getElementById('location-panel');
-                
-                headerToggle?.addEventListener('click', () => {
-                    this.headerExpanded = !this.headerExpanded;
                     
-                    if (this.headerExpanded) {
-                        header.classList.remove('header-collapsed');
-                        header.classList.add('header-expanded');
-                        map.classList.remove('header-collapsed');
-                        locationPanel?.classList.remove('header-collapsed');
-                        headerToggle.classList.remove('collapsed');
-                    } else {
-                        header.classList.remove('header-expanded');
-                        header.classList.add('header-collapsed');
-                        map.classList.add('header-collapsed');
-                        locationPanel?.classList.add('header-collapsed');
-                        headerToggle.classList.add('collapsed');
+                    initializeColorScheme() {
+                        const themes = ['blue', 'amber', 'green', 'red', 'purple'];
+                        const selectedTheme = themes[Math.floor(Math.random() * themes.length)];
+                        
+                        document.body.className = `theme-${selectedTheme}`;
+                        
+                        console.log(`🎨 CRT Terminal initialized with ${selectedTheme.toUpperCase()} color scheme`);
                     }
-                });
-                
-                // Mobile toggle
-                const mobileToggle = document.getElementById('mobile-toggle');
-                const controlsSection = document.getElementById('controls-section');
-                
-                mobileToggle?.addEventListener('click', () => {
-                    controlsSection.classList.toggle('active');
-                });
-                
-                // Search functionality
-                const searchInput = document.getElementById('location-search');
-                const searchBtn = document.getElementById('search-btn');
-                const clearSearchBtn = document.getElementById('clear-search-btn');
-                
-                const performSearch = () => {
-                    const query = searchInput.value.trim();
-                    if (query) {
-                        this.searchLocations(query);
-                    }
-                };
-                
-                const clearSearch = () => {
-                    searchInput.value = '';
-                    this.clearHighlights();
-                    this.clearSearch();
-                };
-                
-                searchBtn?.addEventListener('click', performSearch);
-                clearSearchBtn?.addEventListener('click', clearSearch);
-                
-                searchInput?.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') {
-                        performSearch();
-                    }
-                });
-                
-                searchInput?.addEventListener('input', (e) => {
-                    if (!e.target.value.trim()) {
-                        this.clearHighlights();
-                    }
-                });
-                
-                // Route plotting
-                const plotRouteBtn = document.getElementById('plot-route-btn');
-                const clearRouteBtn = document.getElementById('clear-route-btn');
-                
-                plotRouteBtn?.addEventListener('click', () => {
-                    const fromId = document.getElementById('route-from').value;
-                    const toId = document.getElementById('route-to').value;
-                    if (fromId && toId && fromId !== toId) {
-                        this.plotRoute(parseInt(fromId), parseInt(toId));
-                    }
-                });
-                
-                clearRouteBtn?.addEventListener('click', () => {
-                    this.clearRoute();
-                    document.getElementById('route-from').value = '';
-                    document.getElementById('route-to').value = '';
-                });
-                
-                // View controls
-                const fitBoundsBtn = document.getElementById('fit-bounds-btn');
-                const toggleLabelsBtn = document.getElementById('toggle-labels-btn');
-                const toggleRoutesBtn = document.getElementById('toggle-routes-btn');
-                
-                fitBoundsBtn?.addEventListener('click', () => {
-                    this.fitMapToBounds();
-                });
-                
-                toggleLabelsBtn?.addEventListener('click', () => {
-                    this.toggleLabels();
-                });
-                
-                toggleRoutesBtn?.addEventListener('click', () => {
-                    this.toggleRoutes();
-                });
-                
-                // Panel close
-                const closePanel = document.getElementById('close-panel');
-                closePanel?.addEventListener('click', () => {
-                    this.hideLocationPanel();
-                });
-                
-                // Close panel when clicking outside
-                document.addEventListener('click', (e) => {
-                    const panel = document.getElementById('location-panel');
-                    const mapContainer = this.map?.getContainer();
                     
-                    if (panel && !panel.contains(e.target) && 
-                        mapContainer && !mapContainer.contains(e.target)) {
-                        this.hideLocationPanel();
-                    }
-                });
-                
-                // Keyboard shortcuts
-                document.addEventListener('keydown', (e) => {
-                    if (e.target.tagName.toLowerCase() === 'input' || e.target.tagName.toLowerCase() === 'select') return;
-                    
-                    switch(e.key) {
-                        case 'Escape':
-                            this.hideLocationPanel();
-                            this.clearHighlights();
-                            this.clearRoute();
-                            break;
-                        case 'f':
-                        case 'F':
-                            this.fitMapToBounds();
-                            break;
-                        case 'l':
-                        case 'L':
-                            this.toggleLabels();
-                            break;
-                        case 'r':
-                        case 'R':
-                            this.toggleRoutes();
-                            break;
-                        case 'h':
-                        case 'H':
-                            headerToggle?.click();
-                            break;
-                    }
-                });
-            }
-            
-            connectWebSocket() {
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${protocol}//${window.location.host}/ws`;
-                
-                if (this.websocket) {
-                    this.websocket.close();
-                }
-                
-                this.websocket = new WebSocket(wsUrl);
-                
-                this.websocket.onopen = () => {
-                    this.updateConnectionStatus('CONNECTED', 'var(--success-color)');
-                    this.reconnectAttempts = 0;
-                    console.log('🔗 WebSocket connected to navigation systems');
-                };
-                
-                this.websocket.onmessage = (event) => {
-                    try {
-                        const data = JSON.parse(event.data);
-                        this.handleWebSocketMessage(data);
-                    } catch (error) {
-                        console.error('Failed to parse WebSocket message:', error);
-                    }
-                };
-                
-                this.websocket.onclose = () => {
-                    this.updateConnectionStatus('DISCONNECTED', 'var(--error-color)');
-                    console.log('🔌 WebSocket disconnected');
-                    this.scheduleReconnect();
-                };
-                
-                this.websocket.onerror = (error) => {
-                    console.error('WebSocket error:', error);
-                    this.updateConnectionStatus('ERROR', 'var(--warning-color)');
-                };
-            }
-            
-            scheduleReconnect() {
-                if (this.reconnectAttempts < this.maxReconnectAttempts) {
-                    this.reconnectAttempts++;
-                    const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 30000);
-                    
-                    this.updateConnectionStatus(`RECONNECTING... (${this.reconnectAttempts})`, 'var(--warning-color)');
-                    
-                    setTimeout(() => {
+                    init() {
+                        this.setupMap();
+                        this.setupEventListeners();
                         this.connectWebSocket();
-                    }, delay);
-                } else {
-                    this.updateConnectionStatus('CONNECTION FAILED', 'var(--error-color)');
-                }
-            }
-            
-            handleWebSocketMessage(data) {
-                switch(data.type) {
-                    case 'galaxy_data':
-                        this.updateGalaxyData(data.data);
-                        break;
-                    case 'player_update':
-                        this.updatePlayers(data.data);
-                        break;
-                    case 'location_update':
-                        this.updateLocation(data.data);
-                        break;
-                    default:
-                        console.warn('Unknown WebSocket message type:', data.type);
-                }
-            }
-            
-            updateGalaxyData(data) {
-                try {
-                    this.locations.clear();
-                    this.corridors.clear();
-                    this.labelGrid.clear();
-                    this.map.eachLayer((layer) => {
-                        if (layer !== this.map._layers[Object.keys(this.map._layers)[0]]) {
-                            this.map.removeLayer(layer);
-                        }
-                    });
-                    
-                    data.locations.forEach(location => {
-                        this.addLocation(location);
-                    });
-                    
-                    data.corridors.forEach(corridor => {
-                        this.addCorridor(corridor);
-                    });
-                    
-                    this.applyRouteVisibility();
-                    this.updatePlayers(data.players || []);
-                    this.populateRouteSelects();
-                    this.fitMapToBounds();
-                    
-                } catch (error) {
-                    console.error('Error updating galaxy data:', error);
-                }
-            }
-            
-            addLocation(location) {
-                const marker = this.createLocationMarker(location);
-                marker.addTo(this.map);
-                
-                this.locations.set(location.location_id, {
-                    ...location,
-                    marker: marker
-                });
-                
-                marker.on('click', (e) => {
-                    L.DomEvent.stopPropagation(e);
-                    this.selectLocation(location);
-                });
-            }
-            
-            createLocationMarker(location) {
-                const colors = {
-                    'Colony': 'var(--success-color)',
-                    'Space Station': 'var(--primary-color)',
-                    'Outpost': 'var(--warning-color)',
-                    'Transit Gate': '#ffdd00'
-                };
-                
-                const color = colors[location.location_type] || '#ffffff';
-                const size = this.getMarkerSize(location.location_type);
-                
-                return L.circleMarker([location.y_coord, location.x_coord], {
-                    radius: size,
-                    fillColor: color,
-                    color: '#ffffff',
-                    weight: 2,
-                    opacity: 1,
-                    fillOpacity: 0.9,
-                    className: `location-marker ${location.location_type.toLowerCase().replace(' ', '-')}`
-                });
-            }
-            
-            getMarkerSize(locationType) {
-                const sizes = {
-                    'Colony': 8,
-                    'Space Station': 10,
-                    'Outpost': 6,
-                    'Transit Gate': 7
-                };
-                return sizes[locationType] || 6;
-            }
-            
-            addCorridor(corridor) {
-                const isGated = corridor.name && corridor.name.toLowerCase().includes('gate');
-                const color = isGated ? 'var(--success-color)' : 'var(--warning-color)';
-                
-                const polyline = L.polyline([
-                    [corridor.origin_y, corridor.origin_x],
-                    [corridor.dest_y, corridor.dest_x]
-                ], {
-                    color: color,
-                    weight: isGated ? 2 : 3,
-                    opacity: 0.7,
-                    dashArray: isGated ? null : '8, 5',
-                    className: `corridor ${isGated ? 'gated' : 'ungated'}`
-                });
-                
-                polyline.addTo(this.map);
-                this.corridors.set(corridor.corridor_id, {
-                    ...corridor,
-                    polyline: polyline,
-                    isGated: isGated
-                });
-            }
-            
-            toggleRoutes() {
-                this.showRoutes = !this.showRoutes;
-                const btn = document.getElementById('toggle-routes-btn');
-                
-                this.applyRouteVisibility();
-                
-                if (btn) {
-                    if (this.showRoutes) {
-                        btn.textContent = 'ROUTES';
-                        btn.classList.add('toggle-active');
-                    } else {
-                        btn.textContent = 'ROUTES';
-                        btn.classList.remove('toggle-active');
+                        this.hideLoadingOverlay();
                     }
-                }
-            }
-            
-            applyRouteVisibility() {
-                this.corridors.forEach(corridor => {
-                    if (corridor.polyline) {
-                        if (this.showRoutes) {
-                            corridor.polyline.getElement()?.classList.remove('routes-hidden');
+                    
+                    setupMap() {
+                        this.map = L.map('map', {
+                            crs: L.CRS.Simple,
+                            minZoom: -3,
+                            maxZoom: 6,
+                            zoomControl: false,
+                            attributionControl: false,
+                            maxBounds: [[-5000, -5000], [5000, 5000]],
+                            maxBoundsViscosity: 1.0
+                        });
+                        
+                        L.control.zoom({
+                            position: 'bottomright'
+                        }).addTo(this.map);
+                        
+                        this.map.setView([0, 0], 1);
+                        
+                        this.map.on('click', () => {
+                            this.hideLocationPanel();
+                        });
+                        
+                        // Update labels when zoom changes
+                        this.map.on('zoomend', () => {
+                            if (this.showLabels) {
+                                this.updateLabelsForZoom();
+                            }
+                        });
+                        
+                        this.map.on('moveend', () => {
+                            if (this.showLabels) {
+                                this.updateLabelsForZoom();
+                            }
+                        });
+                    }
+                    
+                    setupEventListeners() {
+                        // Header toggle
+                        const headerToggle = document.getElementById('header-toggle');
+                        const header = document.getElementById('header');
+                        const map = document.getElementById('map');
+                        const locationPanel = document.getElementById('location-panel');
+                        
+                        headerToggle?.addEventListener('click', () => {
+                            this.headerExpanded = !this.headerExpanded;
+                            
+                            if (this.headerExpanded) {
+                                header.classList.remove('header-collapsed');
+                                header.classList.add('header-expanded');
+                                map.classList.remove('header-collapsed');
+                                locationPanel?.classList.remove('header-collapsed');
+                                headerToggle.classList.remove('collapsed');
+                            } else {
+                                header.classList.remove('header-expanded');
+                                header.classList.add('header-collapsed');
+                                map.classList.add('header-collapsed');
+                                locationPanel?.classList.add('header-collapsed');
+                                headerToggle.classList.add('collapsed');
+                            }
+                        });
+                        
+                        // Mobile toggle
+                        const mobileToggle = document.getElementById('mobile-toggle');
+                        const controlsSection = document.getElementById('controls-section');
+                        
+                        mobileToggle?.addEventListener('click', () => {
+                            controlsSection.classList.toggle('active');
+                        });
+                        
+                        // Search functionality
+                        const searchInput = document.getElementById('location-search');
+                        const searchBtn = document.getElementById('search-btn');
+                        const clearSearchBtn = document.getElementById('clear-search-btn');
+                        
+                        const performSearch = () => {
+                            const query = searchInput.value.trim();
+                            if (query) {
+                                this.searchLocations(query);
+                            }
+                        };
+                        
+                        const clearSearch = () => {
+                            searchInput.value = '';
+                            this.clearHighlights();
+                            this.clearSearch();
+                        };
+                        
+                        searchBtn?.addEventListener('click', performSearch);
+                        clearSearchBtn?.addEventListener('click', clearSearch);
+                        
+                        searchInput?.addEventListener('keypress', (e) => {
+                            if (e.key === 'Enter') {
+                                performSearch();
+                            }
+                        });
+                        
+                        searchInput?.addEventListener('input', (e) => {
+                            if (!e.target.value.trim()) {
+                                this.clearHighlights();
+                            }
+                        });
+                        
+                        // Route plotting
+                        const plotRouteBtn = document.getElementById('plot-route-btn');
+                        const clearRouteBtn = document.getElementById('clear-route-btn');
+                        
+                        plotRouteBtn?.addEventListener('click', () => {
+                            const fromId = document.getElementById('route-from').value;
+                            const toId = document.getElementById('route-to').value;
+                            if (fromId && toId && fromId !== toId) {
+                                this.plotRoute(parseInt(fromId), parseInt(toId));
+                            }
+                        });
+                        
+                        clearRouteBtn?.addEventListener('click', () => {
+                            this.clearRoute();
+                            document.getElementById('route-from').value = '';
+                            document.getElementById('route-to').value = '';
+                        });
+                        
+                        // View controls
+                        const fitBoundsBtn = document.getElementById('fit-bounds-btn');
+                        const toggleLabelsBtn = document.getElementById('toggle-labels-btn');
+                        const toggleRoutesBtn = document.getElementById('toggle-routes-btn');
+                        
+                        fitBoundsBtn?.addEventListener('click', () => {
+                            this.fitMapToBounds();
+                        });
+                        
+                        toggleLabelsBtn?.addEventListener('click', () => {
+                            this.toggleLabels();
+                        });
+                        
+                        toggleRoutesBtn?.addEventListener('click', () => {
+                            this.toggleRoutes();
+                        });
+                        
+                        // Panel close
+                        const closePanel = document.getElementById('close-panel');
+                        closePanel?.addEventListener('click', () => {
+                            this.hideLocationPanel();
+                        });
+                        
+                        // Close panel when clicking outside
+                        document.addEventListener('click', (e) => {
+                            const panel = document.getElementById('location-panel');
+                            const mapContainer = this.map?.getContainer();
+                            
+                            if (panel && !panel.contains(e.target) && 
+                                mapContainer && !mapContainer.contains(e.target)) {
+                                this.hideLocationPanel();
+                            }
+                        });
+                        const toggleNPCsBtn = document.getElementById('toggle-npcs-btn');
+                        
+                            toggleNPCsBtn?.addEventListener('click', () => {
+                                this.toggleNPCs();
+                            });
+                        // Keyboard shortcuts
+                        document.addEventListener('keydown', (e) => {
+                            if (e.target.tagName.toLowerCase() === 'input' || e.target.tagName.toLowerCase() === 'select') return;
+                            
+                            switch(e.key) {
+                                case 'Escape':
+                                    this.hideLocationPanel();
+                                    this.clearHighlights();
+                                    this.clearRoute();
+                                    break;
+                                case 'f':
+                                case 'F':
+                                    this.fitMapToBounds();
+                                    break;
+                                case 'l':
+                                case 'L':
+                                    this.toggleLabels();
+                                    break;
+                                case 'r':
+                                case 'R':
+                                    this.toggleRoutes();
+                                    break;
+                                case 'h':
+                                case 'H':
+                                    headerToggle?.click();
+                                    break;
+                            }
+                        });
+                    }
+                    
+                    connectWebSocket() {
+                        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                        const wsUrl = `${protocol}//${window.location.host}/ws`;
+                        
+                        if (this.websocket) {
+                            this.websocket.close();
+                        }
+                        
+                        this.websocket = new WebSocket(wsUrl);
+                        
+                        this.websocket.onopen = () => {
+                            this.updateConnectionStatus('CONNECTED', 'var(--success-color)');
+                            this.reconnectAttempts = 0;
+                            console.log('🔗 WebSocket connected to navigation systems');
+                        };
+                        
+                        this.websocket.onmessage = (event) => {
+                            try {
+                                const data = JSON.parse(event.data);
+                                this.handleWebSocketMessage(data);
+                            } catch (error) {
+                                console.error('Failed to parse WebSocket message:', error);
+                            }
+                        };
+                        
+                        this.websocket.onclose = () => {
+                            this.updateConnectionStatus('DISCONNECTED', 'var(--error-color)');
+                            console.log('🔌 WebSocket disconnected');
+                            this.scheduleReconnect();
+                        };
+                        
+                        this.websocket.onerror = (error) => {
+                            console.error('WebSocket error:', error);
+                            this.updateConnectionStatus('ERROR', 'var(--warning-color)');
+                        };
+                    }
+                    
+                    scheduleReconnect() {
+                        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                            this.reconnectAttempts++;
+                            const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 30000);
+                            
+                            this.updateConnectionStatus(`RECONNECTING... (${this.reconnectAttempts})`, 'var(--warning-color)');
+                            
+                            setTimeout(() => {
+                                this.connectWebSocket();
+                            }, delay);
                         } else {
-                            corridor.polyline.getElement()?.classList.add('routes-hidden');
+                            this.updateConnectionStatus('CONNECTION FAILED', 'var(--error-color)');
                         }
                     }
-                });
-                
-                this.routePolylines.forEach(routeLine => {
-                    if (this.showRoutes) {
-                        routeLine.getElement()?.classList.remove('routes-hidden');
-                    } else {
-                        routeLine.getElement()?.classList.add('routes-hidden');
-                    }
-                });
-            }
-            
-            updatePlayers(players) {
-                const playerCount = document.getElementById('player-count');
-                if (playerCount) {
-                    playerCount.textContent = `${players.length} CONTACTS`;
-                }
-                
-                this.players.clear();
-                
-                players.forEach(player => {
-                    if (!this.players.has(player.location_id)) {
-                        this.players.set(player.location_id, []);
-                    }
-                    this.players.get(player.location_id).push(player);
-                });
-                
-                this.locations.forEach((location, locationId) => {
-                    this.updateLocationWithPlayers(location, this.players.get(locationId) || []);
-                });
-                
-                if (this.selectedLocation) {
-                    this.updateLocationPanel(this.selectedLocation);
-                }
-            }
-            
-            updateLocationWithPlayers(location, playersHere) {
-                const marker = location.marker;
-                if (!marker) return;
-
-                if (location.playerIndicator) {
-                    this.map.removeLayer(location.playerIndicator);
-                    delete location.playerIndicator;
-                }
-
-                if (playersHere.length > 0) {
-                    const indicator = L.circleMarker([location.y_coord, location.x_coord], {
-                        radius: 14,
-                        fillColor: 'transparent',
-                        color: 'var(--success-color)',
-                        weight: 3,
-                        opacity: 1,
-                        fillOpacity: 0,
-                        className: 'player-presence-indicator',
-                        interactive: false // Add this line
-                    });
-
-                    indicator.addTo(this.map);
-                    location.playerIndicator = indicator;
-                }
-            }
-            
-            selectLocation(location) {
-                this.selectedLocation = location;
-                this.updateLocationPanel(location);
-                this.showLocationPanel();
-                
-                this.clearHighlights();
-                this.highlightLocation(location, 'var(--primary-color)');
-            }
-            
-            async updateLocationPanel(location) {
-                const titleElement = document.getElementById('location-title');
-                const detailsElement = document.getElementById('location-details');
-                
-                if (!titleElement || !detailsElement) return;
-                
-                titleElement.textContent = location.name.toUpperCase();
-                
-                const playersHere = this.players.get(location.location_id) || [];
-                const subLocations = await this.getSubLocations(location.location_id);
-                
-                const wealthDisplay = this.getWealthDisplay(location.wealth_level);
-                const typeIcon = this.getLocationTypeIcon(location.location_type);
-                
-                const detailsHtml = `
-                    <div class="location-detail">
-                        <strong>${typeIcon} TYPE:</strong> ${location.location_type.toUpperCase()}
-                    </div>
-                    <div class="location-detail">
-                        <strong>💰 WEALTH:</strong> ${wealthDisplay}
-                    </div>
-                    <div class="location-detail">
-                        <strong>👥 POPULATION:</strong> ${location.population?.toLocaleString() || 'UNKNOWN'}
-                    </div>
-                    <div class="location-detail">
-                        <strong>📍 COORDINATES:</strong> (${location.x_coord}, ${location.y_coord})
-                    </div>
-                    <div class="location-detail">
-                        <strong>📄 DESCRIPTION:</strong>
-                        <div style="margin-top: 0.5rem; font-style: italic; color: var(--text-secondary); text-transform: none;">
-                            ${location.description || 'No description available.'}
-                        </div>
-                    </div>
-                    ${subLocations.length > 0 ? `
-                        <div class="sub-locations">
-                            <strong>🏢 AVAILABLE AREAS:</strong>
-                            ${subLocations.map(sub => `
-                                <div class="sub-location-item">
-                                    ${sub.icon || '📍'} ${sub.name.toUpperCase()} - ${sub.description}
-                                </div>
-                            `).join('')}
-                        </div>
-                    ` : ''}
-                    ${playersHere.length > 0 ? `
-                        <div class="players-list">
-                            <strong>👥 CONTACTS PRESENT (${playersHere.length}):</strong>
-                            ${playersHere.map(player => `
-                                <div class="player-item">
-                                    <span class="status-indicator status-online"></span>
-                                    ${player.name.toUpperCase()}
-                                </div>
-                            `).join('')}
-                        </div>
-                    ` : '<div class="location-detail"><em>No contacts currently present</em></div>'}
-                `;
-                
-                detailsElement.innerHTML = detailsHtml;
-            }
-            
-            getWealthDisplay(wealthLevel) {
-                if (wealthLevel >= 9) return '👑 OPULENT';
-                if (wealthLevel >= 7) return '💎 WEALTHY';
-                if (wealthLevel >= 5) return '💰 PROSPEROUS';
-                if (wealthLevel >= 3) return '⚖️ AVERAGE';
-                if (wealthLevel >= 2) return '📉 POOR';
-                if (wealthLevel >= 1) return '🗑️ IMPOVERISHED';
-                return '❓ UNKNOWN';
-            }
-            
-            getLocationTypeIcon(locationType) {
-                const icons = {
-                    'Colony': '🏘️',
-                    'Space Station': '🛰️',
-                    'Outpost': '🏭',
-                    'Transit Gate': '🌌'
-                };
-                return icons[locationType] || '📍';
-            }
-            
-            async getSubLocations(locationId) {
-                try {
-                    const response = await fetch(`/api/location/${locationId}/sub-locations`);
-                    if (response.ok) {
-                        return await response.json();
-                    }
-                } catch (error) {
-                    console.error('Failed to fetch sub-locations:', error);
-                }
-                return [];
-            }
-            
-            showLocationPanel() {
-                const panel = document.getElementById('location-panel');
-                if (panel) {
-                    panel.classList.remove('hidden');
-                }
-            }
-            
-            hideLocationPanel() {
-                const panel = document.getElementById('location-panel');
-                if (panel) {
-                    panel.classList.add('hidden');
-                }
-                this.selectedLocation = null;
-                this.clearHighlights();
-            }
-            
-            searchLocations(query) {
-                this.clearHighlights();
-                
-                if (!query.trim()) return;
-                
-                const results = [];
-                const queryLower = query.toLowerCase();
-                
-                this.locations.forEach((location) => {
-                    if (location.name.toLowerCase().includes(queryLower) ||
-                        location.location_type.toLowerCase().includes(queryLower)) {
-                        results.push(location);
-                    }
-                });
-                
-                if (results.length > 0) {
-                    results.forEach(location => {
-                        this.highlightLocation(location, 'var(--primary-color)');
-                    });
                     
-                    if (results.length === 1) {
-                        this.map.setView([results[0].y_coord, results[0].x_coord], 4);
-                        this.selectLocation(results[0]);
-                    } else {
-                        this.fitBoundsToLocations(results);
+                    handleWebSocketMessage(data) {
+                        switch(data.type) {
+                            case 'galaxy_data':
+                                this.updateGalaxyData(data.data);
+                                break;
+                            case 'player_update':
+                                this.updatePlayers(data.data);
+                                break;
+                            case 'npc_update':
+                                this.updateNPCs(data.data);  // ADD THIS LINE
+                                break;
+                            case 'location_update':
+                                this.updateLocation(data.data);
+                                break;
+                            default:
+                                console.warn('Unknown WebSocket message type:', data.type);
+                        }
                     }
-                }
-            }
-            
-            clearSearch() {
-                const searchInput = document.getElementById('location-search');
-                if (searchInput) {
-                    searchInput.value = '';
-                }
-                this.clearHighlights();
-            }
-            
-            highlightLocation(location, color = '#ffff00') {
-                if (!location.marker) return;
-                
-                const originalOptions = location.marker.options;
-                location.marker.setStyle({
-                    ...originalOptions,
-                    color: color,
-                    weight: 4,
-                    opacity: 1,
-                    className: `${originalOptions.className} location-highlight`
-                });
-                
-                this.highlightedLocations.push(location);
-            }
-            
-            clearHighlights() {
-                this.highlightedLocations.forEach(location => {
-                    if (location.marker) {
-                        const originalOptions = location.marker.options;
-                        location.marker.setStyle({
-                            ...originalOptions,
+                    
+                    updateGalaxyData(data) {
+                        try {
+                            this.locations.clear();
+                            this.corridors.clear();
+                            this.labelGrid.clear();
+                            this.map.eachLayer((layer) => {
+                                if (layer !== this.map._layers[Object.keys(this.map._layers)[0]]) {
+                                    this.map.removeLayer(layer);
+                                }
+                            });
+                            
+                            data.locations.forEach(location => {
+                                this.addLocation(location);
+                            });
+                            
+                            data.corridors.forEach(corridor => {
+                                this.addCorridor(corridor);
+                            });
+                            
+                            this.applyRouteVisibility();
+                            this.updatePlayers(data.players || []);
+                            this.updateNPCs(data.dynamic_npcs || []);  // ADD THIS LINE
+                            this.populateRouteSelects();
+                            this.fitMapToBounds();
+                            
+                        } catch (error) {
+                            console.error('Error updating galaxy data:', error);
+                        }
+                    }
+                    
+                    addLocation(location) {
+                        const marker = this.createLocationMarker(location);
+                        marker.addTo(this.map);
+                        
+                        this.locations.set(location.location_id, {
+                            ...location,
+                            marker: marker
+                        });
+                        
+                        marker.on('click', (e) => {
+                            L.DomEvent.stopPropagation(e);
+                            this.selectLocation(location);
+                        });
+                    }
+                    
+                    createLocationMarker(location) {
+                        const colors = {
+                            'Colony': 'var(--success-color)',
+                            'Space Station': 'var(--primary-color)',
+                            'Outpost': 'var(--warning-color)',
+                            'Transit Gate': '#ffdd00'
+                        };
+                        
+                        const color = colors[location.location_type] || '#ffffff';
+                        const size = this.getMarkerSize(location.location_type);
+                        
+                        return L.circleMarker([location.y_coord, location.x_coord], {
+                            radius: size,
+                            fillColor: color,
                             color: '#ffffff',
                             weight: 2,
                             opacity: 1,
-                            className: originalOptions.className.replace(' location-highlight', '')
+                            fillOpacity: 0.9,
+                            className: `location-marker ${location.location_type.toLowerCase().replace(' ', '-')}`
                         });
                     }
-                });
-                this.highlightedLocations = [];
-            }
-            
-            async plotRoute(fromId, toId) {
-                try {
-                    const response = await fetch(`/api/route/${fromId}/${toId}`);
-                    if (!response.ok) throw new Error('Route calculation failed');
                     
-                    const routeData = await response.json();
+                    getMarkerSize(locationType) {
+                        const sizes = {
+                            'Colony': 12,
+                            'Space Station': 15,
+                            'Outpost': 10,
+                            'Transit Gate': 11
+                        };
+                        return sizes[locationType] || 10;
+                    }
                     
-                    if (routeData.error) {
-                        alert('NO ROUTE FOUND BETWEEN SELECTED LOCATIONS');
+                    addCorridor(corridor) {
+                        const isGated = corridor.name && corridor.name.toLowerCase().includes('gate');
+                        const color = isGated ? 'var(--success-color)' : 'var(--warning-color)';
+                        
+                        const polyline = L.polyline([
+                            [corridor.origin_y, corridor.origin_x],
+                            [corridor.dest_y, corridor.dest_x]
+                        ], {
+                            color: color,
+                            weight: isGated ? 2 : 3,
+                            opacity: 0.7,
+                            dashArray: isGated ? null : '8, 5',
+                            className: `corridor ${isGated ? 'gated' : 'ungated'}`
+                        });
+                        
+                        polyline.addTo(this.map);
+                        this.corridors.set(corridor.corridor_id, {
+                            ...corridor,
+                            polyline: polyline,
+                            isGated: isGated
+                        });
+                    }
+                    
+                    toggleRoutes() {
+                        this.showRoutes = !this.showRoutes;
+                        const btn = document.getElementById('toggle-routes-btn');
+                        
+                        this.applyRouteVisibility();
+                        
+                        if (btn) {
+                            if (this.showRoutes) {
+                                btn.textContent = 'ROUTES';
+                                btn.classList.add('toggle-active');
+                            } else {
+                                btn.textContent = 'ROUTES';
+                                btn.classList.remove('toggle-active');
+                            }
+                        }
+                    }
+                    toggleNPCs() {
+                        this.showNPCs = !this.showNPCs;
+                        const btn = document.getElementById('toggle-npcs-btn');
+                        
+                        this.applyNPCVisibility();
+                        
+                        if (btn) {
+                            if (this.showNPCs) {
+                                btn.textContent = 'NPCS';
+                                btn.classList.add('toggle-active');
+                            } else {
+                                btn.textContent = 'NPCS';
+                                btn.classList.remove('toggle-active');
+                            }
+                        }
+                    }
+                    
+                    applyNPCVisibility() {
+                        this.locations.forEach(location => {
+                            if (location.npcIndicator) {
+                                if (this.showNPCs) {
+                                    location.npcIndicator.getElement()?.classList.remove('routes-hidden');
+                                } else {
+                                    location.npcIndicator.getElement()?.classList.add('routes-hidden');
+                                }
+                            }
+                        });
+                    }
+                    applyRouteVisibility() {
+                        this.corridors.forEach(corridor => {
+                            if (corridor.polyline) {
+                                if (this.showRoutes) {
+                                    corridor.polyline.getElement()?.classList.remove('routes-hidden');
+                                } else {
+                                    corridor.polyline.getElement()?.classList.add('routes-hidden');
+                                }
+                            }
+                        });
+                        
+                        this.routePolylines.forEach(routeLine => {
+                            if (this.showRoutes) {
+                                routeLine.getElement()?.classList.remove('routes-hidden');
+                            } else {
+                                routeLine.getElement()?.classList.add('routes-hidden');
+                            }
+                        });
+                    }
+                    updateNPCs(npcs) {
+                        this.npcs.clear();
+                        
+                        npcs.forEach(npc => {
+                            if (!this.npcs.has(npc.location_id)) {
+                                this.npcs.set(npc.location_id, []);
+                            }
+                            this.npcs.get(npc.location_id).push(npc);
+                        });
+                        
+                        this.locations.forEach((location, locationId) => {
+                            this.updateLocationWithNPCs(location, this.npcs.get(locationId) || []);
+                        });
+                        
+                        if (this.selectedLocation) {
+                            this.updateLocationPanel(this.selectedLocation);
+                        }
+                    }
+                    
+                    updateLocationWithNPCs(location, npcsHere) {
+                        const marker = location.marker;
+                        if (!marker) return;
+
+                        if (location.npcIndicator) {
+                            this.map.removeLayer(location.npcIndicator);
+                            delete location.npcIndicator;
+                        }
+
+                        if (npcsHere.length > 0) {
+                            const indicator = L.circleMarker([location.y_coord, location.x_coord], {
+                                radius: 16,
+                                fillColor: 'transparent',
+                                color: 'var(--warning-color)',
+                                weight: 3,
+                                opacity: 1,
+                                fillOpacity: 0,
+                                className: 'npc-presence-indicator',
+                                interactive: false,
+                                pane: 'shadowPane'
+                            });
+
+                            indicator.addTo(this.map);
+                            location.npcIndicator = indicator;
+                            
+                            marker.bringToFront();
+                        }
+                    }
+                    updatePlayers(players) {
+                        const playerCount = document.getElementById('player-count');
+                        if (playerCount) {
+                            playerCount.textContent = `${players.length} CONTACTS`;
+                        }
+                        
+                        this.players.clear();
+                        
+                        players.forEach(player => {
+                            if (!this.players.has(player.location_id)) {
+                                this.players.set(player.location_id, []);
+                            }
+                            this.players.get(player.location_id).push(player);
+                        });
+                        
+                        this.locations.forEach((location, locationId) => {
+                            this.updateLocationWithPlayers(location, this.players.get(locationId) || []);
+                        });
+                        
+                        if (this.selectedLocation) {
+                            this.updateLocationPanel(this.selectedLocation);
+                        }
+                    }
+                    
+                    updateLocationWithPlayers(location, playersHere) {
+                        const marker = location.marker;
+                        if (!marker) return;
+
+                        if (location.playerIndicator) {
+                            this.map.removeLayer(location.playerIndicator);
+                            delete location.playerIndicator;
+                        }
+
+                        if (playersHere.length > 0) {
+                            const indicator = L.circleMarker([location.y_coord, location.x_coord], {
+                                radius: 18,
+                                fillColor: 'transparent',
+                                color: 'var(--success-color)',
+                                weight: 3,
+                                opacity: 1,
+                                fillOpacity: 0,
+                                className: 'player-presence-indicator',
+                                interactive: false,
+                                pane: 'shadowPane' // Put it in a lower layer
+                            });
+
+                            indicator.addTo(this.map);
+                            location.playerIndicator = indicator;
+                            
+                            // Ensure the main marker stays clickable by bringing it to front
+                            marker.bringToFront();
+                        }
+                    }
+                    
+                    selectLocation(location) {
+                        this.selectedLocation = location;
+                        this.updateLocationPanel(location);
+                        this.showLocationPanel();
+                        
+                        this.clearHighlights();
+                        this.highlightLocation(location, 'var(--primary-color)');
+                    }
+                    
+                    async updateLocationPanel(location) {
+                        const titleElement = document.getElementById('location-title');
+                        const detailsElement = document.getElementById('location-details');
+                        
+                        if (!titleElement || !detailsElement) return;
+                        
+                        titleElement.textContent = location.name.toUpperCase();
+                        
+                        const playersHere = this.players.get(location.location_id) || [];
+                        const npcsHere = this.npcs.get(location.location_id) || [];
+                        const subLocations = await this.getSubLocations(location.location_id);
+                        
+                        const wealthDisplay = this.getWealthDisplay(location.wealth_level);
+                        const typeIcon = this.getLocationTypeIcon(location.location_type);
+                        
+                        const detailsHtml = `
+                            <div class="location-detail">
+                                <strong>${typeIcon} TYPE:</strong> ${location.location_type.toUpperCase()}
+                            </div>
+                            <div class="location-detail">
+                                <strong>💰 WEALTH:</strong> ${wealthDisplay}
+                            </div>
+                            <div class="location-detail">
+                                <strong>👥 POPULATION:</strong> ${location.population?.toLocaleString() || 'UNKNOWN'}
+                            </div>
+                            <div class="location-detail">
+                                <strong>📍 COORDINATES:</strong> (${location.x_coord}, ${location.y_coord})
+                            </div>
+                            <div class="location-detail">
+                                <strong>📄 DESCRIPTION:</strong>
+                                <div style="margin-top: 0.5rem; font-style: italic; color: var(--text-secondary); text-transform: none;">
+                                    ${location.description || 'No description available.'}
+                                </div>
+                            </div>
+                            ${subLocations.length > 0 ? `
+                                <div class="sub-locations">
+                                    <strong>🏢 AVAILABLE AREAS:</strong>
+                                    ${subLocations.map(sub => `
+                                        <div class="sub-location-item">
+                                            ${sub.icon || '📍'} ${sub.name.toUpperCase()} - ${sub.description}
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : ''}
+                            ${playersHere.length > 0 ? `
+                                <div class="players-list">
+                                    <strong>👥 CONTACTS PRESENT (${playersHere.length}):</strong>
+                                    ${playersHere.map(player => `
+                                        <div class="player-item">
+                                            <span class="status-indicator status-online"></span>
+                                            ${player.name.toUpperCase()}
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : ''}
+                            ${npcsHere.length > 0 ? `
+                                <div class="players-list">
+                                    <strong>🤖 NPCS PRESENT (${npcsHere.length}):</strong>
+                                    ${npcsHere.map(npc => `
+                                        <div class="player-item">
+                                            <span class="status-indicator" style="background: var(--warning-color); box-shadow: 0 0 8px var(--warning-color);"></span>
+                                            ${npc.name.toUpperCase()} (${npc.callsign}) - ${npc.ship_name}
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : ''}
+                            ${playersHere.length === 0 && npcsHere.length === 0 ? '<div class="location-detail"><em>No contacts or NPCs currently present</em></div>' : ''}
+                        `;
+                        
+                        detailsElement.innerHTML = detailsHtml;
+                    }
+                    
+                    getWealthDisplay(wealthLevel) {
+                        if (wealthLevel >= 9) return '👑 OPULENT';
+                        if (wealthLevel >= 7) return '💎 WEALTHY';
+                        if (wealthLevel >= 5) return '💰 PROSPEROUS';
+                        if (wealthLevel >= 3) return '⚖️ AVERAGE';
+                        if (wealthLevel >= 2) return '📉 POOR';
+                        if (wealthLevel >= 1) return '🗑️ IMPOVERISHED';
+                        return '❓ UNKNOWN';
+                    }
+                    
+                    getLocationTypeIcon(locationType) {
+                        const icons = {
+                            'Colony': '🏘️',
+                            'Space Station': '🛰️',
+                            'Outpost': '🏭',
+                            'Transit Gate': '🌌'
+                        };
+                        return icons[locationType] || '📍';
+                    }
+                    
+                    async getSubLocations(locationId) {
+                        try {
+                            const response = await fetch(`/api/location/${locationId}/sub-locations`);
+                            if (response.ok) {
+                                return await response.json();
+                            }
+                        } catch (error) {
+                            console.error('Failed to fetch sub-locations:', error);
+                        }
+                        return [];
+                    }
+                    
+                    showLocationPanel() {
+                        const panel = document.getElementById('location-panel');
+                        if (panel) {
+                            panel.classList.remove('hidden');
+                        }
+                    }
+                    
+                    hideLocationPanel() {
+                        const panel = document.getElementById('location-panel');
+                        if (panel) {
+                            panel.classList.add('hidden');
+                        }
+                        this.selectedLocation = null;
+                        this.clearHighlights();
+                    }
+                    
+                    searchLocations(query) {
+                        this.clearHighlights();
+                        
+                        if (!query.trim()) return;
+                        
+                        const results = [];
+                        const queryLower = query.toLowerCase();
+                        
+                        this.locations.forEach((location) => {
+                            if (location.name.toLowerCase().includes(queryLower) ||
+                                location.location_type.toLowerCase().includes(queryLower)) {
+                                results.push(location);
+                            }
+                        });
+                        
+                        if (results.length > 0) {
+                            results.forEach(location => {
+                                this.highlightLocation(location, 'var(--primary-color)');
+                            });
+                            
+                            if (results.length === 1) {
+                                this.map.setView([results[0].y_coord, results[0].x_coord], 4);
+                                this.selectLocation(results[0]);
+                            } else {
+                                this.fitBoundsToLocations(results);
+                            }
+                        }
+                    }
+                    
+                    clearSearch() {
+                        const searchInput = document.getElementById('location-search');
+                        if (searchInput) {
+                            searchInput.value = '';
+                        }
+                        this.clearHighlights();
+                    }
+                    
+                    highlightLocation(location, color = '#ffff00') {
+                        if (!location.marker) return;
+                        
+                        const originalOptions = location.marker.options;
+                        location.marker.setStyle({
+                            ...originalOptions,
+                            color: color,
+                            weight: 4,
+                            opacity: 1,
+                            className: `${originalOptions.className} location-highlight`
+                        });
+                        
+                        this.highlightedLocations.push(location);
+                    }
+                    
+                    clearHighlights() {
+                        this.highlightedLocations.forEach(location => {
+                            if (location.marker) {
+                                const originalOptions = location.marker.options;
+                                location.marker.setStyle({
+                                    ...originalOptions,
+                                    color: '#ffffff',
+                                    weight: 2,
+                                    opacity: 1,
+                                    className: originalOptions.className.replace(' location-highlight', '')
+                                });
+                            }
+                        });
+                        this.highlightedLocations = [];
+                    }
+                    
+                    async plotRoute(fromId, toId) {
+                        try {
+                            const response = await fetch(`/api/route/${fromId}/${toId}`);
+                            if (!response.ok) throw new Error('Route calculation failed');
+                            
+                            const routeData = await response.json();
+                            
+                            if (routeData.error) {
+                                alert('NO ROUTE FOUND BETWEEN SELECTED LOCATIONS');
+                                return;
+                            }
+                            
+                            this.displayRoute(routeData);
+                            
+                        } catch (error) {
+                            console.error('Error plotting route:', error);
+                            alert('FAILED TO CALCULATE ROUTE');
+                        }
+                    }
+                    
+                    displayRoute(routeData) {
+                        this.clearRoute();
+                        
+                        if (!routeData.path || routeData.path.length < 2) return;
+                        
+                        const routeCoords = routeData.path.map(location => [location.y_coord, location.x_coord]);
+                        const routeLine = L.polyline(routeCoords, {
+                            color: '#ffff00',
+                            weight: 5,
+                            opacity: 0.9,
+                            className: 'route-highlight'
+                        });
+                        
+                        routeLine.addTo(this.map);
+                        this.routePolylines.push(routeLine);
+                        
+                        if (!this.showRoutes) {
+                            routeLine.getElement()?.classList.add('routes-hidden');
+                        }
+                        
+                        routeData.path.forEach(location => {
+                            const loc = this.locations.get(location.location_id);
+                            if (loc) {
+                                this.highlightLocation(loc, '#ffff00');
+                            }
+                        });
+                        
+                        this.map.fitBounds(routeLine.getBounds(), { padding: [20, 20] });
+                        this.currentRoute = routeData;
+                        
+                        const clearBtn = document.getElementById('clear-route-btn');
+                        if (clearBtn) clearBtn.disabled = false;
+                    }
+                    
+                    clearRoute() {
+                        this.routePolylines.forEach(polyline => {
+                            this.map.removeLayer(polyline);
+                        });
+                        this.routePolylines = [];
+                        
+                        this.clearHighlights();
+                        this.currentRoute = null;
+                        
+                        const clearBtn = document.getElementById('clear-route-btn');
+                        if (clearBtn) clearBtn.disabled = true;
+                    }
+                    
+                    populateRouteSelects() {
+                        const fromSelect = document.getElementById('route-from');
+                        const toSelect = document.getElementById('route-to');
+                        
+                        if (!fromSelect || !toSelect) return;
+                        
+                        [fromSelect, toSelect].forEach(select => {
+                            while (select.children.length > 1) {
+                                select.removeChild(select.lastChild);
+                            }
+                        });
+                        
+                        const sortedLocations = Array.from(this.locations.values())
+                            .sort((a, b) => a.name.localeCompare(b.name));
+                        
+                        sortedLocations.forEach(location => {
+                            [fromSelect, toSelect].forEach(select => {
+                                const option = document.createElement('option');
+                                option.value = location.location_id;
+                                option.textContent = `${location.name.toUpperCase()} (${location.location_type.toUpperCase()})`;
+                                select.appendChild(option);
+                            });
+                        });
+                        
+                        fromSelect.disabled = false;
+                        toSelect.disabled = false;
+                        
+                        [fromSelect, toSelect].forEach(select => {
+                            select.addEventListener('change', () => {
+                                const plotBtn = document.getElementById('plot-route-btn');
+                                if (plotBtn) {
+                                    plotBtn.disabled = !(fromSelect.value && toSelect.value && fromSelect.value !== toSelect.value);
+                                }
+                            });
+                        });
+                    }
+                    
+                    fitMapToBounds() {
+                        if (this.locations.size === 0) return;
+                        
+                        const bounds = L.latLngBounds();
+                        this.locations.forEach(location => {
+                            bounds.extend([location.y_coord, location.x_coord]);
+                        });
+                        
+                        this.map.fitBounds(bounds, { padding: [20, 20] });
+                    }
+                    
+                    fitBoundsToLocations(locations) {
+                        if (locations.length === 0) return;
+                        
+                        const bounds = L.latLngBounds();
+                        locations.forEach(location => {
+                            bounds.extend([location.y_coord, location.x_coord]);
+                        });
+                        
+                        this.map.fitBounds(bounds, { padding: [40, 40] });
+                    }
+                    
+                toggleLabels() {
+                    this.showLabels = !this.showLabels;
+                    const btn = document.getElementById('toggle-labels-btn');
+                    
+                    if (this.showLabels) {
+                        this.addLocationLabels();
+                        if (btn) btn.textContent = 'HIDE LABELS';
+                    } else {
+                        this.removeLocationLabels();
+                        if (btn) btn.textContent = 'LABELS';
+                    }
+                }
+                
+                addLocationLabels() {
+                    this.removeLocationLabels();
+                    
+                    const zoom = this.map.getZoom();
+                    const bounds = this.map.getBounds();
+                    
+                    // Get all visible locations
+                    let visibleLocations = [];
+                    this.locations.forEach(location => {
+                        const point = L.latLng(location.y_coord, location.x_coord);
+                        if (bounds.contains(point)) {
+                            visibleLocations.push(location);
+                        }
+                    });
+
+                    // Simple, predictable logic: if few locations visible, show all labels
+                    // If many locations visible, show only the most important ones
+                    let locationsToLabel;
+                    
+                    if (visibleLocations.length <= 8) {
+                        // When zoomed in close or few locations visible, show ALL labels
+                        locationsToLabel = visibleLocations;
+                    } else if (zoom >= 2) {
+                        // High zoom with many locations - show top 75%
+                        visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
+                        locationsToLabel = visibleLocations.slice(0, Math.floor(visibleLocations.length * 0.75));
+                    } else if (zoom >= 0) {
+                        // Medium zoom - show top 50%
+                        visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
+                        locationsToLabel = visibleLocations.slice(0, Math.floor(visibleLocations.length * 0.5));
+                    } else if (zoom >= -2) {
+                        // Low zoom - show top 25%
+                        visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
+                        locationsToLabel = visibleLocations.slice(0, Math.max(1, Math.floor(visibleLocations.length * 0.25)));
+                    } else {
+                        // Very low zoom - show only top 10 most important
+                        visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
+                        locationsToLabel = visibleLocations.slice(0, Math.min(10, visibleLocations.length));
+                    }
+
+                    // Add labels with simple spacing - no complex collision detection
+                    locationsToLabel.forEach((location, index) => {
+                        // Small delay to prevent all labels from appearing at once
+                        setTimeout(() => {
+                            this.addSimpleLabel(location);
+                        }, index * 10);
+                    });
+                }
+                
+                addSimpleLabel(location) {
+                    const zoom = this.map.getZoom();
+                    const labelSize = this.getSimpleLabelSize(zoom);
+                    
+                    // Simple offset pattern - cycle through positions to avoid overlap
+                    const offsetPatterns = [
+                        [0, -30],      // Above
+                        [25, -15],     // Top-right
+                        [25, 15],      // Bottom-right
+                        [0, 30],       // Below
+                        [-25, 15],     // Bottom-left
+                        [-25, -15],    // Top-left
+                        [35, 0],       // Right
+                        [-35, 0]       // Left
+                    ];
+                    
+                    // Use location ID to get consistent positioning
+                    const patternIndex = location.location_id % offsetPatterns.length;
+                    const [offsetX, offsetY] = offsetPatterns[patternIndex];
+                    
+                    // Scale offset with zoom
+                    const zoomScale = Math.max(0.7, Math.min(1.5, 1.0 + (zoom * 0.1)));
+                    const finalOffsetX = offsetX * zoomScale;
+                    const finalOffsetY = offsetY * zoomScale;
+                    
+                    // Calculate label position
+                    const basePoint = this.map.latLngToContainerPoint([location.y_coord, location.x_coord]);
+                    const labelPoint = L.point(basePoint.x + finalOffsetX, basePoint.y + finalOffsetY);
+                    const labelPosition = this.map.containerPointToLatLng(labelPoint);
+                    
+                    // Check if position is within map bounds
+                    if (!this.map.getBounds().contains(labelPosition)) {
+                        // Try opposite offset if out of bounds
+                        const fallbackPoint = L.point(basePoint.x - finalOffsetX, basePoint.y - finalOffsetY);
+                        const fallbackPosition = this.map.containerPointToLatLng(fallbackPoint);
+                        if (this.map.getBounds().contains(fallbackPosition)) {
+                            const wealthClass = this.getWealthClass(location.wealth_level);
+                            const zoomClass = this.getZoomClass(zoom);
+
+                            const label = L.marker(fallbackPosition, {
+                                icon: L.divIcon({
+                                    className: `location-label ${wealthClass} ${zoomClass}`,
+                                    html: this.formatLabelText(location.name, zoom),
+                                    iconSize: [labelSize.width, labelSize.height],
+                                    iconAnchor: [labelSize.width / 2, labelSize.height / 2]
+                                }),
+                                interactive: false
+                            });
+
+                            label.addTo(this.map);
+                            location.label = label;
+                        }
                         return;
                     }
                     
-                    this.displayRoute(routeData);
+                    const wealthClass = this.getWealthClass(location.wealth_level);
+                    const zoomClass = this.getZoomClass(zoom);
+
+                    const label = L.marker(labelPosition, {
+                        icon: L.divIcon({
+                            className: `location-label ${wealthClass} ${zoomClass}`,
+                            html: this.formatLabelText(location.name, zoom),
+                            iconSize: [labelSize.width, labelSize.height],
+                            iconAnchor: [labelSize.width / 2, labelSize.height / 2]
+                        }),
+                        interactive: false
+                    });
+
+                    label.addTo(this.map);
+                    location.label = label;
+                }
+                
+                formatLabelText(name, zoom) {
+                    // Truncate long names at low zoom levels
+                    if (zoom < -1 && name.length > 12) {
+                        return name.substring(0, 10).toUpperCase() + '...';
+                    } else if (zoom < 1 && name.length > 15) {
+                        return name.substring(0, 12).toUpperCase() + '...';
+                    }
+                    return name.toUpperCase();
+                }
+                
+                getSimpleLabelSize(zoom) {
+                    if (zoom >= 3) {
+                        return { width: 120, height: 28 };
+                    } else if (zoom >= 1) {
+                        return { width: 100, height: 24 };
+                    } else if (zoom >= -1) {
+                        return { width: 80, height: 20 };
+                    } else {
+                        return { width: 70, height: 18 };
+                    }
+                }
+                
+                getLocationImportance(location) {
+                    const typeWeights = {
+                        'Space Station': 100,
+                        'Colony': 80,
+                        'Transit Gate': 60,
+                        'Outpost': 40
+                    };
                     
-                } catch (error) {
-                    console.error('Error plotting route:', error);
-                    alert('FAILED TO CALCULATE ROUTE');
-                }
-            }
-            
-            displayRoute(routeData) {
-                this.clearRoute();
-                
-                if (!routeData.path || routeData.path.length < 2) return;
-                
-                const routeCoords = routeData.path.map(location => [location.y_coord, location.x_coord]);
-                const routeLine = L.polyline(routeCoords, {
-                    color: '#ffff00',
-                    weight: 5,
-                    opacity: 0.9,
-                    className: 'route-highlight'
-                });
-                
-                routeLine.addTo(this.map);
-                this.routePolylines.push(routeLine);
-                
-                if (!this.showRoutes) {
-                    routeLine.getElement()?.classList.add('routes-hidden');
+                    const baseScore = typeWeights[location.location_type] || 20;
+                    const wealthBonus = (location.wealth_level || 1) * 10;
+                    const populationBonus = Math.log10((location.population || 1) + 1) * 5;
+                    
+                    return baseScore + wealthBonus + populationBonus;
                 }
                 
-                routeData.path.forEach(location => {
-                    const loc = this.locations.get(location.location_id);
-                    if (loc) {
-                        this.highlightLocation(loc, '#ffff00');
+                getWealthClass(wealthLevel) {
+                    if (wealthLevel >= 7) return 'wealth-high';
+                    if (wealthLevel >= 4) return 'wealth-medium';
+                    return 'wealth-low';
+                }
+                
+                getZoomClass(zoom) {
+                    if (zoom >= 3) return 'zoom-large';
+                    if (zoom >= 0) return 'zoom-medium';
+                    return 'zoom-small';
+                }
+                
+                updateLabelsForZoom() {
+                    if (this.showLabels) {
+                        // Use a longer delay to prevent rapid updates during zoom/pan
+                        clearTimeout(this.labelUpdateTimeout);
+                        this.labelUpdateTimeout = setTimeout(() => {
+                            this.addLocationLabels();
+                        }, 300);
                     }
-                });
+                }
                 
-                this.map.fitBounds(routeLine.getBounds(), { padding: [20, 20] });
-                this.currentRoute = routeData;
-                
-                const clearBtn = document.getElementById('clear-route-btn');
-                if (clearBtn) clearBtn.disabled = false;
-            }
-            
-            clearRoute() {
-                this.routePolylines.forEach(polyline => {
-                    this.map.removeLayer(polyline);
-                });
-                this.routePolylines = [];
-                
-                this.clearHighlights();
-                this.currentRoute = null;
-                
-                const clearBtn = document.getElementById('clear-route-btn');
-                if (clearBtn) clearBtn.disabled = true;
-            }
-            
-            populateRouteSelects() {
-                const fromSelect = document.getElementById('route-from');
-                const toSelect = document.getElementById('route-to');
-                
-                if (!fromSelect || !toSelect) return;
-                
-                [fromSelect, toSelect].forEach(select => {
-                    while (select.children.length > 1) {
-                        select.removeChild(select.lastChild);
-                    }
-                });
-                
-                const sortedLocations = Array.from(this.locations.values())
-                    .sort((a, b) => a.name.localeCompare(b.name));
-                
-                sortedLocations.forEach(location => {
-                    [fromSelect, toSelect].forEach(select => {
-                        const option = document.createElement('option');
-                        option.value = location.location_id;
-                        option.textContent = `${location.name.toUpperCase()} (${location.location_type.toUpperCase()})`;
-                        select.appendChild(option);
-                    });
-                });
-                
-                fromSelect.disabled = false;
-                toSelect.disabled = false;
-                
-                [fromSelect, toSelect].forEach(select => {
-                    select.addEventListener('change', () => {
-                        const plotBtn = document.getElementById('plot-route-btn');
-                        if (plotBtn) {
-                            plotBtn.disabled = !(fromSelect.value && toSelect.value && fromSelect.value !== toSelect.value);
+                removeLocationLabels() {
+                    this.locations.forEach(location => {
+                        if (location.label) {
+                            this.map.removeLayer(location.label);
+                            delete location.label;
                         }
                     });
-                });
-            }
-            
-            fitMapToBounds() {
-                if (this.locations.size === 0) return;
-                
-                const bounds = L.latLngBounds();
-                this.locations.forEach(location => {
-                    bounds.extend([location.y_coord, location.x_coord]);
-                });
-                
-                this.map.fitBounds(bounds, { padding: [20, 20] });
-            }
-            
-            fitBoundsToLocations(locations) {
-                if (locations.length === 0) return;
-                
-                const bounds = L.latLngBounds();
-                locations.forEach(location => {
-                    bounds.extend([location.y_coord, location.x_coord]);
-                });
-                
-                this.map.fitBounds(bounds, { padding: [40, 40] });
-            }
-            
-            toggleLabels() {
-                this.showLabels = !this.showLabels;
-                const btn = document.getElementById('toggle-labels-btn');
-                
-                if (this.showLabels) {
-                    this.addLocationLabels();
-                    if (btn) btn.textContent = 'HIDE LABELS';
-                } else {
-                    this.removeLocationLabels();
-                    if (btn) btn.textContent = 'LABELS';
                 }
-            }
-            
-            addLocationLabels() {
-                this.removeLocationLabels();
-                this.labelGrid.clear();
-
-                const bounds = this.map.getBounds();
-                
-                let visibleLocations = [];
-                
-                // 1. Get all locations currently in the view, without filtering by zoom level.
-                this.locations.forEach(location => {
-                    const point = L.latLng(location.y_coord, location.x_coord);
-                    if (bounds.contains(point)) {
-                        visibleLocations.push(location);
+                    
+                    updateConnectionStatus(text, color) {
+                        const indicator = document.getElementById('connection-indicator');
+                        const statusText = document.getElementById('connection-text');
+                        
+                        if (indicator && statusText) {
+                            indicator.style.color = color;
+                            statusText.textContent = text;
+                        }
                     }
-                });
-
-                // 2. Sort them by importance to give priority to more significant locations.
-                visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
-                
-                // 3. Attempt to add a label for each. The collision detection will naturally
-                //    prevent clutter at low zooms and allow more labels at high zooms.
-                visibleLocations.forEach(location => {
-                    this.addSmartLabel(location);
-                });
-            }
-            
-            getLocationImportance(location) {
-                const typeWeights = {
-                    'Space Station': 4,
-                    'Colony': 3,
-                    'Transit Gate': 2,
-                    'Outpost': 1
-                };
-                const wealthWeight = (location.wealth_level || 1) * 0.5;
-                const populationWeight = Math.log10((location.population || 1) + 1) * 0.3;
-                
-                return (typeWeights[location.location_type] || 1) + wealthWeight + populationWeight;
-            }
-            
-            addSmartLabel(location) {
-                const zoom = this.map.getZoom();
-                const basePosition = [location.y_coord, location.x_coord];
-                const labelSize = this.estimateLabelSize(location.name, zoom);
-                
-                const positionData = this.findOptimalLabelPosition(basePosition, labelSize);
-                if (!positionData) return;
-
-                const { positionLatLng, positionPoint } = positionData;
-
-                const wealthClass = this.getWealthClass(location.wealth_level);
-                const zoomClass = this.getZoomClass(zoom);
-
-                const label = L.marker(positionLatLng, {
-                    icon: L.divIcon({
-                        className: `location-label ${wealthClass} ${zoomClass}`,
-                        html: location.name.toUpperCase(),
-                        iconSize: [labelSize.width, labelSize.height],
-                        iconAnchor: [labelSize.width / 2, labelSize.height / 2]
-                    }),
-                    interactive: false
-                });
-
-                label.addTo(this.map);
-                location.label = label;
-                this.markLabelArea(positionPoint, labelSize);
-            }
-            
-            estimateLabelSize(text, zoom) {
-                let charWidth, padding, minWidth, height;
-
-                // REMOVED the size "jump" at zoom level 4 that was causing labels to disappear.
-                // Now, labels will scale up at zoom 2 and maintain that sizing, preventing the break.
-                if (zoom >= 2) {
-                    charWidth = 8;
-                    padding = 16;
-                    minWidth = 80;
-                    height = 24;
-                } else {
-                    charWidth = 7;
-                    padding = 12;
-                    minWidth = 70;
-                    height = 20;
-                }
-
-                const width = Math.max(minWidth, (text.length * charWidth) + padding);
-                return { width, height };
-            }
-            
-            getZoomClass(zoom) {
-                if (zoom >= 4) return 'zoom-large';
-                if (zoom >= 2) return 'zoom-medium';
-                return 'zoom-small';
-            }
-            
-            findOptimalLabelPosition(basePosition, labelSize) {
-                const basePoint = this.map.latLngToContainerPoint(basePosition);
-                const zoom = this.map.getZoom();
-                // REVERSED LOGIC: Make offset SMALLER at high zoom and LARGER at low zoom.
-                const offsetDistance = Math.max(15, 35 - (zoom * 3));
-                
-                const offsets = [
-                    [0, -offsetDistance], // Above
-                    [0, offsetDistance],  // Below
-                    [offsetDistance, 0],  // Right
-                    [-offsetDistance, 0], // Left
-                    [offsetDistance * 0.7, -offsetDistance * 0.7], // Top-right
-                    [-offsetDistance * 0.7, -offsetDistance * 0.7], // Top-left
-                    [offsetDistance * 0.7, offsetDistance * 0.7], // Bottom-right
-                    [-offsetDistance * 0.7, offsetDistance * 0.7]  // Bottom-left
-                ];
-
-                for (const [offsetX, offsetY] of offsets) {
-                    const newPoint = L.point(basePoint.x + offsetX, basePoint.y + offsetY);
-                    if (this.isPositionAvailable(newPoint, labelSize)) {
-                        return {
-                            positionLatLng: this.map.containerPointToLatLng(newPoint),
-                            positionPoint: newPoint
-                        };
-                    }
-                }
-                return null;
-            }
-            
-            isPositionAvailable(point, labelSize) {
-                const { width, height } = labelSize;
-                const gridSize = 10; // Pixel grid size for collision check
-                const startX = Math.floor((point.x - width / 2) / gridSize);
-                const endX = Math.floor((point.x + width / 2) / gridSize);
-                const startY = Math.floor((point.y - height / 2) / gridSize);
-                const endY = Math.floor((point.y + height / 2) / gridSize);
-
-                for (let x = startX; x <= endX; x++) {
-                    for (let y = startY; y <= endY; y++) {
-                        if (this.labelGrid.has(`${x},${y}`)) {
-                            return false;
+                    
+                    hideLoadingOverlay() {
+                        const overlay = document.getElementById('loading-overlay');
+                        if (overlay) {
+                            setTimeout(() => {
+                                overlay.classList.add('hidden');
+                            }, 1500);
                         }
                     }
                 }
-                return this.map.getPixelBounds().contains(point);
-            }
-            
-            markLabelArea(point, labelSize) {
-                const { width, height } = labelSize;
-                const gridSize = 10;
-                const startX = Math.floor((point.x - width / 2) / gridSize);
-                const endX = Math.floor((point.x + width / 2) / gridSize);
-                const startY = Math.floor((point.y - height / 2) / gridSize);
-                const endY = Math.floor((point.y + height / 2) / gridSize);
 
-                for (let x = startX; x <= endX; x++) {
-                    for (let y = startY; y <= endY; y++) {
-                        this.labelGrid.set(`${x},${y}`, true);
-                    }
-                }
-            }
-            
-            getWealthClass(wealthLevel) {
-                if (wealthLevel >= 4) return 'wealth-high';
-                if (wealthLevel >= 3) return 'wealth-medium';
-                return 'wealth-low';
-            }
-            
-            updateLabelsForZoom() {
-                if (this.showLabels) {
-                    clearTimeout(this.labelUpdateTimeout);
-                    this.labelUpdateTimeout = setTimeout(() => {
-                        this.addLocationLabels();
-                    }, 150);
-                }
-            }
-            
-            removeLocationLabels() {
-                this.locations.forEach(location => {
-                    if (location.label) {
-                        this.map.removeLayer(location.label);
-                        delete location.label;
-                    }
-                });
-                this.labelGrid.clear();
-            }
-            
-            updateConnectionStatus(text, color) {
-                const indicator = document.getElementById('connection-indicator');
-                const statusText = document.getElementById('connection-text');
-                
-                if (indicator && statusText) {
-                    indicator.style.color = color;
-                    statusText.textContent = text;
-                }
-            }
-            
-            hideLoadingOverlay() {
-                const overlay = document.getElementById('loading-overlay');
-                if (overlay) {
-                    setTimeout(() => {
-                        overlay.classList.add('hidden');
-                    }, 1500);
-                }
-            }
-        }
-
-        // Initialize map when page loads
-        document.addEventListener('DOMContentLoaded', () => {
-            new GalaxyMap();
-        });'''
+                // Initialize map when page loads
+                document.addEventListener('DOMContentLoaded', () => {
+                    new GalaxyMap();
+                });'''
 
         with open("web/static/js/map.js", "w", encoding='utf-8') as f:
             f.write(js_content)
@@ -2493,7 +2661,31 @@ class WebMapCog(commands.Cog, name="WebMap"):
             except Exception as e:
                 print(f"Error calculating route: {e}")
                 return {"error": "Route calculation failed"}
-        
+        @app.get("/api/npc/{npc_id}")
+        async def get_npc_details(npc_id: int):
+            """Get details for a specific NPC"""
+            try:
+                npc_data = self.db.execute_query(
+                    """SELECT name, callsign, age, ship_name, ship_type, current_location, credits
+                       FROM dynamic_npcs WHERE npc_id = ? AND is_alive = 1""",
+                    (npc_id,),
+                    fetch='one'
+                )
+                
+                if npc_data:
+                    return {
+                        "name": npc_data[0],
+                        "callsign": npc_data[1],
+                        "age": npc_data[2],
+                        "ship_name": npc_data[3],
+                        "ship_type": npc_data[4],
+                        "current_location": npc_data[5],
+                        "credits": npc_data[6]
+                    }
+                else:
+                    return {"error": "NPC not found"}
+            except Exception as e:
+                return {"error": str(e)}
         @app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
@@ -2501,11 +2693,27 @@ class WebMapCog(commands.Cog, name="WebMap"):
             
             try:
                 # Send initial data
-                galaxy_data = await self._get_galaxy_data()
-                await websocket.send_text(json.dumps({
-                    "type": "galaxy_data",
-                    "data": galaxy_data
-                }))
+                try:
+                    galaxy_data = await self._get_galaxy_data()
+                    await websocket.send_text(json.dumps({
+                        "type": "galaxy_data",
+                        "data": galaxy_data
+                    }))
+                    print(f"✅ WebSocket client connected and sent initial data")
+                except Exception as e:
+                    print(f"❌ Error sending initial galaxy data: {e}")
+                    # Send minimal data to prevent frontend from hanging
+                    await websocket.send_text(json.dumps({
+                        "type": "galaxy_data",
+                        "data": {
+                            "galaxy_name": "Unknown Galaxy",
+                            "current_time": "Unknown",
+                            "locations": [],
+                            "corridors": [],
+                            "players": [],
+                            "dynamic_npcs": []
+                        }
+                    }))
                 
                 # Keep connection alive and handle messages
                 while True:
@@ -2514,7 +2722,11 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     
             except WebSocketDisconnect:
                 self.websocket_clients.discard(websocket)
-        
+                print(f"📱 WebSocket client disconnected")
+            except Exception as e:
+                print(f"❌ WebSocket error: {e}")
+                self.websocket_clients.discard(websocket)
+
         return app
     
     async def _get_galaxy_data(self):
@@ -2538,7 +2750,6 @@ class WebMapCog(commands.Cog, name="WebMap"):
         )
         
         # Get active corridors
-        # Replace the existing corridors query in _get_galaxy_data() method
         corridors = self.db.execute_query(
             '''SELECT c.corridor_id, c.name, c.danger_level, c.origin_location, c.destination_location,
                       ol.x_coord as origin_x, ol.y_coord as origin_y,
@@ -2558,6 +2769,23 @@ class WebMapCog(commands.Cog, name="WebMap"):
             fetch='all'
         )
         
+        # Get dynamic NPCs - with error handling
+        dynamic_npcs = []
+        try:
+            dynamic_npcs = self.db.execute_query(
+                """SELECT n.name, n.callsign, n.current_location, n.ship_name, n.ship_type,
+                          n.is_alive, n.travel_start_time
+                   FROM dynamic_npcs n
+                   WHERE n.is_alive = 1 AND n.current_location IS NOT NULL 
+                   AND n.travel_start_time IS NULL""",
+                fetch='all'
+            )
+            if dynamic_npcs is None:
+                dynamic_npcs = []
+        except Exception as e:
+            print(f"Warning: Could not fetch dynamic NPCs: {e}")
+            dynamic_npcs = []
+        
         return {
             "galaxy_name": galaxy_name,
             "current_time": formatted_time,
@@ -2572,7 +2800,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     "population": loc[6],
                     "description": loc[7]
                 }
-                for loc in locations
+                for loc in (locations or [])
             ],
             "corridors": [
                 {
@@ -2586,7 +2814,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     "dest_x": cor[7],
                     "dest_y": cor[8]
                 }
-                for cor in corridors
+                for cor in (corridors or [])
             ],
             "players": [
                 {
@@ -2594,7 +2822,18 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     "location_id": player[1],
                     "is_logged_in": player[2]
                 }
-                for player in players
+                for player in (players or [])
+            ],
+            "dynamic_npcs": [
+                {
+                    "name": npc[0],
+                    "callsign": npc[1],
+                    "location_id": npc[2],
+                    "ship_name": npc[3],
+                    "ship_type": npc[4],
+                    "is_alive": npc[5]
+                }
+                for npc in dynamic_npcs
             ]
         }
     
@@ -2623,15 +2862,22 @@ class WebMapCog(commands.Cog, name="WebMap"):
         if self.is_running and self.websocket_clients:
             await self._broadcast_player_updates()
     async def _broadcast_player_updates(self):
-        """Optimized player updates with caching"""
+        """Optimized player and NPC updates with caching"""
         try:
             # Get current player data
-            players_data = self.db.execute_query(
-                """SELECT c.name, c.current_location, c.is_logged_in, c.user_id
-                   FROM characters c
-                   WHERE c.is_logged_in = 1 AND c.current_location IS NOT NULL""",
-                fetch='all'
-            )
+            players_data = []
+            try:
+                players_data = self.db.execute_query(
+                    """SELECT c.name, c.current_location, c.is_logged_in, c.user_id
+                       FROM characters c
+                       WHERE c.is_logged_in = 1 AND c.current_location IS NOT NULL""",
+                    fetch='all'
+                )
+                if players_data is None:
+                    players_data = []
+            except Exception as e:
+                print(f"Warning: Could not fetch player data: {e}")
+                players_data = []
             
             current_players = [
                 {
@@ -2643,11 +2889,39 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 for player in players_data
             ]
             
-            # Broadcast immediately to all clients
+            # Get current dynamic NPC data
+            npcs_data = []
+            try:
+                npcs_data = self.db.execute_query(
+                    """SELECT n.name, n.callsign, n.current_location, n.ship_name, n.ship_type
+                       FROM dynamic_npcs n
+                       WHERE n.is_alive = 1 AND n.current_location IS NOT NULL 
+                       AND n.travel_start_time IS NULL""",
+                    fetch='all'
+                )
+                if npcs_data is None:
+                    npcs_data = []
+            except Exception as e:
+                print(f"Warning: Could not fetch NPC data: {e}")
+                npcs_data = []
+            
+            current_npcs = [
+                {
+                    "name": npc[0],
+                    "callsign": npc[1],
+                    "location_id": npc[2],
+                    "ship_name": npc[3],
+                    "ship_type": npc[4]
+                }
+                for npc in npcs_data
+            ]
+            
+            # Broadcast both updates
             await self._broadcast_update("player_update", current_players)
+            await self._broadcast_update("npc_update", current_npcs)
             
         except Exception as e:
-            print(f"Error broadcasting player updates: {e}")
+            print(f"Error broadcasting updates: {e}")
     async def _start_update_loop(self):
         """Start the periodic update loop"""
         while self.is_running:

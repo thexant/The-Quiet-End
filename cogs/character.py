@@ -5,13 +5,58 @@ from discord import app_commands
 import random
 from utils.location_utils import get_character_location_status
 from datetime import datetime
+import asyncio
 
 class CharacterCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
     
-    
+    @app_commands.command(name="status", description="Quick access to character information and management")
+    async def status_shorthand(self, interaction: discord.Interaction):
+        # Check if user has a character
+        char_data = self.db.execute_query(
+            "SELECT name, is_logged_in FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.response.send_message(
+                "You don't have a character! Use `/character create` first.",
+                ephemeral=True
+            )
+            return
+        
+        char_name, is_logged_in = char_data
+        
+        # Create the character panel embed
+        embed = discord.Embed(
+            title=f"📋 Character Panel: {char_name}",
+            description="Quick access to your character information",
+            color=0x4169E1
+        )
+        
+        # Add status indicator
+        status_emoji = "🟢" if is_logged_in else "⚫"
+        status_text = "Online" if is_logged_in else "Offline"
+        embed.add_field(name="Status", value=f"{status_emoji} {status_text}", inline=True)
+        
+        embed.add_field(
+            name="Available Actions",
+            value="Use the buttons below to access different aspects of your character:",
+            inline=False
+        )
+        
+        embed.set_footer(text="Click the buttons below to view detailed information")
+        
+        view = CharacterPanelView(self.bot, interaction.user.id)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="here", description="Quick access to location panel and interactions")
+    async def here_shorthand(self, interaction: discord.Interaction):
+        # Call the existing location info logic
+        await self.location_info.callback(self, interaction)
     @app_commands.command(
     name="act",
     description="Perform a roleplay action"
@@ -932,25 +977,6 @@ class CharacterCog(commands.Cog):
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    async def check_character_death(self, user_id: int, guild: discord.Guild) -> bool:
-        """Check if character should die from 0 HP and handle death if so"""
-        char_data = self.db.execute_query(
-            "SELECT name, hp, current_location FROM characters WHERE user_id = ?",
-            (user_id,),
-            fetch='one'
-        )
-        
-        if not char_data:
-            return False
-        
-        char_name, hp, current_location = char_data
-        
-        if hp <= 0:
-            # Character has died!
-            await self._execute_character_death(user_id, char_name, guild)
-            return True
-        
-        return False
 
     async def _execute_character_death(self, user_id: int, char_name: str, guild: discord.Guild, reason: str = "unknown"):
         """Execute automatic character death with enhanced descriptions."""
@@ -2204,6 +2230,55 @@ class UndockJobConfirmView(discord.ui.View):
         
         await interaction.response.send_message("Undocking cancelled.", ephemeral=True)
 
+class CharacterPanelView(discord.ui.View):
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+    
+    @discord.ui.button(label="Character Info", style=discord.ButtonStyle.primary, emoji="👤")
+    async def view_character(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Call the existing character view logic
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.view_character.callback(char_cog, interaction)
+    
+    @discord.ui.button(label="Ship Status", style=discord.ButtonStyle.secondary, emoji="🚀")
+    async def view_ship(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Call the existing ship view logic
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.view_ship.callback(char_cog, interaction)
+    
+    @discord.ui.button(label="Inventory", style=discord.ButtonStyle.success, emoji="🎒")
+    async def view_inventory(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Call the existing inventory view logic
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.view_inventory.callback(char_cog, interaction)
+    
+    @discord.ui.button(label="Skills", style=discord.ButtonStyle.secondary, emoji="📊")
+    async def view_skills(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Call the existing skills view logic
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.view_skills.callback(char_cog, interaction)
         
 async def setup(bot):
     await bot.add_cog(CharacterCog(bot))

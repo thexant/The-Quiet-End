@@ -92,7 +92,7 @@ class RPGBot(commands.Bot):
             import traceback
             traceback.print_exc()
             raise
-    
+        
     async def on_ready(self):
         print(f'🚀 {self.user} has landed in human space!')
         print(f'🌍 Connected to {len(self.guilds)} guild(s)')
@@ -105,44 +105,7 @@ class RPGBot(commands.Bot):
             "SELECT COUNT(*) FROM locations",
             fetch='one'
         )[0]
-        for guild in self.guilds:
-            try:
-                # Check if news channel is configured
-                config = self.db.execute_query(
-                    "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = ?",
-                    (guild.id,),
-                    fetch='one'
-                )
-
-                if config and config[0] and guild.get_channel(config[0]):
-                    continue  # Already configured and valid
-
-                print(f"🔧 Checking news channel for {guild.name}...")
-
-                # Find the main galaxy category
-                main_category = discord.utils.get(guild.categories, name=" ==== 🌌 GALAXY 🌌 ==== ")
-                if not main_category:
-                    main_category = await guild.create_category(" ==== 🌌 GALAXY 🌌 ==== ")
-                    print(f"  🆕 Created main category in {guild.name}")
-
-                # Find or create the news channel
-                news_channel = discord.utils.get(main_category.text_channels, name="📡-galactic-news")
-                if not news_channel:
-                    news_channel = await main_category.create_text_channel(
-                        "📡-galactic-news",
-                        topic="Galactic News Network - Stay informed about events across the galaxy"
-                    )
-                    print(f"  🆕 Created news channel in {guild.name}")
-
-                # Update the database
-                self.db.execute_query(
-                    "INSERT OR REPLACE INTO server_config (guild_id, galactic_updates_channel_id) VALUES (?, ?)",
-                    (guild.id, news_channel.id)
-                )
-                print(f"  ✅ Configured news channel for {guild.name}")
-
-            except Exception as e:
-                print(f"❌ Failed to configure news channel for {guild.name}: {e}")
+        
         if location_count == 0:
             print("🌌 No locations found - use `/galaxy generate` to create the galaxy")
         else:
@@ -152,7 +115,14 @@ class RPGBot(commands.Bot):
             galaxy_cog = self.get_cog('GalaxyGeneratorCog')
             if galaxy_cog:
                 print("🌌 Galaxy cog loaded, auto corridor shifts handled by cog")
-    
+        
+        # Sync slash commands
+        try:
+            print("🔄 Syncing slash commands...")
+            synced = await self.tree.sync()
+            print(f"✅ Synced {len(synced)} command(s)")
+        except Exception as e:
+            print(f"❌ Failed to sync commands: {e}")    
     async def on_command_error(self, ctx, error):
         """Handle command errors gracefully"""
         if isinstance(error, commands.CommandNotFound):

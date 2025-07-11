@@ -141,9 +141,6 @@ class NPCInteractionsCog(commands.Cog):
                 ("Patrol Duty", "Conduct security patrols of the facility", 180, "combat", 5, 2, 20),                 # Was 60
                 ("Equipment Check", "Inspect and maintain security equipment", 200, "engineering", 8, 1, 15),         # Was 30
                 ("Threat Assessment", "Evaluate security risks and vulnerabilities", 300, "combat", 15, 2, 20)        # Was 60
-            ],
-            "Escort": [
-                ("Escort to {dest_name}", "Provide safe passage for an NPC to a new location. The journey is estimated to be {jumps} jumps.", 150 * jumps + random.randint(50, 200), "combat", 10, jumps + random.randint(0, 2), 10 * jumps)  # Changed from 30 * jumps
             ]
         }
         
@@ -784,62 +781,115 @@ class NPCInteractionsCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed, ephemeral=False)        
     async def generate_npc_trade_inventory(self, npc_id: int, npc_type: str, trade_specialty: str = None):
-        """Generate trade inventory for an NPC"""
+        """Generate trade inventory for an NPC with specialty-based pricing"""
+        from utils.item_config import ItemConfig
         
         # Base items all NPCs might have
         base_items = ["Data Chip", "Emergency Rations", "Basic Med Kit", "Fuel Cell"]
         
-        # Specialty items based on trade specialty
-        specialty_items = {
-            "Rare minerals": ["Rare Minerals", "Crystal Formations", "Exotic Alloys"],
-            "Technical components": ["Scanner Module", "Engine Booster", "Hull Reinforcement"],
-            "Medical supplies": ["Advanced Med Kit", "Radiation Treatment", "Combat Stims"],
-            "Luxury goods": ["Artifact", "Cultural Items", "Fine Wine"],
-            "Information": ["Navigation Data", "Market Intelligence", "Historical Records"],
-            "Contraband": ["Illegal Substances", "Stolen Goods", "Black Market Tech"]
+        # Map trade specialties to ItemConfig item types and specific items
+        specialty_mappings = {
+            "Rare minerals": {
+                "items": ["Rare Minerals", "Crystal Formations", "Exotic Alloys"],
+                "types": ["trade"]
+            },
+            "Technical components": {
+                "items": ["Scanner Module", "Engine Booster", "Hull Reinforcement", "Repair Kit"],
+                "types": ["equipment", "upgrade"]
+            },
+            "Medical supplies": {
+                "items": ["Advanced Med Kit", "Radiation Treatment", "Combat Stims"],
+                "types": ["medical"]
+            },
+            "Luxury goods": {
+                "items": ["Artifact", "Cultural Items", "Fine Wine"],
+                "types": ["trade"]
+            },
+            "Information": {
+                "items": ["Data Chip", "Navigation Data", "Market Intelligence", "Historical Records"],
+                "types": ["trade"]
+            },
+            "Contraband": {
+                "items": ["Illegal Substances", "Stolen Goods", "Black Market Tech"],
+                "types": ["trade"]
+            }
         }
         
         items_to_add = random.sample(base_items, random.randint(1, 3))
         
-        if trade_specialty and trade_specialty in specialty_items:
-            specialty_list = specialty_items[trade_specialty]
-            items_to_add.extend(random.sample(specialty_list, random.randint(1, 2)))
+        # Add specialty items if NPC has a specialty
+        if trade_specialty and trade_specialty in specialty_mappings:
+            specialty_info = specialty_mappings[trade_specialty]
+            
+            # Add specific specialty items
+            specialty_items = [item for item in specialty_info["items"] 
+                              if item in ItemConfig.ITEM_DEFINITIONS]
+            if specialty_items:
+                items_to_add.extend(random.sample(specialty_items, 
+                                                min(len(specialty_items), random.randint(2, 4))))
+            
+            # Add items of specialty types
+            for item_type in specialty_info["types"]:
+                type_items = ItemConfig.get_items_by_type(item_type)
+                if type_items:
+                    items_to_add.extend(random.sample(type_items, 
+                                                    min(len(type_items), random.randint(1, 2))))
         
         # Add items to inventory
-        for item_name in items_to_add:
-            if item_name in ItemConfig.ITEM_DEFINITIONS:
-                item_def = ItemConfig.get_item_definition(item_name)
-                base_price = item_def["base_value"]
-                
-                # NPCs charge 20-50% markup
+        for item_name in set(items_to_add):  # Remove duplicates
+            item_def = ItemConfig.get_item_definition(item_name)
+            if not item_def:
+                continue
+            
+            base_price = item_def["base_value"]
+            item_type = item_def["type"]
+            
+            # Calculate pricing with specialty bonuses
+            is_specialty_item = False
+            if trade_specialty and trade_specialty in specialty_mappings:
+                specialty_info = specialty_mappings[trade_specialty]
+                is_specialty_item = (item_name in specialty_info["items"] or 
+                                   item_type in specialty_info["types"])
+            
+            if is_specialty_item:
+                # Specialty items: better prices (10-30% markup instead of 20-50%)
+                markup = random.uniform(1.1, 1.3)
+            else:
+                # Regular items: standard markup (20-50%)
                 markup = random.uniform(1.2, 1.5)
-                price = int(base_price * markup)
-                
-                # Some items might require trade instead of credits
-                trade_for_item = None
-                trade_quantity = 1
-                
-                if random.random() < 0.3:  # 30% chance to require trade
-                    trade_items = ["Rare Minerals", "Data Chip", "Artifact", "Technical Components"]
-                    trade_for_item = random.choice(trade_items)
-                    trade_quantity = random.randint(1, 3)
-                    price = None  # No credit price if trade required
-                
-                quantity = random.randint(1, 5)
-                rarity = item_def.get("rarity", "common")
-                
-                # Rare items restock less frequently
-                restock_hours = {"common": 24, "uncommon": 48, "rare": 96, "legendary": 168}
-                restock_time = datetime.now() + timedelta(hours=restock_hours.get(rarity, 24))
-                
-                self.db.execute_query(
-                    '''INSERT INTO npc_trade_inventory
-                       (npc_id, npc_type, item_name, item_type, quantity, price_credits,
-                        trade_for_item, trade_quantity_required, rarity, description, restocks_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                    (npc_id, npc_type, item_name, item_def["type"], quantity, price,
-                     trade_for_item, trade_quantity, rarity, item_def["description"], restock_time)
-                )
+            
+            price = int(base_price * markup)
+            
+            # Some items might require trade instead of credits
+            trade_for_item = None
+            trade_quantity = 1
+            
+            if random.random() < 0.3:  # 30% chance to require trade
+                trade_items = ["Rare Minerals", "Data Chip", "Artifact", "Technical Components"]
+                trade_for_item = random.choice(trade_items)
+                trade_quantity = random.randint(1, 3)
+                price = None  # No credit price if trade required
+            
+            # Specialty NPCs have more stock of their specialty items
+            if is_specialty_item:
+                quantity = random.randint(2, 6)  # More specialty items
+            else:
+                quantity = random.randint(1, 3)  # Fewer regular items
+            
+            rarity = item_def.get("rarity", "common")
+            
+            # Rare items restock less frequently
+            restock_hours = {"common": 24, "uncommon": 48, "rare": 96, "legendary": 168}
+            restock_time = datetime.now() + timedelta(hours=restock_hours.get(rarity, 24))
+            
+            self.db.execute_query(
+                '''INSERT INTO npc_trade_inventory
+                   (npc_id, npc_type, item_name, item_type, quantity, price_credits,
+                    trade_for_item, trade_quantity_required, rarity, description, restocks_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (npc_id, npc_type, item_name, item_type, quantity, price,
+                 trade_for_item, trade_quantity, rarity, item_def["description"], restock_time)
+            )
 
 class NPCSelectView(discord.ui.View):
     def __init__(self, bot, user_id: int, location_id: int, static_npcs: list, dynamic_npcs: list):
@@ -1088,7 +1138,51 @@ class NPCActionView(discord.ui.View):
         
         view = NPCTradeSelectView(self.bot, self.user_id, self.npc_id, self.npc_type, trade_items)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
+    @discord.ui.button(label="Sell Items", style=discord.ButtonStyle.primary, emoji="💰")
+    async def sell_to_npc(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        # Get player's inventory
+        inventory_items = self.bot.db.execute_query(
+            '''SELECT item_id, item_name, quantity, item_type, value, description
+               FROM inventory 
+               WHERE owner_id = ? AND quantity > 0
+               ORDER BY item_type, item_name''',
+            (interaction.user.id,),
+            fetch='all'
+        )
+        
+        if not inventory_items:
+            await interaction.response.send_message("You don't have any items to sell.", ephemeral=True)
+            return
+        
+        # Get NPC's trade specialty for pricing
+        trade_specialty = None
+        if self.npc_type == "static":
+            specialty_result = self.bot.db.execute_query(
+                "SELECT trade_specialty FROM static_npcs WHERE npc_id = ?",
+                (self.npc_id,),
+                fetch='one'
+            )
+            trade_specialty = specialty_result[0] if specialty_result else None
+        
+        embed = discord.Embed(
+            title="💰 Sell Items to NPC",
+            description="Select items to sell:",
+            color=0x00ff00
+        )
+        
+        if trade_specialty:
+            embed.add_field(
+                name="🎯 Specialty Bonus",
+                value=f"This NPC pays 25% more for **{trade_specialty}** items!",
+                inline=False
+            )
+        
+        view = NPCSellSelectView(self.bot, self.user_id, self.npc_id, self.npc_type, inventory_items, trade_specialty)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 class NPCJobSelectView(discord.ui.View):
     def __init__(self, bot, user_id: int, npc_id: int, npc_type: str, jobs: list):
         super().__init__(timeout=120)
@@ -1447,6 +1541,251 @@ class NPCTradeSelectView(discord.ui.View):
         embed.add_field(name="Rarity", value=rarity.title(), inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
+class NPCSellSelectView(discord.ui.View):
+    def __init__(self, bot, user_id: int, npc_id: int, npc_type: str, inventory_items: list, trade_specialty: str = None):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.user_id = user_id
+        self.npc_id = npc_id
+        self.npc_type = npc_type
+        self.trade_specialty = trade_specialty
+        
+        # Create select menu for items
+        options = []
+        
+        for item_id, item_name, quantity, item_type, value, description in inventory_items[:25]:
+            # Calculate selling price based on specialty
+            sell_price = self._calculate_sell_price(item_name, item_type, value)
+            specialty_bonus = self._is_specialty_item(item_name, item_type)
+            
+            bonus_text = " ⭐" if specialty_bonus else ""
+            options.append(
+                discord.SelectOption(
+                    label=f"{item_name} (x{quantity}){bonus_text}",
+                    description=f"Sell for {sell_price:,} credits each"[:100],
+                    value=str(item_id),
+                    emoji="💰" if specialty_bonus else "🪙"
+                )
+            )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder="Choose an item to sell...",
+                options=options[:25]  # Discord limit
+            )
+            select.callback = self.item_selected
+            self.add_item(select)
+    
+    def _is_specialty_item(self, item_name: str, item_type: str) -> bool:
+        """Check if item matches NPC's trade specialty"""
+        if not self.trade_specialty:
+            return False
+        
+        from utils.item_config import ItemConfig
+        item_def = ItemConfig.get_item_definition(item_name)
+        
+        # Map trade specialties to item types/names
+        specialty_mappings = {
+            "Rare minerals": ["Rare Minerals", "Crystal Formations", "Exotic Alloys"],
+            "Technical components": lambda item: item_type in ["equipment", "upgrade"] or item_name in ["Scanner Module", "Engine Booster", "Hull Reinforcement"],
+            "Medical supplies": lambda item: item_type == "medical" or item_name in ["Advanced Med Kit", "Radiation Treatment", "Combat Stims"],
+            "Luxury goods": ["Artifact", "Cultural Items", "Fine Wine"],
+            "Information": ["Navigation Data", "Market Intelligence", "Historical Records", "Data Chip"],
+            "Contraband": ["Illegal Substances", "Stolen Goods", "Black Market Tech"]
+        }
+        
+        mapping = specialty_mappings.get(self.trade_specialty)
+        if not mapping:
+            return False
+        
+        if callable(mapping):
+            return mapping(item_name)
+        else:
+            return item_name in mapping
+    
+    def _calculate_sell_price(self, item_name: str, item_type: str, base_value: int) -> int:
+        """Calculate how much NPC will pay for an item"""
+        from utils.item_config import ItemConfig
+        item_def = ItemConfig.get_item_definition(item_name)
+        
+        # Base sell rate (NPCs buy at 60-70% of base value)
+        base_rate = 0.65
+        
+        # Specialty bonus (25% more for specialty items)
+        if self._is_specialty_item(item_name, item_type):
+            base_rate = 0.8  # 80% of base value instead of 65%
+        
+        # Use ItemConfig base_value if available, otherwise use stored value
+        if item_def and "base_value" in item_def:
+            base_value = item_def["base_value"]
+        
+        return max(1, int(base_value * base_rate))
+    
+    async def item_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        item_id = int(interaction.data['values'][0])
+        
+        # Get item details
+        item_info = self.bot.db.execute_query(
+            '''SELECT item_id, item_name, quantity, item_type, value, description
+               FROM inventory WHERE item_id = ?''',
+            (item_id,),
+            fetch='one'
+        )
+        
+        if not item_info:
+            await interaction.response.send_message("Item no longer available.", ephemeral=True)
+            return
+        
+        item_id, item_name, quantity, item_type, stored_value, description = item_info
+        
+        # Calculate sell price
+        sell_price = self._calculate_sell_price(item_name, item_type, stored_value)
+        is_specialty = self._is_specialty_item(item_name, item_type)
+        
+        view = NPCSellQuantityView(self.bot, self.user_id, self.npc_id, self.npc_type, 
+                                   item_id, item_name, quantity, sell_price, is_specialty)
+        
+        embed = discord.Embed(
+            title="💰 Confirm Sale",
+            description=f"Selling **{item_name}** to NPC",
+            color=0x00ff00
+        )
+        
+        embed.add_field(name="Price per Item", value=f"{sell_price:,} credits", inline=True)
+        embed.add_field(name="Available Quantity", value=str(quantity), inline=True)
+        
+        if is_specialty:
+            embed.add_field(name="⭐ Specialty Bonus", value="25% extra payment!", inline=True)
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        
+class NPCSellQuantityView(discord.ui.View):
+    def __init__(self, bot, user_id: int, npc_id: int, npc_type: str, item_id: int, 
+                 item_name: str, max_quantity: int, sell_price: int, is_specialty: bool):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.user_id = user_id
+        self.npc_id = npc_id
+        self.npc_type = npc_type
+        self.item_id = item_id
+        self.item_name = item_name
+        self.max_quantity = max_quantity
+        self.sell_price = sell_price
+        self.is_specialty = is_specialty
+        self.selected_quantity = 1
+        
+        self.update_buttons()
+    
+    def update_buttons(self):
+        self.clear_items()
+        
+        # Quantity adjustment buttons
+        decrease_btn = discord.ui.Button(
+            label="-", style=discord.ButtonStyle.secondary, 
+            disabled=(self.selected_quantity <= 1)
+        )
+        decrease_btn.callback = self.decrease_quantity
+        self.add_item(decrease_btn)
+        
+        quantity_btn = discord.ui.Button(
+            label=f"Quantity: {self.selected_quantity}", 
+            style=discord.ButtonStyle.primary, disabled=True
+        )
+        self.add_item(quantity_btn)
+        
+        increase_btn = discord.ui.Button(
+            label="+", style=discord.ButtonStyle.secondary,
+            disabled=(self.selected_quantity >= self.max_quantity)
+        )
+        increase_btn.callback = self.increase_quantity
+        self.add_item(increase_btn)
+        
+        # Max button
+        max_btn = discord.ui.Button(
+            label="Max", style=discord.ButtonStyle.secondary,
+            disabled=(self.selected_quantity >= self.max_quantity)
+        )
+        max_btn.callback = self.set_max_quantity
+        self.add_item(max_btn)
+        
+        # Confirm sale button
+        confirm_btn = discord.ui.Button(
+            label=f"Sell for {self.sell_price * self.selected_quantity:,} credits",
+            style=discord.ButtonStyle.success, emoji="✅"
+        )
+        confirm_btn.callback = self.confirm_sale
+        self.add_item(confirm_btn)
+    
+    async def decrease_quantity(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        self.selected_quantity = max(1, self.selected_quantity - 1)
+        self.update_buttons()
+        await interaction.response.edit_message(view=self)
+    
+    async def increase_quantity(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        self.selected_quantity = min(self.max_quantity, self.selected_quantity + 1)
+        self.update_buttons()
+        await interaction.response.edit_message(view=self)
+    
+    async def set_max_quantity(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        self.selected_quantity = self.max_quantity
+        self.update_buttons()
+        await interaction.response.edit_message(view=self)
+    
+    async def confirm_sale(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        total_payment = self.sell_price * self.selected_quantity
+        
+        # Update inventory
+        if self.selected_quantity >= self.max_quantity:
+            # Remove item completely
+            self.bot.db.execute_query(
+                "DELETE FROM inventory WHERE item_id = ?",
+                (self.item_id,)
+            )
+        else:
+            # Reduce quantity
+            self.bot.db.execute_query(
+                "UPDATE inventory SET quantity = quantity - ? WHERE item_id = ?",
+                (self.selected_quantity, self.item_id)
+            )
+        
+        # Add money to player
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            (total_payment, self.user_id)
+        )
+        
+        embed = discord.Embed(
+            title="✅ Sale Successful",
+            description=f"Sold {self.selected_quantity}x **{self.item_name}** to NPC!",
+            color=0x00ff00
+        )
+        
+        embed.add_field(name="Payment Received", value=f"{total_payment:,} credits", inline=True)
+        embed.add_field(name="Price per Item", value=f"{self.sell_price:,} credits", inline=True)
+        
+        if self.is_specialty:
+            embed.add_field(name="⭐ Specialty Bonus", value="Applied!", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)       
 async def setup(bot):
     await bot.add_cog(NPCInteractionsCog(bot))

@@ -214,7 +214,7 @@ class RadioCog(commands.Cog):
                       l.x_coord, l.y_coord, l.system_name
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.current_location IS NOT NULL''',
+               WHERE c.current_location IS NOT NULL AND c.is_logged_in = 1''',
             fetch='all'
         )
         
@@ -272,7 +272,7 @@ class RadioCog(commands.Cog):
                       l.x_coord, l.y_coord, l.system_name
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.current_location IS NOT NULL''',
+               WHERE c.current_location IS NOT NULL AND c.is_logged_in = 1''',
             fetch='all'
         )
 

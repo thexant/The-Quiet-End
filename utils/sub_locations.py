@@ -1100,7 +1100,7 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_check_schedules(interaction, char_name)
         elif service_type == "travel_info":
             await self._handle_travel_info(interaction, char_name)
-        # New handlers for character info changes
+
         elif service_type == "change_name":
             modal = ChangeNameModal(
                 title="Change Character Name",
@@ -1153,6 +1153,7 @@ class SubLocationServiceView(discord.ui.View):
                 bot=self.bot
             )
             await interaction.response.send_modal(modal)
+            
         elif service_type == "take_id_photo":
             current_image = self.db.execute_query(
                 "SELECT image_url FROM characters WHERE user_id = ?",
@@ -3127,7 +3128,97 @@ class SubLocationServiceView(discord.ui.View):
         )
         embed.add_field(name="📋 Status", value="The governement agency will have your permit application reviewed within: 90 years.", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
+    async def _handle_equipment_mods(self, interaction, char_name: str, money: int):
+        """Enhanced equipment modification services"""
+        import random
+        
+        # Check if player has any ship components or equipment to modify
+        equipment = self.db.execute_query(
+            '''SELECT item_name, item_type, quantity FROM inventory 
+               WHERE owner_id = ? AND item_type IN ('equipment', 'ship_component', 'component')
+               LIMIT 5''',
+            (interaction.user.id,),
+            fetch='all'
+        )
+        
+        modifications = [
+            ("Performance Boost", 200, "Increase item efficiency by 10%"),
+            ("Durability Enhancement", 150, "Extend item lifespan significantly"),
+            ("Size Optimization", 100, "Reduce item storage requirements"),
+            ("Compatibility Upgrade", 250, "Make item work with more systems")
+        ]
+        
+        mod_name, mod_cost, mod_desc = random.choice(modifications)
+        
+        embed = discord.Embed(
+            title="⚙️ Equipment Modifications",
+            description=f"**{char_name}** explores equipment modification services.",
+            color=0xff6347
+        )
+        
+        if equipment:
+            equip_list = []
+            for item_name, item_type, quantity in equipment:
+                equip_list.append(f"• {item_name} ({quantity}x) - {item_type}")
+            
+            embed.add_field(
+                name="🔧 Your Modifiable Equipment",
+                value="\n".join(equip_list),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📦 No Equipment",
+                value="You don't have any equipment available for modification.",
+                inline=False
+            )
+        
+        embed.add_field(name="⚡ Featured Modification", value=mod_name, inline=False)
+        embed.add_field(name="💰 Cost", value=f"{mod_cost} credits", inline=True)
+        embed.add_field(name="📋 Effect", value=mod_desc, inline=True)
+        
+        embed.add_field(
+            name="🛠️ Modification Process",
+            value="Modifications are permanent improvements that enhance your equipment's capabilities.",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    async def _handle_ship_storage(self, interaction, char_name: str, money: int):
+        """Enhanced ship storage services"""
+        import random
+        
+        storage_services = [
+            ("Short-term Parking", 20, "Safe parking for up to 24 hours"),
+            ("Extended Storage", 100, "Secure storage for up to 7 days"),
+            ("Maintenance Storage", 150, "Storage with basic maintenance included"),
+            ("Premium Hangar", 300, "Climate-controlled storage with security")
+        ]
+        
+        service_name, cost, description = random.choice(storage_services)
+        
+        embed = discord.Embed(
+            title="🚁 Ship Storage Services",
+            description=f"**{char_name}** inquires about ship storage options.",
+            color=0x4682b4
+        )
+        
+        embed.add_field(name="🏢 Featured Service", value=service_name, inline=False)
+        embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
+        embed.add_field(name="📝 Details", value=description, inline=True)
+        
+        embed.add_field(
+            name="🛡️ Storage Benefits",
+            value="• Protection from environmental hazards\n• Security monitoring\n• Insurance coverage\n• Easy retrieval access",
+            inline=False
+        )
+        
+        if money >= cost:
+            embed.add_field(name="✅ Status", value="Service available", inline=True)
+        else:
+            embed.add_field(name="❌ Status", value="Insufficient funds", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     async def _handle_generic_service(self, interaction, service_type: str, char_name: str):
         """Handle generic/flavor services"""
         import random
@@ -3647,28 +3738,125 @@ class SubLocationServiceView(discord.ui.View):
         embed.add_field(name="💰 Price Range", value="10-45 credits per item", inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    async def _handle_socialize(self, interaction, char_name: str):
-        """Handle socializing in the cafeteria"""
-        social_encounters = [
-            "You join a conversation about recent corridor discoveries",
-            "Fellow travelers share stories of their journeys",
-            "You exchange contact information with a potential business partner",
-            "Local residents discuss recent events and news",
-            "You participate in friendly debates about space politics",
-            "Others share tips about navigation and travel safety"
-        ]
+    async def _handle_cargo_services(self, interaction, char_name: str, money: int):
+        """Enhanced cargo services"""
+        import random
+        
+        # Check ship cargo status
+        ship_info = self.db.execute_query(
+            "SELECT cargo_capacity, cargo_used, name FROM ships WHERE owner_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            embed = discord.Embed(
+                title="📦 Cargo Services",
+                description="No ship found for cargo operations.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        cargo_capacity, cargo_used, ship_name = ship_info
+        cargo_free = cargo_capacity - cargo_used
+        
+        services = []
+        
+        if cargo_used > 0:
+            services.append("🔄 **Cargo Reorganization** - Optimize storage layout (50 credits)")
+        
+        if cargo_free > 0:
+            services.append("📦 **Temporary Storage** - Store items while docked (10 credits/day)")
+        
+        services.extend([
+            "🏷️ **Cargo Manifest Update** - Update shipping documentation (25 credits)",
+            "🔍 **Cargo Inspection** - Security scan and certification (75 credits)",
+            "⚖️ **Weight Distribution** - Balance cargo for optimal flight (40 credits)"
+        ])
         
         embed = discord.Embed(
-            title="👥 Socializing",
-            description=f"**{char_name}** engages in conversation with fellow diners.",
-            color=0x20b2aa
+            title="📦 Cargo Services",
+            description=f"**{char_name}** reviews cargo handling services for the **{ship_name}**.",
+            color=0x8b4513
         )
-        embed.add_field(name="💬 Interaction", value=random.choice(social_encounters), inline=False)
-        embed.add_field(name="🤝 Networking", value="You build relationships within the community.", inline=False)
+        
+        embed.add_field(
+            name="🚀 Current Cargo Status",
+            value=f"Used: {cargo_used}/{cargo_capacity} units\nFree Space: {cargo_free} units",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🛠️ Available Services",
+            value="\n".join(services),
+            inline=False
+        )
+        
+        embed.add_field(
+            name="💰 Your Credits",
+            value=f"{money:,} credits",
+            inline=True
+        )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
+    async def _handle_socialize(self, interaction, char_name: str):
+        """Enhanced socializing with varied outcomes"""
+        import random
+        
+        # Different social encounters based on location context
+        social_encounters = [
+            {
+                "type": "conversation",
+                "description": "You join a lively conversation about recent events",
+                "outcome": "You learn some interesting local gossip and feel more connected to the community."
+            },
+            {
+                "type": "networking",
+                "description": "You meet a fellow traveler with similar interests",
+                "outcome": "You exchange contact information and might cross paths again in the future."
+            },
+            {
+                "type": "storytelling",
+                "description": "Others gather as you share tales of your recent adventures",
+                "outcome": "Your stories entertain the crowd and enhance your local reputation."
+            },
+            {
+                "type": "advice",
+                "description": "A experienced local offers you some helpful advice",
+                "outcome": "You gain valuable insights about navigation, trade, or survival."
+            },
+            {
+                "type": "information",
+                "description": "You overhear useful information about job opportunities",
+                "outcome": "You learn about potential work or business opportunities in the area."
+            }
+        ]
+        
+        encounter = random.choice(social_encounters)
+        
+        embed = discord.Embed(
+            title="👥 Social Interaction",
+            description=f"**{char_name}** {encounter['description']}.",
+            color=0x20b2aa
+        )
+        
+        embed.add_field(name="💬 Outcome", value=encounter['outcome'], inline=False)
+        
+        # Small chance of gaining reputation or credits from social interactions
+        if random.random() < 0.15:  # 15% chance
+            bonus_type = random.choice(["credits", "reputation"])
+            if bonus_type == "credits":
+                bonus_amount = random.randint(5, 25)
+                self.db.execute_query(
+                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    (bonus_amount, interaction.user.id)
+                )
+                embed.add_field(name="💰 Bonus", value=f"Someone appreciated your company! +{bonus_amount} credits", inline=False)
+            else:
+                embed.add_field(name="⭐ Bonus", value="Your positive interaction improved your local standing!", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
     # Transit Lounge Services
     async def _handle_wait_comfortably(self, interaction, char_name: str, hp: int, max_hp: int):
         """Handle waiting comfortably in transit lounge"""
@@ -3731,6 +3919,186 @@ class SubLocationServiceView(discord.ui.View):
         )
         embed.add_field(name="ℹ️ Travel Tips", value="\n".join(random.sample(travel_tips, 3)), inline=False)
         embed.add_field(name="🎯 Planning", value="This information will help you plan your journey more effectively.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+    async def _handle_browse_shops(self, interaction, char_name: str):
+        """Handle browsing shops - show actual shop inventory"""
+        await interaction.response.defer(ephemeral=True)
+        
+        # Get shop items for this location
+        items = self.db.execute_query(
+            '''SELECT item_name, item_type, price, stock, description
+               FROM shop_items 
+               WHERE location_id = ? AND (stock > 0 OR stock = -1)
+               ORDER BY item_type, price''',
+            (self.location_id,),
+            fetch='all'
+        )
+        
+        # Get location info for shop generation if needed
+        location_info = self.db.execute_query(
+            "SELECT name, wealth_level, location_type FROM locations WHERE location_id = ?",
+            (self.location_id,),
+            fetch='one'
+        )
+        
+        if not items and location_info:
+            # Generate shop items if none exist
+            economy_cog = self.bot.get_cog('EconomyCog')
+            if economy_cog:
+                await economy_cog._generate_shop_items(self.location_id, location_info[1], location_info[2])
+                items = self.db.execute_query(
+                    '''SELECT item_name, item_type, price, stock, description
+                       FROM shop_items 
+                       WHERE location_id = ? AND (stock > 0 OR stock = -1)
+                       ORDER BY item_type, price''',
+                    (self.location_id,),
+                    fetch='all'
+                )
+        
+        embed = discord.Embed(
+            title="🛒 Market District Shops",
+            description=f"**{char_name}** browses the available shops and vendors.",
+            color=0xffd700
+        )
+        
+        if items:
+            # Group items by type
+            item_types = {}
+            for item_name, item_type, price, stock, description in items:
+                if item_type not in item_types:
+                    item_types[item_type] = []
+                
+                stock_text = f"({stock} in stock)" if stock != -1 else "(Unlimited)"
+                item_types[item_type].append(f"**{item_name}** - {price:,} credits {stock_text}")
+            
+            for item_type, type_items in item_types.items():
+                embed.add_field(
+                    name=item_type.replace('_', ' ').title(),
+                    value="\n".join(type_items[:5]),  # Limit to 5 items per type
+                    inline=True
+                )
+        else:
+            embed.add_field(name="No Items Available", value="The shops are currently out of stock.", inline=False)
+        
+        embed.add_field(
+            name="💡 How to Buy",
+            value="Use `/shop buy <item_name> [quantity]` to purchase items",
+            inline=False
+        )
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def _handle_specialty_vendors(self, interaction, char_name: str, money: int):
+        """Handle specialty vendor interactions with rare items"""
+        import random
+        
+        # Specialty items that are rare/unique
+        specialty_items = [
+            ("Advanced Navigation Array", "ship_component", 2500, "Reduces travel time by 15%", 1),
+            ("Medical Nano-Kit", "medical", 800, "Instantly restores 50 HP when used", 2),
+            ("Encrypted Data Core", "information", 1200, "Contains valuable trade route data", 1),
+            ("Rare Alloy Sample", "material", 1500, "Premium ship hull reinforcement material", 3),
+            ("Personal Shield Generator", "equipment", 3000, "Provides protection during dangerous encounters", 1),
+            ("Quantum Fuel Stabilizer", "ship_component", 1800, "Improves fuel efficiency by 20%", 2),
+            ("Black Market Contacts", "information", 2200, "Access to exclusive underground markets", 1),
+            ("Emergency Beacon", "equipment", 600, "Calls for rescue in critical situations", 4),
+        ]
+        
+        # Randomly select 2-4 items available today
+        available_items = random.sample(specialty_items, random.randint(2, 4))
+        
+        embed = discord.Embed(
+            title="🏪 Specialty Vendors",
+            description=f"**{char_name}** visits the exclusive specialty vendors.",
+            color=0x9400d3
+        )
+        
+        embed.add_field(
+            name="✨ Today's Rare Offerings",
+            value="These items are only available from specialty vendors and may not appear again.",
+            inline=False
+        )
+        
+        items_text = []
+        for item_name, item_type, price, description, stock in available_items:
+            affordability = "✅" if money >= price else "❌"
+            items_text.append(f"{affordability} **{item_name}** - {price:,} credits ({stock} available)")
+            items_text.append(f"   *{description}*")
+        
+        embed.add_field(
+            name="🛍️ Available Items",
+            value="\n".join(items_text),
+            inline=False
+        )
+        
+        embed.add_field(
+            name="💰 Your Credits",
+            value=f"{money:,} credits",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="💡 Purchase",
+            value="Contact the vendor directly to negotiate purchases of these rare items.",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_check_prices(self, interaction, char_name: str):
+        """Handle checking current market prices"""
+        import random
+        
+        # Get some sample items and their prices from the shop
+        sample_items = self.db.execute_query(
+            '''SELECT item_name, price FROM shop_items 
+               WHERE location_id = ? AND (stock > 0 OR stock = -1)
+               ORDER BY RANDOM() LIMIT 6''',
+            (self.location_id,),
+            fetch='all'
+        )
+        
+        embed = discord.Embed(
+            title="📈 Market Price Check",
+            description=f"**{char_name}** reviews current market prices.",
+            color=0x4169e1
+        )
+        
+        if sample_items:
+            price_list = []
+            for item_name, price in sample_items:
+                # Add some price variation flavor
+                trend = random.choice(["📈 +5%", "📉 -3%", "📊 stable", "📊 stable", "📊 stable"])
+                price_list.append(f"**{item_name}**: {price:,} credits {trend}")
+            
+            embed.add_field(
+                name="💰 Current Prices",
+                value="\n".join(price_list),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📊 Market Status",
+                value="No price data available at this time.",
+                inline=False
+            )
+        
+        # Add some market intelligence
+        market_conditions = [
+            "Fuel prices expected to rise due to corridor instabilities",
+            "Medical supplies in high demand at outer colonies",
+            "Ship parts showing price volatility across different systems",
+            "Food prices stable due to good hydroponics yields",
+            "Luxury goods commanding premium prices at wealthy stations"
+        ]
+        
+        embed.add_field(
+            name="📰 Market Intelligence",
+            value=random.choice(market_conditions),
+            inline=False
+        )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 class SubLocationButton(discord.ui.Button):
