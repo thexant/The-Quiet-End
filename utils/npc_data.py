@@ -93,7 +93,7 @@ RADIO_MESSAGES = [
     "{callsign} here, family sends their regards from the Core Worlds. Missing home today.",
     "Captain {name} logging personal note: {location} has the best coffee in three systems.",
     "{callsign} to old friends, still flying the trade routes. Hope to cross paths again soon.",
-    "This is {callsign}, teaching the new crew member about proper radio etiquette. Wave hello everyone!".
+    "This is {callsign}, teaching the new crew member about proper radio etiquette. Wave hello everyone!",
     
     "This is {callsign} to anyone on this frequency... My nav-computer is cycling, showing a corridor that shouldn't be here. Is... is anyone else seeing this?",
     "{callsign} requesting updated corridor stability data. My last chart is three cycles old and I don't trust it. Anything more recent would be appreciated.",

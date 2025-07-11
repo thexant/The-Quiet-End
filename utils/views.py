@@ -634,6 +634,77 @@ class LocationView(discord.ui.View):
             )
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    @discord.ui.button(label="NPCs", style=discord.ButtonStyle.secondary, emoji="👤")
+    async def npc_interactions(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle NPC interactions button"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get character's current location
+        char_info = self.bot.db.execute_query(
+            "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info or not char_info[1]:
+            await interaction.response.send_message("You must be logged in to interact with NPCs!", ephemeral=True)
+            return
+        
+        location_id = char_info[0]
+        if not location_id:
+            await interaction.response.send_message("You must be at a location to interact with NPCs!", ephemeral=True)
+            return
+        
+        # Get NPCs at this location
+        static_npcs = self.bot.db.execute_query(
+            '''SELECT npc_id, name, age, occupation, personality, trade_specialty
+               FROM static_npcs WHERE location_id = ?''',
+            (location_id,),
+            fetch='all'
+        )
+        
+        dynamic_npcs = self.bot.db.execute_query(
+            '''SELECT npc_id, name, age, ship_name, ship_type
+               FROM dynamic_npcs 
+               WHERE current_location = ? AND is_alive = 1 AND travel_start_time IS NULL''',
+            (location_id,),
+            fetch='all'
+        )
+        
+        if not static_npcs and not dynamic_npcs:
+            await interaction.response.send_message("No NPCs are available for interaction at this location.", ephemeral=True)
+            return
+        
+        # Import the NPCSelectView class and create the view
+        from cogs.npc_interactions import NPCSelectView
+        view = NPCSelectView(self.bot, interaction.user.id, location_id, static_npcs, dynamic_npcs)
+        
+        embed = discord.Embed(
+            title="👥 NPCs at Location",
+            description="Select an NPC to interact with:",
+            color=0x6c5ce7
+        )
+        
+        # Add some info about available NPCs
+        if static_npcs:
+            static_list = [f"• **{name}** - {occupation}" for npc_id, name, age, occupation, personality, trade_specialty in static_npcs[:5]]
+            embed.add_field(
+                name="🏢 Residents and locals",
+                value="\n".join(static_list) + (f"\n*...and {len(static_npcs)-5} more*" if len(static_npcs) > 5 else ""),
+                inline=False
+            )
+        
+        if dynamic_npcs:
+            dynamic_list = [f"• **{name}** - Captain of {ship_name}" for npc_id, name, age, ship_name, ship_type in dynamic_npcs[:5]]
+            embed.add_field(
+                name="🚀 Visiting Travellers",
+                value="\n".join(dynamic_list) + (f"\n*...and {len(dynamic_npcs)-5} more*" if len(dynamic_npcs) > 5 else ""),
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     async def _generate_random_jobs(self, location_id: int):
         """Generate some random jobs for a location"""
         job_templates = [
@@ -1208,7 +1279,269 @@ class TravelConfirmView(discord.ui.View):
             return
         
         await interaction.response.send_message("Travel cancelled.", ephemeral=True)
-
+class PersistentLocationView(discord.ui.View):
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=None)  # No timeout for persistent view
+        self.bot = bot
+        self.user_id = user_id
+        
+        # Get current location and status
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            (user_id,),
+            fetch='one'
+        )
+        
+        if char_data:
+            self.current_location_id = char_data[0]
+            location_status = char_data[1]
+        else:
+            self.current_location_id = None
+            location_status = "docked"
+        
+        # Configure buttons based on dock status
+        self._configure_buttons(location_status)
+    
+    def _configure_buttons(self, location_status: str):
+        """Configure button states based on dock status"""
+        self.clear_items()
+        
+        # Always available buttons
+        self.add_item(self.npc_interactions)
+        
+        # Status-dependent buttons
+        if location_status == "docked":
+            self.add_item(self.jobs_panel)
+            self.add_item(self.shop_management)
+            self.add_item(self.sub_areas)
+            self.add_item(self.undock_button)
+        else:  # in_space
+            self.add_item(self.travel_button)
+            self.add_item(self.dock_button)
+    
+    async def refresh_view(self, interaction: discord.Interaction = None):
+        """Refresh the view when dock status changes"""
+        char_data = self.bot.db.execute_query(
+            "SELECT location_status FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if char_data:
+            location_status = char_data[0]
+            self._configure_buttons(location_status)
+            
+            # Update embed
+            embed = discord.Embed(
+                title="📍 Location Panel",
+                description="Interactive Control Panel",
+                color=0x4169E1
+            )
+            
+            status_emoji = "🛬" if location_status == "docked" else "🚀"
+            embed.add_field(
+                name="Status",
+                value=f"{status_emoji} {location_status.replace('_', ' ').title()}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="Available Actions",
+                value="Use the buttons below to interact with this location",
+                inline=False
+            )
+            
+            embed.set_footer(text="This panel updates automatically when your status changes")
+            
+            if interaction:
+                await interaction.edit_original_response(embed=embed, view=self)
+            else:
+                # Update without interaction (for background updates)
+                panel_data = self.bot.db.execute_query(
+                    "SELECT message_id, channel_id FROM user_location_panels WHERE user_id = ?",
+                    (self.user_id,),
+                    fetch='one'
+                )
+                
+                if panel_data:
+                    message_id, channel_id = panel_data
+                    channel = self.bot.get_channel(channel_id)
+                    if channel:
+                        try:
+                            message = await channel.fetch_message(message_id)
+                            await message.edit(embed=embed, view=self)
+                        except:
+                            pass
+    
+    @discord.ui.button(label="NPCs", style=discord.ButtonStyle.secondary, emoji="👤")
+    async def npc_interactions(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle NPC interactions button"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Same NPC logic as before
+        char_info = self.bot.db.execute_query(
+            "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info or not char_info[1]:
+            await interaction.response.send_message("You must be logged in to interact with NPCs!", ephemeral=True)
+            return
+        
+        location_id = char_info[0]
+        if not location_id:
+            await interaction.response.send_message("You must be at a location to interact with NPCs!", ephemeral=True)
+            return
+        
+        # Get NPCs at this location
+        static_npcs = self.bot.db.execute_query(
+            '''SELECT npc_id, name, age, occupation, personality, trade_specialty
+               FROM static_npcs WHERE location_id = ?''',
+            (location_id,),
+            fetch='all'
+        )
+        
+        dynamic_npcs = self.bot.db.execute_query(
+            '''SELECT npc_id, name, age, ship_name, ship_type
+               FROM dynamic_npcs 
+               WHERE current_location = ? AND is_alive = 1 AND travel_start_time IS NULL''',
+            (location_id,),
+            fetch='all'
+        )
+        
+        if not static_npcs and not dynamic_npcs:
+            await interaction.response.send_message("No NPCs are available for interaction at this location.", ephemeral=True)
+            return
+        
+        # Import the NPCSelectView class and create the view
+        from cogs.npc_interactions import NPCSelectView
+        view = NPCSelectView(self.bot, interaction.user.id, location_id, static_npcs, dynamic_npcs)
+        
+        embed = discord.Embed(
+            title="👥 NPCs at Location",
+            description="Select an NPC to interact with:",
+            color=0x6c5ce7
+        )
+        
+        # Add some info about available NPCs
+        if static_npcs:
+            static_list = [f"• **{name}** - {occupation}" for npc_id, name, age, occupation, personality, trade_specialty in static_npcs[:5]]
+            embed.add_field(
+                name="🏢 Residents and locals",
+                value="\n".join(static_list) + (f"\n*...and {len(static_npcs)-5} more*" if len(static_npcs) > 5 else ""),
+                inline=False
+            )
+        
+        if dynamic_npcs:
+            dynamic_list = [f"• **{name}** - Captain of {ship_name}" for npc_id, name, age, ship_name, ship_type in dynamic_npcs[:5]]
+            embed.add_field(
+                name="🚀 Visiting Travellers",
+                value="\n".join(dynamic_list) + (f"\n*...and {len(dynamic_npcs)-5} more*" if len(dynamic_npcs) > 5 else ""),
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Jobs", style=discord.ButtonStyle.primary, emoji="💼")
+    async def jobs_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        economy_cog = self.bot.get_cog('EconomyCog')
+        if economy_cog:
+            await economy_cog.job_list.callback(economy_cog, interaction)
+    
+    @discord.ui.button(label="Shop", style=discord.ButtonStyle.success, emoji="🛒")
+    async def shop_management(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        economy_cog = self.bot.get_cog('EconomyCog')
+        if economy_cog:
+            await economy_cog.shop_list.callback(economy_cog, interaction)
+    
+    @discord.ui.button(label="Sub-Areas", style=discord.ButtonStyle.secondary, emoji="🏢")
+    async def sub_areas(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Sub-areas logic (same as before)
+        char_location = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_location:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        from utils.sub_locations import SubLocationManager
+        sub_manager = SubLocationManager(self.bot)
+        
+        available_subs = await sub_manager.get_available_sub_locations(char_location[0])
+        
+        if not available_subs:
+            await interaction.response.send_message("No sub-areas available at this location.", ephemeral=True)
+            return
+        
+        view = SubLocationSelectView(self.bot, interaction.user.id, char_location[0], available_subs)
+        
+        embed = discord.Embed(
+            title="🏢 Sub-Areas",
+            description="Choose an area to visit within this location",
+            color=0x6a5acd
+        )
+        
+        for sub in available_subs:
+            status = "🟢 Active" if sub['exists'] else "⚫ Create"
+            embed.add_field(
+                name=f"{sub['icon']} {sub['name']}",
+                value=f"{sub['description'][:100]}...\n**Status:** {status}",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Travel", style=discord.ButtonStyle.primary, emoji="🚀")
+    async def travel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        travel_cog = self.bot.get_cog('TravelCog')
+        if travel_cog:
+            await travel_cog.view_routes.callback(travel_cog, interaction)
+    
+    @discord.ui.button(label="Dock", style=discord.ButtonStyle.success, emoji="🛬")
+    async def dock_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.dock_ship.callback(char_cog, interaction)
+            # Refresh the view after docking
+            await self.refresh_view()
+    
+    @discord.ui.button(label="Undock", style=discord.ButtonStyle.primary, emoji="🚀")
+    async def undock_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.undock_ship.callback(char_cog, interaction)
+            # Refresh the view after undocking
+            await self.refresh_view()
 class JobSelectView(discord.ui.View):
     def __init__(self, bot, user_id: int, jobs: List[Tuple], location_name: str):
         super().__init__(timeout=60)

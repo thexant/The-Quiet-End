@@ -2,8 +2,6 @@
 import discord
 from discord.ext import commands, tasks
 import random
-from views.jobview import JobView
-from cogs.jobs import StationaryJob, TransportJob
 import asyncio
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple

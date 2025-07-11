@@ -449,7 +449,14 @@ class Database:
             )''',
             # Add location status to characters (docked vs in-space)
             '''ALTER TABLE characters ADD COLUMN location_status TEXT DEFAULT 'docked' ''',
-
+            '''CREATE TABLE IF NOT EXISTS user_location_panels (
+                user_id INTEGER,
+                location_id INTEGER,
+                message_id INTEGER,
+                channel_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, location_id)
+            )''',
             # Add experience fields to characters
             '''ALTER TABLE characters ADD COLUMN experience INTEGER DEFAULT 0''',
             '''ALTER TABLE characters ADD COLUMN level INTEGER DEFAULT 1''',
