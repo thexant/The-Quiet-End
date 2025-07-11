@@ -1281,38 +1281,233 @@ class ServicesView(discord.ui.View):
         self.bot = bot
         self.user_id = user_id
     
+    async def _handle_refuel_ship(self, interaction, char_name: str, money: int):
+        """Handle ship refueling service"""
+        ship_info = self.bot.db.execute_query(
+            "SELECT ship_id, fuel_capacity, current_fuel FROM ships WHERE owner_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            embed = discord.Embed(
+                title="⛽ Refueling Station",
+                description="No ship found to refuel.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        ship_id, fuel_capacity, current_fuel = ship_info
+        
+        if current_fuel >= fuel_capacity:
+            embed = discord.Embed(
+                title="⛽ Refueling Station",
+                description=f"**{char_name}**, your ship's fuel tanks are already full.",
+                color=0x00ff00
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Calculate refuel cost
+        fuel_needed = fuel_capacity - current_fuel
+        cost_per_fuel = 3
+        total_cost = fuel_needed * cost_per_fuel
+        
+        if money < total_cost:
+            max_affordable_fuel = money // cost_per_fuel
+            embed = discord.Embed(
+                title="⛽ Refueling Station",
+                description=f"**Full Refuel Cost:** {total_cost} credits\n**Your Credits:** {money}",
+                color=0xff6600
+            )
+            if max_affordable_fuel > 0:
+                embed.add_field(
+                    name="⛽ Partial Refuel Available",
+                    value=f"We can provide {max_affordable_fuel} fuel units for {max_affordable_fuel * cost_per_fuel} credits.",
+                    inline=False
+                )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Apply refueling
+        self.bot.db.execute_query(
+            "UPDATE ships SET current_fuel = ? WHERE ship_id = ?",
+            (fuel_capacity, ship_id)
+        )
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = ? WHERE user_id = ?",
+            (money - total_cost, interaction.user.id)
+        )
+        
+        embed = discord.Embed(
+            title="⛽ Refueling Complete",
+            description=f"**{char_name}**, your ship has been refueled.",
+            color=0x00ff00
+        )
+        embed.add_field(name="⛽ Fuel Level", value=f"{current_fuel} → {fuel_capacity}", inline=True)
+        embed.add_field(name="💰 Cost", value=f"{total_cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining Credits", value=f"{money - total_cost}", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_repair_ship(self, interaction, char_name: str, money: int):
+        """Handle ship repair service"""
+        ship_info = self.bot.db.execute_query(
+            "SELECT ship_id, hull_integrity, max_hull FROM ships WHERE owner_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            embed = discord.Embed(
+                title="🔧 Ship Repair Bay",
+                description="No ship found to repair.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        ship_id, hull_integrity, max_hull = ship_info
+        
+        if hull_integrity >= max_hull:
+            embed = discord.Embed(
+                title="🔧 Ship Repair Bay",
+                description=f"**{char_name}**, your ship's hull is in perfect condition.",
+                color=0x00ff00
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Calculate repair cost
+        repairs_needed = max_hull - hull_integrity
+        cost_per_point = 25
+        total_cost = repairs_needed * cost_per_point
+        
+        if money < total_cost:
+            max_affordable_repairs = money // cost_per_point
+            embed = discord.Embed(
+                title="🔧 Ship Repair Bay",
+                description=f"**Full Repair Cost:** {total_cost} credits\n**Your Credits:** {money}",
+                color=0xff6600
+            )
+            if max_affordable_repairs > 0:
+                embed.add_field(
+                    name="🔧 Partial Repairs Available",
+                    value=f"We can repair {max_affordable_repairs} hull points for {max_affordable_repairs * cost_per_point} credits.",
+                    inline=False
+                )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Apply repairs
+        self.bot.db.execute_query(
+            "UPDATE ships SET hull_integrity = ? WHERE ship_id = ?",
+            (max_hull, ship_id)
+        )
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = ? WHERE user_id = ?",
+            (money - total_cost, interaction.user.id)
+        )
+        
+        embed = discord.Embed(
+            title="🔧 Ship Repairs Complete",
+            description=f"**{char_name}**, your ship has been fully repaired.",
+            color=0x00ff00
+        )
+        embed.add_field(name="🛠️ Hull Integrity", value=f"{hull_integrity} → {max_hull}", inline=True)
+        embed.add_field(name="💰 Cost", value=f"{total_cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining Credits", value=f"{money - total_cost}", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_medical_treatment(self, interaction, char_name: str, hp: int, max_hp: int, money: int):
+        """Handle medical treatment service"""
+        if hp >= max_hp:
+            embed = discord.Embed(
+                title="⚕️ Medical Bay",
+                description=f"**{char_name}**, your vitals are optimal. No treatment required.",
+                color=0x00ff00
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Calculate healing and cost
+        healing_needed = max_hp - hp
+        cost_per_hp = 15
+        total_cost = healing_needed * cost_per_hp
+        
+        if money < total_cost:
+            max_affordable_healing = money // cost_per_hp
+            embed = discord.Embed(
+                title="⚕️ Medical Bay",
+                description=f"**Treatment Cost:** {total_cost} credits\n**Your Credits:** {money}\n\nInsufficient funds for full treatment.",
+                color=0xff0000
+            )
+            if max_affordable_healing > 0:
+                embed.add_field(
+                    name="💊 Partial Treatment Available",
+                    value=f"We can heal {max_affordable_healing} HP for {max_affordable_healing * cost_per_hp} credits.",
+                    inline=False
+                )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Apply healing
+        self.bot.db.execute_query(
+            "UPDATE characters SET hp = ?, money = ? WHERE user_id = ?",
+            (max_hp, money - total_cost, interaction.user.id)
+        )
+        
+        embed = discord.Embed(
+            title="⚕️ Medical Treatment Complete",
+            description=f"**{char_name}**, you have been fully healed.",
+            color=0x00ff00
+        )
+        embed.add_field(name="💚 Health Restored", value=f"{hp} → {max_hp} HP", inline=True)
+        embed.add_field(name="💰 Cost", value=f"{total_cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining Credits", value=f"{money - total_cost}", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     @discord.ui.button(label="Refuel Ship", style=discord.ButtonStyle.primary, emoji="⛽")
     async def refuel(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        await interaction.response.send_message(
-            "🚧 **Refueling system coming soon**\n\nWill include:\n• Fuel pricing based on location wealth\n• Partial or full refueling options\n• Fuel quality variations",
-            ephemeral=True
+        char_info = self.bot.db.execute_query(
+            "SELECT name, money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
         )
-    
+        await self._handle_refuel_ship(interaction, char_info[0], char_info[1])
+
     @discord.ui.button(label="Repair Ship", style=discord.ButtonStyle.secondary, emoji="🔨")
     async def repair(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        await interaction.response.send_message(
-            "🚧 **Repair system coming soon**\n\nWill include:\n• Hull and system repairs\n• Repair quality based on location\n• Emergency vs. full service options",
-            ephemeral=True
+        char_info = self.bot.db.execute_query(
+            "SELECT name, money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
         )
-    
+        await self._handle_repair_ship(interaction, char_info[0], char_info[1])
+
     @discord.ui.button(label="Medical Treatment", style=discord.ButtonStyle.success, emoji="⚕️")
     async def medical(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        await interaction.response.send_message(
-            "🚧 **Medical system coming soon**\n\nWill include:\n• Radiation treatment\n• Injury healing\n• Health status management",
-            ephemeral=True
+        char_info = self.bot.db.execute_query(
+            "SELECT name, hp, max_hp, money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
         )
+        await self._handle_medical_treatment(interaction, char_info[0], char_info[1], char_info[2], char_info[3])
 class SubLocationSelectView(discord.ui.View):
     def __init__(self, bot, user_id: int, location_id: int, available_subs: list):
         super().__init__(timeout=120)

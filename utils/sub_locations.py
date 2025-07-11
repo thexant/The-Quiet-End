@@ -567,7 +567,7 @@ class SubLocationServiceView(discord.ui.View):
         # Add buttons based on sub-location type
         self._add_service_buttons()
         print(f"🔧 Created SubLocationServiceView for {sub_type} with {len(self.children)} buttons")
-    
+        
     def _add_service_buttons(self):
         """Add service buttons based on sub-location type"""
         
@@ -745,41 +745,99 @@ class SubLocationServiceView(discord.ui.View):
                 style=discord.ButtonStyle.secondary,
                 service_type="security_consult"
             ))
-        elif self.sub_type == 'hydroponics':
+
+        elif self.sub_type == 'gate_control':
             self.add_item(SubLocationButton(
-                label="Harvest Crops",
-                emoji="🌿",
+                label="Check Traffic", 
+                emoji="📊", 
+                style=discord.ButtonStyle.secondary,
+                service_type="check_traffic"
+            ))
+            self.add_item(SubLocationButton(
+                label="Corridor Status", 
+                emoji="🌌", 
+                style=discord.ButtonStyle.primary,
+                service_type="corridor_status"
+            ))
+            
+        elif self.sub_type == 'truck_stop':
+            self.add_item(SubLocationButton(
+                label="Rest & Recuperate", 
+                emoji="😴", 
                 style=discord.ButtonStyle.success,
-                service_type="harvest_crops"
+                service_type="rest_recuperate"
             ))
             self.add_item(SubLocationButton(
-                label="Request Supplies",
-                emoji="📦",
-                style=discord.ButtonStyle.primary,
-                service_type="request_hydro_supplies"
-            ))
-        elif self.sub_type == 'research':
-            self.add_item(SubLocationButton(
-                label="Analyze Data",
-                emoji="🔬",
-                style=discord.ButtonStyle.primary,
-                service_type="analyze_data"
-            ))
-            self.add_item(SubLocationButton(
-                label="Request Research Grant",
-                emoji="💰",
+                label="Traveler Info", 
+                emoji="🗺️", 
                 style=discord.ButtonStyle.secondary,
-                service_type="request_grant"
+                service_type="traveler_info"
             ))
-        elif self.sub_type in ['gate_control', 'truck_stop', 'checkpoint', 'fuel_depot', 'gate_mechanic', 'abandoned_quarters', 'emergency_shelter', 'salvage_yard', 'power_core', 'scavenger_den', 'recreation', 'communications', 'cafeteria', 'dormitory']:
-            # These are just examples, you can add more specific buttons
+            
+        elif self.sub_type == 'checkpoint':
             self.add_item(SubLocationButton(
-                label="Interact",
-                emoji="👋",
+                label="Security Scan", 
+                emoji="🔍", 
+                style=discord.ButtonStyle.primary,
+                service_type="security_scan"
+            ))
+            self.add_item(SubLocationButton(
+                label="Transit Papers", 
+                emoji="📄", 
                 style=discord.ButtonStyle.secondary,
-                service_type="generic_interaction"
+                service_type="transit_papers"
+            ))
+            
+        elif self.sub_type == 'fuel_depot':
+            self.add_item(SubLocationButton(
+                label="Priority Refuel", 
+                emoji="⛽", 
+                style=discord.ButtonStyle.success,
+                service_type="priority_refuel"
+            ))
+            self.add_item(SubLocationButton(
+                label="Fuel Quality Check", 
+                emoji="🧪", 
+                style=discord.ButtonStyle.secondary,
+                service_type="fuel_quality"
+            ))
+            
+        elif self.sub_type == 'gate_mechanic':
+            self.add_item(SubLocationButton(
+                label="Pre-Transit Check", 
+                emoji="🔧", 
+                style=discord.ButtonStyle.primary,
+                service_type="pre_transit_check"
+            ))
+            self.add_item(SubLocationButton(
+                label="Emergency Repairs", 
+                emoji="🚨", 
+                style=discord.ButtonStyle.danger,
+                service_type="emergency_repairs"
             ))
 
+        # Derelict area services
+        elif self.sub_type in ['abandoned_quarters', 'emergency_shelter', 'salvage_yard', 'power_core', 'scavenger_den']:
+            self.add_item(SubLocationButton(
+                label="Search for Supplies", 
+                emoji="🔍", 
+                style=discord.ButtonStyle.secondary,
+                service_type="search_supplies"
+            ))
+            if self.sub_type == 'salvage_yard':
+                self.add_item(SubLocationButton(
+                    label="Scavenge Parts", 
+                    emoji="⚙️", 
+                    style=discord.ButtonStyle.primary,
+                    service_type="scavenge_parts"
+                ))
+            if self.sub_type == 'emergency_shelter':
+                self.add_item(SubLocationButton(
+                    label="Use Emergency Med", 
+                    emoji="🩹", 
+                    style=discord.ButtonStyle.success,
+                    service_type="emergency_medical"
+                ))
     async def handle_service(self, interaction: discord.Interaction, service_type: str):
         """Handle service interactions"""
         
@@ -884,7 +942,6 @@ class SubLocationServiceView(discord.ui.View):
                 bot=self.bot
             )
             await interaction.response.send_modal(modal)
-                # Add this elif condition in the handle_service method after the existing ones:
         elif service_type == "take_id_photo":
             current_image = self.db.execute_query(
                 "SELECT image_url FROM characters WHERE user_id = ?",
@@ -904,6 +961,7 @@ class SubLocationServiceView(discord.ui.View):
             # Generic flavor response for unimplemented services
             await self._handle_generic_service(interaction, service_type, char_name)
         
+
     async def on_error(self, interaction: discord.Interaction, error: Exception, item):
         """Handle view errors gracefully"""
         print(f"❌ SubLocationServiceView error: {error}")
@@ -922,7 +980,7 @@ class SubLocationServiceView(discord.ui.View):
                     ephemeral=True
                 )
         except:
-            pass  # Couldn't send error message
+            pass
 
     async def _handle_medical_treatment(self, interaction, char_name: str, hp: int, max_hp: int, money: int):
         """Handle medical treatment service"""
