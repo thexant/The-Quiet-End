@@ -235,6 +235,11 @@ class SubLocationManager:
             # Try to get existing thread
             thread = guild.get_thread(existing[0])
             if thread:
+                # If thread exists, just add the user to it
+                try:
+                    await thread.add_user(user)
+                except Exception as e:
+                    print(f"Failed to add user to existing sub-location thread: {e}")
                 return thread
             else:
                 # Thread was deleted, but the record remains. We'll create a new one.
@@ -244,10 +249,11 @@ class SubLocationManager:
                 )
         
         try:
-            # Create thread
+            # Create a public thread
             thread_name = f"{sub_data['icon']} {sub_data['name']}"
             thread = await location_channel.create_thread(
                 name=thread_name,
+                type=discord.ChannelType.public_thread,
                 auto_archive_duration=60,  # 1 hour
                 reason=f"Sub-location created by {user.name}"
             )
@@ -262,6 +268,9 @@ class SubLocationManager:
             # Send welcome message
             await self._send_sub_location_welcome(thread, sub_data, location_id)
             
+            # Add the user to the thread
+            await thread.add_user(user)
+
             # Track for cleanup
             self.active_threads[thread.id] = {
                 'location_id': location_id,
@@ -558,9 +567,6 @@ class SubLocationServiceView(discord.ui.View):
         # Add buttons based on sub-location type
         self._add_service_buttons()
         print(f"🔧 Created SubLocationServiceView for {sub_type} with {len(self.children)} buttons")
-        
-        # Add buttons based on sub-location type
-        self._add_service_buttons()
     
     def _add_service_buttons(self):
         """Add service buttons based on sub-location type"""
@@ -739,100 +745,41 @@ class SubLocationServiceView(discord.ui.View):
                 style=discord.ButtonStyle.secondary,
                 service_type="security_consult"
             ))
-        # Add these cases to the _add_service_buttons method in SubLocationServiceView class:
-
-        elif self.sub_type == 'gate_control':
+        elif self.sub_type == 'hydroponics':
             self.add_item(SubLocationButton(
-                label="Check Traffic", 
-                emoji="📊", 
-                style=discord.ButtonStyle.secondary,
-                service_type="check_traffic"
-            ))
-            self.add_item(SubLocationButton(
-                label="Corridor Status", 
-                emoji="🌌", 
-                style=discord.ButtonStyle.primary,
-                service_type="corridor_status"
-            ))
-            
-        elif self.sub_type == 'truck_stop':
-            self.add_item(SubLocationButton(
-                label="Rest & Recuperate", 
-                emoji="😴", 
+                label="Harvest Crops",
+                emoji="🌿",
                 style=discord.ButtonStyle.success,
-                service_type="rest_recuperate"
+                service_type="harvest_crops"
             ))
             self.add_item(SubLocationButton(
-                label="Traveler Info", 
-                emoji="🗺️", 
-                style=discord.ButtonStyle.secondary,
-                service_type="traveler_info"
-            ))
-            
-        elif self.sub_type == 'checkpoint':
-            self.add_item(SubLocationButton(
-                label="Security Scan", 
-                emoji="🔍", 
+                label="Request Supplies",
+                emoji="📦",
                 style=discord.ButtonStyle.primary,
-                service_type="security_scan"
+                service_type="request_hydro_supplies"
             ))
+        elif self.sub_type == 'research':
             self.add_item(SubLocationButton(
-                label="Transit Papers", 
-                emoji="📄", 
-                style=discord.ButtonStyle.secondary,
-                service_type="transit_papers"
-            ))
-            
-        elif self.sub_type == 'fuel_depot':
-            self.add_item(SubLocationButton(
-                label="Priority Refuel", 
-                emoji="⛽", 
-                style=discord.ButtonStyle.success,
-                service_type="priority_refuel"
-            ))
-            self.add_item(SubLocationButton(
-                label="Fuel Quality Check", 
-                emoji="🧪", 
-                style=discord.ButtonStyle.secondary,
-                service_type="fuel_quality"
-            ))
-            
-        elif self.sub_type == 'gate_mechanic':
-            self.add_item(SubLocationButton(
-                label="Pre-Transit Check", 
-                emoji="🔧", 
+                label="Analyze Data",
+                emoji="🔬",
                 style=discord.ButtonStyle.primary,
-                service_type="pre_transit_check"
+                service_type="analyze_data"
             ))
             self.add_item(SubLocationButton(
-                label="Emergency Repairs", 
-                emoji="🚨", 
-                style=discord.ButtonStyle.danger,
-                service_type="emergency_repairs"
+                label="Request Research Grant",
+                emoji="💰",
+                style=discord.ButtonStyle.secondary,
+                service_type="request_grant"
+            ))
+        elif self.sub_type in ['gate_control', 'truck_stop', 'checkpoint', 'fuel_depot', 'gate_mechanic', 'abandoned_quarters', 'emergency_shelter', 'salvage_yard', 'power_core', 'scavenger_den', 'recreation', 'communications', 'cafeteria', 'dormitory']:
+            # These are just examples, you can add more specific buttons
+            self.add_item(SubLocationButton(
+                label="Interact",
+                emoji="👋",
+                style=discord.ButtonStyle.secondary,
+                service_type="generic_interaction"
             ))
 
-        # Derelict area services
-        elif self.sub_type in ['abandoned_quarters', 'emergency_shelter', 'salvage_yard', 'power_core', 'scavenger_den']:
-            self.add_item(SubLocationButton(
-                label="Search for Supplies", 
-                emoji="🔍", 
-                style=discord.ButtonStyle.secondary,
-                service_type="search_supplies"
-            ))
-            if self.sub_type == 'salvage_yard':
-                self.add_item(SubLocationButton(
-                    label="Scavenge Parts", 
-                    emoji="⚙️", 
-                    style=discord.ButtonStyle.primary,
-                    service_type="scavenge_parts"
-                ))
-            if self.sub_type == 'emergency_shelter':
-                self.add_item(SubLocationButton(
-                    label="Use Emergency Med", 
-                    emoji="🩹", 
-                    style=discord.ButtonStyle.success,
-                    service_type="emergency_medical"
-                ))
     async def handle_service(self, interaction: discord.Interaction, service_type: str):
         """Handle service interactions"""
         
@@ -957,6 +904,288 @@ class SubLocationServiceView(discord.ui.View):
             # Generic flavor response for unimplemented services
             await self._handle_generic_service(interaction, service_type, char_name)
         
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item):
+        """Handle view errors gracefully"""
+        print(f"❌ SubLocationServiceView error: {error}")
+        import traceback
+        traceback.print_exc()
+        
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "An error occurred while processing your request. Please try again.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    "An error occurred while processing your request. Please try again.",
+                    ephemeral=True
+                )
+        except:
+            pass  # Couldn't send error message
+
+    async def _handle_medical_treatment(self, interaction, char_name: str, hp: int, max_hp: int, money: int):
+        """Handle medical treatment service"""
+        if hp >= max_hp:
+            embed = discord.Embed(
+                title="⚕️ Medical Bay",
+                description=f"**{char_name}**, your vitals are optimal. No treatment required.",
+                color=0x00ff00
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Calculate healing and cost
+        healing_needed = max_hp - hp
+        cost_per_hp = 15
+        total_cost = healing_needed * cost_per_hp
+        
+        if money < total_cost:
+            embed = discord.Embed(
+                title="⚕️ Medical Bay",
+                description=f"**Treatment Cost:** {total_cost} credits\n**Your Credits:** {money}\n\nInsufficient funds for full treatment.",
+                color=0xff0000
+            )
+            embed.add_field(
+                name="💊 Partial Treatment Available",
+                value=f"We can heal {money // cost_per_hp} HP for {(money // cost_per_hp) * cost_per_hp} credits.",
+                inline=False
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Apply healing
+        self.db.execute_query(
+            "UPDATE characters SET hp = ?, money = ? WHERE user_id = ?",
+            (max_hp, money - total_cost, interaction.user.id)
+        )
+        
+        embed = discord.Embed(
+            title="⚕️ Medical Treatment Complete",
+            description=f"**{char_name}**, you have been fully healed.",
+            color=0x00ff00
+        )
+        embed.add_field(name="💚 Health Restored", value=f"{hp} → {max_hp} HP", inline=True)
+        embed.add_field(name="💰 Cost", value=f"{total_cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining Credits", value=f"{money - total_cost}", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_priority_refuel(self, interaction, char_name: str, money: int):
+        """Handle priority refueling service at gate fuel depot"""
+        ship_info = self.db.execute_query(
+            "SELECT fuel_capacity, current_fuel FROM ships WHERE owner_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            embed = discord.Embed(
+                title="⛽ Priority Refuel",
+                description="No ship found to refuel.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        fuel_capacity, current_fuel = ship_info
+        
+        if current_fuel >= fuel_capacity:
+            embed = discord.Embed(
+                title="⛽ Priority Refuel",
+                description=f"**{char_name}**, your ship's fuel tanks are already full.",
+                color=0x00ff00
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Priority refuel costs more but gives better fuel
+        fuel_needed = fuel_capacity - current_fuel
+        cost_per_fuel = 5  # More expensive than regular refuel
+        total_cost = fuel_needed * cost_per_fuel
+        
+        if money < total_cost:
+            max_affordable_fuel = money // cost_per_fuel
+            embed = discord.Embed(
+                title="⛽ Priority Refuel Service",
+                description=f"**Premium Refuel Cost:** {total_cost} credits\n**Your Credits:** {money}",
+                color=0xff6600
+            )
+            if max_affordable_fuel > 0:
+                embed.add_field(
+                    name="⛽ Partial Service Available",
+                    value=f"We can provide {max_affordable_fuel} premium fuel units for {max_affordable_fuel * cost_per_fuel} credits.",
+                    inline=False
+                )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Apply premium refueling (also gives small efficiency bonus)
+        self.db.execute_query(
+            "UPDATE ships SET current_fuel = ?, fuel_efficiency = fuel_efficiency + 1 WHERE owner_id = ?",
+            (fuel_capacity, interaction.user.id)
+        )
+        self.db.execute_query(
+            "UPDATE characters SET money = ? WHERE user_id = ?",
+            (money - total_cost, interaction.user.id)
+        )
+        
+        embed = discord.Embed(
+            title="⛽ Priority Refuel Complete",
+            description=f"**{char_name}**, your ship has been refueled with premium fuel.",
+            color=0x00ff00
+        )
+        embed.add_field(name="⛽ Fuel Level", value=f"{current_fuel} → {fuel_capacity}", inline=True)
+        embed.add_field(name="✨ Bonus", value="+1 Fuel Efficiency", inline=True)
+        embed.add_field(name="💰 Cost", value=f"{total_cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining Credits", value=f"{money - total_cost}", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_pre_transit_check(self, interaction, char_name: str):
+        """Handle pre-transit system check at gate mechanics"""
+        ship_info = self.db.execute_query(
+            "SELECT name, ship_type, fuel_capacity, current_fuel, hull_integrity, max_hull, fuel_efficiency FROM ships WHERE owner_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            embed = discord.Embed(
+                title="🔧 Pre-Transit Check",
+                description="No ship found for inspection.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        ship_name, ship_type, fuel_cap, current_fuel, hull, max_hull, fuel_eff = ship_info
+        
+        # Calculate readiness scores
+        fuel_readiness = (current_fuel / fuel_cap) * 100 if fuel_cap > 0 else 0
+        hull_readiness = (hull / max_hull) * 100 if max_hull > 0 else 0
+        
+        # Determine overall readiness
+        overall_readiness = (fuel_readiness + hull_readiness) / 2
+        
+        if overall_readiness >= 80:
+            status = "✅ CLEARED FOR TRANSIT"
+            color = 0x00ff00
+            recommendation = "All systems nominal. Safe travels!"
+        elif overall_readiness >= 60:
+            status = "⚠️ CAUTION ADVISED"
+            color = 0xffa500
+            recommendation = "Consider repairs or refueling before long-distance travel."
+        else:
+            status = "🚨 NOT RECOMMENDED"
+            color = 0xff0000
+            recommendation = "Immediate maintenance required before corridor transit."
+        
+        embed = discord.Embed(
+            title="🔧 Pre-Transit System Check",
+            description=f"**{char_name}**'s ship **{ship_name}** inspection results:",
+            color=color
+        )
+        
+        embed.add_field(name="🚀 Ship Type", value=ship_type, inline=True)
+        embed.add_field(name="📊 Overall Status", value=status, inline=True)
+        embed.add_field(name="⭐ Readiness Score", value=f"{overall_readiness:.1f}%", inline=True)
+        
+        embed.add_field(
+            name="🔍 System Details",
+            value=f"⛽ Fuel: {current_fuel}/{fuel_cap} ({fuel_readiness:.1f}%)\n🛡️ Hull: {hull}/{max_hull} ({hull_readiness:.1f}%)\n⚙️ Efficiency: {fuel_eff}",
+            inline=False
+        )
+        
+        embed.add_field(name="💡 Recommendation", value=recommendation, inline=False)
+        
+        if overall_readiness < 80:
+            services = []
+            if fuel_readiness < 80:
+                services.append("• Refuel at Fuel Depot")
+            if hull_readiness < 80:
+                services.append("• Hull repairs needed")
+            
+            if services:
+                embed.add_field(name="🛠️ Suggested Services", value="\n".join(services), inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_emergency_repairs(self, interaction, char_name: str, money: int):
+        """Handle emergency repair service at gate mechanics"""
+        ship_info = self.db.execute_query(
+            "SELECT hull_integrity, max_hull FROM ships WHERE owner_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            embed = discord.Embed(
+                title="🚨 Emergency Repairs",
+                description="No ship found for emergency repairs.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        hull_integrity, max_hull = ship_info
+        
+        if hull_integrity >= max_hull * 0.8:  # 80% or better
+            embed = discord.Embed(
+                title="🚨 Emergency Repairs",
+                description=f"**{char_name}**, your ship doesn't require emergency repairs.",
+                color=0x00ff00
+            )
+            embed.add_field(name="🛡️ Hull Status", value=f"{hull_integrity}/{max_hull} ({(hull_integrity/max_hull)*100:.1f}%)", inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Emergency repairs are expensive but fast
+        critical_repairs = min(max_hull - hull_integrity, max_hull // 2)  # Repair up to 50% or to full
+        cost_per_point = 40  # More expensive than regular repairs
+        total_cost = critical_repairs * cost_per_point
+        
+        if money < total_cost:
+            embed = discord.Embed(
+                title="🚨 Emergency Repair Service",
+                description=f"**Emergency Repair Cost:** {total_cost} credits\n**Your Credits:** {money}",
+                color=0xff0000
+            )
+            embed.add_field(
+                name="⚠️ Critical Notice",
+                value="Emergency repairs required for safe corridor transit. Consider requesting assistance or emergency funding.",
+                inline=False
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Apply emergency repairs
+        new_hull = hull_integrity + critical_repairs
+        self.db.execute_query(
+            "UPDATE ships SET hull_integrity = ? WHERE owner_id = ?",
+            (new_hull, interaction.user.id)
+        )
+        self.db.execute_query(
+            "UPDATE characters SET money = ? WHERE user_id = ?",
+            (money - total_cost, interaction.user.id)
+        )
+        
+        embed = discord.Embed(
+            title="🚨 Emergency Repairs Complete",
+            description=f"**{char_name}**, critical hull repairs have been completed.",
+            color=0x00ff00
+        )
+        embed.add_field(name="🛠️ Hull Integrity", value=f"{hull_integrity} → {new_hull}", inline=True)
+        embed.add_field(name="⚡ Service Type", value="Emergency Priority", inline=True)
+        embed.add_field(name="💰 Cost", value=f"{total_cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining Credits", value=f"{money - total_cost}", inline=True)
+        embed.add_field(
+            name="🛡️ Status", 
+            value="Ship cleared for corridor transit" if new_hull >= max_hull * 0.6 else "Additional repairs recommended", 
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item):
         """Handle view errors gracefully"""
