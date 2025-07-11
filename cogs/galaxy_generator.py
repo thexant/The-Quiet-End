@@ -557,21 +557,72 @@ class GalaxyGeneratorCog(commands.Cog):
             
         except Exception as e:
             await interaction.followup.send(f"Error generating galaxy: {str(e)}", ephemeral=True)
-    
+    async def _create_earth(self, start_year: int) -> Dict:
+        """Creates the static Earth location."""
+        earth_name = "Earth"
+        earth_system = "Sol"
+
+        # Static description for Earth
+        description = (
+            f"The cradle of humanity, Earth is the administrative and cultural capital of human space. "
+            f"Established long before the Exodus, its shimmering orbital rings and sprawling megacities stand as a testament "
+            f"to centuries of history. Earth boasts the most advanced technology, the highest standard of living, and the "
+            f"most powerful corporate and political entities in the known galaxy."
+        )
+
+        # Generate random coordinates for Earth's location on the map
+        angle = random.uniform(0, 2 * math.pi)
+        radius = random.uniform(0, 20) # Keep Earth relatively central
+        x = radius * math.cos(angle)
+        y = radius * math.sin(angle)
+
+        location = {
+            'name': earth_name,
+            'type': 'colony',
+            'x_coord': x,
+            'y_coord': y,
+            'system_name': earth_system,
+            'description': description,
+            'wealth_level': 10,  # Max wealth
+            'population': random.randint(50000, 100000), # High population
+            'established_date': f"{start_year - 700}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}", # Ancient
+            'has_jobs': True,
+            'has_shops': True,
+            'has_medical': True,
+            'has_repairs': True,
+            'has_fuel': True,
+            'has_upgrades': True,
+            'has_black_market': random.random() < 0.2, # 20% chance of a hidden black market
+            'is_generated': True, # Mark as generated for cleanup purposes
+            'is_derelict': False,
+            'has_shipyard': True # Earth must have a shipyard
+        }
+
+        location_id = self._save_location_to_db(location)
+        location['id'] = location_id
+
+        print(f"🌍 Created static location: Earth in {earth_system} system.")
+        return location
     async def _generate_major_locations(self, num_locations: int, start_year: int) -> List[Dict]:
         """Generate colonies, space stations, and outposts with establishment dates"""
-        
+
         distributions = {
             'colony': 0.45,
             'space_station': 0.30, 
             'outpost': 0.25
         }
-        
+
         major_locations = []
         used_names = set()
         used_systems = set()
-        
-        for i in range(num_locations):
+
+        # Create Earth first and add it to the lists
+        earth_location = await self._create_earth(start_year)
+        major_locations.append(earth_location)
+        used_names.add(earth_location['name'])
+        used_systems.add(earth_location['system_name'])
+
+        for i in range(num_locations): # The loop now generates the user-specified number of *additional* locations
             # Determine location type
             rand = random.random()
             if rand < distributions['colony']:
@@ -580,30 +631,29 @@ class GalaxyGeneratorCog(commands.Cog):
                 loc_type = 'space_station'
             else:
                 loc_type = 'outpost'
-            
+
             # Generate unique name
             name = self._generate_unique_name(loc_type, used_names)
             used_names.add(name)
-            
+
             # Generate unique system
             system = self._generate_unique_system(used_systems)
             used_systems.add(system)
-            
+
             # Generate establishment date (before start year)
             establishment_year = start_year - random.randint(1, 20)
             establishment_date = f"{establishment_year}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}"
-            
+
             # Generate location properties based on type
             location = self._create_location_data(name, loc_type, system, establishment_date)
-            
+
             # Store in database
             location_id = self._save_location_to_db(location)
             location['id'] = location_id
-            
+
             major_locations.append(location)
-        
+
         return major_locations
-    # After creating locations, add this in the galaxy generation process
     async def _create_npcs_for_galaxy(self):
         """Create NPCs for all locations after galaxy generation"""
         npc_cog = self.bot.get_cog('NPCCog')
