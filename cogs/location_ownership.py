@@ -1,0 +1,666 @@
+import discord
+from discord.ext import commands
+from discord import app_commands
+import asyncio
+import random
+from datetime import datetime, timedelta
+from typing import Optional, Dict, List
+
+class LocationOwnershipCog(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.db = bot.db
+        
+        # Location purchase costs by type and wealth level
+        self.base_costs = {
+            'colony': {'derelict': 50000, 'poor': 100000},
+            'space_station': {'derelict': 75000, 'poor': 150000}, 
+            'outpost': {'derelict': 25000, 'poor': 50000}
+        }
+        
+        # Upgrade costs and effects
+        self.upgrade_types = {
+            'wealth': {
+                'name': 'Economic Development',
+                'description': 'Improves location wealth and income generation',
+                'max_level': 10,
+                'base_cost': 10000
+            },
+            'population': {
+                'name': 'Population Growth',
+                'description': 'Increases population and service capacity',
+                'max_level': 10,
+                'base_cost': 8000
+            },
+            'security': {
+                'name': 'Security Systems',
+                'description': 'Reduces raid chance and improves defenses',
+                'max_level': 5,
+                'base_cost': 15000
+            },
+            'storage': {
+                'name': 'Storage Facility',
+                'description': 'Increases private storage capacity',
+                'max_level': 8,
+                'base_cost': 12000
+            },
+            'services': {
+                'name': 'Service Expansion',
+                'description': 'Unlocks and improves location services',
+                'max_level': 6,
+                'base_cost': 20000
+            }
+        }
+
+    def calculate_purchase_price(self, location_data: tuple) -> Optional[int]:
+        """Calculate the purchase price for a location"""
+        location_id, name, location_type, wealth_level, population, is_derelict = location_data
+        
+        if not (is_derelict or wealth_level <= 3):
+            return None  # Not purchasable
+        
+        base_cost = self.base_costs.get(location_type, {})
+        if is_derelict:
+            return base_cost.get('derelict', 50000)
+        elif wealth_level <= 3:
+            return base_cost.get('poor', 100000)
+        
+        return None
+
+    def calculate_upkeep_cost(self, location_id: int) -> int:
+        """Calculate monthly upkeep cost based on upgrades"""
+        upgrades = self.db.execute_query(
+            "SELECT upgrade_type, upgrade_level FROM location_upgrades WHERE location_id = ?",
+            (location_id,),
+            fetch='all'
+        )
+        
+        base_upkeep = 1000
+        for upgrade_type, level in upgrades:
+            base_upkeep += level * 500
+        
+        return base_upkeep
+
+    @app_commands.command(name="location_info", description="View detailed information about current location")
+    async def location_info(self, interaction: discord.Interaction):
+        # Get character's current location
+        char_data = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            return await interaction.response.send_message("Character not found!", ephemeral=True)
+        
+        location_id = char_data[0]
+        
+        # Get location details
+        location_data = self.db.execute_query(
+            '''SELECT l.name, l.location_type, l.wealth_level, l.population, l.is_derelict, 
+                      l.description, lo.owner_id, lo.custom_name, lo.custom_description,
+                      c.name as owner_name, g.name as group_name
+               FROM locations l
+               LEFT JOIN location_ownership lo ON l.location_id = lo.location_id
+               LEFT JOIN characters c ON lo.owner_id = c.user_id
+               LEFT JOIN groups g ON lo.group_id = g.group_id
+               WHERE l.location_id = ?''',
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_data:
+            return await interaction.response.send_message("Location not found!", ephemeral=True)
+        
+        (name, location_type, wealth_level, population, is_derelict, description, 
+         owner_id, custom_name, custom_description, owner_name, group_name) = location_data
+        
+        # Create embed
+        display_name = custom_name or name
+        embed = discord.Embed(
+            title=f"📍 {display_name}",
+            description=custom_description or description,
+            color=0x00ff00 if owner_id else (0xff6b6b if is_derelict else 0x4169E1)
+        )
+        
+        # Basic info
+        embed.add_field(name="Type", value=location_type.replace('_', ' ').title(), inline=True)
+        embed.add_field(name="Wealth Level", value=f"{wealth_level}/10", inline=True)
+        embed.add_field(name="Population", value=f"{population:,}", inline=True)
+        
+        # Ownership info
+        if owner_id:
+            if owner_id == interaction.user.id:
+                embed.add_field(name="Ownership", value="**You own this location!**", inline=False)
+            else:
+                owner_text = f"Owned by **{owner_name}**"
+                if group_name:
+                    owner_text += f" ({group_name})"
+                embed.add_field(name="Ownership", value=owner_text, inline=False)
+            
+            # Show upgrades if owned
+            upgrades = self.db.execute_query(
+                "SELECT upgrade_type, upgrade_level FROM location_upgrades WHERE location_id = ?",
+                (location_id,),
+                fetch='all'
+            )
+            
+            if upgrades:
+                upgrade_text = []
+                for upgrade_type, level in upgrades:
+                    upgrade_info = self.upgrade_types.get(upgrade_type, {})
+                    upgrade_name = upgrade_info.get('name', upgrade_type.title())
+                    upgrade_text.append(f"• {upgrade_name}: Level {level}")
+                
+                embed.add_field(name="Upgrades", value="\n".join(upgrade_text), inline=False)
+        
+        elif is_derelict or wealth_level <= 3:
+            # Show purchase option
+            purchase_price = self.calculate_purchase_price((location_id, name, location_type, wealth_level, population, is_derelict))
+            if purchase_price:
+                status = "Derelict - Available for Claiming" if is_derelict else "Economically Distressed - Available for Purchase"
+                embed.add_field(
+                    name="Availability", 
+                    value=f"**{status}**\nPrice: {purchase_price:,} credits", 
+                    inline=False
+                )
+        
+        # Add view with action buttons if applicable
+        view = LocationOwnershipView(self.bot, interaction.user.id, location_id)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="purchase_location", description="Purchase or claim the current location")
+    async def purchase_location(self, interaction: discord.Interaction):
+        # Get character data
+        char_data = self.db.execute_query(
+            '''SELECT c.current_location, c.money, ce.level
+               FROM characters c
+               LEFT JOIN character_experience ce ON c.user_id = ce.user_id
+               WHERE c.user_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            return await interaction.response.send_message("Character not found!", ephemeral=True)
+        
+        location_id, money, level = char_data
+        level = level or 1
+        
+        # Check if player already owns a location of this type
+        location_data = self.db.execute_query(
+            '''SELECT l.location_type, l.name, l.wealth_level, l.population, l.is_derelict
+               FROM locations l
+               WHERE l.location_id = ?''',
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_data:
+            return await interaction.response.send_message("Location not found!", ephemeral=True)
+        
+        location_type, name, wealth_level, population, is_derelict = location_data
+        
+        # Check if already owned
+        existing_owner = self.db.execute_query(
+            "SELECT owner_id FROM location_ownership WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if existing_owner:
+            return await interaction.response.send_message("This location is already owned!", ephemeral=True)
+        
+        # Check if location is purchasable
+        purchase_price = self.calculate_purchase_price((location_id, name, location_type, wealth_level, population, is_derelict))
+        if not purchase_price:
+            return await interaction.response.send_message("This location is not available for purchase.", ephemeral=True)
+        
+        # Check level requirement for wealthy locations
+        if not is_derelict and level < 10:
+            return await interaction.response.send_message("You need to be at least level 10 to purchase economically distressed locations.", ephemeral=True)
+        
+        # Check if player already owns this type of location
+        existing_ownership = self.db.execute_query(
+            '''SELECT l.location_type FROM location_ownership lo
+               JOIN locations l ON lo.location_id = l.location_id
+               WHERE lo.owner_id = ? AND l.location_type = ?''',
+            (interaction.user.id, location_type),
+            fetch='one'
+        )
+        
+        if existing_ownership:
+            return await interaction.response.send_message(f"You already own a {location_type.replace('_', ' ')}! You can only own one location of each type.", ephemeral=True)
+        
+        # Check if player can afford it
+        if money < purchase_price:
+            return await interaction.response.send_message(f"Insufficient funds! You need {purchase_price:,} credits but have {money:,}.", ephemeral=True)
+        
+        # Create confirmation embed
+        action = "Claim" if is_derelict else "Purchase"
+        embed = discord.Embed(
+            title=f"{action} Location: {name}",
+            description=f"Are you sure you want to {action.lower()} this {location_type.replace('_', ' ')} for {purchase_price:,} credits?",
+            color=0xffa500
+        )
+        
+        embed.add_field(name="Type", value=location_type.replace('_', ' ').title(), inline=True)
+        embed.add_field(name="Wealth Level", value=f"{wealth_level}/10", inline=True)
+        embed.add_field(name="Population", value=f"{population:,}", inline=True)
+        embed.add_field(name="Monthly Upkeep", value="1,000 credits (base)", inline=True)
+        
+        view = PurchaseConfirmationView(self.bot, interaction.user.id, location_id, purchase_price)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="upgrade_location", description="Upgrade one of your owned locations")
+    async def upgrade_location(self, interaction: discord.Interaction):
+        # Get user's owned locations
+        owned_locations = self.db.execute_query(
+            '''SELECT lo.location_id, l.name, l.location_type
+               FROM location_ownership lo
+               JOIN locations l ON lo.location_id = l.location_id
+               WHERE lo.owner_id = ?''',
+            (interaction.user.id,),
+            fetch='all'
+        )
+        
+        if not owned_locations:
+            return await interaction.response.send_message("You don't own any locations!", ephemeral=True)
+        
+        # If user owns only one location, go directly to upgrades
+        if len(owned_locations) == 1:
+            location_id = owned_locations[0][0]
+            await self._show_upgrade_options(interaction, location_id)
+        else:
+            # Show location selection
+            view = LocationSelectionView(self.bot, interaction.user.id, owned_locations, "upgrade")
+            embed = discord.Embed(
+                title="Select Location to Upgrade",
+                description="Choose which location you want to upgrade:",
+                color=0x4169E1
+            )
+            
+            for location_id, name, location_type in owned_locations:
+                embed.add_field(
+                    name=f"{name} ({location_type.replace('_', ' ').title()})",
+                    value=f"ID: {location_id}",
+                    inline=True
+                )
+            
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    async def _show_upgrade_options(self, interaction: discord.Interaction, location_id: int):
+        """Show available upgrades for a location"""
+        # Get current upgrades
+        current_upgrades = {}
+        upgrades = self.db.execute_query(
+            "SELECT upgrade_type, upgrade_level FROM location_upgrades WHERE location_id = ?",
+            (location_id,),
+            fetch='all'
+        )
+        
+        for upgrade_type, level in upgrades:
+            current_upgrades[upgrade_type] = level
+        
+        # Get location info
+        location_info = self.db.execute_query(
+            "SELECT name FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        location_name = location_info[0] if location_info else "Unknown"
+        
+        embed = discord.Embed(
+            title=f"Upgrade Options: {location_name}",
+            description="Select an upgrade type:",
+            color=0x00ff00
+        )
+        
+        # Show available upgrades
+        for upgrade_type, upgrade_info in self.upgrade_types.items():
+            current_level = current_upgrades.get(upgrade_type, 0)
+            max_level = upgrade_info['max_level']
+            
+            if current_level < max_level:
+                next_level = current_level + 1
+                cost = upgrade_info['base_cost'] * next_level
+                
+                embed.add_field(
+                    name=f"{upgrade_info['name']} (Level {current_level} → {next_level})",
+                    value=f"{upgrade_info['description']}\nCost: {cost:,} credits",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name=f"{upgrade_info['name']} (MAX LEVEL)",
+                    value=f"{upgrade_info['description']}\nMaxed out at level {max_level}",
+                    inline=False
+                )
+        
+        view = UpgradeSelectionView(self.bot, interaction.user.id, location_id, current_upgrades)
+        
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class LocationOwnershipView(discord.ui.View):
+    def __init__(self, bot, user_id: int, location_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        
+        # Check if user owns this location
+        ownership = self.bot.db.execute_query(
+            "SELECT owner_id FROM location_ownership WHERE location_id = ? AND owner_id = ?",
+            (location_id, user_id),
+            fetch='one'
+        )
+        
+        # Check if location is purchasable
+        location_data = self.bot.db.execute_query(
+            "SELECT location_type, wealth_level, is_derelict FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        is_owned_by_user = bool(ownership)
+        is_purchasable = False
+        
+        if location_data and not ownership:
+            location_type, wealth_level, is_derelict = location_data
+            is_purchasable = is_derelict or wealth_level <= 3
+        
+        # Add appropriate buttons
+        if is_owned_by_user:
+            self.add_item(UpgradeLocationButton())
+            self.add_item(ManageLocationButton())
+            self.add_item(CollectIncomeButton())
+        elif is_purchasable:
+            self.add_item(PurchaseLocationButton())
+
+class PurchaseLocationButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Purchase/Claim", style=discord.ButtonStyle.green, emoji="💰")
+    
+    async def callback(self, interaction: discord.Interaction):
+        cog = interaction.client.get_cog('LocationOwnershipCog')
+        if cog:
+            await cog.purchase_location.callback(cog, interaction)
+
+class UpgradeLocationButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Upgrade", style=discord.ButtonStyle.primary, emoji="⬆️")
+    
+    async def callback(self, interaction: discord.Interaction):
+        cog = interaction.client.get_cog('LocationOwnershipCog')
+        if cog:
+            await cog._show_upgrade_options(interaction, self.view.location_id)
+
+class ManageLocationButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Manage", style=discord.ButtonStyle.secondary, emoji="⚙️")
+    
+    async def callback(self, interaction: discord.Interaction):
+        # Implementation for location management (access control, fees, etc.)
+        await interaction.response.send_message("Location management coming soon!", ephemeral=True)
+
+class CollectIncomeButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Collect Income", style=discord.ButtonStyle.success, emoji="💵")
+    
+    async def callback(self, interaction: discord.Interaction):
+        # Check for uncollected income
+        uncollected = self.view.bot.db.execute_query(
+            "SELECT SUM(amount) FROM location_income_log WHERE location_id = ? AND collected = 0",
+            (self.view.location_id,),
+            fetch='one'
+        )
+        
+        total_income = uncollected[0] if uncollected and uncollected[0] else 0
+        
+        if total_income <= 0:
+            await interaction.response.send_message("No income to collect.", ephemeral=True)
+            return
+        
+        # Collect income
+        self.view.bot.db.execute_query(
+            "UPDATE location_income_log SET collected = 1 WHERE location_id = ? AND collected = 0",
+            (self.view.location_id,)
+        )
+        
+        # Add money to player
+        self.view.bot.db.execute_query(
+            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            (total_income, self.view.user_id)
+        )
+        
+        await interaction.response.send_message(f"💰 Collected {total_income:,} credits in income!", ephemeral=True)
+
+class PurchaseConfirmationView(discord.ui.View):
+    def __init__(self, bot, user_id: int, location_id: int, price: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.price = price
+    
+    @discord.ui.button(label="Confirm Purchase", style=discord.ButtonStyle.green, emoji="✅")
+    async def confirm_purchase(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This is not your transaction!", ephemeral=True)
+        
+        # Double-check funds
+        money = self.bot.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not money or money[0] < self.price:
+            return await interaction.response.send_message("Insufficient funds!", ephemeral=True)
+        
+        # Complete purchase
+        try:
+            # Deduct money
+            self.bot.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (self.price, self.user_id)
+            )
+            
+            # Create ownership record
+            upkeep_due = datetime.now() + timedelta(days=30)
+            self.bot.db.execute_query(
+                '''INSERT INTO location_ownership 
+                   (location_id, owner_id, purchase_price, upkeep_due_date, total_invested)
+                   VALUES (?, ?, ?, ?, ?)''',
+                (self.location_id, self.user_id, self.price, upkeep_due, self.price)
+            )
+            
+            # Update location status
+            self.bot.db.execute_query(
+                "UPDATE locations SET is_derelict = 0 WHERE location_id = ?",
+                (self.location_id,)
+            )
+            
+            location_name = self.bot.db.execute_query(
+                "SELECT name FROM locations WHERE location_id = ?",
+                (self.location_id,),
+                fetch='one'
+            )[0]
+            
+            embed = discord.Embed(
+                title="🎉 Purchase Successful!",
+                description=f"You now own **{location_name}**!",
+                color=0x00ff00
+            )
+            embed.add_field(name="Amount Paid", value=f"{self.price:,} credits", inline=True)
+            embed.add_field(name="Next Upkeep Due", value=upkeep_due.strftime("%Y-%m-%d"), inline=True)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            await interaction.response.send_message(f"Purchase failed: {str(e)}", ephemeral=True)
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red, emoji="❌")
+    async def cancel_purchase(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This is not your transaction!", ephemeral=True)
+        
+        await interaction.response.send_message("Purchase cancelled.", ephemeral=True)
+
+class LocationSelectionView(discord.ui.View):
+    def __init__(self, bot, user_id: int, locations: List, action: str):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.action = action
+        
+        # Add buttons for each location
+        for i, (location_id, name, location_type) in enumerate(locations[:5]):  # Limit to 5
+            button = LocationSelectButton(location_id, name, i)
+            self.add_item(button)
+
+class LocationSelectButton(discord.ui.Button):
+    def __init__(self, location_id: int, name: str, row: int):
+        super().__init__(label=name[:80], style=discord.ButtonStyle.primary, row=row)
+        self.location_id = location_id
+    
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.view.user_id:
+            return await interaction.response.send_message("This is not your panel!", ephemeral=True)
+        
+        cog = interaction.client.get_cog('LocationOwnershipCog')
+        if cog and self.view.action == "upgrade":
+            await cog._show_upgrade_options(interaction, self.location_id)
+
+class UpgradeSelectionView(discord.ui.View):
+    def __init__(self, bot, user_id: int, location_id: int, current_upgrades: Dict):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.current_upgrades = current_upgrades
+        
+        # Add upgrade buttons
+        cog = bot.get_cog('LocationOwnershipCog')
+        if cog:
+            for upgrade_type, upgrade_info in cog.upgrade_types.items():
+                current_level = current_upgrades.get(upgrade_type, 0)
+                if current_level < upgrade_info['max_level']:
+                    button = UpgradeButton(upgrade_type, upgrade_info, current_level)
+                    self.add_item(button)
+
+class UpgradeButton(discord.ui.Button):
+    def __init__(self, upgrade_type: str, upgrade_info: Dict, current_level: int):
+        next_level = current_level + 1
+        cost = upgrade_info['base_cost'] * next_level
+        
+        super().__init__(
+            label=f"{upgrade_info['name']} (Lv{next_level}) - {cost:,}",
+            style=discord.ButtonStyle.secondary
+        )
+        
+        self.upgrade_type = upgrade_type
+        self.upgrade_info = upgrade_info
+        self.current_level = current_level
+        self.cost = cost
+    
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.view.user_id:
+            return await interaction.response.send_message("This is not your panel!", ephemeral=True)
+        
+        # Check if user can afford upgrade
+        money = self.view.bot.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (self.view.user_id,),
+            fetch='one'
+        )
+        
+        if not money or money[0] < self.cost:
+            return await interaction.response.send_message(f"Insufficient funds! You need {self.cost:,} credits.", ephemeral=True)
+        
+        # Perform upgrade
+        try:
+            # Deduct money
+            self.view.bot.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (self.cost, self.view.user_id)
+            )
+            
+            # Add or update upgrade
+            existing = self.view.bot.db.execute_query(
+                "SELECT upgrade_level FROM location_upgrades WHERE location_id = ? AND upgrade_type = ?",
+                (self.view.location_id, self.upgrade_type),
+                fetch='one'
+            )
+            
+            new_level = self.current_level + 1
+            
+            if existing:
+                self.view.bot.db.execute_query(
+                    "UPDATE location_upgrades SET upgrade_level = ?, cost = cost + ? WHERE location_id = ? AND upgrade_type = ?",
+                    (new_level, self.cost, self.view.location_id, self.upgrade_type)
+                )
+            else:
+                self.view.bot.db.execute_query(
+                    '''INSERT INTO location_upgrades (location_id, upgrade_type, upgrade_level, cost, description)
+                       VALUES (?, ?, ?, ?, ?)''',
+                    (self.view.location_id, self.upgrade_type, new_level, self.cost, self.upgrade_info['description'])
+                )
+            
+            # Update total invested
+            self.view.bot.db.execute_query(
+                "UPDATE location_ownership SET total_invested = total_invested + ? WHERE location_id = ?",
+                (self.cost, self.view.location_id)
+            )
+            
+            # Apply upgrade effects
+            await self._apply_upgrade_effects(interaction, new_level)
+            
+            embed = discord.Embed(
+                title="✅ Upgrade Complete!",
+                description=f"**{self.upgrade_info['name']}** upgraded to level {new_level}",
+                color=0x00ff00
+            )
+            embed.add_field(name="Cost", value=f"{self.cost:,} credits", inline=True)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            await interaction.response.send_message(f"Upgrade failed: {str(e)}", ephemeral=True)
+    
+    async def _apply_upgrade_effects(self, interaction: discord.Interaction, new_level: int):
+        """Apply the effects of the upgrade to the location"""
+        if self.upgrade_type == 'wealth':
+            # Increase wealth level
+            self.view.bot.db.execute_query(
+                "UPDATE locations SET wealth_level = LEAST(wealth_level + 1, 10) WHERE location_id = ?",
+                (self.view.location_id,)
+            )
+        
+        elif self.upgrade_type == 'population':
+            # Increase population
+            increase = new_level * 50
+            self.view.bot.db.execute_query(
+                "UPDATE locations SET population = population + ? WHERE location_id = ?",
+                (increase, self.view.location_id)
+            )
+        
+        elif self.upgrade_type == 'services':
+            # Enable services based on level
+            if new_level >= 2:
+                self.view.bot.db.execute_query(
+                    "UPDATE locations SET has_medical = 1 WHERE location_id = ?",
+                    (self.view.location_id,)
+                )
+            if new_level >= 3:
+                self.view.bot.db.execute_query(
+                    "UPDATE locations SET has_repairs = 1, has_upgrades = 1 WHERE location_id = ?",
+                    (self.view.location_id,)
+                )
+
+async def setup(bot):
+    await bot.add_cog(LocationOwnershipCog(bot))

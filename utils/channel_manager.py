@@ -1,0 +1,1428 @@
+# utils/channel_manager.py - IMPROVED VERSION
+import discord
+import asyncio
+from datetime import datetime, timedelta
+from typing import Optional, List, Tuple
+import re
+
+class ChannelManager:
+    """
+    Manages on-demand creation and cleanup of location channels
+    """
+    
+    def __init__(self, bot):
+        self.bot = bot
+        self.db = bot.db
+        self.active_location_messages = {}
+        # Default configuration (will be overridden by server config)
+        self.max_location_channels = 50
+        self.channel_timeout_hours = 48
+        self.cleanup_batch_size = 5
+        self.auto_cleanup_enabled = True
+        
+        # Category cache
+        self._category_cache = {}
+        
+        # Track active location messages to clean them up
+        self._active_location_messages = {}  # {user_id: {location_id: message_id}}
+        
+        # Start background cleanup task
+        self._start_background_cleanup()
+    
+    def _start_background_cleanup(self):
+        """Start the background cleanup task"""
+        async def background_cleanup():
+            while True:
+                try:
+                    await asyncio.sleep(30)  # Check every 30 seconds
+                    
+                    # Get all guilds the bot is in
+                    for guild in self.bot.guilds:
+                        await self._check_and_cleanup_empty_channels(guild)
+                        
+                except Exception as e:
+                    print(f"❌ Error in background cleanup: {e}")
+                    await asyncio.sleep(60)  # Wait longer if there's an error
+        
+        # Start the background task
+        self.bot.loop.create_task(background_cleanup())
+    
+    async def _load_server_config(self, guild: discord.Guild):
+        """Load server-specific configuration"""
+        config = self.db.execute_query(
+            '''SELECT max_location_channels, channel_timeout_hours, auto_cleanup_enabled
+               FROM server_config WHERE guild_id = ?''',
+            (guild.id,),
+            fetch='one'
+        )
+        
+        if config:
+            self.max_location_channels = config[0] or 50
+            self.channel_timeout_hours = config[1] or 48
+            self.auto_cleanup_enabled = config[2] if config[2] is not None else True
+        
+    async def get_or_create_location_channel(self, guild: discord.Guild, location_id: int, user: discord.Member = None) -> Optional[discord.TextChannel]:
+        """
+        Get existing channel for location or create one if needed
+        Returns None if location doesn't exist
+        """
+        # Load server configuration
+        await self._load_server_config(guild)
+        
+        # Get location info
+        location_info = self.db.execute_query(
+            '''SELECT location_id, channel_id, name, location_type, description, wealth_level
+               FROM locations WHERE location_id = ?''',
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_info:
+            return None
+        
+        loc_id, channel_id, name, loc_type, description, wealth = location_info
+        
+        # Check if channel already exists
+        if channel_id:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                # Update last active time
+                await self._update_channel_activity(location_id)
+                return channel
+            else:
+                # Channel was deleted, clear the reference
+                self.db.execute_query(
+                    "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
+                    (location_id,)
+                )
+        
+        # Need to create new channel
+        channel = await self._create_location_channel(guild, location_info, user)
+        return channel
+    
+    async def _create_location_channel(self, guild: discord.Guild, location_info: Tuple, requesting_user: discord.Member = None) -> Optional[discord.TextChannel]:
+        """
+        Create a new Discord channel for a location
+        """
+        loc_id, channel_id, name, loc_type, description, wealth = location_info
+        
+        # Check if we need to clean up old channels first
+        await self._cleanup_old_channels_if_needed(guild)
+        
+        try:
+            # Generate safe channel name
+            channel_name = self._generate_channel_name(name, loc_type)
+            
+            # Create channel topic
+            wealth_stars = "⭐" * min(wealth // 2, 5)
+            topic = f"{loc_type.replace('_', ' ').title()}: {name} {wealth_stars}"
+            if description:
+                topic += f" | {description[:100]}"
+            
+            # Set up permissions - start with no access for @everyone
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False)
+            }
+            
+            # Give access to requesting user if provided
+            if requesting_user:
+                overwrites[requesting_user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            
+            # Find or create category for location channels
+            category = await self._get_or_create_location_category(guild, loc_type)
+            
+            # Create the channel
+            channel = await guild.create_text_channel(
+                channel_name,
+                category=category,
+                topic=topic,
+                overwrites=overwrites,
+                reason=f"On-demand creation for location: {name}"
+            )
+            
+            # Update database with channel info
+            current_time = datetime.now()
+            self.db.execute_query(
+                '''UPDATE locations 
+                   SET channel_id = ?, channel_last_active = ?
+                   WHERE location_id = ?''',
+                (channel.id, current_time, loc_id)
+            )
+            
+            # Send welcome message to channel with available routes
+            await self._send_location_welcome(channel, location_info)
+            
+            print(f"📍 Created location channel #{channel_name} for {name}")
+            return channel
+            
+        except Exception as e:
+            print(f"❌ Failed to create channel for {name}: {e}")
+            return None
+    
+    def _generate_channel_name(self, location_name: str, location_type: str) -> str:
+        """Generate a Discord-safe channel name with activity indicator"""
+        # Remove special characters and convert to lowercase
+        safe_name = re.sub(r'[^\w\s-]', '', location_name.lower())
+        safe_name = re.sub(r'\s+', '-', safe_name)
+        safe_name = safe_name.strip('-')
+        
+        # Add type prefix for clarity
+        type_prefix = {
+            'colony': 'col',
+            'space_station': 'sta',
+            'outpost': 'out',
+            'gate': 'gate'
+        }.get(location_type, 'loc')
+        
+        # Ensure name isn't too long (Discord limit is 100 chars)
+        max_name_length = 85 - len(type_prefix)  # Leave room for indicators
+        if len(safe_name) > max_name_length:
+            safe_name = safe_name[:max_name_length].rstrip('-')
+        
+        return f"{type_prefix}-{safe_name}"
+    
+    async def _get_or_create_location_category(self, guild: discord.Guild, location_type: str) -> Optional[discord.CategoryChannel]:
+        """
+        Get configured category for location type from server config
+        """
+        # Map location types to config columns
+        category_mapping = {
+            'colony': 'colony_category_id',
+            'space_station': 'station_category_id', 
+            'outpost': 'outpost_category_id',
+            'gate': 'gate_category_id'
+        }
+        
+        config_column = category_mapping.get(location_type)
+        if not config_column:
+            return None
+        
+        # Get category ID from server config
+        category_id = self.db.execute_query(
+            f"SELECT {config_column} FROM server_config WHERE guild_id = ?",
+            (guild.id,),
+            fetch='one'
+        )
+        
+        if not category_id or not category_id[0]:
+            # Fallback to creating/finding by name if no config
+            return await self._fallback_category_creation(guild, location_type)
+        
+        # Get the configured category
+        category = guild.get_channel(category_id[0])
+        if category and isinstance(category, discord.CategoryChannel):
+            return category
+        
+        # Category was deleted, fallback to creation
+        return await self._fallback_category_creation(guild, location_type)
+    
+    async def _fallback_category_creation(self, guild: discord.Guild, location_type: str) -> Optional[discord.CategoryChannel]:
+        """
+        Fallback category creation if server config is missing
+        """
+        category_names = {
+            'colony': '🏭 COLONIES',
+            'space_station': '🛰️ SPACE STATIONS',
+            'outpost': '🛤️ OUTPOSTS',
+            'gate': '🚪 GATES'
+        }
+        
+        category_name = category_names.get(location_type, '📍 LOCATIONS')
+        
+        # Look for existing category
+        for category in guild.categories:
+            if category.name == category_name:
+                return category
+        
+        # Create new category if it doesn't exist
+        try:
+            category = await guild.create_category(
+                category_name,
+                reason=f"Auto-created category for {location_type} locations"
+            )
+            return category
+        except Exception as e:
+            print(f"❌ Failed to create category {category_name}: {e}")
+            return None
+    
+    async def _send_location_welcome(self, channel: discord.TextChannel, location_info: Tuple):
+        """Send a welcome message to a newly created location channel with available routes"""
+        loc_id, channel_id, name, loc_type, description, wealth = location_info
+        
+        # Get services info
+        services_info = self.db.execute_query(
+            '''SELECT has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population
+               FROM locations WHERE location_id = ?''',
+            (loc_id,),
+            fetch='one'
+        )
+        
+        if not services_info:
+            return
+
+        has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population = services_info
+        
+        # Create welcome embed WITHOUT activity info (since it becomes stale)
+        embed = discord.Embed(
+            title=f"📍 Welcome to {name}",
+            description=description,
+            color=0x4169E1
+        )
+        
+        # Location details
+        type_emoji = {
+            'colony': '🏭',
+            'space_station': '🛰️',
+            'outpost': '🛤️',
+            'gate': '🚪'
+        }.get(loc_type, '📍')
+        
+        embed.add_field(
+            name="Location Type",
+            value=f"{type_emoji} {loc_type.replace('_', ' ').title()}",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="Population",
+            value=f"{population:,}",
+            inline=True
+        )
+        
+        wealth_text = "⭐" * min(wealth // 2, 5) if wealth > 0 else "💸"
+        embed.add_field(
+            name="Wealth Level",
+            value=f"{wealth_text} {wealth}/10",
+            inline=True
+        )
+        
+        # Available services
+        services = []
+        if has_jobs:   services.append("💼 Jobs")
+        if has_shops:  services.append("🛒 Shopping")
+        if has_medical:services.append("⚕️ Medical")
+        if has_repairs:services.append("🔨 Repairs")
+        if has_fuel:   services.append("⛽ Fuel")
+        if has_upgrades:services.append("⬆️ Upgrades")
+
+        if services:
+            embed.add_field(
+                name="Available Services",
+                value=" • ".join(services),
+                inline=False
+            )
+        # STATIC NPCS
+        npc_cog = self.bot.get_cog('NPCCog')
+        if npc_cog:
+            static_npcs = npc_cog.get_static_npcs_for_location(loc_id)
+            if static_npcs:
+                npc_list = [f"{name} - {age}" for name, age in static_npcs[:5]]  # Limit to 5 for space
+                if len(static_npcs) > 5:
+                    npc_list.append(f"...and {len(static_npcs) - 5} more")
+                
+                embed.add_field(
+                    name="Notable NPCs",
+                    value="\n".join(npc_list),
+                    inline=False
+                )
+        # LOGBOOK PRESENCE
+        log_count = self.db.execute_query(
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            (loc_id,),
+            fetch='one'
+        )[0]
+        embed.add_field(
+            name="📓 Logbook",
+            value="Available" if log_count > 0 else "None",
+            inline=True
+        )
+
+        
+        # NEW: Get available routes and display them
+        routes = self.db.execute_query(
+            '''SELECT c.name, l.name as dest_name, l.location_type as dest_type, c.travel_time, c.danger_level
+               FROM corridors c
+               JOIN locations l ON c.destination_location = l.location_id
+               WHERE c.origin_location = ? AND c.is_active = 1
+               ORDER BY c.travel_time
+               LIMIT 8''',
+            (loc_id,),
+            fetch='all'
+        )
+        
+        if routes:
+            route_lines = []
+            for corridor_name, dest_name, dest_type, travel_time, danger in routes:
+                # Determine route type and emoji
+                if "Approach" in corridor_name:
+                    route_emoji = "🌌"  # Local space
+                elif "Ungated" in corridor_name:
+                    route_emoji = "⭕️"  # Dangerous ungated
+                else:
+                    route_emoji = "🔵"  # Safe gated
+                
+                dest_emoji = {
+                    'colony': '🏭',
+                    'space_station': '🛰️',
+                    'outpost': '🛤️',
+                    'gate': '🚪'
+                }.get(dest_type, '📍')
+                
+                # Format time
+                mins = travel_time // 60
+                secs = travel_time % 60
+                if mins > 60:
+                    hours = mins // 60
+                    mins = mins % 60
+                    time_text = f"{hours}h{mins}m"
+                elif mins > 0:
+                    time_text = f"{mins}m{secs}s" if secs > 0 else f"{mins}m"
+                else:
+                    time_text = f"{secs}s"
+                
+                danger_text = "⚠️" * danger if danger > 0 else ""
+                # IMPROVED: Clear departure → destination format
+                route_lines.append(f"{route_emoji} **{name} → {dest_emoji} {dest_name}** · {time_text} {danger_text}")
+            
+            embed.add_field(
+                name="🗺️ Available Routes",
+                value="\n".join(route_lines),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="🗺️ Available Routes",
+                value="*No active routes from this location*",
+                inline=False
+            )
+        
+        # Usage instructions
+        embed.add_field(
+            name="🎮 Getting Started",
+            value="• Use `/character location` for interactive options\n• Use `/travel routes` to see detailed travel info\n• Use `/shop list` and `/job list` to see what's available",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="ℹ️ Channel Info",
+            value="This channel was created automatically when someone arrived. It will be cleaned up if unused for extended periods.",
+            inline=False
+        )
+        
+        try:
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"❌ Failed to send welcome message to {channel.name}: {e}")
+
+    async def send_location_status(self, channel: discord.TextChannel, user: discord.Member, location_id: int):
+        """Send current location status to a specific user (shows their current location)"""
+        
+        # Check if this user is actually at this location
+        user_location = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (user.id,),
+            fetch='one'
+        )
+        
+        if not user_location or user_location[0] != location_id:
+            return  # Don't send active location message if they're not here
+        
+        # Remove any existing active location message for this user at this location
+        await self._remove_active_location_message(user.id, location_id, channel)
+        
+        # Get current player count and names at this location
+        players_at_location = self.db.execute_query(
+            "SELECT c.name, c.user_id FROM characters c WHERE c.current_location = ?",
+            (location_id,),
+            fetch='all'
+        )
+        
+        # Get location name
+        location_name = self.db.execute_query(
+            "SELECT name FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )[0]
+        
+        # Create updated embed format
+        embed = discord.Embed(
+            title="📍 Location Status",
+            color=0x00ff00
+        )
+        
+        embed.add_field(
+            name="Location", 
+            value=location_name,
+            inline=True
+        )
+        
+        embed.add_field(
+            name="Current Activity",
+            value=f"{len(players_at_location)} Players Present",
+            inline=True
+        )
+        
+        # Add players list
+        if players_at_location:
+            player_names = [player[0] for player in players_at_location]
+            players_text = ", ".join(player_names)
+            # Truncate if too long
+            if len(players_text) > 1000:
+                players_text = players_text[:997] + "..."
+            embed.add_field(
+                name="Players here",
+                value=players_text,
+                inline=False
+            )
+        
+        embed.add_field(
+            name="Channel Status",
+            value="This channel will remain active while players are present.",
+            inline=False
+        )
+        
+        try:
+            # Send the status message
+            status_message = await channel.send(embed=embed)
+            
+            # Store message for tracking and auto-updates
+            self.active_location_messages[f"{user.id}_{location_id}"] = {
+                'message': status_message,
+                'channel': channel,
+                'location_id': location_id,
+                'user_id': user.id
+            }
+            
+            # Start auto-refresh task
+            import asyncio
+            asyncio.create_task(self._auto_refresh_location_status(status_message, location_id, channel))
+            
+        except Exception as e:
+            print(f"❌ Failed to send location status to {channel.name}: {e}")
+
+    async def _auto_refresh_location_status(self, message: discord.Message, location_id: int, channel: discord.TextChannel):
+        """Auto-refresh location status every minute"""
+        try:
+            for _ in range(60):  # Refresh for 1 hour max
+                await asyncio.sleep(60)  # Wait 1 minute
+                
+                # Check if message still exists
+                try:
+                    await message.fetch()
+                except:
+                    break  # Message was deleted, stop refreshing
+                
+                # Get updated player data
+                players_at_location = self.db.execute_query(
+                    "SELECT c.name, c.user_id FROM characters c WHERE c.current_location = ?",
+                    (location_id,),
+                    fetch='all'
+                )
+                
+                # Get location name
+                location_name = self.db.execute_query(
+                    "SELECT name FROM locations WHERE location_id = ?",
+                    (location_id,),
+                    fetch='one'
+                )[0]
+                
+                # Create updated embed
+                embed = discord.Embed(
+                    title="📍 Location Status",
+                    color=0x00ff00
+                )
+                
+                embed.add_field(
+                    name="Location", 
+                    value=location_name,
+                    inline=True
+                )
+                
+                embed.add_field(
+                    name="Current Activity",
+                    value=f"{len(players_at_location)} Players Present",
+                    inline=True
+                )
+                
+                # Add players list
+                if players_at_location:
+                    player_names = [player[0] for player in players_at_location]
+                    players_text = ", ".join(player_names)
+                    # Truncate if too long
+                    if len(players_text) > 1000:
+                        players_text = players_text[:997] + "..."
+                    embed.add_field(
+                        name="Players here",
+                        value=players_text,
+                        inline=False
+                    )
+                
+                embed.add_field(
+                    name="Channel Status",
+                    value="This channel will remain active while players are present.",
+                    inline=False
+                )
+                
+                try:
+                    await message.edit(embed=embed)
+                except:
+                    break  # Failed to edit, stop refreshing
+                    
+        except Exception as e:
+            print(f"❌ Error in auto-refresh for location {location_id}: {e}")
+    def _track_active_location_message(self, user_id: int, location_id: int, message_id: int):
+        """Track an active location message for later cleanup"""
+        if user_id not in self._active_location_messages:
+            self._active_location_messages[user_id] = {}
+        self._active_location_messages[user_id][location_id] = message_id
+
+    async def _remove_active_location_message(self, user_id: int, location_id: int, channel: discord.TextChannel):
+        """Remove tracked active location message"""
+        if user_id in self._active_location_messages:
+            if location_id in self._active_location_messages[user_id]:
+                message_id = self._active_location_messages[user_id][location_id]
+                try:
+                    message = await channel.fetch_message(message_id)
+                    await message.delete()
+                except:
+                    pass  # Message already deleted or not found
+                
+                # Remove from tracking
+                del self._active_location_messages[user_id][location_id]
+                if not self._active_location_messages[user_id]:
+                    del self._active_location_messages[user_id]
+    
+    async def _update_channel_activity(self, location_id: int):
+        """
+        Update the last active time for a location channel
+        """
+        current_time = datetime.now()
+        self.db.execute_query(
+            "UPDATE locations SET channel_last_active = ? WHERE location_id = ?",
+            (current_time, location_id)
+        )
+    
+    async def give_user_location_access(self, user: discord.Member, location_id: int) -> bool:
+        """Give a user access to a location's channel, creating it if necessary"""
+        channel = await self.get_or_create_location_channel(user.guild, location_id, user)
+        if not channel:
+            return False
+        
+        try:
+            await channel.set_permissions(user, read_messages=True, send_messages=True)
+            await self._update_channel_activity(location_id)
+            
+            # Send personalized location status to the user
+            await self.send_location_status(channel, user, location_id)
+            
+            return True
+        except Exception as e:
+            print(f"❌ Failed to give {user.name} access to {channel.name}: {e}")
+            return False
+
+    async def remove_user_location_access(self, user: discord.Member, location_id: int) -> bool:
+        """
+        Remove a user's access to a location channel and clean up their messages
+        """
+        location_info = self.db.execute_query(
+            "SELECT channel_id FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_info or not location_info[0]:
+            return True  # No channel exists, so access is already "removed"
+        
+        channel = user.guild.get_channel(location_info[0])
+        if not channel:
+            return True  # Channel doesn't exist
+        
+        try:
+            # Remove their active location message first
+            await self._remove_active_location_message(user.id, location_id, channel)
+            
+            # Remove channel permissions
+            await channel.set_permissions(user, overwrite=None)
+            
+            print(f"🚪 Removed {user.name} access from location channel")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to remove {user.name} access from {channel.name}: {e}")
+            return False
+    
+    async def _check_and_cleanup_empty_channels(self, guild: discord.Guild):
+        """Background task to check and cleanup empty channels - IMPROVED to check login status"""
+        if not self.auto_cleanup_enabled:
+            return
+            
+        # More aggressive cleanup - only 1 minute instead of 2
+        cutoff_time = datetime.now() - timedelta(minutes=1)
+        
+        # IMPROVED: Only count LOGGED-IN players for location channels
+        empty_channels = self.db.execute_query(
+            '''SELECT l.location_id, l.channel_id, l.name,
+                      COUNT(CASE WHEN c.is_logged_in = 1 THEN c.user_id END) as logged_in_count
+               FROM locations l
+               LEFT JOIN characters c ON l.location_id = c.current_location
+               WHERE l.channel_id IS NOT NULL 
+               AND (l.channel_last_active IS NULL OR l.channel_last_active < ?)
+               GROUP BY l.location_id, l.channel_id, l.name
+               HAVING logged_in_count = 0
+               LIMIT 5''',  # Process max 5 at a time to avoid rate limits
+            (cutoff_time,),
+            fetch='all'
+        )
+        
+        # NEW: Also check for empty ship channels
+        empty_ship_channels = self.db.execute_query(
+            '''SELECT s.ship_id, s.channel_id, s.name,
+                      COUNT(CASE WHEN c.is_logged_in = 1 THEN c.user_id END) as logged_in_count
+               FROM ships s
+               LEFT JOIN characters c ON s.ship_id = c.current_ship_id
+               WHERE s.channel_id IS NOT NULL
+               GROUP BY s.ship_id, s.channel_id, s.name
+               HAVING logged_in_count = 0
+               LIMIT 3''',  # Limit ship cleanup too
+            fetch='all'
+        )
+        
+        cleaned_count = 0
+        
+        # Clean up location channels
+        for location_id, channel_id, location_name, logged_in_count in empty_channels:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                try:
+                    # Additional check: make sure no one is traveling TO this location
+                    travelers_coming = self.db.execute_query(
+                        "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = ? AND status = 'traveling'",
+                        (location_id,),
+                        fetch='one'
+                    )[0]
+                    
+                    if travelers_coming == 0:
+                        await channel.delete(reason="Automated cleanup - no logged-in players")
+                        print(f"🧹 Auto-cleaned channel #{channel.name} for {location_name} (no logged-in players)")
+                        cleaned_count += 1
+                    else:
+                        # Someone is traveling here, update activity to keep channel
+                        await self._update_channel_activity(location_id)
+                        continue
+                        
+                except Exception as e:
+                    print(f"❌ Failed to delete channel for {location_name}: {e}")
+            
+            # Clear channel reference from database regardless
+            self.db.execute_query(
+                "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
+                (location_id,)
+            )
+        
+        # NEW: Clean up ship channels
+        for ship_id, channel_id, ship_name, logged_in_count in empty_ship_channels:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                try:
+                    await channel.delete(reason="Automated cleanup - no players aboard ship")
+                    print(f"🧹 Auto-cleaned ship channel #{channel.name} for {ship_name} (no players aboard)")
+                    cleaned_count += 1
+                except Exception as e:
+                    print(f"❌ Failed to delete ship channel for {ship_name}: {e}")
+            
+            # Clear channel reference from database
+            self.db.execute_query(
+                "UPDATE ships SET channel_id = NULL WHERE ship_id = ?",
+                (ship_id,)
+            )
+        
+        if cleaned_count > 0:
+            print(f"🧹 Background cleanup: removed {cleaned_count} channels with no logged-in players")
+    async def immediate_ship_cleanup(self, guild: discord.Guild, ship_id: int):
+        """Check if a ship should be cleaned up immediately when someone leaves"""
+        # Wait just a moment for database to update
+        await asyncio.sleep(1)
+        
+        # Check if ship has any LOGGED-IN players
+        logged_in_players = self.db.execute_query(
+            "SELECT COUNT(*) FROM characters WHERE current_ship_id = ? AND is_logged_in = 1",
+            (ship_id,),
+            fetch='one'
+        )[0]
+        
+        if logged_in_players == 0:
+            # Get ship channel info
+            ship_info = self.db.execute_query(
+                "SELECT channel_id, name FROM ships WHERE ship_id = ?",
+                (ship_id,),
+                fetch='one'
+            )
+            
+            if ship_info and ship_info[0]:
+                channel = guild.get_channel(ship_info[0])
+                if channel:
+                    try:
+                        await channel.delete(reason="No logged-in players aboard ship")
+                        print(f"🧹 Immediately cleaned up ship channel for: {ship_info[1]} (no logged-in players)")
+                        
+                        self.db.execute_query(
+                            "UPDATE ships SET channel_id = NULL WHERE ship_id = ?",
+                            (ship_id,)
+                        )
+                    except Exception as e:
+                        print(f"❌ Failed to cleanup empty ship channel: {e}")
+    async def _cleanup_old_channels_if_needed(self, guild: discord.Guild):
+        """
+        Clean up old unused channels if we're approaching the limit - IMPROVED to count only logged-in players
+        """
+        # Count current location channels that have logged-in players or recent activity
+        current_channels = self.db.execute_query(
+            '''SELECT COUNT(DISTINCT l.location_id)
+               FROM locations l
+               LEFT JOIN characters c ON l.location_id = c.current_location AND c.is_logged_in = 1
+               WHERE l.channel_id IS NOT NULL 
+               AND (c.user_id IS NOT NULL OR l.channel_last_active > datetime('now', '-1 hour'))''',
+            fetch='one'
+        )[0]
+        
+        if current_channels >= self.max_location_channels:
+            await self._cleanup_old_channels(guild, force=True)
+    
+    async def _cleanup_old_channels(self, guild: discord.Guild, force: bool = False):
+        """Clean up old unused location channels with better logic"""
+        # More aggressive cleanup timing
+        if force:
+            cutoff_time = datetime.now() - timedelta(minutes=30)  # 30 minutes if forced
+        else:
+            cutoff_time = datetime.now() - timedelta(hours=2)     # 2 hours normal cleanup
+        
+        # Only clean up channels with no current players
+        old_channels = self.db.execute_query(
+            '''SELECT l.location_id, l.channel_id, l.name,
+                      COUNT(c.user_id) as player_count,
+                      l.channel_last_active
+               FROM locations l
+               LEFT JOIN characters c ON l.location_id = c.current_location
+               WHERE l.channel_id IS NOT NULL 
+               AND (l.channel_last_active IS NULL OR l.channel_last_active < ?)
+               GROUP BY l.location_id, l.channel_id, l.name, l.channel_last_active
+               HAVING player_count = 0
+               ORDER BY l.channel_last_active ASC
+               LIMIT ?''',
+            (cutoff_time, self.cleanup_batch_size),
+            fetch='all'
+        )
+        
+        cleaned_count = 0
+        for location_id, channel_id, location_name, player_count, last_active in old_channels:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                try:
+                    # Check for very recent messages (last 10 minutes)
+                    recent_cutoff = datetime.now() - timedelta(minutes=10)
+                    recent_activity = False
+                    async for message in channel.history(limit=3, after=recent_cutoff):
+                        recent_activity = True
+                        break
+                    
+                    if not recent_activity:
+                        await channel.delete(reason="Automated cleanup - location empty and unused")
+                        print(f"🧹 Cleaned up empty channel #{channel.name} for {location_name}")
+                        cleaned_count += 1
+                    else:
+                        # Update activity time since we found recent messages
+                        await self._update_channel_activity(location_id)
+                        continue
+                        
+                except Exception as e:
+                    print(f"❌ Failed to delete channel for {location_name}: {e}")
+            
+            # Clear channel reference from database
+            self.db.execute_query(
+                "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
+                (location_id,)
+            )
+        
+        if cleaned_count > 0:
+            print(f"🧹 Cleaned up {cleaned_count} unused location channels")
+
+    async def update_channel_on_player_movement(self, guild: discord.Guild, user_id: int, old_location_id: int = None, new_location_id: int = None):
+        """Update channels when a player moves between locations - IMPROVED for immediate cleanup"""
+        
+        member = guild.get_member(user_id)
+        if not member:
+            return
+        
+        # Remove access from old location
+        if old_location_id:
+            success = await self.remove_user_location_access(member, old_location_id)
+            if success:
+                # Immediate cleanup check for the old location (no delay)
+                asyncio.create_task(self._immediate_cleanup_check(guild, old_location_id))
+        
+        # Give access to new location
+        if new_location_id:
+            await self.give_user_location_access(member, new_location_id)
+
+    async def _immediate_cleanup_check(self, guild: discord.Guild, location_id: int):
+        """Check if a location should be cleaned up immediately - IMPROVED to check login status"""
+        # Wait just a moment for database to update
+        await asyncio.sleep(2)
+        
+        # IMPROVED: Check if location has any LOGGED-IN players
+        logged_in_count = self.db.execute_query(
+            "SELECT COUNT(*) FROM characters WHERE current_location = ? AND is_logged_in = 1",
+            (location_id,),
+            fetch='one'
+        )[0]
+        
+        # Also check if anyone is traveling TO this location
+        travelers_coming = self.db.execute_query(
+            "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = ? AND status = 'traveling'",
+            (location_id,),
+            fetch='one'
+        )[0]
+        
+        if logged_in_count == 0 and travelers_coming == 0:
+            # Get channel info
+            location_info = self.db.execute_query(
+                "SELECT channel_id, name FROM locations WHERE location_id = ?",
+                (location_id,),
+                fetch='one'
+            )
+            
+            if location_info and location_info[0]:
+                channel = guild.get_channel(location_info[0])
+                if channel:
+                    try:
+                        await channel.delete(reason="No logged-in players at location")
+                        print(f"🧹 Immediately cleaned up channel for location: {location_info[1]} (no logged-in players)")
+                        
+                        self.db.execute_query(
+                            "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
+                            (location_id,)
+                        )
+                    except Exception as e:
+                        print(f"❌ Failed to cleanup empty location channel: {e}")
+
+    async def create_transit_channel(self, guild: discord.Guild, user_or_group, corridor_name: str, destination: str) -> Optional[discord.TextChannel]:
+        """
+        Create a temporary channel for corridor transit - IMPROVED with travel type detection
+        """
+        try:
+            # Get transit category from config
+            transit_category_id = self.db.execute_query(
+                "SELECT transit_category_id FROM server_config WHERE guild_id = ?",
+                (guild.id,),
+                fetch='one'
+            )
+            
+            category = None
+            if transit_category_id and transit_category_id[0]:
+                category = guild.get_channel(transit_category_id[0])
+            
+            # Fallback category creation
+            if not category:
+                for cat in guild.categories:
+                    if cat.name == '🚀 IN TRANSIT':
+                        category = cat
+                        break
+                
+                if not category:
+                    try:
+                        category = await guild.create_category(
+                            '🚀 IN TRANSIT',
+                            reason="Transit category for corridor travel"
+                        )
+                    except Exception:
+                        pass  # Continue without category
+            
+            # Set up permissions
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False)
+            }
+            
+            # Add permissions for travelers
+            if isinstance(user_or_group, list):
+                # Group travel
+                for user_id in user_or_group:
+                    member = guild.get_member(user_id)
+                    if member:
+                        overwrites[member] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                
+                channel_name = f"transit-group-{user_or_group[0]}"
+            else:
+                # Solo travel
+                overwrites[user_or_group] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                channel_name = f"transit-{user_or_group.id}"
+            
+            # Determine travel type based on corridor name for better topic
+            if "Approach" in corridor_name:
+                travel_type = "local space"
+                topic = f"In local space traveling to {destination}"
+            elif "Ungated" in corridor_name:
+                travel_type = "dangerous ungated corridor"
+                topic = f"In dangerous ungated corridor {corridor_name} to {destination}"
+            else:
+                travel_type = "gated corridor"
+                topic = f"In gated corridor {corridor_name} to {destination}"
+            
+            # Create the transit channel
+            channel = await guild.create_text_channel(
+                channel_name,
+                category=category,
+                topic=topic,
+                overwrites=overwrites,
+                reason=f"Temporary transit channel through {corridor_name}"
+            )
+            
+            # Send initial transit message with proper travel type
+            await self._send_transit_welcome(channel, corridor_name, destination, travel_type)
+            
+            print(f"🚀 Created transit channel #{channel_name} for {corridor_name}")
+            return channel
+            
+        except Exception as e:
+            print(f"❌ Failed to create transit channel: {e}")
+            return None
+    
+    async def _send_transit_welcome(self, channel: discord.TextChannel, corridor_name: str, destination: str, travel_type: str):
+        """
+        Send welcome message to transit channel - IMPROVED with travel type
+        """
+        # Determine title and description based on travel type
+        if travel_type == "local space":
+            title = f"🌌 Local Space Transit to {destination}"
+            description = f"Your ship is traveling through local space to **{destination}**"
+            hazard_text = "• Monitor for local traffic\n• Watch for debris fields\n• Maintain safe distance from other vessels\n• Check navigation systems regularly"
+        elif travel_type == "dangerous ungated corridor":
+            title = f"⚠️ Ungated Corridor Transit - {corridor_name}"
+            description = f"Your ship is traveling through the dangerous ungated corridor **{corridor_name}** to **{destination}**"
+            hazard_text = "• **HIGH RADIATION EXPOSURE RISK**\n• Watch for corridor instability\n• Monitor structural integrity\n• Be prepared for emergency exits\n• **EXTREME DANGER - STAY ALERT**"
+        else:
+            title = f"🔒 Gated Corridor Transit - {corridor_name}"
+            description = f"Your ship is traveling through the gated corridor **{corridor_name}** to **{destination}**"
+            hazard_text = "• Monitor for standard corridor hazards\n• Watch for static fog alerts\n• Check gate synchronization\n• Maintain course through gate network"
+        
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=0x800080 if travel_type == "gated corridor" else 0xff6600 if travel_type == "local space" else 0xff0000
+        )
+        
+        embed.add_field(
+            name="⚠️ Transit Hazards",
+            value=hazard_text,
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🛠️ Available Actions",
+            value="• `/character ship` - Check ship status\n• `/character inventory` - Use items\n• `/travel status` - Check progress\n• `/travel emergency_exit` - Emergency exit (dangerous!)",
+            inline=False
+        )
+        
+        if travel_type != "local space":
+            embed.add_field(
+                name="👥 Group Travel",
+                value="Group members can coordinate actions and share resources during transit.",
+                inline=False
+            )
+        
+        embed.add_field(
+            name="ℹ️ Transit Info",
+            value="This channel will be automatically deleted when your journey completes.",
+            inline=False
+        )
+        
+        try:
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"❌ Failed to send transit welcome: {e}")
+    async def immediate_logout_cleanup(self, guild: discord.Guild, location_id: int, ship_id: int = None):
+        """Immediately check and cleanup a location when someone logs out"""
+        # Wait just a moment for database to update
+        await asyncio.sleep(1)
+        
+        # Handle location cleanup if provided
+        if location_id:
+            # Check if location has any LOGGED-IN players
+            logged_in_players = self.db.execute_query(
+                "SELECT COUNT(*) FROM characters WHERE current_location = ? AND is_logged_in = 1",
+                (location_id,),
+                fetch='one'
+            )[0]
+            
+            # Also check if anyone is traveling TO this location
+            travelers_coming = self.db.execute_query(
+                "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = ? AND status = 'traveling'",
+                (location_id,),
+                fetch='one'
+            )[0]
+            
+            if logged_in_players == 0 and travelers_coming == 0:
+                # Get channel info
+                location_info = self.db.execute_query(
+                    "SELECT channel_id, name FROM locations WHERE location_id = ?",
+                    (location_id,),
+                    fetch='one'
+                )
+                
+                if location_info and location_info[0]:
+                    channel = guild.get_channel(location_info[0])
+                    if channel:
+                        try:
+                            await channel.delete(reason="Last logged-in player left location")
+                            print(f"🧹 Logout cleanup: removed channel for {location_info[1]} (no logged-in players)")
+                            
+                            self.db.execute_query(
+                                "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
+                                (location_id,)
+                            )
+                        except Exception as e:
+                            print(f"❌ Failed to cleanup location channel during logout: {e}")
+        
+        # NEW: Handle ship cleanup if provided
+        if ship_id:
+            await self.immediate_ship_cleanup(guild, ship_id)
+
+    async def restore_user_location_on_login(self, user: discord.Member, location_id: int) -> bool:
+        """Restore or create location access when a user logs in"""
+        # First, ensure the channel exists and user has access
+        channel = await self.get_or_create_location_channel(user.guild, location_id, user)
+        if not channel:
+            print(f"❌ Failed to create/access channel for location {location_id}")
+            return False
+        
+        try:
+            # Ensure user has permissions
+            await channel.set_permissions(user, read_messages=True, send_messages=True)
+            await self._update_channel_activity(location_id)
+            
+            # Send personalized location status
+            await self.send_location_status(channel, user, location_id)
+            
+            print(f"✅ Login restoration: gave {user.name} access to location {location_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to restore {user.name} access during login: {e}")
+            return False
+    async def cleanup_transit_channel(self, channel_id: int, delay_seconds: int = 30):
+        """
+        Clean up a transit channel after a delay
+        """
+        await asyncio.sleep(delay_seconds)
+        
+        channel = self.bot.get_channel(channel_id)
+        if channel:
+            try:
+                await channel.delete(reason="Transit completed")
+                print(f"🗑️ Cleaned up transit channel #{channel.name}")
+            except Exception as e:
+                print(f"❌ Failed to delete transit channel: {e}")
+    
+    async def get_server_config(self, guild: discord.Guild) -> dict:
+        """
+        Get server configuration for this guild
+        """
+        config = self.db.execute_query(
+            '''SELECT colony_category_id, station_category_id, outpost_category_id,
+                      gate_category_id, transit_category_id, max_location_channels,
+                      channel_timeout_hours, auto_cleanup_enabled, setup_completed
+               FROM server_config WHERE guild_id = ?''',
+            (guild.id,),
+            fetch='one'
+        )
+        
+        if not config:
+            return {
+                'setup_completed': False,
+                'max_location_channels': 50,
+                'channel_timeout_hours': 48,
+                'auto_cleanup_enabled': True
+            }
+        
+        return {
+            'colony_category_id': config[0],
+            'station_category_id': config[1],
+            'outpost_category_id': config[2], 
+            'gate_category_id': config[3],
+            'transit_category_id': config[4],
+            'max_location_channels': config[5] or 50,
+            'channel_timeout_hours': config[6] or 48,
+            'auto_cleanup_enabled': config[7] if config[7] is not None else True,
+            'setup_completed': config[8] or False
+        }
+    async def get_or_create_ship_channel(self, guild: discord.Guild, ship_info: tuple, user: discord.Member = None) -> Optional[discord.TextChannel]:
+        """
+        Get existing channel for ship or create one if needed
+        """
+        ship_id, ship_name, ship_type, interior_desc, channel_id = ship_info
+        
+        # Check if channel already exists
+        if channel_id:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                return channel
+            else:
+                # Channel was deleted, clear the reference
+                self.db.execute_query(
+                    "UPDATE ships SET channel_id = NULL WHERE ship_id = ?",
+                    (ship_id,)
+                )
+        
+        # Create new ship channel
+        channel = await self._create_ship_channel(guild, ship_info, user)
+        return channel
+
+    async def _create_ship_channel(self, guild: discord.Guild, ship_info: tuple, requesting_user: discord.Member = None) -> Optional[discord.TextChannel]:
+        """
+        Create a new Discord channel for a ship interior
+        """
+        ship_id, ship_name, ship_type, interior_desc, channel_id = ship_info
+        
+        try:
+            # Generate safe channel name
+            channel_name = self._generate_ship_channel_name(ship_name, ship_type)
+            
+            # Create channel topic
+            topic = f"Ship Interior: {ship_name} ({ship_type})"
+            if interior_desc:
+                topic += f" | {interior_desc[:100]}"
+            
+            # Set up permissions - start with no access for @everyone
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False)
+            }
+            
+            # Give access to requesting user if provided
+            if requesting_user:
+                overwrites[requesting_user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            
+            # Find or create category for ship channels
+            category = await self._get_or_create_ship_category(guild)
+            
+            # Create the channel
+            channel = await guild.create_text_channel(
+                channel_name,
+                category=category,
+                topic=topic,
+                overwrites=overwrites,
+                reason=f"Ship interior channel for: {ship_name}"
+            )
+            
+            # Update database with channel info
+            self.db.execute_query(
+                "UPDATE ships SET channel_id = ? WHERE ship_id = ?",
+                (channel.id, ship_id)
+            )
+            
+            # Send welcome message to channel
+            await self._send_ship_welcome(channel, ship_info)
+            
+            print(f"🚀 Created ship channel #{channel_name} for {ship_name}")
+            return channel
+            
+        except Exception as e:
+            print(f"❌ Failed to create ship channel for {ship_name}: {e}")
+            return None
+
+    def _generate_ship_channel_name(self, ship_name: str, ship_type: str) -> str:
+        """Generate a Discord-safe channel name for ships"""
+        # Remove special characters and convert to lowercase
+        import re
+        safe_name = re.sub(r'[^\w\s-]', '', ship_name.lower())
+        safe_name = re.sub(r'\s+', '-', safe_name)
+        safe_name = safe_name.strip('-')
+        
+        # Add ship prefix
+        ship_prefix = "ship"
+        
+        # Ensure name isn't too long
+        max_name_length = 85 - len(ship_prefix)
+        if len(safe_name) > max_name_length:
+            safe_name = safe_name[:max_name_length].rstrip('-')
+        
+        return f"{ship_prefix}-{safe_name}"
+
+    async def _get_or_create_ship_category(self, guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+        """
+        Get or create category for ship channels
+        """
+        category_name = '🚀 SHIP INTERIORS'
+        
+        # Look for existing category
+        for category in guild.categories:
+            if category.name == category_name:
+                return category
+        
+        # Create new category if it doesn't exist
+        try:
+            category = await guild.create_category(
+                category_name,
+                reason="Auto-created category for ship interior channels"
+            )
+            return category
+        except Exception as e:
+            print(f"❌ Failed to create ship category {category_name}: {e}")
+            return None
+
+    async def _send_ship_welcome(self, channel: discord.TextChannel, ship_info: tuple):
+        """Send a welcome message to a newly created ship channel"""
+        ship_id, ship_name, ship_type, interior_desc, channel_id = ship_info
+        
+        embed = discord.Embed(
+            title=f"🚀 Welcome Aboard {ship_name}",
+            description=interior_desc or "You are now inside your ship.",
+            color=0x2F4F4F
+        )
+        
+        embed.add_field(
+            name="Ship Class",
+            value=ship_type,
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🎮 Available Actions",
+            value="• `/ship interior leave` - Exit the ship\n• `/character inventory` - Check your items\n• `/character ship` - Check ship status",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="ℹ️ Ship Interior",
+            value="This is your private ship space. Other players can only enter if you grant them access.",
+            inline=False
+        )
+        
+        try:
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"❌ Failed to send ship welcome message: {e}")
+
+    async def give_user_ship_access(self, user: discord.Member, ship_id: int) -> bool:
+        """Give a user access to a ship's channel"""
+        ship_info = self.db.execute_query(
+            "SELECT channel_id FROM ships WHERE ship_id = ?",
+            (ship_id,),
+            fetch='one'
+        )
+        
+        if not ship_info or not ship_info[0]:
+            return False
+        
+        channel = user.guild.get_channel(ship_info[0])
+        if not channel:
+            return False
+        
+        try:
+            await channel.set_permissions(user, read_messages=True, send_messages=True)
+            return True
+        except Exception as e:
+            print(f"❌ Failed to give {user.name} ship access: {e}")
+            return False
+
+    async def remove_user_ship_access(self, user: discord.Member, ship_id: int) -> bool:
+        """Remove a user's access to a ship channel"""
+        ship_info = self.db.execute_query(
+            "SELECT channel_id FROM ships WHERE ship_id = ?",
+            (ship_id,),
+            fetch='one'
+        )
+        
+        if not ship_info or not ship_info[0]:
+            return True
+        
+        channel = user.guild.get_channel(ship_info[0])
+        if not channel:
+            return True
+        
+        try:
+            await channel.set_permissions(user, overwrite=None)
+            return True
+        except Exception as e:
+            print(f"❌ Failed to remove {user.name} ship access: {e}")
+            return False
+class CharacterDeleteConfirmView(discord.ui.View):
+    def __init__(self, bot, user_id: int, char_name: str):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        self.char_name = char_name
+    
+    @discord.ui.button(label="PERMANENTLY DELETE CHARACTER", style=discord.ButtonStyle.danger, emoji="💀")
+    async def confirm_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your deletion panel!", ephemeral=True)
+            return
+        
+        # Get current location for channel cleanup
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location, ship_id FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        current_location, ship_id = char_data
+        
+        # Delete character and associated data
+        self.bot.db.execute_query("DELETE FROM characters WHERE user_id = ?", (self.user_id,))
+
+        # Delete character identity (add this line)
+        self.bot.db.execute_query("DELETE FROM character_identity WHERE user_id = ?", (self.user_id,))
+
+        if ship_id:
+            self.bot.db.execute_query("DELETE FROM ships WHERE ship_id = ?", (ship_id,))
+        
+        # Cancel any active travel
+        self.bot.db.execute_query(
+            "UPDATE travel_sessions SET status = 'manual_deletion' WHERE user_id = ? AND status = 'traveling'",
+            (self.user_id,)
+        )
+        
+        # Remove from any group
+        self.bot.db.execute_query("UPDATE characters SET group_id = NULL WHERE user_id = ?", (self.user_id,))
+        
+        # Cancel any jobs
+        self.bot.db.execute_query(
+            "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL WHERE taken_by = ?",
+            (self.user_id,)
+        )
+        
+        # Remove access from location channels using channel manager
+        if current_location:
+            channel_manager = ChannelManager(self.bot)
+            await channel_manager.remove_user_location_access(interaction.user, current_location)
+        
+        embed = discord.Embed(
+            title="💀 Character Deleted",
+            description=f"**{self.char_name}** has been permanently deleted.",
+            color=0x000000
+        )
+        
+        embed.add_field(
+            name="⚰️ Deletion Complete",
+            value="All character data, inventory, and progress has been erased.",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🔄 Starting Over",
+            value="You can create a new character with `/character create` to begin a new journey.",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+        print(f"💀 Character deletion (manual): {self.char_name} (ID: {self.user_id})")
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your deletion panel!", ephemeral=True)
+            return
+        
+        await interaction.response.send_message("Character deletion cancelled. Your character is safe!", ephemeral=True)
