@@ -3,6 +3,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import random
+import io
+import zipfile
+import re
+from datetime import datetime
 
 class AdminCog(commands.Cog):
     def __init__(self, bot):
@@ -220,8 +224,8 @@ class AdminCog(commands.Cog):
         """Show current server configuration"""
         config = self.db.execute_query(
             '''SELECT colony_category_id, station_category_id, outpost_category_id,
-                      gate_category_id, transit_category_id, ship_interiors_category_id, 
-                      max_location_channels, channel_timeout_hours, auto_cleanup_enabled
+                      gate_category_id, transit_category_id, max_location_channels,
+                      channel_timeout_hours, auto_cleanup_enabled
                FROM server_config WHERE guild_id = ?''',
             (interaction.guild.id,),
             fetch='one'
@@ -243,8 +247,7 @@ class AdminCog(commands.Cog):
             'Space Stations': config[1], 
             'Outposts': config[2],
             'Gates': config[3],
-            'Transit': config[4],
-            'Ship Interiors': config[5]
+            'Transit': config[4]
         }
         
         category_status = []
@@ -266,7 +269,7 @@ class AdminCog(commands.Cog):
         
         embed.add_field(
             name="🔧 Channel Settings",
-            value=f"• Max channels: {config[6]}\n• Timeout: {config[7]} hours\n• Auto-cleanup: {'Enabled' if config[8] else 'Disabled'}",
+            value=f"• Max channels: {config[5]}\n• Timeout: {config[6]} hours\n• Auto-cleanup: {'Enabled' if config[7] else 'Disabled'}",
             inline=True
         )
         
@@ -1177,7 +1180,217 @@ class AdminCog(commands.Cog):
                 f"Error updating setting: {str(e)}",
                 ephemeral=True
             )
-    
+    @admin_group.command(name="export", description="Export current galaxy data and maps into a readable guide")
+    async def export_galaxy(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        try:
+            # Call the main export logic
+            zip_buffer = await self._perform_export(interaction)
+            
+            # Reset buffer position to the beginning
+            zip_buffer.seek(0)
+            
+            # Get galaxy name for the file
+            galaxy_info = self.db.execute_query("SELECT name FROM galaxy_info WHERE galaxy_id = 1", fetch='one')
+            galaxy_name = galaxy_info[0].replace(" ", "_") if galaxy_info else "Galaxy"
+            timestamp = datetime.now().strftime("%Y%m%d")
+            
+            zip_filename = f"Galactic_Encyclopedia_{galaxy_name}_{timestamp}.zip"
+
+            await interaction.followup.send(
+                "✅ **Export Complete!**\nYour dynamic galaxy guide has been generated.",
+                file=discord.File(zip_buffer, filename=zip_filename),
+                ephemeral=True
+            )
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send(f"❌ **Export Failed!**\nAn unexpected error occurred: {e}", ephemeral=True)
+
+    def _sanitize_filename(self, name: str) -> str:
+        """Sanitizes a string to be a valid filename."""
+        # Remove invalid characters
+        name = re.sub(r'[\\/*?:"<>|]', "", name)
+        # Replace spaces with underscores
+        name = name.replace(" ", "_")
+        # Truncate to a reasonable length
+        return name[:100]
+
+    async def _perform_export(self, interaction: discord.Interaction) -> io.BytesIO:
+        """Performs the export process and returns a zip file buffer."""
+        zip_buffer = io.BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            
+            # --- 1. Initial Setup & Data Retrieval ---
+            await interaction.edit_original_response(content="⏳ **Exporting...** (1/5) Fetching galaxy data...")
+
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            galaxy_info = time_system.get_galaxy_info()
+            if not galaxy_info:
+                raise Exception("Galaxy has not been generated yet.")
+
+            galaxy_name, start_date, _, _, _, _, _, _ = galaxy_info
+            current_time = time_system.format_ingame_datetime(time_system.calculate_current_ingame_time())
+
+            locations = self.db.execute_query("SELECT * FROM locations", fetch='all')
+            corridors = self.db.execute_query("SELECT * FROM corridors", fetch='all')
+            static_npcs = self.db.execute_query("SELECT * FROM static_npcs", fetch='all')
+            dynamic_npcs = self.db.execute_query("SELECT * FROM dynamic_npcs", fetch='all')
+            sub_locations = self.db.execute_query("SELECT * FROM sub_locations", fetch='all')
+            
+            # --- 2. Generate and Add Maps ---
+            await interaction.edit_original_response(content="⏳ **Exporting...** (2/5) Generating galaxy maps...")
+            galaxy_cog = self.bot.get_cog('GalaxyGeneratorCog')
+            if not galaxy_cog:
+                raise Exception("GalaxyGeneratorCog not found.")
+
+            map_styles = ["standard", "wealth", "danger", "infrastructure", "connections"]
+            for style in map_styles:
+                map_buffer = await galaxy_cog._generate_visual_map(map_style=style, show_labels=True, highlight_player=None)
+                if map_buffer:
+                    zip_file.writestr(f'Assets/galaxy_map_{style}.png', map_buffer.getvalue())
+
+            # --- 3. Generate Markdown Files ---
+            await interaction.edit_original_response(content="⏳ **Exporting...** (3/5) Compiling location reports...")
+            
+            # Locations
+            locations_by_id = {loc[0]: loc for loc in locations}
+            for loc in locations:
+                loc_id, channel_id, name, loc_type, desc, wealth, pop, x, y, system, has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, is_gen, is_derelict, estab_date, _, has_shipyard = loc[:21]
+                
+                md_content = f"# {name}\n\n"
+                md_content += f"**Type:** {loc_type.replace('_', ' ').title()}\n"
+                md_content += f"**System:** {system}\n"
+                md_content += f"**Coordinates:** ({x:.1f}, {y:.1f})\n"
+                md_content += f"**Population:** {pop:,}\n"
+                md_content += f"**Wealth Level:** {wealth}/10\n"
+                md_content += f"**Established:** {estab_date or 'Unknown'}\n"
+                md_content += f"**Status:** {'Derelict' if is_derelict else 'Operational'}\n\n"
+                md_content += f"## Description\n{desc or 'No description available.'}\n\n"
+
+                services = []
+                if has_jobs: services.append("💼 Jobs")
+                if has_shops: services.append("🛒 Shopping")
+                if has_medical: services.append("⚕️ Medical")
+                if has_repairs: services.append("🔧 Repairs")
+                if has_fuel: services.append("⛽ Fuel")
+                if has_upgrades: services.append("⬆️ Upgrades")
+                if has_shipyard: services.append("🚢 Shipyard")
+                if services:
+                    md_content += "## Services\n" + ", ".join(services) + "\n\n"
+
+                loc_subs = [s for s in sub_locations if s[1] == loc_id]
+                if loc_subs:
+                    md_content += "## Sub-Areas\n"
+                    for sub in loc_subs:
+                        md_content += f"- **{sub[2]}**: {sub[4]}\n"
+                    md_content += "\n"
+                
+                loc_corridors = [c for c in corridors if c[2] == loc_id and c[7] == 1]
+                if loc_corridors:
+                    md_content += "## Connected Routes\n"
+                    for corr in loc_corridors:
+                        dest_name = locations_by_id.get(corr[3], (None, 'Unknown'))[1]
+                        md_content += f"- **{corr[1]}** to [{dest_name}](../../Corridors/{self._sanitize_filename(corr[1])}.md) (Danger: {corr[6]})\n"
+                    md_content += "\n"
+                
+                loc_npcs = [n for n in static_npcs if n[1] == loc_id]
+                if loc_npcs:
+                    md_content += "## Notable Inhabitants\n"
+                    for npc in loc_npcs:
+                         md_content += f"- [{npc[2]}](../../Inhabitants/Static_NPCs/{self._sanitize_filename(npc[2])}.md) ({npc[4]})\n"
+                    md_content += "\n"
+
+                sanitized_loc_type = loc_type.replace('_', ' ').title().replace(' ', '_')
+                zip_file.writestr(f"Locations/{sanitized_loc_type}/{self._sanitize_filename(name)}.md", md_content)
+
+            # Corridors
+            await interaction.edit_original_response(content="⏳ **Exporting...** (4/5) Mapping corridors and inhabitants...")
+            corridor_names = {}
+            for corr in corridors:
+                corr_id, name, origin_id, dest_id, travel_time, fuel_cost, danger, is_active = corr[:8]
+                if "Return" in name: continue
+                
+                clean_name = name.replace(" (Ungated)", "").strip()
+                if clean_name in corridor_names: continue
+                corridor_names[clean_name] = True
+                
+                origin_name = locations_by_id.get(origin_id, (None, 'Unknown'))[1]
+                dest_name = locations_by_id.get(dest_id, (None, 'Unknown'))[1]
+                
+                md_content = f"# {clean_name}\n\n"
+                md_content += f"**Type:** {'Ungated' if 'Ungated' in name else 'Gated'}\n"
+                md_content += f"**Connects:** [{origin_name}](../Locations/{locations_by_id[origin_id][3].replace('_',' ').title().replace(' ','_')}/{self._sanitize_filename(origin_name)}.md) <-> [{dest_name}](../Locations/{locations_by_id[dest_id][3].replace('_',' ').title().replace(' ','_')}/{self._sanitize_filename(dest_name)}.md)\n"
+                md_content += f"**Travel Time:** {travel_time // 60}m {travel_time % 60}s\n"
+                md_content += f"**Fuel Cost:** {fuel_cost}\n"
+                md_content += f"**Danger Level:** {danger}/5\n"
+                md_content += f"**Status:** {'Active' if is_active else 'Dormant'}\n"
+                
+                zip_file.writestr(f"Corridors/{self._sanitize_filename(clean_name)}.md", md_content)
+
+            # Inhabitants
+            for npc in static_npcs:
+                npc_id, loc_id, name, age, occupation, personality, trade_specialty = npc[:7]
+                loc_name = locations_by_id.get(loc_id, (None, "Unknown"))[1]
+                md_content = f"# {name}\n\n"
+                md_content += f"**Type:** Static\n"
+                md_content += f"**Location:** [{loc_name}](../../Locations/{locations_by_id[loc_id][3].replace('_',' ').title().replace(' ','_')}/{self._sanitize_filename(loc_name)}.md)\n"
+                md_content += f"**Occupation:** {occupation}\n"
+                md_content += f"**Personality:** {personality}\n"
+                if trade_specialty:
+                    md_content += f"**Trade Specialty:** {trade_specialty}\n"
+                zip_file.writestr(f"Inhabitants/Static_NPCs/{self._sanitize_filename(name)}.md", md_content)
+
+            for npc in dynamic_npcs:
+                npc_id, name, callsign, age, ship_name, ship_type, loc_id = npc[:7]
+                loc_name = locations_by_id.get(loc_id, (None, "In Transit"))[1]
+                md_content = f"# {name} ({callsign})\n\n"
+                md_content += f"**Type:** Dynamic\n"
+                md_content += f"**Current Location:** {loc_name}\n"
+                md_content += f"**Ship:** {ship_name} ({ship_type})\n"
+                zip_file.writestr(f"Inhabitants/Dynamic_NPCs/{self._sanitize_filename(callsign)}.md", md_content)
+
+            # --- 4. Generate Summary and Index ---
+            await interaction.edit_original_response(content="⏳ **Exporting...** (5/5) Finalizing encyclopedia...")
+            
+            # Galactic Summary
+            total_npcs = len(static_npcs) + len(dynamic_npcs)
+            summary_content = f"# Galactic Summary\n\n"
+            summary_content += f"**Galaxy Name:** {galaxy_name}\n"
+            summary_content += f"**Genesis Date:** {start_date}\n"
+            summary_content += f"**Current In-Game Time:** {current_time}\n\n"
+            summary_content += f"## Statistics\n- **Total Locations:** {len(locations)}\n- **Active Corridors:** {len(corridors)}\n- **Total NPCs:** {total_npcs}\n\n"
+            summary_content += "## Galactic Maps\n"
+            summary_content += "- [Standard Overview Map](../Assets/galaxy_map_standard.png)\n"
+            summary_content += "- [Economic Wealth Distribution Map](../Assets/galaxy_map_wealth.png)\n"
+            summary_content += "- [Corridor Safety Assessment Map](../Assets/galaxy_map_danger.png)\n"
+            summary_content += "- [Infrastructure Map](../Assets/galaxy_map_infrastructure.png)\n"
+            summary_content += "- [Connectivity Map](../Assets/galaxy_map_connections.png)\n"
+            zip_file.writestr("01_Galactic_Summary.md", summary_content)
+
+            # Index
+            index_content = f"# Galactic Encyclopedia: {galaxy_name}\n\n"
+            index_content += "A comprehensive guide to the current state of the galaxy.\n\n"
+            index_content += "## Table of Contents\n"
+            index_content += "- [Galactic Summary](01_Galactic_Summary.md)\n"
+            index_content += "- Locations\n"
+            index_content += "  - [Colonies](Locations/Colony/)\n"
+            index_content += "  - [Space Stations](Locations/Space_Station/)\n"
+            index_content += "  - [Outposts](Locations/Outpost/)\n"
+            index_content += "  - [Gates](Locations/Gate/)\n"
+            index_content += "- [Corridors](Corridors/)\n"
+            index_content += "- [Inhabitants](Inhabitants/)\n"
+            zip_file.writestr("index.md", index_content)
+
+            return zip_buffer
     @admin_group.command(name="create_location", description="Manually create a new location")
     @app_commands.describe(
         channel="The channel to use for this location",

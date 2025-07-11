@@ -2455,18 +2455,17 @@ class GalaxyGeneratorCog(commands.Cog):
             '''INSERT INTO locations 
                (name, location_type, description, wealth_level, population,
                 x_coord, y_coord, system_name, established_date, has_jobs, has_shops, has_medical, 
-                has_repairs, has_fuel, has_upgrades, has_black_market, is_generated, is_derelict, faction, has_federal_supply) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                has_repairs, has_fuel, has_upgrades, has_black_market, is_generated, is_derelict) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             (location['name'], location['type'], location['description'], 
              location['wealth_level'], location['population'], location['x_coord'], 
              location['y_coord'], location['system_name'], location.get('established_date'),
              location['has_jobs'], location['has_shops'], location['has_medical'], 
              location['has_repairs'], location['has_fuel'], location['has_upgrades'],
-             location.get('has_black_market', False), location['is_generated'],
-             location.get('is_derelict', False), location.get('faction', 'neutral'),
-             location.get('has_federal_supply', False))
+             location.get('has_black_market', False), location['is_generated'], 
+             location.get('is_derelict', False))
         )
-        
+            
         return self.db.execute_query(
             "SELECT location_id FROM locations WHERE name = ? ORDER BY location_id DESC LIMIT 1",
             (location['name'],),

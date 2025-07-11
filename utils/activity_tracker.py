@@ -10,10 +10,7 @@ class ActivityTracker:
         self.db = bot.db
         self.afk_tasks: Dict[int, asyncio.Task] = {}
         self.warning_tasks: Dict[int, asyncio.Task] = {}
-        
-        # Start the activity monitoring task
-        self.monitor_task = bot.loop.create_task(self.monitor_activity())
-    
+            
     def update_activity(self, user_id: int):
         """Update user's last activity timestamp"""
         self.db.execute_query(

@@ -38,48 +38,21 @@ class RPGBot(commands.Bot):
         self.activity_tracker = None
         self.income_task = None
     async def setup_hook(self):
-        """Load all cogs"""
-        # Initialize activity tracker here where async context is available
-        from utils.activity_tracker import ActivityTracker
-        self.activity_tracker = ActivityTracker(self)
-        cogs = [
-            'cogs.character',
-            'cogs.travel', 
-            'cogs.economy',
-            'cogs.admin',
-            'cogs.groups',
-            'cogs.events',
-            'cogs.galaxy_generator',
-            'cogs.radio',
-            'cogs.combat',
-            'cogs.corridor_events',
-            'cogs.enhanced_events',
-            'cogs.location_logs',
-            'cogs.ship_systems',
-            'cogs.time_cog',
-            'cogs.sub_locations',
-            'cogs.help',
-            'cogs.item_usage',
-            'cogs.galactic_news',
-            'cogs.location_ownership',
-            'cogs.npcs',
-            'cogs.npc_interactions',
-            'cogs.web_map',
-            'cogs.reputation',
-        ]
+        """This function is called when the bot is preparing to start."""
+        # Initialize the database
+        await self.db.initialize()
         
-        print("🔧 Loading cogs...")
-        loaded_count = 0
+        # Load all cogs from the 'cogs' directory
+        for filename in os.listdir('./cogs'):
+            if filename.endswith('.py'):
+                try:
+                    await self.load_extension(f'cogs.{filename[:-3]}')
+                    self.logger.info(f"Loaded cog: {filename}")
+                except Exception as e:
+                    self.logger.error(f"Failed to load cog {filename}: {e}")
         
-        for cog in cogs:
-            try:
-                await self.load_extension(cog)
-                print(f"  ✅ {cog}")
-                loaded_count += 1
-            except Exception as e:
-                print(f"  ❌ {cog}: {e}")
-        
-        print(f"📦 Loaded {loaded_count}/{len(cogs)} cogs")
+        # ADD THIS LINE to correctly start the activity tracker's loop
+        self.monitor_task = asyncio.create_task(self.activity_tracker.monitor_activity())
         self.income_task = self.loop.create_task(self.generate_location_income())
         # Sync slash commands
         try:
