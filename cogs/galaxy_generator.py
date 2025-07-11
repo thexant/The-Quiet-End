@@ -748,7 +748,7 @@ class GalaxyGeneratorCog(commands.Cog):
         if is_derelict:
             # Derelict locations have very low wealth and population
             wealth = random.randint(1, 3)
-            population = random.randint(0, 10)
+            population = 0
             description = self._generate_derelict_description(name, loc_type, system, establishment_date)
         else:
             # Normal location generation
