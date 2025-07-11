@@ -56,6 +56,9 @@ class CorridorEventsCog(commands.Cog):
             fetch='one'
         )[0]
         
+        # Schedule event resolution and store the task
+        timeout_task = asyncio.create_task(self._handle_event_timeout(transit_channel.id, event_id))
+        
         # Track active event
         self.active_events[transit_channel.id] = {
             'event_id': event_id,
@@ -63,7 +66,8 @@ class CorridorEventsCog(commands.Cog):
             'severity': severity,
             'expires_at': expires_at,
             'travelers': travelers,
-            'responses': {}
+            'responses': {},
+            'timeout_task': timeout_task  # Store the task
         }
         
         # Send event alert
@@ -475,28 +479,60 @@ class CorridorEventView(discord.ui.View):
         return descriptions.get(event_type, "Minimal precautions with limited protection.")
     
     async def _handle_response(self, interaction: discord.Interaction, response_type: str, response_message: str):
-        """Handle player response to corridor event with immediate resolution"""
+        """Handle player response to corridor event, check for completion, and resolve immediately."""
         events_cog = self.bot.get_cog('CorridorEventsCog')
         if not events_cog or self.channel_id not in events_cog.active_events:
-            await interaction.response.send_message("This event is no longer active.", ephemeral=True)
+            await interaction.response.send_message("This event is no longer active.", ephemeral=True, delete_after=5)
+            # Try to remove the view from the original message if possible
+            try:
+                await interaction.message.edit(view=None)
+            except:
+                pass
             return
-        
-        # Record response
-        events_cog.active_events[self.channel_id]['responses'][interaction.user.id] = response_type
-        
-        # Update database
-        current_responses = events_cog.active_events[self.channel_id]['responses']
-        responses_json = json.dumps(current_responses)
-        
-        self.bot.db.execute_query(
-            "UPDATE corridor_events SET responses = ? WHERE transit_channel_id = ? AND is_active = 1",
-            (responses_json, self.channel_id)
-        )
-        
+
+        event_data = events_cog.active_events[self.channel_id]
+
+        # Prevent a user from responding more than once
+        if interaction.user.id in event_data['responses']:
+            await interaction.response.send_message("You have already responded to this event.", ephemeral=True)
+            return
+
+        # Record the user's response and process their action immediately
+        event_data['responses'][interaction.user.id] = response_type
         await interaction.response.send_message(response_message, ephemeral=True)
-        
-        # Start immersive feedback sequence and resolve immediately
         asyncio.create_task(self._process_user_action(interaction.user, response_type, events_cog))
+
+        # Check if all travelers have now responded
+        if len(event_data['responses']) >= len(event_data['travelers']):
+            # All players have responded, so we can resolve the event
+            # First, disable the buttons on the original message
+            self.stop()
+            try:
+                await interaction.message.edit(view=None)
+            except discord.NotFound:
+                pass # Message was already deleted, which is fine
+
+            # Cancel the timeout task so it doesn't fire later
+            if 'timeout_task' in event_data and not event_data['timeout_task'].done():
+                event_data['timeout_task'].cancel()
+
+            # Clean up the event from the active_events dictionary
+            if self.channel_id in events_cog.active_events:
+                del events_cog.active_events[self.channel_id]
+
+            # Mark the event as inactive in the database
+            self.bot.db.execute_query(
+                "UPDATE corridor_events SET is_active = 0 WHERE event_id = ?",
+                (event_data['event_id'],)
+            )
+
+            # Post a concluding message in the channel
+            await interaction.channel.send(embed=discord.Embed(
+                title="✅ Event Concluded",
+                description="All travelers have responded to the hazard. The situation is resolved.",
+                color=0x333333
+            ))
+
     
     async def _process_user_action(self, user: discord.User, response_type: str, events_cog):
         """Process the user's action with immersive feedback and immediate resolution"""

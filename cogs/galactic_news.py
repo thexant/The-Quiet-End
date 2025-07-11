@@ -208,13 +208,16 @@ class GalacticNewsCog(commands.Cog):
         
         event_data_json = json.dumps(event_data) if event_data else None
         
+        # Correct the timestamp format for SQLite compatibility
+        delivery_time_str = delivery_time.strftime("%Y-%m-%d %H:%M:%S")
+        
         self.db.execute_query(
             """INSERT INTO news_queue 
                (guild_id, news_type, title, description, location_id, 
                 scheduled_delivery, delay_hours, event_data)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (guild_id, news_type, title, description, location_id, 
-             delivery_time.isoformat(), delay_hours, event_data_json)
+             delivery_time_str, delay_hours, event_data_json)
         )
         
         print(f"📰 Queued {news_type} news for {guild_id}: {title} (delay: {delay_hours:.1f}h)")

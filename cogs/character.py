@@ -1186,7 +1186,7 @@ class CharacterCog(commands.Cog):
         )
         # Handle group notifications and management
         group_info = self.db.execute_query(
-            "SELECT group_id, name FROM characters c JOIN groups g ON c.group_id = g.group_id WHERE c.user_id = ?",
+            "SELECT g.group_id, g.name FROM characters c JOIN groups g ON c.group_id = g.group_id WHERE c.user_id = ?",
             (user_id,),
             fetch='one'
         )

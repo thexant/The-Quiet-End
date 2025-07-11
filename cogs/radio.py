@@ -259,31 +259,36 @@ class RadioCog(commands.Cog):
     
     # Modify _extend_via_repeaters to accept corridor_type.
     # Find the existing _extend_via_repeaters method and modify its signature and content.
-    async def _extend_via_repeaters(self, sender_x: float, sender_y: float, 
+# Modify _extend_via_repeaters to accept corridor_type.
+    # Find the existing _extend_via_repeaters method and modify its signature and content.
+    async def _extend_via_repeaters(self, sender_x: float, sender_y: float,
                                   original_message: str, direct_recipients: List[Dict],
                                   sender_corridor_type: str = "normal") -> List[Dict]: # Added sender_corridor_type
         """Extend radio coverage via repeaters"""
         
+        # Get all players to calculate repeater coverage against
+        all_players = self.db.execute_query(
+            '''SELECT c.user_id, c.name, c.callsign, l.location_id, l.name as loc_name,
+                      l.x_coord, l.y_coord, l.system_name
+               FROM characters c
+               JOIN locations l ON c.current_location = l.location_id
+               WHERE c.current_location IS NOT NULL''',
+            fetch='all'
+        )
+
         # Get all active repeaters
         repeaters = self.db.execute_query(
-            '''SELECT r.repeater_id, r.receive_range, r.transmit_range, 
+            '''SELECT r.repeater_id, r.receive_range, r.transmit_range,
                       l.x_coord, l.y_coord, l.name as loc_name, l.system_name
                FROM repeaters r
                JOIN locations l ON r.location_id = l.location_id
                WHERE r.is_active = 1''',
             fetch='all'
         )
-        
+
         if not repeaters:
             return direct_recipients
-        
-        # Track all signal sources (original + repeaters that receive signal)
-        # Note: Original sender is now an implicit source from _calculate_radio_propagation's initial call
-        # Repeaters become "sources" if they can receive a signal from the original sender or other repeaters.
-        
-        # For simplicity, let's treat the initial sender as a "source" and then repeaters that pick up that signal.
-        # This is a bit of a BFS-like approach for signal spread.
-        
+
         # We need a clear set of unique recipients with their best signal
         enhanced_recipients = {rec['user_id']: rec for rec in direct_recipients} # Start with direct recipients
 
@@ -291,12 +296,11 @@ class RadioCog(commands.Cog):
         # Each source is (x, y, message_at_source, distance_from_original_sender, transmission_range, source_name)
         # The message_at_source already has degradation up to this point.
         propagation_queue = []
-        
+
         # Add original sender location as the initial propagation source
-        # This assumes the original message comes out from the sender's current location effectively.
         propagation_queue.append({
-            'x': sender_x, 
-            'y': sender_y, 
+            'x': sender_x,
+            'y': sender_y,
             'message': original_message, # This is the original, undegraded message
             'total_degradation_distance': 0, # Total "distance" of degradation applied so far
             'range': 10, # Default range for direct transmission
@@ -309,7 +313,7 @@ class RadioCog(commands.Cog):
         while propagation_queue:
             current_source = propagation_queue.pop(0)
             source_key = (current_source['x'], current_source['y'], current_source['name'])
-            
+
             if source_key in processed_sources:
                 continue
             processed_sources.add(source_key)
@@ -317,23 +321,23 @@ class RadioCog(commands.Cog):
             # Check for other repeaters that can pick up this signal
             for repeater in repeaters:
                 rep_id, recv_range, trans_range, rep_x, rep_y, rep_name, rep_system = repeater
-                
+
                 # Distance from current source to this repeater
                 distance_to_repeater = math.sqrt((rep_x - current_source['x']) ** 2 + (rep_y - current_source['y']) ** 2)
                 system_distance_to_repeater = int(distance_to_repeater / 10)
-                
+
                 if system_distance_to_repeater <= recv_range: # If repeater can receive
                     # Calculate total degradation distance through this path
                     new_total_degradation_distance = current_source['total_degradation_distance'] + system_distance_to_repeater
-                    
+
                     # Create new propagation source for this repeater
                     new_source_message = self._degrade_message(
                         original_message, new_total_degradation_distance, current_source['sender_corridor_type'] # Degrade based on total distance and original sender's corridor type
                     )
-                    
+
                     new_source = {
-                        'x': rep_x, 
-                        'y': rep_y, 
+                        'x': rep_x,
+                        'y': rep_y,
                         'message': new_source_message,
                         'total_degradation_distance': new_total_degradation_distance,
                         'range': trans_range, # Repeater transmits with its own range
@@ -345,7 +349,7 @@ class RadioCog(commands.Cog):
             # Check all players for reception from this source
             for player in all_players:
                 user_id_rec, char_name, callsign, loc_id, loc_name, x, y, system = player
-                
+
                 # Skip original sender (already handled, or not target)
                 if x == sender_x and y == sender_y and current_source['name'] == 'Origin':
                     continue
@@ -353,19 +357,19 @@ class RadioCog(commands.Cog):
                 # Distance from this current source to the player
                 distance_to_player = math.sqrt((x - current_source['x']) ** 2 + (y - current_source['y']) ** 2)
                 system_distance_to_player = int(distance_to_player / 10)
-                
+
                 if system_distance_to_player <= current_source['range']: # If player is in range of this source
                     # Total degradation path: original_sender -> ... -> current_source -> player
                     final_total_degradation_distance = current_source['total_degradation_distance'] + system_distance_to_player
-                    
+
                     final_message = self._degrade_message(
                         original_message, final_total_degradation_distance, current_source['sender_corridor_type'] # Degrade based on total path and original sender's corridor type
                     )
                     signal_strength = max(0, 100 - (final_total_degradation_distance * 10)) # Adjust multiplier as needed
-                    
+
                     # Construct relay path for display
                     relay_path_display = [current_source['name']] if current_source['name'] != 'Origin' else []
-                    
+
                     # Update if this is a better (stronger) signal for this player
                     if user_id_rec not in enhanced_recipients or signal_strength > enhanced_recipients[user_id_rec]['signal_strength']:
                         enhanced_recipients[user_id_rec] = {
@@ -381,7 +385,7 @@ class RadioCog(commands.Cog):
                             'relay_path': relay_path_display,
                             'source': current_source['name'] # Debugging what source provided the signal
                         }
-        
+
         return list(enhanced_recipients.values())
     
     # Modify _degrade_message to accept sender_corridor_type.

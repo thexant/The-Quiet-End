@@ -36,7 +36,7 @@ class EventsCog(commands.Cog):
                 self.enhanced_random_events.start()
                 
                 print("🎲 Scheduling corridor check...")
-                self._schedule_next_corridor_check()
+                self.bot.loop.create_task(self._start_corridor_management_loop())
                 
                 print("✅ All event tasks started successfully")
                 
@@ -1021,8 +1021,10 @@ class EventsCog(commands.Cog):
     async def _generate_location_job(self, location_id: int, wealth: int, location_type: str):
         """Generate a new job at a location with more variety, including desperation jobs."""
         
+        job_generated = False
+
         # Check for Desperation Job possibility
-        if wealth <= 3 and random.random() < 0.4: # 40% chance for a desperation job in poor locations
+        if wealth <= 3 and random.random() < 0.25: # 40% chance for a desperation job in poor locations
             desperation_jobs = [
                 ("Smuggle 'Medical Supplies'", "Transport a discreet package of 'medical supplies' to a nearby system. No questions asked. High risk, high reward.", random.randint(300, 700), -15, 4),
                 ("Silence a Witness", "A local contact needs a problem to 'disappear'. Handle it quietly.", random.randint(500, 800), -25, 5),
@@ -1031,7 +1033,6 @@ class EventsCog(commands.Cog):
             ]
             title, desc, reward, karma, danger = random.choice(desperation_jobs)
             
-            # This is a stationary job for now, but could be adapted to travel
             duration = random.randint(30, 90)
             expire_time = datetime.now() + timedelta(hours=random.randint(2, 6))
             expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1043,15 +1044,41 @@ class EventsCog(commands.Cog):
                 (location_id, title, desc, reward, danger, duration, expire_str, karma)
             )
             print(f"🩸 Generated Desperation Job at location {location_id}: {title}")
-            return
+            job_generated = True
 
-        # If not a desperation job, generate a travel or stationary job
-        if random.random() < 0.8:
-            travel_job_generated = await self._generate_travel_job(location_id, wealth, location_type)
-            if travel_job_generated:
-                return
+        # Check for Good Deeds Job possibility
+        elif wealth <= 5 and random.random() < 0.25:  # 30% chance for good deeds in wealthy locations
+            good_deeds_jobs = [
+                ("Volunteer Medical Aid", "Provide free medical assistance to refugees and displaced persons. Dangerous but morally rewarding work.", random.randint(50, 150), +20, 4),
+                ("Rescue Stranded Civilians", "Search and rescue mission for civilians stranded in dangerous territory. Low pay, high risk, high honor.", random.randint(75, 200), +25, 5),
+                ("Humanitarian Supply Drop", "Deliver essential supplies to disaster-stricken areas despite hostile conditions.", random.randint(100, 250), +15, 4),
+                ("Evacuate Endangered Settlement", "Help evacuate civilians from areas under threat. Minimal compensation but saves lives.", random.randint(80, 180), +30, 5),
+                ("Protect Relief Workers", "Escort and protect humanitarian workers in dangerous zones. Payment covers expenses only.", random.randint(60, 140), +20, 4),
+                ("Orphanage Supply Run", "Deliver food and medical supplies to remote orphanages in pirate-controlled space.", random.randint(40, 120), +25, 5)
+            ]
+            title, desc, reward, karma, danger = random.choice(good_deeds_jobs)
+            
+            duration = random.randint(45, 120)
+            expire_time = datetime.now() + timedelta(hours=random.randint(3, 8))
+            expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
+
+            self.db.execute_query(
+                '''INSERT INTO jobs
+                   (location_id, title, description, reward_money, danger_level, duration_minutes, expires_at, is_taken, job_status, karma_change)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'available', ?)''',
+                (location_id, title, desc, reward, danger, duration, expire_str, karma)
+            )
+            print(f"😇 Generated Good Deeds Job at location {location_id}: {title}")
+            job_generated = True
         
-        await self._generate_stationary_job(location_id, wealth, location_type)
+        # If no special job was generated, create a standard one
+        if not job_generated:
+            if random.random() < 0.8:
+                travel_job_generated = await self._generate_travel_job(location_id, wealth, location_type)
+                if not travel_job_generated:
+                    await self._generate_stationary_job(location_id, wealth, location_type)
+            else:
+                await self._generate_stationary_job(location_id, wealth, location_type)
     async def _generate_travel_job(self, location_id: int, wealth: int, location_type: str) -> bool:
         """Generate a travel job with support for multi-jump destinations and async yielding"""
         

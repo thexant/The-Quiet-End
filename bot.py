@@ -4,7 +4,9 @@ from discord.ext import commands
 import asyncio
 import os
 from database import Database
+import logging
 from utils.activity_tracker import ActivityTracker
+import random
 # Try to load configuration
 try:
     from config import BOT_CONFIG, DISCORD_CONFIG
@@ -24,6 +26,7 @@ intents.members = True
 
 class RPGBot(commands.Bot):
     def __init__(self):
+        self.db = Database()
         activity = discord.Activity(type=discord.ActivityType.playing, name=ACTIVITY_NAME)
         super().__init__(
             command_prefix=COMMAND_PREFIX, 
@@ -31,8 +34,6 @@ class RPGBot(commands.Bot):
             activity=activity,
             help_command=None  # We'll use slash commands primarily
         )
-        self.db = Database()
-        import logging
         self.logger = logging.getLogger('RPGBot')
         # Don't initialize activity tracker here - move to setup_hook
         self.activity_tracker = None
@@ -40,11 +41,6 @@ class RPGBot(commands.Bot):
     async def setup_hook(self):
         """This function is called when the bot is preparing to start."""
         try:
-            print("🔧 Initializing database...")
-            # Initialize the database
-            await self.db.initialize()
-            print("✅ Database initialized")
-            
             print("📊 Initializing activity tracker...")
             # Initialize the activity tracker BEFORE trying to use it
             self.activity_tracker = ActivityTracker(self)
@@ -109,7 +105,44 @@ class RPGBot(commands.Bot):
             "SELECT COUNT(*) FROM locations",
             fetch='one'
         )[0]
-        
+        for guild in self.guilds:
+            try:
+                # Check if news channel is configured
+                config = self.db.execute_query(
+                    "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = ?",
+                    (guild.id,),
+                    fetch='one'
+                )
+
+                if config and config[0] and guild.get_channel(config[0]):
+                    continue  # Already configured and valid
+
+                print(f"🔧 Checking news channel for {guild.name}...")
+
+                # Find the main galaxy category
+                main_category = discord.utils.get(guild.categories, name=" ==== 🌌 GALAXY 🌌 ==== ")
+                if not main_category:
+                    main_category = await guild.create_category(" ==== 🌌 GALAXY 🌌 ==== ")
+                    print(f"  🆕 Created main category in {guild.name}")
+
+                # Find or create the news channel
+                news_channel = discord.utils.get(main_category.text_channels, name="📡-galactic-news")
+                if not news_channel:
+                    news_channel = await main_category.create_text_channel(
+                        "📡-galactic-news",
+                        topic="Galactic News Network - Stay informed about events across the galaxy"
+                    )
+                    print(f"  🆕 Created news channel in {guild.name}")
+
+                # Update the database
+                self.db.execute_query(
+                    "INSERT OR REPLACE INTO server_config (guild_id, galactic_updates_channel_id) VALUES (?, ?)",
+                    (guild.id, news_channel.id)
+                )
+                print(f"  ✅ Configured news channel for {guild.name}")
+
+            except Exception as e:
+                print(f"❌ Failed to configure news channel for {guild.name}: {e}")
         if location_count == 0:
             print("🌌 No locations found - use `/galaxy generate` to create the galaxy")
         else:
@@ -171,23 +204,24 @@ class RPGBot(commands.Bot):
         
         await self.process_commands(message)
     async def generate_location_income(self):
-        """Generate passive income for locations every hour"""
-        await self.wait_until_ready()  # Make sure bot is ready
+        """Generate passive income for locations every hour."""
+        await self.wait_until_ready()
         
-        while True:
+        while not self.is_closed():
             try:
-                # Get all locations
-                locations = self.db.execute_query(
-                    "SELECT location_id, wealth_level FROM locations",
+                await asyncio.sleep(3600)  # Wait 1 hour
+                
+                owned_locations = self.db.execute_query(
+                    '''SELECT lo.location_id, l.wealth_level, l.population
+                       FROM location_ownership lo
+                       JOIN locations l ON lo.location_id = l.location_id''',
                     fetch='all'
                 )
                 
-                for location_id, wealth_level in locations:
-                    # Calculate base income (0-100 credits per hour based on wealth)
-                    base_income = wealth_level * 10 + random.randint(0, 20)
-                    
-                    # Add some randomness
-                    final_income = max(0, base_income + random.randint(-10, 25))
+                for location_id, wealth_level, population in owned_locations:
+                    base_income = (wealth_level * 10) + (population // 100)
+                    income_multiplier = 1.0  # Placeholder for upgrades
+                    final_income = int(base_income * income_multiplier)
                     
                     if final_income > 0:
                         self.db.execute_query(
@@ -197,11 +231,10 @@ class RPGBot(commands.Bot):
                             (final_income, location_id)
                         )
                 
+                print("💰 Generated passive income for owned locations.")
+                
             except Exception as e:
                 print(f"Error generating location income: {e}")
-            
-            # Wait 1 hour
-            await asyncio.sleep(3600)
 # Run the bot
 bot = RPGBot()
 

@@ -183,6 +183,101 @@ class NPCInteractionsCog(commands.Cog):
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (npc_id, npc_type, title, desc, reward, reward_items, skill, min_skill, danger, duration, expires_at)
             )
+    async def _handle_general_conversation(self, interaction: discord.Interaction, npc_id: int, npc_type: str):
+        """Handle general conversation with an NPC."""
+        if npc_type == "static":
+            npc_info = self.db.execute_query(
+                "SELECT name, occupation, personality FROM static_npcs WHERE npc_id = ?",
+                (npc_id,),
+                fetch='one'
+            )
+            if not npc_info:
+                await interaction.response.send_message("NPC not found!", ephemeral=True)
+                return
+            npc_name, occupation, personality = npc_info
+        else:  # dynamic
+            npc_info = self.db.execute_query(
+                "SELECT name, 'Traveler' as occupation, 'Adventurous' as personality FROM dynamic_npcs WHERE npc_id = ?",
+                (npc_id,),
+                fetch='one'
+            )
+            if not npc_info:
+                await interaction.response.send_message("NPC not found!", ephemeral=True)
+                return
+            npc_name, occupation, personality = npc_info
+
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+
+        # Generate conversation snippet
+        greetings = [
+            f"{npc_name} nods at you. ",
+            f"{npc_name} looks up as you approach. ",
+            f"You catch {npc_name}'s eye. ",
+            f"{npc_name} offers a brief smile. "
+        ]
+        
+        openers_by_personality = {
+            "Friendly and talkative": [
+                f"'Good to see a new face around here! What brings you to this part of the galaxy?'",
+                f"'Welcome! Anything I can help you with today?'"
+            ],
+            "Quiet and reserved": [
+                f"'...' they say, waiting for you to speak first.",
+                f"'Yes?' they ask quietly."
+            ],
+            "Experienced and wise": [
+                f"'Seen a lot of travelers come and go. You look like you've got a story.'",
+                f"'The corridors are restless these days. Be careful out there.'"
+            ],
+            "Gruff but helpful": [
+                f"'What do you want?' they say, though not unkindly.",
+                f"'Don't waste my time. What is it?'"
+            ],
+            "Cynical but honest": [
+                f"'Another one... Look, the galaxy chews up and spits out people like you. What's your angle?'",
+                f"'Don't expect any favors. The only thing that talks out here is credits.'"
+            ]
+        }
+        
+        openers_by_occupation = {
+            "Engineer": [f"'The grav-plates on this station are a mess. Always something to fix.'"],
+            "Medic": [f"'Hope you're not here for my services. A quiet day is a good day in the medbay.'"],
+            "Merchant": [f"'Trade routes are getting more dangerous. Insurance costs are through the roof.'"],
+            "Security Guard": [f"'Keep your nose clean and we won't have any problems.'"],
+            "Traveler": [f"'Just passing through. The jump from the last system was rough.'"]
+        }
+
+        greeting = random.choice(greetings)
+        
+        # Get personality-based opener, with a fallback
+        personality_opener = random.choice(
+            openers_by_personality.get(personality, ["'Anything I can help you with?'"])
+        )
+
+        # Get occupation-based opener if available
+        occupation_opener = random.choice(
+            openers_by_occupation.get(occupation, [""])
+        )
+
+        conversation = greeting
+        if random.random() < 0.7: # 70% chance to use personality opener
+            conversation += personality_opener
+        else:
+            conversation += occupation_opener if occupation_opener else personality_opener
+
+
+        embed = discord.Embed(
+            title=f"Conversation with {npc_name}",
+            description=conversation,
+            color=0x9b59b6
+        )
+        embed.set_footer(text=f"Roleplay your response in the channel!")
+
+        await interaction.response.send_message(embed=embed, ephemeral=False)        
     async def generate_npc_trade_inventory(self, npc_id: int, npc_type: str, trade_specialty: str = None):
         """Generate trade inventory for an NPC"""
         
@@ -341,6 +436,15 @@ class NPCActionView(discord.ui.View):
         self.npc_id = npc_id
         self.npc_type = npc_type
     
+    @discord.ui.button(label="Converse", style=discord.ButtonStyle.secondary, emoji="💬")
+    async def general_conversation(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+
+        npc_cog = self.bot.get_cog('NPCInteractionsCog')
+        if npc_cog:
+            await npc_cog._handle_general_conversation(interaction, self.npc_id, self.npc_type)
     @discord.ui.button(label="View Jobs", style=discord.ButtonStyle.primary, emoji="💼")
     async def view_jobs(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:

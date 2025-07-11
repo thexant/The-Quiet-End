@@ -635,26 +635,28 @@ class EconomyCog(commands.Cog):
 
     @job_group.command(name="complete", description="Complete your current job")
     async def job_complete(self, interaction: discord.Interaction):
-        # Fetch the active job with skill requirements
+                # Fetch the active job with skill requirements and destination_location_id
         job_info = self.db.execute_query(
             '''SELECT j.job_id, j.title, j.reward_money, j.danger_level, j.taken_at,
                       j.duration_minutes, l.name AS location_name, j.job_status,
-                      j.description, j.location_id, j.required_skill, j.min_skill_level
+                      j.description, j.location_id, j.required_skill, j.min_skill_level,
+                      j.destination_location_id
                FROM jobs j
                JOIN locations l ON j.location_id = l.location_id
                WHERE j.taken_by = ? AND j.is_taken = 1''',
             (interaction.user.id,),
             fetch='one'
         )
-        
+
         if not job_info:
             await interaction.response.send_message(
-                "You don't have an active job to complete.", 
+                "You don't have an active job to complete.",
                 ephemeral=True
             )
             return
 
-        job_id, title, reward, danger, taken_at, duration_minutes, location_name, job_status, description, job_location_id, required_skill, min_skill_level = job_info
+        (job_id, title, reward, danger, taken_at, duration_minutes, location_name, job_status,
+         description, job_location_id, required_skill, min_skill_level, destination_location_id) = job_info
 
         # Check if job was already completed
         if job_status == 'completed':
@@ -696,16 +698,29 @@ class EconomyCog(commands.Cog):
                 return
             
             # Check if player is at the job's destination (the location where job was posted)
-            if current_location != job_location_id:
-                # Get destination location name
-                dest_location_name = self.db.execute_query(
-                    "SELECT name FROM locations WHERE location_id = ?",
-                    (job_location_id,),
-                    fetch='one'
-                )[0]
+            # Check if player is at the job's destination
+            if not destination_location_id or current_location != destination_location_id:
+                # Get correct destination location name
+                correct_dest_name = "an unknown location"
+                if destination_location_id:
+                    dest_name_result = self.db.execute_query(
+                        "SELECT name FROM locations WHERE location_id = ?",
+                        (destination_location_id,),
+                        fetch='one'
+                    )
+                    if dest_name_result:
+                        correct_dest_name = dest_name_result[0]
                 
+                # Get player's current location name for a more accurate error message
+                current_location_name_result = self.db.execute_query(
+                    "SELECT name FROM locations WHERE location_id = ?",
+                    (current_location,),
+                    fetch='one'
+                )
+                current_location_name = current_location_name_result[0] if current_location_name_result else "an unknown location"
+
                 await interaction.response.send_message(
-                    f"❌ **Wrong destination!**\n\nThis transport job must be completed at **{dest_location_name}**.\nYou are currently at {location_name}.",
+                    f"❌ **Wrong destination!**\n\nThis transport job must be completed at **{correct_dest_name}**.\nYou are currently at {current_location_name}.",
                     ephemeral=True
                 )
                 return
@@ -1289,9 +1304,9 @@ class EconomyCog(commands.Cog):
             self.db.execute_query(
                 '''INSERT INTO jobs
                    (location_id, title, description, reward_money, required_skill, min_skill_level,
-                    danger_level, duration_minutes, expires_at, is_taken)
-                   VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0)''',
-                (location_id, title, desc, final_reward, danger, duration, expire_str)
+                    danger_level, duration_minutes, expires_at, is_taken, destination_location_id)
+                   VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0, ?)''',
+                (location_id, title, desc, final_reward, danger, duration, expire_str, dest_id)
             )
 
         # 5) Add fewer stationary jobs (20% of jobs)
@@ -1322,7 +1337,7 @@ class EconomyCog(commands.Cog):
     async def job_accept(self, interaction: discord.Interaction, job_identifier: str):
         # Check if player has a character and is not in transit
         char_info = self.db.execute_query(
-            "SELECT current_location, health, money, group_id FROM characters WHERE user_id = ?",
+            "SELECT current_location, hp, money, group_id FROM characters WHERE user_id = ?",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1397,7 +1412,7 @@ class EconomyCog(commands.Cog):
             )
         
         # 4) Handle group or solo job acceptance
-        await self._handle_group_job_acceptance(interaction, job[0], job)
+        await self._accept_solo_job(interaction, job[0], job)
 
     async def _handle_group_job_acceptance(self, interaction: discord.Interaction, job_id: int, group_id: int, current_location: int):
         """Handle job acceptance for group members"""

@@ -681,13 +681,15 @@ class TravelCog(commands.Cog):
         try:
             # Get destination and character info
             location_info = self.db.execute_query("SELECT name, faction FROM locations WHERE location_id = ?", (dest_location_id,), fetch='one')
-            if not location_info: return
+            if not location_info: 
+                await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
+                return
+            
             dest_name, faction = location_info
 
             rep_cog = self.bot.get_cog('ReputationCog')
             if not rep_cog:
-                print("ReputationCog not found, cannot check access.")
-                # Fallback to default behavior if rep system is offline
+                print("ReputationCog not found, granting standard access.")
                 await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
                 return
 
@@ -735,7 +737,8 @@ class TravelCog(commands.Cog):
                 await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, message)
             elif view:
                 # Send message and wait for fee payment
-                if transit_chan: await transit_chan.send(message, view=view)
+                if transit_chan: 
+                    await transit_chan.send(message, view=view)
                 decision = await view.wait_for_decision()
                 if decision == 'pay':
                     await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, f"Docking fees paid. You are cleared to land at {dest_name}.")
@@ -744,37 +747,79 @@ class TravelCog(commands.Cog):
 
         except Exception as e:
             print(f"❌ Error in arrival access handling: {e}")
-            # Fallback to granting access on error to avoid trapping players
-            await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, "An error occurred during docking, but you have been granted access.")
-
+            # Fallback to granting access without showing an error message to the user
+            await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
 
     async def _grant_final_access(self, user_id: int, dest_location_id: int, guild: discord.Guild, transit_chan: discord.TextChannel, arrival_message: str = ""):
         """Finalizes arrival, updates DB and channels, and cleans up."""
-        self.db.execute_query(
-            "UPDATE characters SET current_location=? WHERE user_id=?",
-            (dest_location_id, user_id)
-        )
-        
-        # Update ship docking location
-        ship_id_result = self.db.execute_query("SELECT active_ship_id FROM characters WHERE user_id=?", (user_id,), fetch='one')
-        if ship_id_result and ship_id_result[0]:
-            self.db.execute_query("UPDATE ships SET docked_at_location=? WHERE ship_id=?", (dest_location_id, ship_id_result[0]))
+        try:
+            # Update character location first
+            self.db.execute_query(
+                "UPDATE characters SET current_location=? WHERE user_id=?",
+                (dest_location_id, user_id)
+            )
+            
+            # Update ship docking location
+            ship_id_result = self.db.execute_query("SELECT active_ship_id FROM characters WHERE user_id=?", (user_id,), fetch='one')
+            if ship_id_result and ship_id_result[0]:
+                self.db.execute_query("UPDATE ships SET docked_at_location=? WHERE ship_id=?", (dest_location_id, ship_id_result[0]))
 
-        # Give channel access
-        await self.channel_mgr.update_channel_on_player_movement(guild, user_id, None, dest_location_id)
+            # Get member object
+            member = guild.get_member(user_id)
+            if not member:
+                print(f"❌ Could not find member {user_id} in guild during travel completion")
+                return
 
-        # Send arrival message
-        if transit_chan:
-            await transit_chan.send(arrival_message)
-            await self.channel_mgr.cleanup_transit_channel(transit_chan.id, delay_seconds=30)
-        
-        # Cleanup progress tracking
-        # This part assumes you have a way to derive the corridor_id for the session_key.
-        # Since it's complex, we'll just attempt a generic cleanup.
-        for key in list(self.active_status_messages.keys()):
-            if key.startswith(f"{user_id}_"):
-                del self.active_status_messages[key]
-                break
+            # Give channel access with proper error handling
+            success = await self.channel_mgr.give_user_location_access(member, dest_location_id)
+            
+            if not success:
+                # If normal access fails, try to create the location channel manually
+                print(f"⚠️ Standard access failed for user {user_id}, attempting manual channel creation")
+                location_channel = await self.channel_mgr.get_or_create_location_channel(guild, dest_location_id, member)
+                if location_channel:
+                    try:
+                        await location_channel.set_permissions(member, read_messages=True, send_messages=True)
+                        print(f"✅ Manual access granted for user {user_id} to location {dest_location_id}")
+                    except Exception as perm_error:
+                        print(f"❌ Failed to grant manual permissions: {perm_error}")
+                else:
+                    print(f"❌ Failed to create location channel for location {dest_location_id}")
+
+            # Send arrival message regardless of channel access success
+            if transit_chan:
+                try:
+                    if not arrival_message:
+                        location_name = self.db.execute_query(
+                            "SELECT name FROM locations WHERE location_id = ?",
+                            (dest_location_id,),
+                            fetch='one'
+                        )
+                        arrival_message = f"✅ Arrived at **{location_name[0] if location_name else 'Unknown Location'}**!"
+                    
+                    await transit_chan.send(arrival_message)
+                except Exception as msg_error:
+                    print(f"❌ Failed to send arrival message: {msg_error}")
+                
+                # Always clean up transit channel
+                await self.channel_mgr.cleanup_transit_channel(transit_chan.id, delay_seconds=30)
+            
+            # Cleanup progress tracking
+            for key in list(self.active_status_messages.keys()):
+                if key.startswith(f"{user_id}_"):
+                    del self.active_status_messages[key]
+                    break
+                    
+        except Exception as e:
+            print(f"❌ Error in _grant_final_access: {e}")
+            # Even if there's an error, try to ensure the character location is updated
+            try:
+                self.db.execute_query(
+                    "UPDATE characters SET current_location=? WHERE user_id=?",
+                    (dest_location_id, user_id)
+                )
+            except Exception as db_error:
+                print(f"❌ Critical error: Failed to update character location: {db_error}")
 
 
     async def _force_retreat(self, user_id: int, origin_location_id: int, guild: discord.Guild, transit_chan: discord.TextChannel, reason: str):

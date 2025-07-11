@@ -1374,7 +1374,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         });'''
         
         with open("web/static/js/map.js", "w", encoding='utf-8') as f:
-            f.write(js_content)        
+            f.write(js_content)      
         
     def _setup_fastapi(self):
         """Setup FastAPI application"""
@@ -1981,7 +1981,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-async def _calculate_route(self, from_id: int, to_id: int) -> dict:
+    async def _calculate_route(self, from_id: int, to_id: int) -> dict:
         """Calculate the shortest route between two locations using Dijkstra's algorithm"""
         
         # Get all active corridors
