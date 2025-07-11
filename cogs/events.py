@@ -12,17 +12,38 @@ class EventsCog(commands.Cog):
         # DON'T start tasks in __init__
         
     async def cog_load(self):
-        """Start background tasks after cog is loaded"""
-        await self.bot.wait_until_ready()
-        print("🎲 Starting event background tasks...")
-        
-        # Start all the background tasks
-        self.cleanup_tasks.start()
-        self.random_events.start()
-        self.job_generation.start()
-        self.micro_events.start()
-        self.enhanced_random_events.start()
-        self._schedule_next_corridor_check()
+            """Start background tasks after cog is loaded"""
+            print("🎲 Events cog loaded, scheduling background tasks...")
+            
+            # Wait a bit before starting tasks to ensure everything is ready
+            await asyncio.sleep(2)
+            
+            try:
+                # Start all the background tasks with error handling
+                print("🎲 Starting cleanup tasks...")
+                self.cleanup_tasks.start()
+                
+                print("🎲 Starting random events...")
+                self.random_events.start()
+                
+                print("🎲 Starting job generation...")
+                self.job_generation.start()
+                
+                print("🎲 Starting micro events...")
+                self.micro_events.start()
+                
+                print("🎲 Starting enhanced random events...")
+                self.enhanced_random_events.start()
+                
+                print("🎲 Scheduling corridor check...")
+                self._schedule_next_corridor_check()
+                
+                print("✅ All event tasks started successfully")
+                
+            except Exception as e:
+                print(f"❌ Error starting event tasks: {e}")
+                import traceback
+                traceback.print_exc()
         
     def cog_unload(self):
         """Clean up tasks when cog is unloaded"""
