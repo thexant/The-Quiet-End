@@ -1306,22 +1306,16 @@ class PersistentLocationView(discord.ui.View):
         """Configure button states based on dock status"""
         self.clear_items()
         
-        # Always available buttons
-        self.add_item(self.npc_interactions)
-        
         # Status-dependent buttons
         if location_status == "docked":
             self.add_item(self.jobs_panel)
             self.add_item(self.shop_management)
             self.add_item(self.sub_areas)
+            self.add_item(self.npc_interactions)
             self.add_item(self.undock_button)
-            # ADD THIS LINE:
-            self.npc_interactions.disabled = False
         else:  # in_space
             self.add_item(self.travel_button)
             self.add_item(self.dock_button)
-            # ADD THIS LINE:
-            self.npc_interactions.disabled = True
     
     async def refresh_view(self, interaction: discord.Interaction = None):
         """Refresh the view when dock status changes"""

@@ -551,7 +551,23 @@ class EconomyCog(commands.Cog):
         embed.add_field(name="New Balance", value=f"{current_money + total_earnings:,} credits", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    
+    def get_shift_job_multiplier(self) -> float:
+        """Get job generation multiplier based on current shift"""
+        from utils.time_system import TimeSystem
+        time_system = TimeSystem(self.bot)
+        
+        shift_name, shift_period = time_system.get_current_shift()
+        
+        # Job generation multipliers by shift
+        shift_multipliers = {
+            "morning": 0.8,   # 80% normal job generation
+            "day": 1.5,       # 150% - busiest period
+            "evening": 0.9,   # 90% normal job generation  
+            "night": 0.4      # 40% - slowest period
+        }
+        
+        return shift_multipliers.get(shift_period, 1.0)
+        
     @job_group.command(name="list", description="View available jobs at current location")
     async def job_list(self, interaction: discord.Interaction):
         # 1) Defer right away to avoid "Unknown interaction"
@@ -1232,7 +1248,7 @@ class EconomyCog(commands.Cog):
             
         await interaction.response.send_message(embed=embed, ephemeral=True)
     async def _generate_jobs_for_location(self, location_id: int):
-        """Create jobs with heavy emphasis on travel between locations."""
+        """Create jobs with heavy emphasis on travel between locations and shift-aware generation."""
         # 1) Remove all untaken jobs here
         self.db.execute_query(
             "DELETE FROM jobs WHERE location_id = ? AND is_taken = 0",
@@ -1262,11 +1278,18 @@ class EconomyCog(commands.Cog):
         if not connected_destinations:
             return
 
+        # Get shift multiplier for job generation
+        shift_multiplier = self.get_shift_job_multiplier()
+        
         expire_time = datetime.now() + timedelta(hours=random.randint(3, 8))
         expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 4) Generate MANY travel jobs (80% of all jobs should be travel)
-        num_travel_jobs = random.randint(4, 8)  # Much more travel jobs
+        # 4) Generate travel jobs with shift-aware counts
+        base_travel_jobs = random.randint(4, 8)
+        num_travel_jobs = max(1, int(base_travel_jobs * shift_multiplier))  # Apply shift multiplier
+        
+        print(f"🕐 Generating {num_travel_jobs} travel jobs (shift multiplier: {shift_multiplier:.1f})")
+        
         for _ in range(num_travel_jobs):
             dest_id, dest_name, x1, y1, dest_type, dest_wealth = random.choice(connected_destinations)
             
@@ -1309,28 +1332,31 @@ class EconomyCog(commands.Cog):
                 (location_id, title, desc, final_reward, danger, duration, expire_str, dest_id)
             )
 
-        # 5) Add fewer stationary jobs (20% of jobs)
-        stationary_jobs = [
-            ("Local Systems Check", f"Perform routine system diagnostics at {loc_name}."),
-            ("Station Maintenance", f"Carry out maintenance duties at {loc_name}."),
-            ("Security Patrol", f"Patrol the perimeter of {loc_name}."),
-            ("Inventory Management", f"Organize and audit supplies at {loc_name}."),
-        ]
+        # 5) Add fewer stationary jobs with shift multiplier
+        base_stationary = random.randint(1, 2)
+        num_stationary = max(0, int(base_stationary * shift_multiplier))  # Can be 0 during night shift
         
-        num_stationary = random.randint(1, 2)  # Much fewer stationary jobs
-        for _ in range(num_stationary):
-            title, desc = random.choice(stationary_jobs)
-            reward = random.randint(40, 80)  # Lower pay for local work
-            duration = random.randint(2, 8)  
-            danger = random.randint(0, 2)
+        if num_stationary > 0:
+            stationary_jobs = [
+                ("Local Systems Check", f"Perform routine system diagnostics at {loc_name}."),
+                ("Station Maintenance", f"Carry out maintenance duties at {loc_name}."),
+                ("Security Patrol", f"Patrol the perimeter of {loc_name}."),
+                ("Inventory Management", f"Organize and audit supplies at {loc_name}."),
+            ]
             
-            self.db.execute_query(
-                '''INSERT INTO jobs
-                   (location_id, title, description, reward_money, required_skill, min_skill_level,
-                    danger_level, duration_minutes, expires_at, is_taken)
-                   VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0)''',
-                (location_id, title, desc, reward, danger, duration, expire_str)
-            )
+            for _ in range(num_stationary):
+                title, desc = random.choice(stationary_jobs)
+                reward = random.randint(40, 80)  # Lower pay for local work
+                duration = random.randint(2, 8)  
+                danger = random.randint(0, 2)
+                
+                self.db.execute_query(
+                    '''INSERT INTO jobs
+                       (location_id, title, description, reward_money, required_skill, min_skill_level,
+                        danger_level, duration_minutes, expires_at, is_taken)
+                       VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0)''',
+                    (location_id, title, desc, reward, danger, duration, expire_str)
+                )
 
     @job_group.command(name="accept", description="Accept a job by title or ID number")
     @app_commands.describe(job_identifier="Job title/partial title OR job ID number")

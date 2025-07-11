@@ -1,6 +1,6 @@
 # cogs/web_map.py
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import asyncio
 import json
@@ -33,7 +33,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         self.external_ip_override = None
         # Create web directories if they don't exist
         self._ensure_web_directories()
-        
+        self.update_player_data_task.start()
         # Create HTML and static files
         self._create_web_files()
     
@@ -71,7 +71,9 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 continue
         
         return None
-    
+    async def cog_unload(self):
+        """Clean up when cog is unloaded"""
+        self.update_player_data_task.cancel()
     def _get_display_url(self) -> tuple[str, str]:
         """Get the display URL and note for users"""
         # If there's an override, use it
@@ -91,90 +93,119 @@ class WebMapCog(commands.Cog, name="WebMap"):
         return display_url, url_note
         
     def _create_web_files(self):
-        """Create the HTML template and static files"""
+        """Create the HTML template and static files with enhanced holo-table design"""
         # Create the main HTML template
-        html_content = '''<!DOCTYPE html>
+        html_content = html_content = '''<!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Galaxy Map - The Quiet End</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+        <title>Galaxy Map - Navigation Terminal</title>
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
         <link rel="stylesheet" href="/static/css/map.css" />
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono:wght@400&family=Orbitron:wght@400;500;700;900&display=swap" rel="stylesheet">
     </head>
     <body>
-        <div id="header">
-            <h1>🌌 Galaxy Map - The Quiet End</h1>
-            <div id="controls-section">
-                <div id="search-container">
-                    <input type="text" id="location-search" placeholder="Search locations..." />
-                    <button id="search-btn">🔍</button>
+        <div class="scanlines"></div>
+        <div class="static-overlay"></div>
+        
+        <!-- Header Toggle Button - Always Visible -->
+        <button id="header-toggle" class="header-toggle" title="Toggle Navigation Panel">
+            <span class="toggle-icon">▼</span>
+        </button>
+        
+        <div id="header" class="header-expanded">
+            <div class="header-brand">
+                <div class="terminal-indicator">
+                    <div class="power-light"></div>
+                    <span class="terminal-id">NAV-7742</span>
                 </div>
-                <div id="route-container">
-                    <select id="route-from" disabled>
-                        <option value="">From...</option>
-                    </select>
-                    <select id="route-to" disabled>
-                        <option value="">To...</option>
-                    </select>
-                    <button id="plot-route-btn" disabled>Plot Route</button>
-                    <button id="clear-route-btn" disabled>Clear</button>
-                </div>
-                <div id="label-container">
-                    <label class="label-control">
-                        <input type="checkbox" id="show-labels" checked> Show Labels
-                    </label>
-                    <label class="label-control">
-                        <input type="checkbox" id="show-colonies" checked> Colonies
-                    </label>
-                    <label class="label-control">
-                        <input type="checkbox" id="show-stations" checked> Stations
-                    </label>
-                    <label class="label-control">
-                        <input type="checkbox" id="show-outposts" checked> Outposts
-                    </label>
-                    <label class="label-control">
-                        <input type="checkbox" id="show-gates"> Gates
-                    </label>
-                </div>
+                <h1>NAVIGATION TERMINAL</h1>
+                <div class="subtitle">◦ TRANSIT NETWORK OVERVIEW: ACTIVE ROUTES AND KNOWN LOCATIONS ◦</div>
             </div>
-            <div id="info-panel">
-                <div id="galaxy-info">
-                    <span id="galaxy-name">Loading...</span> | 
-                    <span id="galaxy-time">--:--</span> | 
-                    <span id="location-count">0 locations</span> | 
-                    <span id="player-count">0 players online</span>
+            
+            <button id="mobile-toggle" class="mobile-toggle">☰</button>
+            
+            <div id="controls-section" class="controls-section">
+                <div class="controls-row">
+                    <div id="search-container" class="control-group">
+                        <input type="text" id="location-search" placeholder="SEARCH LOCATIONS..." />
+                        <button id="search-btn" class="btn-primary">SCAN</button>
+                        <button id="clear-search-btn" class="btn-secondary">CLR</button>
+                    </div>
+                    
+                    <div id="status-container" class="status-container">
+                        <div id="connection-status" class="connection-status">
+                            <span id="connection-indicator">●</span>
+                            <span id="connection-text">CONNECTING...</span>
+                        </div>
+                        <div id="player-info" class="player-info">
+                            <span id="player-count">0 CONTACTS</span>
+                        </div>
+                    </div>
                 </div>
-                <div id="connection-status">🔴 Connecting...</div>
+                
+                <div class="controls-row">
+                    <div id="route-container" class="control-group">
+                        <select id="route-from" disabled>
+                            <option value="">ORIGIN...</option>
+                        </select>
+                        <select id="route-to" disabled>
+                            <option value="">DESTINATION...</option>
+                        </select>
+                        <button id="plot-route-btn" class="btn-primary" disabled>PLOT</button>
+                        <button id="clear-route-btn" class="btn-secondary" disabled>CLEAR</button>
+                    </div>
+                    
+                    <div id="view-controls" class="control-group">
+                        <button id="fit-bounds-btn" class="btn-secondary">CENTER</button>
+                        <button id="toggle-labels-btn" class="btn-secondary">LABELS</button>
+                        <button id="toggle-routes-btn" class="btn-secondary toggle-active">ROUTES</button>
+                    </div>
+                </div>
             </div>
         </div>
-        
+
         <div id="map"></div>
-        
-        <div id="location-panel" class="panel hidden">
+
+        <div id="location-panel" class="location-panel hidden">
             <div class="panel-header">
-                <h3 id="location-title">Location Details</h3>
-                <button id="close-panel" class="close-btn">&times;</button>
+                <div class="panel-status">
+                    <div class="status-light"></div>
+                    <span>LOCATION DATA</span>
+                </div>
+                <h3 id="location-title">UNKNOWN</h3>
+                <button id="close-panel" class="close-btn">×</button>
             </div>
             <div class="panel-content">
                 <div id="location-details"></div>
             </div>
         </div>
-        
-        <div id="legend" class="panel">
-            <div class="panel-header">
-                <h3>🗺️ Legend</h3>
-                <button id="toggle-legend" class="toggle-btn">−</button>
+
+        <div id="legend" class="legend">
+            <div class="legend-header">
+                <div class="legend-status">
+                    <div class="status-light"></div>
+                    <span>LEGEND</span>
+                </div>
             </div>
-            <div class="panel-content" id="legend-content">
-                <div class="legend-item"><span class="marker colony"></span> Colonies</div>
-                <div class="legend-item"><span class="marker station"></span> Space Stations</div>
-                <div class="legend-item"><span class="marker outpost"></span> Outposts</div>
-                <div class="legend-item"><span class="marker gate"></span> Transit Gates</div>
-                <div class="legend-item"><span class="corridor gated"></span> Gated Corridors</div>
-                <div class="legend-item"><span class="corridor ungated"></span> Ungated Corridors</div>
-                <div class="legend-item"><span class="player-indicator"></span> Players Present</div>
+            <div class="legend-items">
+                <div class="legend-item"><span class="marker colony"></span> COLONIES</div>
+                <div class="legend-item"><span class="marker station"></span> STATIONS</div>
+                <div class="legend-item"><span class="marker outpost"></span> OUTPOSTS</div>
+                <div class="legend-item"><span class="marker gate"></span> GATES</div>
+                <div class="legend-item"><span class="corridor gated"></span> GATED</div>
+                <div class="legend-item"><span class="corridor ungated"></span> UNGATED</div>
+                <div class="legend-item"><span class="player-indicator"></span> CONTACTS</div>
             </div>
+        </div>
+
+        <div id="loading-overlay" class="loading-overlay">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">INITIALIZING NAVIGATION SYSTEMS...</div>
+            <div class="loading-subtext">SCANNING GALACTIC INFRASTRUCTURE...</div>
         </div>
 
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -185,287 +216,848 @@ class WebMapCog(commands.Cog, name="WebMap"):
         with open("web/templates/index.html", "w", encoding='utf-8') as f:
             f.write(html_content)
         
-        # Create CSS file
-        css_content = '''body {
-            margin: 0;
-            padding: 0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #000;
-            color: #fff;
-            overflow: hidden;
+        # Create enhanced CSS file with holo-table aesthetic
+        # Create enhanced CSS file with randomized CRT color schemes
+        css_content = css_content = '''/* CRT Navigation Terminal with Random Color Schemes */
+        :root {
+            /* Default blue scheme - will be overridden by JS */
+            --primary-color: #00ffff;
+            --secondary-color: #00cccc;
+            --accent-color: #0088cc;
+            --warning-color: #ff8800;
+            --success-color: #00ff88;
+            --error-color: #ff3333;
+            
+            /* Base colors */
+            --primary-bg: #000408;
+            --secondary-bg: #0a0f1a;
+            --accent-bg: #1a2332;
+            --text-primary: #e0ffff;
+            --text-secondary: #88ccdd;
+            --text-muted: #556677;
+            --border-color: #003344;
+            --shadow-dark: rgba(0, 0, 0, 0.9);
+            
+            /* Dynamic colors based on scheme */
+            --glow-primary: rgba(0, 255, 255, 0.6);
+            --glow-secondary: rgba(0, 204, 204, 0.4);
+            --gradient-holo: linear-gradient(135deg, rgba(0, 255, 255, 0.1), rgba(0, 204, 204, 0.2));
+            --gradient-panel: linear-gradient(145deg, rgba(10, 15, 26, 0.95), rgba(26, 35, 50, 0.95));
         }
 
-        #header {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 80px;
-            background: rgba(0, 0, 0, 0.9);
-            border-bottom: 2px solid #333;
-            z-index: 1000;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0 20px;
+        /* Color Schemes */
+        .theme-blue {
+            --primary-color: #00ffff;
+            --secondary-color: #00cccc;
+            --accent-color: #0088cc;
+            --glow-primary: rgba(0, 255, 255, 0.6);
+            --glow-secondary: rgba(0, 204, 204, 0.4);
+            --gradient-holo: linear-gradient(135deg, rgba(0, 255, 255, 0.1), rgba(0, 204, 204, 0.2));
+        }
+
+        .theme-amber {
+            --primary-color: #ffaa00;
+            --secondary-color: #cc8800;
+            --accent-color: #ff6600;
+            --glow-primary: rgba(255, 170, 0, 0.6);
+            --glow-secondary: rgba(204, 136, 0, 0.4);
+            --gradient-holo: linear-gradient(135deg, rgba(255, 170, 0, 0.1), rgba(204, 136, 0, 0.2));
+            --text-primary: #fff0e0;
+            --text-secondary: #ddcc88;
+            --border-color: #443300;
+        }
+
+        .theme-green {
+            --primary-color: #00ff88;
+            --secondary-color: #00cc66;
+            --accent-color: #00aa44;
+            --glow-primary: rgba(0, 255, 136, 0.6);
+            --glow-secondary: rgba(0, 204, 102, 0.4);
+            --gradient-holo: linear-gradient(135deg, rgba(0, 255, 136, 0.1), rgba(0, 204, 102, 0.2));
+            --text-primary: #e0ffe8;
+            --text-secondary: #88dd99;
+            --border-color: #003322;
+        }
+
+        .theme-red {
+            --primary-color: #ff4444;
+            --secondary-color: #cc2222;
+            --accent-color: #aa0000;
+            --glow-primary: rgba(255, 68, 68, 0.6);
+            --glow-secondary: rgba(204, 34, 34, 0.4);
+            --gradient-holo: linear-gradient(135deg, rgba(255, 68, 68, 0.1), rgba(204, 34, 34, 0.2));
+            --text-primary: #ffe0e0;
+            --text-secondary: #dd8888;
+            --border-color: #330000;
+        }
+
+        .theme-purple {
+            --primary-color: #aa44ff;
+            --secondary-color: #8822cc;
+            --accent-color: #6600aa;
+            --glow-primary: rgba(170, 68, 255, 0.6);
+            --glow-secondary: rgba(136, 34, 204, 0.4);
+            --gradient-holo: linear-gradient(135deg, rgba(170, 68, 255, 0.1), rgba(136, 34, 204, 0.2));
+            --text-primary: #f0e0ff;
+            --text-secondary: #cc88dd;
+            --border-color: #220033;
+        }
+
+        * {
             box-sizing: border-box;
         }
 
-        #header h1 {
+        body {
             margin: 0;
-            font-size: 24px;
-            color: #4a9eff;
-            flex-shrink: 0;
-        }
-
-        #controls-section {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            flex-grow: 1;
-            margin: 0 20px;
-            max-width: 600px;
-        }
-
-        #search-container, #route-container, #label-container {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-
-        #location-search {
-            padding: 6px 10px;
-            border: 1px solid #555;
-            border-radius: 4px;
-            background: #222;
-            color: #fff;
-            font-size: 14px;
-            flex-grow: 1;
-            min-width: 200px;
-        }
-
-        #search-btn, #plot-route-btn, #clear-route-btn {
-            padding: 6px 12px;
-            border: 1px solid #555;
-            border-radius: 4px;
-            background: #333;
-            color: #fff;
-            cursor: pointer;
-            font-size: 14px;
-        }
-
-        #search-btn:hover, #plot-route-btn:hover, #clear-route-btn:hover {
-            background: #444;
-        }
-
-        #route-from, #route-to {
-            padding: 6px 10px;
-            border: 1px solid #555;
-            border-radius: 4px;
-            background: #222;
-            color: #fff;
-            font-size: 14px;
-            min-width: 120px;
-        }
-
-        #plot-route-btn:disabled, #clear-route-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        #label-container {
-            display: flex;
-            gap: 12px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        .label-control {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 12px;
-            color: #ccc;
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .label-control input[type="checkbox"] {
-            accent-color: #4a9eff;
-        }
-
-        .label-control:hover {
-            color: #fff;
-        }
-
-        #info-panel {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            gap: 5px;
-            flex-shrink: 0;
-        }
-
-        #galaxy-info {
-            font-size: 14px;
-            color: #ccc;
-        }
-
-        #connection-status {
-            font-size: 12px;
-            font-weight: bold;
-        }
-
-        #map {
-            position: absolute;
-            top: 80px;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: #000011;
-        }
-
-        .leaflet-container {
-            background: #000011;
-        }
-
-        .leaflet-tile {
-            filter: invert(1) hue-rotate(180deg);
-        }
-
-        /* Remove default leaflet zoom controls */
-        .leaflet-control-zoom {
-            display: none;
-        }
-
-        .panel {
-            position: fixed;
-            background: rgba(0, 0, 0, 0.95);
-            border: 2px solid #333;
-            border-radius: 8px;
-            z-index: 1000;
-            max-width: 400px;
-        }
-
-        #location-panel {
-            top: 100px;
-            right: 20px;
-            width: 350px;
-        }
-
-        #legend {
-            bottom: 20px;
-            left: 20px;
-            width: 200px;
-            transition: height 0.3s ease;
-        }
-
-        #legend.collapsed {
-            height: auto;
-        }
-
-        #legend.collapsed #legend-content {
-            display: none;
-        }
-
-        .panel-header {
-            background: #1a1a1a;
-            padding: 10px 15px;
-            border-bottom: 1px solid #333;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .panel-header h3 {
-            margin: 0;
-            color: #4a9eff;
-        }
-
-        .panel-content {
-            padding: 15px;
-            max-height: 400px;
-            overflow-y: auto;
-        }
-
-        .close-btn, .toggle-btn {
-            background: none;
-            border: none;
-            color: #999;
-            font-size: 18px;
-            cursor: pointer;
             padding: 0;
-            width: 25px;
-            height: 25px;
+            font-family: 'Share Tech Mono', 'Courier New', monospace;
+            background: var(--primary-bg);
+            color: var(--text-primary);
+            overflow: hidden;
+            position: relative;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Enhanced CRT Effects */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                /* Screen curvature simulation */
+                radial-gradient(ellipse 100% 100% at 50% 50%, transparent 98%, rgba(0,0,0,0.1) 100%),
+                /* Phosphor glow */
+                radial-gradient(ellipse 200% 100% at 50% 0%, rgba(var(--glow-primary), 0.02) 0%, transparent 50%),
+                radial-gradient(ellipse 200% 100% at 50% 100%, rgba(var(--glow-primary), 0.02) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .scanlines {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 1px,
+                rgba(var(--glow-primary), 0.03) 1px,
+                rgba(var(--glow-primary), 0.03) 3px
+            );
+            pointer-events: none;
+            z-index: 5;
+            animation: flicker 4s infinite linear;
+        }
+
+        .static-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                /* Static noise */
+                url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><defs><filter id="noise"><feTurbulence baseFrequency="0.9" numOctaves="1" stitchTiles="stitch"/></filter></defs><rect width="100%" height="100%" filter="url(%23noise)" opacity="0.02"/></svg>'),
+                /* Chromatic aberration */
+                radial-gradient(circle at 25% 25%, rgba(255, 0, 0, 0.01) 0%, transparent 50%),
+                radial-gradient(circle at 75% 75%, rgba(0, 255, 0, 0.01) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 3;
+            animation: static-drift 12s infinite linear;
+        }
+
+        @keyframes flicker {
+            0%, 97%, 100% { opacity: 1; }
+            98% { opacity: 0.92; }
+            99% { opacity: 1; }
+            99.5% { opacity: 0.95; }
+        }
+
+        @keyframes static-drift {
+            0% { transform: translateX(0) translateY(0); }
+            25% { transform: translateX(-0.5px) translateY(0.5px); }
+            50% { transform: translateX(0.5px) translateY(-0.5px); }
+            75% { transform: translateX(-0.3px) translateY(-0.3px); }
+            100% { transform: translateX(0) translateY(0); }
+        }
+
+        /* Header Toggle Button */
+        .header-toggle {
+            position: fixed;
+            top: 0.5rem;
+            right: 0.5rem;
+            z-index: 2000;
+            background: var(--gradient-panel);
+            border: 2px solid var(--primary-color);
+            border-radius: 6px;
+            color: var(--primary-color);
+            padding: 0.5rem;
+            cursor: pointer;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.8rem;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px var(--glow-primary);
+            backdrop-filter: blur(5px);
+            min-width: 40px;
+            height: 40px;
             display: flex;
             align-items: center;
             justify-content: center;
         }
 
-        .close-btn:hover, .toggle-btn:hover {
-            color: #fff;
+        .header-toggle:hover {
+            box-shadow: 0 0 25px var(--glow-primary);
+            transform: scale(1.05);
         }
 
-        .hidden {
-            display: none !important;
+        .toggle-icon {
+            transition: transform 0.3s ease;
+            font-weight: bold;
+        }
+
+        .header-toggle.collapsed .toggle-icon {
+            transform: rotate(180deg);
+        }
+
+        /* Header Styles */
+        #header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: var(--gradient-panel);
+            border-bottom: 2px solid var(--primary-color);
+            box-shadow: 
+                0 0 30px var(--glow-primary),
+                inset 0 1px 0 rgba(var(--glow-primary), 0.2),
+                0 4px 20px var(--shadow-dark);
+            z-index: 1000;
+            padding: 1rem;
+            backdrop-filter: blur(5px);
+            border-top: 1px solid rgba(var(--glow-primary), 0.1);
+            transition: all 0.3s ease;
+        }
+
+        #header.header-expanded {
+            transform: translateY(0);
+        }
+
+        #header.header-collapsed {
+            transform: translateY(-100%);
+        }
+
+        .header-brand {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .terminal-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.25rem;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+
+        .power-light {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success-color);
+            box-shadow: 0 0 12px var(--success-color);
+            animation: power-pulse 2s infinite;
+        }
+
+        @keyframes power-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .terminal-id {
+            font-family: 'Orbitron', monospace;
+            font-weight: 700;
+        }
+
+        .header-brand h1 {
+            margin: 0;
+            font-family: 'Orbitron', monospace;
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            text-shadow: 
+                0 0 10px var(--glow-primary),
+                0 0 20px var(--glow-primary),
+                0 0 30px var(--glow-primary);
+            filter: drop-shadow(0 0 8px var(--glow-primary));
+        }
+
+        .subtitle {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-weight: 400;
+            margin-top: 0.25rem;
+            opacity: 0.8;
+            letter-spacing: 2px;
+        }
+
+        .mobile-toggle {
+            display: none;
+            background: linear-gradient(145deg, var(--accent-bg), var(--secondary-bg));
+            border: 1px solid var(--primary-color);
+            color: var(--primary-color);
+            font-size: 1.2rem;
+            padding: 0.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            text-shadow: 0 0 5px var(--glow-primary);
+            box-shadow: 0 0 15px var(--glow-primary);
+            transition: all 0.3s ease;
+        }
+
+        .mobile-toggle:hover {
+            box-shadow: 0 0 25px var(--glow-primary);
+            text-shadow: 0 0 15px var(--glow-primary);
+        }
+
+        .controls-section {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            margin-top: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .controls-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        /* Input Styles - Fixed dropdown visibility */
+        input[type="text"] {
+            background: linear-gradient(145deg, rgba(0, 0, 0, 0.8), rgba(var(--glow-secondary), 0.1));
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-primary);
+            padding: 0.5rem 0.75rem;
+            font-size: 0.8rem;
+            font-family: 'Share Tech Mono', monospace;
+            min-width: 120px;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        select {
+            background: linear-gradient(145deg, rgba(0, 0, 0, 0.9), rgba(var(--glow-secondary), 0.2)) !important;
+            border: 2px solid var(--border-color) !important;
+            border-radius: 4px !important;
+            color: var(--text-primary) !important;
+            padding: 0.5rem 0.75rem !important;
+            font-size: 0.8rem !important;
+            font-family: 'Share Tech Mono', monospace !important;
+            min-width: 120px !important;
+            transition: all 0.3s ease !important;
+            text-transform: uppercase !important;
+            letter-spacing: 0.5px !important;
+            appearance: none !important;
+            -webkit-appearance: none !important;
+            -moz-appearance: none !important;
+            background-image: linear-gradient(145deg, rgba(0, 0, 0, 0.9), rgba(var(--glow-secondary), 0.2)),
+                              linear-gradient(to bottom, transparent 50%, var(--primary-color) 50%) !important;
+            background-size: 100% 100%, 12px 12px !important;
+            background-position: 0 0, calc(100% - 8px) center !important;
+            background-repeat: no-repeat !important;
+        }
+
+        select option {
+            background: var(--secondary-bg) !important;
+            color: var(--text-primary) !important;
+            border: none !important;
+            padding: 0.5rem !important;
+            font-family: 'Share Tech Mono', monospace !important;
+            text-transform: uppercase !important;
+        }
+
+        input[type="text"]:focus, select:focus {
+            outline: none !important;
+            border-color: var(--primary-color) !important;
+            box-shadow: 
+                0 0 0 1px var(--primary-color),
+                0 0 15px var(--glow-primary),
+                inset 0 0 10px rgba(var(--glow-primary), 0.1) !important;
+            background: linear-gradient(145deg, rgba(var(--glow-secondary), 0.2), rgba(var(--glow-primary), 0.1)) !important;
+        }
+
+        input[type="text"]::placeholder {
+            color: var(--text-muted);
+            opacity: 0.7;
+        }
+
+        #location-search {
+            min-width: 180px;
+        }
+
+        /* Button Styles */
+        .btn-primary, .btn-secondary, button {
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 0.5rem 1rem;
+            font-size: 0.75rem;
+            font-family: 'Share Tech Mono', monospace;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 400;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-primary {
+            background: linear-gradient(145deg, var(--primary-color), var(--secondary-color));
+            color: var(--primary-bg);
+            border-color: var(--primary-color);
+            box-shadow: 0 0 15px var(--glow-primary);
+            text-shadow: none;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            box-shadow: 0 0 25px var(--glow-primary);
+            text-shadow: 0 0 5px rgba(0, 0, 0, 0.8);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(145deg, rgba(var(--glow-secondary), 0.3), rgba(var(--accent-bg), 0.8));
+            color: var(--text-secondary);
+            border-color: var(--border-color);
+            text-shadow: 0 0 3px var(--glow-primary);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: linear-gradient(145deg, rgba(var(--glow-secondary), 0.5), rgba(var(--accent-bg), 0.9));
+            color: var(--primary-color);
+            border-color: var(--primary-color);
+            box-shadow: 0 0 15px var(--glow-primary);
+            text-shadow: 0 0 8px var(--glow-primary);
+        }
+
+        .btn-secondary.toggle-active {
+            background: linear-gradient(145deg, var(--warning-color), #cc6600);
+            color: var(--primary-bg);
+            border-color: var(--warning-color);
+            box-shadow: 0 0 15px rgba(255, 136, 0, 0.6);
+            text-shadow: none;
+        }
+
+        .btn-secondary.toggle-active:hover:not(:disabled) {
+            box-shadow: 0 0 25px rgba(255, 136, 0, 0.8);
+        }
+
+        button:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+            box-shadow: none !important;
+            text-shadow: none !important;
+        }
+
+        /* Status Container */
+        .status-container {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .connection-status, .player-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            background: linear-gradient(145deg, rgba(0, 0, 0, 0.6), rgba(var(--glow-secondary), 0.2));
+            border: 1px solid var(--border-color);
+            font-family: 'Share Tech Mono', monospace;
+        }
+
+        .connection-status {
+            text-shadow: 0 0 5px var(--glow-primary);
+        }
+
+        .player-info {
+            color: var(--text-secondary);
+        }
+
+        /* Map Styles - Adjust for collapsible header */
+        #map {
+            position: fixed;
+            top: 110px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 2;
+            background: radial-gradient(ellipse at center, #0a0f1a 0%, #000408 100%);
+            border-top: 1px solid rgba(var(--glow-primary), 0.2);
+            transition: top 0.3s ease;
+        }
+
+        #map.header-collapsed {
+            top: 50px; /* Adjust when header is collapsed */
+        }
+
+        /* Location Panel */
+        .location-panel {
+            position: fixed;
+            top: 120px;
+            right: 1rem;
+            width: 320px;
+            max-height: calc(100vh - 140px);
+            background: var(--gradient-panel);
+            border: 2px solid var(--primary-color);
+            border-radius: 6px;
+            box-shadow: 
+                0 0 40px var(--glow-primary),
+                inset 0 1px 0 rgba(var(--glow-primary), 0.2),
+                0 8px 32px var(--shadow-dark);
+            z-index: 1500;
+            transition: all 0.3s ease;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+        }
+
+        .location-panel.header-collapsed {
+            top: 60px;
+            max-height: calc(100vh - 80px);
+        }
+
+        .location-panel.hidden {
+            transform: translateX(100%);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .panel-header {
+            padding: 1rem;
+            background: linear-gradient(145deg, var(--primary-color), var(--secondary-color));
+            color: var(--primary-bg);
+            border-bottom: 1px solid rgba(var(--glow-primary), 0.3);
+            position: relative;
+        }
+
+        .panel-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.7rem;
+            margin-bottom: 0.5rem;
+            font-weight: 400;
+        }
+
+        .status-light {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--success-color);
+            box-shadow: 0 0 10px var(--success-color);
+            animation: status-pulse 1.5s infinite;
+        }
+
+        @keyframes status-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .panel-header h3 {
+            margin: 0;
+            font-family: 'Orbitron', monospace;
+            font-size: 1rem;
+            font-weight: 700;
+            text-shadow: 0 0 5px rgba(0, 0, 0, 0.8);
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+
+        .close-btn:hover {
+            background: rgba(255, 51, 51, 0.8);
+            border-color: #ff3333;
+            box-shadow: 0 0 15px rgba(255, 51, 51, 0.5);
+        }
+
+        .panel-content {
+            padding: 1rem;
+            max-height: calc(100vh - 200px);
+            overflow-y: auto;
+            font-size: 0.85rem;
+        }
+
+        /* Legend */
+        .legend {
+            position: fixed;
+            bottom: 1rem;
+            left: 1rem;
+            background: var(--gradient-panel);
+            border: 2px solid var(--primary-color);
+            border-radius: 6px;
+            padding: 1rem;
+            box-shadow: 
+                0 0 30px var(--glow-primary),
+                inset 0 1px 0 rgba(var(--glow-primary), 0.2),
+                0 4px 20px var(--shadow-dark);
+            z-index: 1500;
+            min-width: 180px;
+            backdrop-filter: blur(10px);
+        }
+
+        .legend-header {
+            margin-bottom: 0.75rem;
+        }
+
+        .legend-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--primary-color);
+            font-family: 'Orbitron', monospace;
+            font-weight: 500;
+            text-shadow: 0 0 8px var(--glow-primary);
+        }
+
+        .legend-items {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
         }
 
         .legend-item {
             display: flex;
             align-items: center;
-            margin-bottom: 8px;
-            font-size: 14px;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
         }
 
+        /* Marker styles in legend */
         .marker {
-            width: 16px;
-            height: 16px;
+            width: 12px;
+            height: 12px;
             border-radius: 50%;
-            margin-right: 10px;
-            border: 2px solid #fff;
+            margin-right: 0.5rem;
+            border: 2px solid var(--text-primary);
+            box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
         }
 
-        .marker.colony { background: #ff6600; }
-        .marker.station { background: #00aaff; }
-        .marker.outpost { background: #888888; }
-        .marker.gate { background: #ffdd00; }
+        .marker.colony { background: var(--success-color); border-color: var(--success-color); }
+        .marker.station { background: var(--primary-color); border-color: var(--primary-color); }
+        .marker.outpost { background: var(--warning-color); border-color: var(--warning-color); }
+        .marker.gate { background: #ffdd00; border-color: #ffdd00; }
 
         .corridor {
             width: 20px;
             height: 3px;
-            margin-right: 10px;
+            margin-right: 0.5rem;
+            border-radius: 2px;
         }
 
-        .corridor.gated { background: #00ff88; }
-        .corridor.ungated { background: #ff6600; }
+        .corridor.gated { background: var(--success-color); }
+        .corridor.ungated { background: var(--warning-color); }
 
         .player-indicator {
-            width: 16px;
-            height: 16px;
+            width: 12px;
+            height: 12px;
             border-radius: 50%;
-            margin-right: 10px;
-            border: 3px solid #00ff00;
+            margin-right: 0.5rem;
+            border: 2px solid var(--success-color);
             background: transparent;
+            position: relative;
+            animation: contact-pulse 2s infinite;
         }
 
+        @keyframes contact-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.7); }
+            70% { box-shadow: 0 0 0 8px rgba(0, 255, 136, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
+        }
+
+        /* Loading Overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--primary-bg);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            transition: opacity 0.5s ease;
+        }
+
+        .loading-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .loading-spinner {
+            width: 60px;
+            height: 60px;
+            border: 3px solid rgba(var(--glow-primary), 0.3);
+            border-top: 3px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 0 30px var(--glow-primary);
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            font-family: 'Orbitron', monospace;
+            color: var(--primary-color);
+            font-size: 1.1rem;
+            font-weight: 500;
+            text-shadow: 0 0 15px var(--glow-primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .loading-subtext {
+            font-family: 'Share Tech Mono', monospace;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            opacity: 0.8;
+        }
+
+        /* Enhanced Location Labels - Zoom Responsive */
+        .location-label {
+            background: linear-gradient(145deg, rgba(0, 0, 0, 0.9), rgba(var(--glow-secondary), 0.2)) !important;
+            border: 2px solid var(--primary-color) !important;
+            border-radius: 6px !important;
+            padding: 4px 8px !important;
+            font-size: 12px !important;
+            font-weight: bold !important;
+            color: var(--text-primary) !important;
+            font-family: 'Share Tech Mono', monospace !important;
+            white-space: nowrap !important;
+            pointer-events: none !important;
+            z-index: 1000 !important;
+            text-shadow: 0 0 8px var(--glow-primary) !important;
+            box-shadow: 
+                0 0 20px var(--glow-primary),
+                inset 0 1px 0 rgba(var(--glow-primary), 0.3) !important;
+            backdrop-filter: blur(5px) !important;
+            min-width: 80px !important;
+            text-align: center !important;
+            letter-spacing: 0.5px !important;
+            transition: all 0.3s ease !important;
+        }
+
+        .location-label.wealth-high {
+            border-color: #ffd700 !important;
+            color: #ffd700 !important;
+            text-shadow: 0 0 8px #ffd700 !important;
+            box-shadow: 
+                0 0 20px rgba(255, 215, 0, 0.6),
+                inset 0 1px 0 rgba(255, 215, 0, 0.3) !important;
+        }
+
+        .location-label.wealth-medium {
+            border-color: var(--success-color) !important;
+            color: var(--success-color) !important;
+            text-shadow: 0 0 8px var(--success-color) !important;
+            box-shadow: 
+                0 0 20px rgba(0, 255, 136, 0.6),
+                inset 0 1px 0 rgba(0, 255, 136, 0.3) !important;
+        }
+
+        .location-label.wealth-low {
+            border-color: var(--error-color) !important;
+            color: var(--error-color) !important;
+            text-shadow: 0 0 8px var(--error-color) !important;
+            box-shadow: 
+                0 0 20px rgba(255, 51, 51, 0.6),
+                inset 0 1px 0 rgba(255, 51, 51, 0.3) !important;
+        }
+
+        /* Zoom-based label sizing */
+        .location-label.zoom-small {
+            font-size: 10px !important;
+            padding: 2px 4px !important;
+        }
+
+        .location-label.zoom-medium {
+            font-size: 12px !important;
+            padding: 4px 8px !important;
+        }
+
+        .location-label.zoom-large {
+            font-size: 14px !important;
+            padding: 6px 10px !important;
+        }
+
+        /* Location Details Styles */
         .location-detail {
-            margin-bottom: 10px;
+            margin-bottom: 0.75rem;
+            line-height: 1.4;
         }
 
         .location-detail strong {
-            color: #4a9eff;
+            color: var(--primary-color);
+            font-weight: 600;
+            text-shadow: 0 0 5px var(--glow-primary);
         }
 
         .players-list {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 10px;
+            background: linear-gradient(145deg, rgba(var(--glow-secondary), 0.2), rgba(0, 0, 0, 0.6));
+            border: 1px solid var(--border-color);
             border-radius: 4px;
-            margin-top: 10px;
+            padding: 0.75rem;
+            margin-top: 0.75rem;
         }
 
         .player-item {
-            padding: 5px 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(var(--glow-primary), 0.1);
+            font-size: 0.8rem;
         }
 
         .player-item:last-child {
@@ -473,152 +1065,384 @@ class WebMapCog(commands.Cog, name="WebMap"):
         }
 
         .status-indicator {
-            display: inline-block;
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            margin-right: 5px;
+            margin-right: 0.5rem;
+            flex-shrink: 0;
         }
 
-        .status-online { background: #00ff00; }
-        .status-transit { background: #ffaa00; }
+        .status-online { 
+            background: var(--success-color); 
+            box-shadow: 0 0 8px var(--success-color);
+        }
+        .status-transit { 
+            background: var(--warning-color);
+            box-shadow: 0 0 8px var(--warning-color);
+        }
 
         .sub-locations {
-            margin-top: 10px;
+            margin-top: 0.75rem;
+            background: linear-gradient(145deg, rgba(var(--glow-secondary), 0.2), rgba(0, 0, 0, 0.6));
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 0.75rem;
         }
 
         .sub-location-item {
-            padding: 5px 0;
-            color: #ccc;
-            font-size: 13px;
+            padding: 0.5rem 0;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            line-height: 1.3;
         }
 
-        /* Route mode styles */
+        /* Leaflet customizations */
+        .leaflet-popup-content-wrapper {
+            background: var(--gradient-panel);
+            color: var(--text-primary);
+            border: 2px solid var(--primary-color);
+            border-radius: 6px;
+            box-shadow: 
+                0 0 40px var(--glow-primary),
+                0 4px 20px var(--shadow-dark);
+            font-family: 'Share Tech Mono', monospace;
+            text-transform: uppercase;
+        }
+
+        .leaflet-popup-tip {
+            background: var(--secondary-bg);
+            border: 1px solid var(--primary-color);
+        }
+
+        .leaflet-popup-close-button {
+            color: var(--text-primary) !important;
+            font-size: 18px !important;
+            font-weight: bold !important;
+            text-shadow: 0 0 8px var(--glow-primary) !important;
+        }
+
+        .leaflet-control-zoom {
+            border: none !important;
+            border-radius: 4px !important;
+            overflow: hidden;
+            box-shadow: 
+                0 0 30px var(--glow-primary),
+                0 4px 15px var(--shadow-dark) !important;
+        }
+
+        .leaflet-control-zoom a {
+            background: var(--gradient-panel) !important;
+            border: 1px solid var(--border-color) !important;
+            color: var(--text-primary) !important;
+            transition: all 0.3s ease !important;
+            font-family: 'Share Tech Mono', monospace !important;
+            text-shadow: 0 0 5px var(--glow-primary) !important;
+        }
+
+        .leaflet-control-zoom a:hover {
+            background: linear-gradient(145deg, var(--primary-color), var(--secondary-color)) !important;
+            border-color: var(--primary-color) !important;
+            color: var(--primary-bg) !important;
+            box-shadow: 0 0 20px var(--glow-primary) !important;
+            text-shadow: none !important;
+        }
+
+        /* Route and highlight styles */
         .location-dimmed {
-            opacity: 0.3 !important;
-            filter: grayscale(0.7) !important;
+            opacity: 0.2 !important;
+            filter: grayscale(0.9) !important;
+            transition: all 0.5s ease !important;
         }
 
         .location-route-highlight {
             opacity: 1 !important;
             filter: none !important;
             stroke: #ffff00 !important;
-            stroke-width: 3 !important;
+            stroke-width: 4 !important;
             stroke-opacity: 1 !important;
+            animation: route-glow 2s ease-in-out infinite alternate !important;
+        }
+
+        @keyframes route-glow {
+            from { 
+                stroke-width: 4px; 
+                filter: drop-shadow(0 0 10px #ffff00);
+            }
+            to { 
+                stroke-width: 6px; 
+                filter: drop-shadow(0 0 25px #ffff00);
+            }
         }
 
         .route-highlight {
             stroke: #ffff00 !important;
-            stroke-width: 4 !important;
-            stroke-opacity: 0.8 !important;
-            z-index: 1000;
+            stroke-width: 5 !important;
+            stroke-opacity: 0.9 !important;
+            z-index: 1000 !important;
+            filter: drop-shadow(0 0 8px #ffff00) !important;
+            animation: route-pulse 3s ease-in-out infinite !important;
+        }
+
+        @keyframes route-pulse {
+            0%, 100% { 
+                stroke-opacity: 0.6; 
+                stroke-width: 4px;
+                filter: drop-shadow(0 0 8px #ffff00);
+            }
+            50% { 
+                stroke-opacity: 1; 
+                stroke-width: 6px;
+                filter: drop-shadow(0 0 20px #ffff00);
+            }
         }
 
         .location-highlight {
-            stroke: #ffff00 !important;
+            stroke: var(--primary-color) !important;
             stroke-width: 4 !important;
             stroke-opacity: 1 !important;
             fill-opacity: 1 !important;
+            filter: drop-shadow(0 0 15px var(--primary-color)) !important;
+            animation: search-highlight 2s ease-in-out infinite alternate !important;
         }
 
-        /* Label styles */
-        .location-label {
-            background: rgba(0, 0, 0, 0.8) !important;
-            border: 1px solid #333 !important;
-            border-radius: 4px !important;
-            padding: 2px 6px !important;
-            font-size: 11px !important;
-            color: #fff !important;
-            white-space: nowrap !important;
+        @keyframes search-highlight {
+            from { 
+                stroke-width: 4px; 
+                filter: drop-shadow(0 0 15px var(--primary-color));
+            }
+            to { 
+                stroke-width: 6px; 
+                filter: drop-shadow(0 0 30px var(--primary-color));
+            }
+        }
+
+        /* Routes hidden state */
+        .routes-hidden {
+            opacity: 0 !important;
             pointer-events: none !important;
-            z-index: 1000 !important;
+            transition: opacity 0.3s ease !important;
         }
 
-        .location-label.wealth-high {
-            border-color: #ffd700 !important;
-            color: #ffd700 !important;
-        }
-
-        .location-label.wealth-medium {
-            border-color: #90ee90 !important;
-            color: #90ee90 !important;
-        }
-
-        .location-label.wealth-low {
-            border-color: #ff6b6b !important;
-            color: #ff6b6b !important;
-        }
-
-        /* Custom leaflet popup styling */
-        .leaflet-popup-content-wrapper {
-            background: rgba(0, 0, 0, 0.9);
-            color: #fff;
-            border: 1px solid #333;
-        }
-
-        .leaflet-popup-tip {
-            background: rgba(0, 0, 0, 0.9);
-        }
-
-        /* Mobile responsiveness */
+        /* Mobile Responsiveness */
         @media (max-width: 768px) {
+            .header-toggle {
+                top: 0.25rem;
+                right: 0.25rem;
+                padding: 0.4rem;
+                min-width: 36px;
+                height: 36px;
+                font-size: 0.7rem;
+            }
+            
+            .mobile-toggle {
+                display: block;
+                position: absolute;
+                top: 1rem;
+                right: 3rem;
+            }
+            
             #header {
-                height: 100px;
+                padding: 1rem;
+                height: auto;
+                min-height: 80px;
+            }
+            
+            .header-brand {
+                margin-right: 4rem;
+            }
+            
+            .header-brand h1 {
+                font-size: 1.3rem;
+            }
+            
+            .controls-section {
+                display: none;
+                position: absolute;
+                top: 100%;
+                left: 0;
+                right: 0;
+                background: var(--gradient-panel);
+                border-top: 1px solid var(--border-color);
+                padding: 1rem;
+                box-shadow: 0 4px 20px var(--shadow-dark);
+            }
+            
+            .controls-section.active {
+                display: flex;
+            }
+            
+            .controls-row {
                 flex-direction: column;
+                align-items: stretch;
+                gap: 0.75rem;
+            }
+            
+            .control-group {
                 justify-content: center;
-                padding: 10px;
-            }
-            
-            #header h1 {
-                font-size: 18px;
-                margin-bottom: 5px;
-            }
-            
-            #controls-section {
-                margin: 0;
-                max-width: 100%;
-            }
-            
-            #search-container, #route-container, #label-container {
                 flex-wrap: wrap;
+                gap: 0.5rem;
             }
             
-            #label-container {
-                gap: 8px;
-            }
-            
-            .label-control {
-                font-size: 11px;
+            .status-container {
+                flex-direction: column;
+                gap: 0.5rem;
+                align-items: center;
             }
             
             #location-search {
-                min-width: 150px;
+                min-width: 160px;
+                flex-grow: 1;
             }
             
-            #route-from, #route-to {
-                min-width: 100px;
+            select {
+                min-width: 100px !important;
+                flex-grow: 1 !important;
             }
             
             #map {
+                top: 80px;
+            }
+            
+            #map.header-collapsed {
+                top: 40px;
+            }
+            
+            .location-panel {
+                width: calc(100% - 2rem);
+                right: 1rem;
+                left: 1rem;
                 top: 100px;
+                max-height: calc(100vh - 120px);
             }
             
-            #location-panel {
-                width: 90%;
-                right: 5%;
-                top: 110px;
+            .location-panel.header-collapsed {
+                top: 50px;
+                max-height: calc(100vh - 70px);
             }
             
-            #legend {
-                width: 160px;
+            .legend {
+                bottom: 0.5rem;
+                left: 0.5rem;
+                right: 0.5rem;
+                width: auto;
+                min-width: auto;
+            }
+            
+            .legend-items {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+                gap: 0.375rem;
+            }
+            
+            .legend-item {
+                font-size: 0.65rem;
+            }
+            
+            .location-label {
+                font-size: 10px !important;
+                padding: 3px 6px !important;
+            }
+            
+            .location-label.zoom-small {
+                font-size: 8px !important;
+                padding: 2px 4px !important;
+            }
+            
+            .location-label.zoom-medium {
+                font-size: 10px !important;
+                padding: 3px 6px !important;
+            }
+            
+            .location-label.zoom-large {
+                font-size: 12px !important;
+                padding: 4px 8px !important;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .header-brand h1 {
+                font-size: 1.1rem;
+            }
+            
+            .subtitle {
+                font-size: 0.65rem;
+            }
+            
+            .btn-primary, .btn-secondary, button {
+                padding: 0.4rem 0.6rem;
+                font-size: 0.7rem;
+            }
+            
+            input[type="text"], select {
+                padding: 0.4rem 0.6rem !important;
+                font-size: 0.75rem !important;
+            }
+            
+            .legend {
+                padding: 0.75rem;
+            }
+            
+            .panel-content {
+                padding: 0.75rem;
+            }
+            
+            .location-label {
+                font-size: 9px !important;
+                padding: 2px 4px !important;
+            }
+        }
+
+        /* High contrast mode support */
+        @media (prefers-contrast: high) {
+            :root {
+                --border-color: var(--primary-color);
+                --text-secondary: var(--text-primary);
+            }
+            
+            .btn-secondary {
+                border-width: 2px;
+            }
+        }
+
+        /* Reduced motion support */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+            
+            .scanlines, .static-overlay {
+                animation: none;
+                opacity: 0.5;
+            }
+        }
+        
+        .player-presence-indicator {
+            pointer-events: none; /* Allows clicks to pass through to the location marker */
+            animation: player-pulse 2.5s infinite ease-in-out;
+            filter: drop-shadow(0 0 4px var(--success-color));
+        }
+
+        @keyframes player-pulse {
+            0% {
+                stroke-opacity: 0.6;
+                filter: drop-shadow(0 0 4px var(--success-color));
+            }
+            50% {
+                stroke-opacity: 1;
+                filter: drop-shadow(0 0 10px var(--success-color));
+            }
+            100% {
+                stroke-opacity: 0.6;
+                filter: drop-shadow(0 0 4px var(--success-color));
             }
         }'''
-        
         with open("web/static/css/map.css", "w", encoding='utf-8') as f:
             f.write(css_content)
-        
-        # Create JavaScript file
-        js_content = '''class GalaxyMap {
+
+        # Create enhanced JavaScript file with color randomization and improved labels
+        js_content = js_content = '''class GalaxyMap {
             constructor() {
                 this.map = null;
                 this.websocket = null;
@@ -631,69 +1455,267 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 this.currentRoute = null;
                 this.labels = new Map();
                 this.routeMode = false;
-                this.labelSettings = {
-                    showLabels: true,
-                    showColonies: true,
-                    showStations: true,
-                    showOutposts: true,
-                    showGates: false
-                };
+                this.showLabels = false;
+                this.showRoutes = true;
+                this.headerExpanded = true;
+                this.reconnectAttempts = 0;
+                this.maxReconnectAttempts = 10;
+                this.reconnectDelay = 1000;
+                this.labelGrid = new Map();
                 
+                this.initializeColorScheme();
                 this.init();
+            }
+            
+            initializeColorScheme() {
+                const themes = ['blue', 'amber', 'green', 'red', 'purple'];
+                const selectedTheme = themes[Math.floor(Math.random() * themes.length)];
+                
+                document.body.className = `theme-${selectedTheme}`;
+                
+                console.log(`🎨 CRT Terminal initialized with ${selectedTheme.toUpperCase()} color scheme`);
             }
             
             init() {
                 this.setupMap();
-                this.connectWebSocket();
                 this.setupEventListeners();
+                this.connectWebSocket();
+                this.hideLoadingOverlay();
             }
             
             setupMap() {
-                // Initialize map with space-like view - remove default zoom controls
                 this.map = L.map('map', {
                     crs: L.CRS.Simple,
                     minZoom: -3,
-                    maxZoom: 5,
-                    zoomControl: false,  // Disable default zoom controls
-                    attributionControl: false
+                    maxZoom: 6,
+                    zoomControl: false,
+                    attributionControl: false,
+                    maxBounds: [[-5000, -5000], [5000, 5000]],
+                    maxBoundsViscosity: 1.0
                 });
                 
-                // Add custom zoom controls only in bottom right
                 L.control.zoom({
                     position: 'bottomright'
                 }).addTo(this.map);
                 
-                // Set initial view at a more zoomed in level
                 this.map.setView([0, 0], 1);
+                
+                this.map.on('click', () => {
+                    this.hideLocationPanel();
+                });
+                
+                // Update labels when zoom changes
+                this.map.on('zoomend', () => {
+                    if (this.showLabels) {
+                        this.updateLabelsForZoom();
+                    }
+                });
+                
+                this.map.on('moveend', () => {
+                    if (this.showLabels) {
+                        this.updateLabelsForZoom();
+                    }
+                });
+            }
+            
+            setupEventListeners() {
+                // Header toggle
+                const headerToggle = document.getElementById('header-toggle');
+                const header = document.getElementById('header');
+                const map = document.getElementById('map');
+                const locationPanel = document.getElementById('location-panel');
+                
+                headerToggle?.addEventListener('click', () => {
+                    this.headerExpanded = !this.headerExpanded;
+                    
+                    if (this.headerExpanded) {
+                        header.classList.remove('header-collapsed');
+                        header.classList.add('header-expanded');
+                        map.classList.remove('header-collapsed');
+                        locationPanel?.classList.remove('header-collapsed');
+                        headerToggle.classList.remove('collapsed');
+                    } else {
+                        header.classList.remove('header-expanded');
+                        header.classList.add('header-collapsed');
+                        map.classList.add('header-collapsed');
+                        locationPanel?.classList.add('header-collapsed');
+                        headerToggle.classList.add('collapsed');
+                    }
+                });
+                
+                // Mobile toggle
+                const mobileToggle = document.getElementById('mobile-toggle');
+                const controlsSection = document.getElementById('controls-section');
+                
+                mobileToggle?.addEventListener('click', () => {
+                    controlsSection.classList.toggle('active');
+                });
+                
+                // Search functionality
+                const searchInput = document.getElementById('location-search');
+                const searchBtn = document.getElementById('search-btn');
+                const clearSearchBtn = document.getElementById('clear-search-btn');
+                
+                const performSearch = () => {
+                    const query = searchInput.value.trim();
+                    if (query) {
+                        this.searchLocations(query);
+                    }
+                };
+                
+                const clearSearch = () => {
+                    searchInput.value = '';
+                    this.clearHighlights();
+                    this.clearSearch();
+                };
+                
+                searchBtn?.addEventListener('click', performSearch);
+                clearSearchBtn?.addEventListener('click', clearSearch);
+                
+                searchInput?.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        performSearch();
+                    }
+                });
+                
+                searchInput?.addEventListener('input', (e) => {
+                    if (!e.target.value.trim()) {
+                        this.clearHighlights();
+                    }
+                });
+                
+                // Route plotting
+                const plotRouteBtn = document.getElementById('plot-route-btn');
+                const clearRouteBtn = document.getElementById('clear-route-btn');
+                
+                plotRouteBtn?.addEventListener('click', () => {
+                    const fromId = document.getElementById('route-from').value;
+                    const toId = document.getElementById('route-to').value;
+                    if (fromId && toId && fromId !== toId) {
+                        this.plotRoute(parseInt(fromId), parseInt(toId));
+                    }
+                });
+                
+                clearRouteBtn?.addEventListener('click', () => {
+                    this.clearRoute();
+                    document.getElementById('route-from').value = '';
+                    document.getElementById('route-to').value = '';
+                });
+                
+                // View controls
+                const fitBoundsBtn = document.getElementById('fit-bounds-btn');
+                const toggleLabelsBtn = document.getElementById('toggle-labels-btn');
+                const toggleRoutesBtn = document.getElementById('toggle-routes-btn');
+                
+                fitBoundsBtn?.addEventListener('click', () => {
+                    this.fitMapToBounds();
+                });
+                
+                toggleLabelsBtn?.addEventListener('click', () => {
+                    this.toggleLabels();
+                });
+                
+                toggleRoutesBtn?.addEventListener('click', () => {
+                    this.toggleRoutes();
+                });
+                
+                // Panel close
+                const closePanel = document.getElementById('close-panel');
+                closePanel?.addEventListener('click', () => {
+                    this.hideLocationPanel();
+                });
+                
+                // Close panel when clicking outside
+                document.addEventListener('click', (e) => {
+                    const panel = document.getElementById('location-panel');
+                    const mapContainer = this.map?.getContainer();
+                    
+                    if (panel && !panel.contains(e.target) && 
+                        mapContainer && !mapContainer.contains(e.target)) {
+                        this.hideLocationPanel();
+                    }
+                });
+                
+                // Keyboard shortcuts
+                document.addEventListener('keydown', (e) => {
+                    if (e.target.tagName.toLowerCase() === 'input' || e.target.tagName.toLowerCase() === 'select') return;
+                    
+                    switch(e.key) {
+                        case 'Escape':
+                            this.hideLocationPanel();
+                            this.clearHighlights();
+                            this.clearRoute();
+                            break;
+                        case 'f':
+                        case 'F':
+                            this.fitMapToBounds();
+                            break;
+                        case 'l':
+                        case 'L':
+                            this.toggleLabels();
+                            break;
+                        case 'r':
+                        case 'R':
+                            this.toggleRoutes();
+                            break;
+                        case 'h':
+                        case 'H':
+                            headerToggle?.click();
+                            break;
+                    }
+                });
             }
             
             connectWebSocket() {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 const wsUrl = `${protocol}//${window.location.host}/ws`;
                 
+                if (this.websocket) {
+                    this.websocket.close();
+                }
+                
                 this.websocket = new WebSocket(wsUrl);
                 
                 this.websocket.onopen = () => {
-                    this.updateConnectionStatus('🟢 Connected', '#00ff00');
-                    console.log('WebSocket connected');
+                    this.updateConnectionStatus('CONNECTED', 'var(--success-color)');
+                    this.reconnectAttempts = 0;
+                    console.log('🔗 WebSocket connected to navigation systems');
                 };
                 
                 this.websocket.onmessage = (event) => {
-                    const data = JSON.parse(event.data);
-                    this.handleWebSocketMessage(data);
+                    try {
+                        const data = JSON.parse(event.data);
+                        this.handleWebSocketMessage(data);
+                    } catch (error) {
+                        console.error('Failed to parse WebSocket message:', error);
+                    }
                 };
                 
                 this.websocket.onclose = () => {
-                    this.updateConnectionStatus('🔴 Disconnected', '#ff0000');
-                    console.log('WebSocket disconnected');
-                    // Attempt to reconnect after 5 seconds
-                    setTimeout(() => this.connectWebSocket(), 5000);
+                    this.updateConnectionStatus('DISCONNECTED', 'var(--error-color)');
+                    console.log('🔌 WebSocket disconnected');
+                    this.scheduleReconnect();
                 };
                 
                 this.websocket.onerror = (error) => {
                     console.error('WebSocket error:', error);
-                    this.updateConnectionStatus('🟡 Error', '#ffaa00');
+                    this.updateConnectionStatus('ERROR', 'var(--warning-color)');
                 };
+            }
+            
+            scheduleReconnect() {
+                if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                    this.reconnectAttempts++;
+                    const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 30000);
+                    
+                    this.updateConnectionStatus(`RECONNECTING... (${this.reconnectAttempts})`, 'var(--warning-color)');
+                    
+                    setTimeout(() => {
+                        this.connectWebSocket();
+                    }, delay);
+                } else {
+                    this.updateConnectionStatus('CONNECTION FAILED', 'var(--error-color)');
+                }
             }
             
             handleWebSocketMessage(data) {
@@ -707,248 +1729,155 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     case 'location_update':
                         this.updateLocation(data.data);
                         break;
+                    default:
+                        console.warn('Unknown WebSocket message type:', data.type);
                 }
             }
             
             updateGalaxyData(data) {
-                // Update galaxy info
-                document.getElementById('galaxy-name').textContent = data.galaxy_name;
-                document.getElementById('galaxy-time').textContent = data.current_time;
-                document.getElementById('location-count').textContent = `${data.locations.length} locations`;
-                
-                // Clear existing markers
-                this.map.eachLayer((layer) => {
-                    if (layer !== this.map._layers[Object.keys(this.map._layers)[0]]) {
-                        this.map.removeLayer(layer);
-                    }
-                });
-                
-                this.locations.clear();
-                this.corridors.clear();
-                this.labels.clear();
-                
-                // Populate route dropdowns
-                this.populateRouteSelectors(data.locations);
-                
-                // Add corridors first (so they appear under locations)
-                data.corridors.forEach(corridor => this.addCorridor(corridor));
-                
-                // Add locations
-                data.locations.forEach(location => this.addLocation(location));
-                
-                // Update map bounds
-                if (data.locations.length > 0) {
-                    const bounds = L.latLngBounds(
-                        data.locations.map(loc => [loc.y_coord, loc.x_coord])
-                    );
-                    this.map.fitBounds(bounds, { 
-                        padding: [50, 50],
-                        maxZoom: 3
+                try {
+                    this.locations.clear();
+                    this.corridors.clear();
+                    this.labelGrid.clear();
+                    this.map.eachLayer((layer) => {
+                        if (layer !== this.map._layers[Object.keys(this.map._layers)[0]]) {
+                            this.map.removeLayer(layer);
+                        }
                     });
+                    
+                    data.locations.forEach(location => {
+                        this.addLocation(location);
+                    });
+                    
+                    data.corridors.forEach(corridor => {
+                        this.addCorridor(corridor);
+                    });
+                    
+                    this.applyRouteVisibility();
+                    this.updatePlayers(data.players || []);
+                    this.populateRouteSelects();
+                    this.fitMapToBounds();
+                    
+                } catch (error) {
+                    console.error('Error updating galaxy data:', error);
                 }
-            }
-            
-            populateRouteSelectors(locations) {
-                const fromSelect = document.getElementById('route-from');
-                const toSelect = document.getElementById('route-to');
-                
-                // Clear existing options except first
-                fromSelect.innerHTML = '<option value="">From...</option>';
-                toSelect.innerHTML = '<option value="">To...</option>';
-                
-                // Sort locations by name
-                const sortedLocations = locations.sort((a, b) => a.name.localeCompare(b.name));
-                
-                sortedLocations.forEach(location => {
-                    const fromOption = new Option(location.name, location.location_id);
-                    const toOption = new Option(location.name, location.location_id);
-                    fromSelect.add(fromOption);
-                    toSelect.add(toOption);
-                });
-                
-                // Enable route controls
-                fromSelect.disabled = false;
-                toSelect.disabled = false;
-                document.getElementById('plot-route-btn').disabled = false;
-                document.getElementById('clear-route-btn').disabled = false;
             }
             
             addLocation(location) {
                 const marker = this.createLocationMarker(location);
                 marker.addTo(this.map);
                 
-                // Create label
-                const label = this.createLocationLabel(location);
-                this.labels.set(location.location_id, label);
+                this.locations.set(location.location_id, {
+                    ...location,
+                    marker: marker
+                });
                 
-                this.locations.set(location.location_id, { ...location, marker });
-                
-                // Update label visibility
-                this.updateLabelVisibility();
+                marker.on('click', (e) => {
+                    L.DomEvent.stopPropagation(e);
+                    this.selectLocation(location);
+                });
             }
             
             createLocationMarker(location) {
-                const color = this.getLocationColor(location.location_type);
-                const size = this.getLocationSize(location.location_type, location.wealth_level);
+                const colors = {
+                    'Colony': 'var(--success-color)',
+                    'Space Station': 'var(--primary-color)',
+                    'Outpost': 'var(--warning-color)',
+                    'Transit Gate': '#ffdd00'
+                };
                 
-                const marker = L.circleMarker([location.y_coord, location.x_coord], {
+                const color = colors[location.location_type] || '#ffffff';
+                const size = this.getMarkerSize(location.location_type);
+                
+                return L.circleMarker([location.y_coord, location.x_coord], {
                     radius: size,
                     fillColor: color,
                     color: '#ffffff',
                     weight: 2,
                     opacity: 1,
-                    fillOpacity: 0.8
+                    fillOpacity: 0.9,
+                    className: `location-marker ${location.location_type.toLowerCase().replace(' ', '-')}`
                 });
-                
-                // Add popup
-                const popupContent = this.createLocationPopup(location);
-                marker.bindPopup(popupContent);
-                
-                // Add click handler
-                marker.on('click', () => {
-                    this.selectLocation(location.location_id);
-                });
-                
-                return marker;
             }
             
-            getLocationColor(type) {
-                const colors = {
-                    'colony': '#ff6600',
-                    'space_station': '#00aaff',
-                    'outpost': '#888888',
-                    'gate': '#ffdd00'
+            getMarkerSize(locationType) {
+                const sizes = {
+                    'Colony': 8,
+                    'Space Station': 10,
+                    'Outpost': 6,
+                    'Transit Gate': 7
                 };
-                return colors[type] || '#ffffff';
-            }
-            
-            getLocationSize(type, wealth) {
-                const baseSizes = {
-                    'colony': 8,
-                    'space_station': 10,
-                    'outpost': 6,
-                    'gate': 4
-                };
-                const baseSize = baseSizes[type] || 6;
-                return baseSize + (wealth * 0.5);
-            }
-            
-            createLocationLabel(location) {
-                const label = L.marker([location.y_coord, location.x_coord], {
-                    icon: L.divIcon({
-                        className: 'location-label',
-                        html: `<div class="location-label ${this.getLabelClass(location)}">${location.name}</div>`,
-                        iconSize: [100, 20],
-                        iconAnchor: [50, 10]
-                    }),
-                    interactive: false,
-                    zIndexOffset: 1000
-                });
-                
-                return label;
-            }
-
-            getLabelClass(location) {
-                if (location.wealth_level >= 8) return 'wealth-high';
-                if (location.wealth_level >= 5) return 'wealth-medium';
-                return 'wealth-low';
-            }
-            
-            updateLabelVisibility() {
-                const currentZoom = this.map.getZoom();
-                const showLabels = this.labelSettings.showLabels;
-                
-                this.labels.forEach((label, locationId) => {
-                    const location = this.locations.get(locationId);
-                    if (!location) return;
-                    
-                    let shouldShow = showLabels;
-                    
-                    // Check type-specific toggles
-                    if (shouldShow) {
-                        switch (location.location_type) {
-                            case 'colony':
-                                shouldShow = this.labelSettings.showColonies;
-                                break;
-                            case 'space_station':
-                                shouldShow = this.labelSettings.showStations;
-                                break;
-                            case 'outpost':
-                                shouldShow = this.labelSettings.showOutposts;
-                                break;
-                            case 'gate':
-                                shouldShow = this.labelSettings.showGates;
-                                break;
-                        }
-                    }
-                    
-                    // Zoom-based visibility
-                    if (shouldShow) {
-                        if (currentZoom < -1) {
-                            // Very zoomed out - only show major locations
-                            shouldShow = (location.location_type === 'space_station' || 
-                                        (location.location_type === 'colony' && location.wealth_level >= 7));
-                        } else if (currentZoom < 1) {
-                            // Medium zoom - show stations and wealthy colonies
-                            shouldShow = (location.location_type === 'space_station' || 
-                                        (location.location_type === 'colony' && location.wealth_level >= 5));
-                        } else if (currentZoom < 3) {
-                            // Close zoom - show most locations except gates
-                            shouldShow = shouldShow && location.location_type !== 'gate';
-                        }
-                        // At highest zoom, show all that are enabled
-                    }
-                    
-                    // In route mode, only show route-relevant labels
-                    if (shouldShow && this.routeMode && this.currentRoute) {
-                        shouldShow = this.currentRoute.path.includes(locationId);
-                    }
-                    
-                    if (shouldShow) {
-                        label.addTo(this.map);
-                    } else {
-                        this.map.removeLayer(label);
-                    }
-                });
-            }
-            
-            createLocationPopup(location) {
-                return `
-                    <div style="color: white;">
-                        <h4 style="margin: 0 0 10px 0; color: #4a9eff;">${location.name}</h4>
-                        <div><strong>Type:</strong> ${location.location_type.replace('_', ' ')}</div>
-                        <div><strong>Population:</strong> ${location.population.toLocaleString()}</div>
-                        <div><strong>Wealth:</strong> ${'⭐'.repeat(Math.min(location.wealth_level, 5))}</div>
-                    </div>
-                `;
+                return sizes[locationType] || 6;
             }
             
             addCorridor(corridor) {
-                const style = this.getCorridorStyle(corridor);
-                const line = L.polyline([
+                const isGated = corridor.name && corridor.name.toLowerCase().includes('gate');
+                const color = isGated ? 'var(--success-color)' : 'var(--warning-color)';
+                
+                const polyline = L.polyline([
                     [corridor.origin_y, corridor.origin_x],
                     [corridor.dest_y, corridor.dest_x]
-                ], style);
+                ], {
+                    color: color,
+                    weight: isGated ? 2 : 3,
+                    opacity: 0.7,
+                    dashArray: isGated ? null : '8, 5',
+                    className: `corridor ${isGated ? 'gated' : 'ungated'}`
+                });
                 
-                line.addTo(this.map);
-                this.corridors.set(corridor.corridor_id, { ...corridor, line });
+                polyline.addTo(this.map);
+                this.corridors.set(corridor.corridor_id, {
+                    ...corridor,
+                    polyline: polyline,
+                    isGated: isGated
+                });
             }
             
-            getCorridorStyle(corridor) {
-                const isUngated = corridor.name.includes('Ungated');
-                return {
-                    color: isUngated ? '#ff6600' : '#00ff88',
-                    weight: isUngated ? 2 : 1,
-                    opacity: 0.6,
-                    dashArray: isUngated ? '5, 5' : null
-                };
+            toggleRoutes() {
+                this.showRoutes = !this.showRoutes;
+                const btn = document.getElementById('toggle-routes-btn');
+                
+                this.applyRouteVisibility();
+                
+                if (btn) {
+                    if (this.showRoutes) {
+                        btn.textContent = 'ROUTES';
+                        btn.classList.add('toggle-active');
+                    } else {
+                        btn.textContent = 'ROUTES';
+                        btn.classList.remove('toggle-active');
+                    }
+                }
+            }
+            
+            applyRouteVisibility() {
+                this.corridors.forEach(corridor => {
+                    if (corridor.polyline) {
+                        if (this.showRoutes) {
+                            corridor.polyline.getElement()?.classList.remove('routes-hidden');
+                        } else {
+                            corridor.polyline.getElement()?.classList.add('routes-hidden');
+                        }
+                    }
+                });
+                
+                this.routePolylines.forEach(routeLine => {
+                    if (this.showRoutes) {
+                        routeLine.getElement()?.classList.remove('routes-hidden');
+                    } else {
+                        routeLine.getElement()?.classList.add('routes-hidden');
+                    }
+                });
             }
             
             updatePlayers(players) {
-                document.getElementById('player-count').textContent = `${players.length} players online`;
+                const playerCount = document.getElementById('player-count');
+                if (playerCount) {
+                    playerCount.textContent = `${players.length} CONTACTS`;
+                }
                 
-                // Store player data for location panel use
                 this.players.clear();
+                
                 players.forEach(player => {
                     if (!this.players.has(player.location_id)) {
                         this.players.set(player.location_id, []);
@@ -956,110 +1885,127 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     this.players.get(player.location_id).push(player);
                 });
                 
-                // Clear existing player indicators
-                this.locations.forEach((location) => {
-                    this.removePlayerIndicator(location);
-                });
-                
-                // Update location markers with player counts
                 this.locations.forEach((location, locationId) => {
-                    const playersHere = players.filter(p => p.location_id === locationId);
-                    this.updateLocationWithPlayers(location, playersHere);
+                    this.updateLocationWithPlayers(location, this.players.get(locationId) || []);
                 });
                 
-                // Update selected location panel if open
                 if (this.selectedLocation) {
                     this.updateLocationPanel(this.selectedLocation);
                 }
             }
             
-            removePlayerIndicator(location) {
-                // Remove green ring if exists
+            updateLocationWithPlayers(location, playersHere) {
+                const marker = location.marker;
+                if (!marker) return;
+
                 if (location.playerIndicator) {
                     this.map.removeLayer(location.playerIndicator);
                     delete location.playerIndicator;
                 }
-            }
-            
-            updateLocationWithPlayers(location, players) {
-                this.removePlayerIndicator(location);
-                
-                if (players.length > 0) {
-                    // Add green ring indicator for locations with players
-                    const ringMarker = L.circleMarker([location.y_coord, location.x_coord], {
-                        radius: location.marker.options.radius + 4,
+
+                if (playersHere.length > 0) {
+                    const indicator = L.circleMarker([location.y_coord, location.x_coord], {
+                        radius: 14,
                         fillColor: 'transparent',
-                        color: '#00ff00',
+                        color: 'var(--success-color)',
                         weight: 3,
-                        opacity: 0.8,
+                        opacity: 1,
                         fillOpacity: 0,
-                        interactive: false  // Add this line to make the ring non-interactive
+                        className: 'player-presence-indicator',
+                        interactive: false // Add this line
                     });
-                    
-                    ringMarker.addTo(this.map);
-                    location.playerIndicator = ringMarker;
+
+                    indicator.addTo(this.map);
+                    location.playerIndicator = indicator;
                 }
             }
             
-            selectLocation(locationId) {
-                this.selectedLocation = locationId;
-                this.updateLocationPanel(locationId);
+            selectLocation(location) {
+                this.selectedLocation = location;
+                this.updateLocationPanel(location);
                 this.showLocationPanel();
+                
+                this.clearHighlights();
+                this.highlightLocation(location, 'var(--primary-color)');
             }
             
-            async updateLocationPanel(locationId) {
-                const location = this.locations.get(locationId);
-                if (!location) return;
+            async updateLocationPanel(location) {
+                const titleElement = document.getElementById('location-title');
+                const detailsElement = document.getElementById('location-details');
                 
-                document.getElementById('location-title').textContent = location.name;
+                if (!titleElement || !detailsElement) return;
                 
-                // Get players at this location
-                const playersHere = await this.getPlayersAtLocation(locationId);
+                titleElement.textContent = location.name.toUpperCase();
                 
-                // Get sub-locations from API
-                const subLocations = await this.getSubLocations(locationId);
+                const playersHere = this.players.get(location.location_id) || [];
+                const subLocations = await this.getSubLocations(location.location_id);
+                
+                const wealthDisplay = this.getWealthDisplay(location.wealth_level);
+                const typeIcon = this.getLocationTypeIcon(location.location_type);
                 
                 const detailsHtml = `
                     <div class="location-detail">
-                        <strong>Type:</strong> ${location.location_type.replace('_', ' ')}
+                        <strong>${typeIcon} TYPE:</strong> ${location.location_type.toUpperCase()}
                     </div>
                     <div class="location-detail">
-                        <strong>Population:</strong> ${location.population.toLocaleString()}
+                        <strong>💰 WEALTH:</strong> ${wealthDisplay}
                     </div>
                     <div class="location-detail">
-                        <strong>Wealth Level:</strong> ${location.wealth_level}/10 ${'⭐'.repeat(Math.min(location.wealth_level, 5))}
+                        <strong>👥 POPULATION:</strong> ${location.population?.toLocaleString() || 'UNKNOWN'}
                     </div>
                     <div class="location-detail">
-                        <strong>Coordinates:</strong> (${location.x_coord.toFixed(1)}, ${location.y_coord.toFixed(1)})
+                        <strong>📍 COORDINATES:</strong> (${location.x_coord}, ${location.y_coord})
                     </div>
                     <div class="location-detail">
-                        <strong>Description:</strong><br>
-                        <em>${location.description || 'No description available.'}</em>
+                        <strong>📄 DESCRIPTION:</strong>
+                        <div style="margin-top: 0.5rem; font-style: italic; color: var(--text-secondary); text-transform: none;">
+                            ${location.description || 'No description available.'}
+                        </div>
                     </div>
                     ${subLocations.length > 0 ? `
                         <div class="sub-locations">
-                            <strong>Available Areas:</strong>
+                            <strong>🏢 AVAILABLE AREAS:</strong>
                             ${subLocations.map(sub => `
                                 <div class="sub-location-item">
-                                    ${sub.icon} ${sub.name} - ${sub.description}
+                                    ${sub.icon || '📍'} ${sub.name.toUpperCase()} - ${sub.description}
                                 </div>
                             `).join('')}
                         </div>
                     ` : ''}
                     ${playersHere.length > 0 ? `
                         <div class="players-list">
-                            <strong>Players Present (${playersHere.length}):</strong>
+                            <strong>👥 CONTACTS PRESENT (${playersHere.length}):</strong>
                             ${playersHere.map(player => `
                                 <div class="player-item">
                                     <span class="status-indicator status-online"></span>
-                                    ${player.name}
+                                    ${player.name.toUpperCase()}
                                 </div>
                             `).join('')}
                         </div>
-                    ` : '<div class="location-detail"><em>No players currently present</em></div>'}
+                    ` : '<div class="location-detail"><em>No contacts currently present</em></div>'}
                 `;
                 
-                document.getElementById('location-details').innerHTML = detailsHtml;
+                detailsElement.innerHTML = detailsHtml;
+            }
+            
+            getWealthDisplay(wealthLevel) {
+                if (wealthLevel >= 9) return '👑 OPULENT';
+                if (wealthLevel >= 7) return '💎 WEALTHY';
+                if (wealthLevel >= 5) return '💰 PROSPEROUS';
+                if (wealthLevel >= 3) return '⚖️ AVERAGE';
+                if (wealthLevel >= 2) return '📉 POOR';
+                if (wealthLevel >= 1) return '🗑️ IMPOVERISHED';
+                return '❓ UNKNOWN';
+            }
+            
+            getLocationTypeIcon(locationType) {
+                const icons = {
+                    'Colony': '🏘️',
+                    'Space Station': '🛰️',
+                    'Outpost': '🏭',
+                    'Transit Gate': '🌌'
+                };
+                return icons[locationType] || '📍';
             }
             
             async getSubLocations(locationId) {
@@ -1074,18 +2020,20 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 return [];
             }
             
-            async getPlayersAtLocation(locationId) {
-                // Get from stored player data
-                return this.players.get(locationId) || [];
-            }
-            
             showLocationPanel() {
-                document.getElementById('location-panel').classList.remove('hidden');
+                const panel = document.getElementById('location-panel');
+                if (panel) {
+                    panel.classList.remove('hidden');
+                }
             }
             
             hideLocationPanel() {
-                document.getElementById('location-panel').classList.add('hidden');
+                const panel = document.getElementById('location-panel');
+                if (panel) {
+                    panel.classList.add('hidden');
+                }
                 this.selectedLocation = null;
+                this.clearHighlights();
             }
             
             searchLocations(query) {
@@ -1094,277 +2042,405 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 if (!query.trim()) return;
                 
                 const results = [];
-                this.locations.forEach((location, id) => {
-                    if (location.name.toLowerCase().includes(query.toLowerCase())) {
+                const queryLower = query.toLowerCase();
+                
+                this.locations.forEach((location) => {
+                    if (location.name.toLowerCase().includes(queryLower) ||
+                        location.location_type.toLowerCase().includes(queryLower)) {
                         results.push(location);
                     }
                 });
                 
                 if (results.length > 0) {
-                    // Highlight matching locations
                     results.forEach(location => {
-                        this.highlightLocation(location);
+                        this.highlightLocation(location, 'var(--primary-color)');
                     });
                     
-                    // Zoom to first result if only one match
                     if (results.length === 1) {
                         this.map.setView([results[0].y_coord, results[0].x_coord], 4);
+                        this.selectLocation(results[0]);
                     } else {
-                        // Fit bounds to all results
-                        const bounds = L.latLngBounds(
-                            results.map(loc => [loc.y_coord, loc.x_coord])
-                        );
-                        this.map.fitBounds(bounds, { padding: [20, 20] });
+                        this.fitBoundsToLocations(results);
                     }
                 }
             }
             
-            highlightLocation(location) {
-                const highlightMarker = L.circleMarker([location.y_coord, location.x_coord], {
-                    radius: location.marker.options.radius + 6,
-                    fillColor: 'transparent',
-                    color: '#ffff00',
+            clearSearch() {
+                const searchInput = document.getElementById('location-search');
+                if (searchInput) {
+                    searchInput.value = '';
+                }
+                this.clearHighlights();
+            }
+            
+            highlightLocation(location, color = '#ffff00') {
+                if (!location.marker) return;
+                
+                const originalOptions = location.marker.options;
+                location.marker.setStyle({
+                    ...originalOptions,
+                    color: color,
                     weight: 4,
                     opacity: 1,
-                    fillOpacity: 0,
-                    className: 'location-highlight'
+                    className: `${originalOptions.className} location-highlight`
                 });
                 
-                highlightMarker.addTo(this.map);
-                this.highlightedLocations.push(highlightMarker);
+                this.highlightedLocations.push(location);
             }
             
             clearHighlights() {
-                this.highlightedLocations.forEach(marker => {
-                    this.map.removeLayer(marker);
+                this.highlightedLocations.forEach(location => {
+                    if (location.marker) {
+                        const originalOptions = location.marker.options;
+                        location.marker.setStyle({
+                            ...originalOptions,
+                            color: '#ffffff',
+                            weight: 2,
+                            opacity: 1,
+                            className: originalOptions.className.replace(' location-highlight', '')
+                        });
+                    }
                 });
                 this.highlightedLocations = [];
             }
             
             async plotRoute(fromId, toId) {
-                this.clearRoute();
-                
-                if (!fromId || !toId || fromId === toId) return;
-                
                 try {
                     const response = await fetch(`/api/route/${fromId}/${toId}`);
-                    if (response.ok) {
-                        const routeData = await response.json();
-                        this.displayRoute(routeData);
-                    } else {
-                        alert('No route found between these locations.');
+                    if (!response.ok) throw new Error('Route calculation failed');
+                    
+                    const routeData = await response.json();
+                    
+                    if (routeData.error) {
+                        alert('NO ROUTE FOUND BETWEEN SELECTED LOCATIONS');
+                        return;
                     }
+                    
+                    this.displayRoute(routeData);
+                    
                 } catch (error) {
-                    console.error('Failed to plot route:', error);
-                    alert('Error calculating route.');
+                    console.error('Error plotting route:', error);
+                    alert('FAILED TO CALCULATE ROUTE');
                 }
             }
             
             displayRoute(routeData) {
+                this.clearRoute();
+                
                 if (!routeData.path || routeData.path.length < 2) return;
                 
-                this.routeMode = true;
-                
-                // Dim all locations first
-                this.locations.forEach((location) => {
-                    location.marker.getElement()?.classList.add('location-dimmed');
+                const routeCoords = routeData.path.map(location => [location.y_coord, location.x_coord]);
+                const routeLine = L.polyline(routeCoords, {
+                    color: '#ffff00',
+                    weight: 5,
+                    opacity: 0.9,
+                    className: 'route-highlight'
                 });
                 
-                // Dim all corridors
-                this.corridors.forEach((corridor) => {
-                    if (corridor.line.getElement) {
-                        corridor.line.getElement()?.classList.add('location-dimmed');
+                routeLine.addTo(this.map);
+                this.routePolylines.push(routeLine);
+                
+                if (!this.showRoutes) {
+                    routeLine.getElement()?.classList.add('routes-hidden');
+                }
+                
+                routeData.path.forEach(location => {
+                    const loc = this.locations.get(location.location_id);
+                    if (loc) {
+                        this.highlightLocation(loc, '#ffff00');
                     }
                 });
                 
-                // Highlight route corridors and un-dim them
-                for (let i = 0; i < routeData.path.length - 1; i++) {
-                    const fromId = routeData.path[i];
-                    const toId = routeData.path[i + 1];
-                    
-                    this.corridors.forEach((corridor) => {
-                        if ((corridor.origin_location === fromId && corridor.destination_location === toId) ||
-                            (corridor.origin_location === toId && corridor.destination_location === fromId)) {
-                            
-                            // Remove dim and add highlight
-                            if (corridor.line.getElement) {
-                                corridor.line.getElement()?.classList.remove('location-dimmed');
-                                corridor.line.getElement()?.classList.add('route-highlight');
-                            }
-                            
-                            // Create additional highlight line for better visibility
-                            const routeLine = L.polyline([
-                                [corridor.origin_y, corridor.origin_x],
-                                [corridor.dest_y, corridor.dest_x]
-                            ], {
-                                color: '#ffff00',
-                                weight: 5,
-                                opacity: 0.9,
-                                className: 'route-highlight-overlay',
-                                interactive: false
-                            });
-                            
-                            routeLine.addTo(this.map);
-                            this.routePolylines.push(routeLine);
-                        }
-                    });
-                }
-                
-                // Highlight and un-dim waypoint locations
-                routeData.path.forEach(locationId => {
-                    const location = this.locations.get(locationId);
-                    if (location) {
-                        location.marker.getElement()?.classList.remove('location-dimmed');
-                        location.marker.getElement()?.classList.add('location-route-highlight');
-                        this.highlightLocation(location);
-                    }
-                });
-                
-                // Update label visibility for route mode
-                this.updateLabelVisibility();
-                
-                // Fit map to route with padding
-                const routeLocations = routeData.path.map(id => {
-                    const loc = this.locations.get(id);
-                    return loc ? [loc.y_coord, loc.x_coord] : null;
-                }).filter(coord => coord !== null);
-                
-                if (routeLocations.length > 0) {
-                    const bounds = L.latLngBounds(routeLocations);
-                    this.map.fitBounds(bounds, { padding: [30, 30], maxZoom: 3 });
-                }
-                
+                this.map.fitBounds(routeLine.getBounds(), { padding: [20, 20] });
                 this.currentRoute = routeData;
+                
+                const clearBtn = document.getElementById('clear-route-btn');
+                if (clearBtn) clearBtn.disabled = false;
             }
             
             clearRoute() {
-                this.routeMode = false;
-                
-                // Remove route highlight lines
-                this.routePolylines.forEach(line => {
-                    this.map.removeLayer(line);
+                this.routePolylines.forEach(polyline => {
+                    this.map.removeLayer(polyline);
                 });
                 this.routePolylines = [];
                 
-                // Remove location highlights
                 this.clearHighlights();
-                
-                // Remove all dimming and highlighting classes
-                this.locations.forEach((location) => {
-                    const element = location.marker.getElement();
-                    if (element) {
-                        element.classList.remove('location-dimmed', 'location-route-highlight');
-                    }
-                });
-                
-                this.corridors.forEach((corridor) => {
-                    const element = corridor.line.getElement ? corridor.line.getElement() : null;
-                    if (element) {
-                        element.classList.remove('location-dimmed', 'route-highlight');
-                    }
-                });
-                
-                // Update label visibility
-                this.updateLabelVisibility();
-                
                 this.currentRoute = null;
+                
+                const clearBtn = document.getElementById('clear-route-btn');
+                if (clearBtn) clearBtn.disabled = true;
+            }
+            
+            populateRouteSelects() {
+                const fromSelect = document.getElementById('route-from');
+                const toSelect = document.getElementById('route-to');
+                
+                if (!fromSelect || !toSelect) return;
+                
+                [fromSelect, toSelect].forEach(select => {
+                    while (select.children.length > 1) {
+                        select.removeChild(select.lastChild);
+                    }
+                });
+                
+                const sortedLocations = Array.from(this.locations.values())
+                    .sort((a, b) => a.name.localeCompare(b.name));
+                
+                sortedLocations.forEach(location => {
+                    [fromSelect, toSelect].forEach(select => {
+                        const option = document.createElement('option');
+                        option.value = location.location_id;
+                        option.textContent = `${location.name.toUpperCase()} (${location.location_type.toUpperCase()})`;
+                        select.appendChild(option);
+                    });
+                });
+                
+                fromSelect.disabled = false;
+                toSelect.disabled = false;
+                
+                [fromSelect, toSelect].forEach(select => {
+                    select.addEventListener('change', () => {
+                        const plotBtn = document.getElementById('plot-route-btn');
+                        if (plotBtn) {
+                            plotBtn.disabled = !(fromSelect.value && toSelect.value && fromSelect.value !== toSelect.value);
+                        }
+                    });
+                });
+            }
+            
+            fitMapToBounds() {
+                if (this.locations.size === 0) return;
+                
+                const bounds = L.latLngBounds();
+                this.locations.forEach(location => {
+                    bounds.extend([location.y_coord, location.x_coord]);
+                });
+                
+                this.map.fitBounds(bounds, { padding: [20, 20] });
+            }
+            
+            fitBoundsToLocations(locations) {
+                if (locations.length === 0) return;
+                
+                const bounds = L.latLngBounds();
+                locations.forEach(location => {
+                    bounds.extend([location.y_coord, location.x_coord]);
+                });
+                
+                this.map.fitBounds(bounds, { padding: [40, 40] });
+            }
+            
+            toggleLabels() {
+                this.showLabels = !this.showLabels;
+                const btn = document.getElementById('toggle-labels-btn');
+                
+                if (this.showLabels) {
+                    this.addLocationLabels();
+                    if (btn) btn.textContent = 'HIDE LABELS';
+                } else {
+                    this.removeLocationLabels();
+                    if (btn) btn.textContent = 'LABELS';
+                }
+            }
+            
+            addLocationLabels() {
+                this.removeLocationLabels();
+                this.labelGrid.clear();
+
+                const bounds = this.map.getBounds();
+                
+                let visibleLocations = [];
+                
+                // 1. Get all locations currently in the view, without filtering by zoom level.
+                this.locations.forEach(location => {
+                    const point = L.latLng(location.y_coord, location.x_coord);
+                    if (bounds.contains(point)) {
+                        visibleLocations.push(location);
+                    }
+                });
+
+                // 2. Sort them by importance to give priority to more significant locations.
+                visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
+                
+                // 3. Attempt to add a label for each. The collision detection will naturally
+                //    prevent clutter at low zooms and allow more labels at high zooms.
+                visibleLocations.forEach(location => {
+                    this.addSmartLabel(location);
+                });
+            }
+            
+            getLocationImportance(location) {
+                const typeWeights = {
+                    'Space Station': 4,
+                    'Colony': 3,
+                    'Transit Gate': 2,
+                    'Outpost': 1
+                };
+                const wealthWeight = (location.wealth_level || 1) * 0.5;
+                const populationWeight = Math.log10((location.population || 1) + 1) * 0.3;
+                
+                return (typeWeights[location.location_type] || 1) + wealthWeight + populationWeight;
+            }
+            
+            addSmartLabel(location) {
+                const zoom = this.map.getZoom();
+                const basePosition = [location.y_coord, location.x_coord];
+                const labelSize = this.estimateLabelSize(location.name, zoom);
+                
+                const positionData = this.findOptimalLabelPosition(basePosition, labelSize);
+                if (!positionData) return;
+
+                const { positionLatLng, positionPoint } = positionData;
+
+                const wealthClass = this.getWealthClass(location.wealth_level);
+                const zoomClass = this.getZoomClass(zoom);
+
+                const label = L.marker(positionLatLng, {
+                    icon: L.divIcon({
+                        className: `location-label ${wealthClass} ${zoomClass}`,
+                        html: location.name.toUpperCase(),
+                        iconSize: [labelSize.width, labelSize.height],
+                        iconAnchor: [labelSize.width / 2, labelSize.height / 2]
+                    }),
+                    interactive: false
+                });
+
+                label.addTo(this.map);
+                location.label = label;
+                this.markLabelArea(positionPoint, labelSize);
+            }
+            
+            estimateLabelSize(text, zoom) {
+                let charWidth, padding, minWidth, height;
+
+                // REMOVED the size "jump" at zoom level 4 that was causing labels to disappear.
+                // Now, labels will scale up at zoom 2 and maintain that sizing, preventing the break.
+                if (zoom >= 2) {
+                    charWidth = 8;
+                    padding = 16;
+                    minWidth = 80;
+                    height = 24;
+                } else {
+                    charWidth = 7;
+                    padding = 12;
+                    minWidth = 70;
+                    height = 20;
+                }
+
+                const width = Math.max(minWidth, (text.length * charWidth) + padding);
+                return { width, height };
+            }
+            
+            getZoomClass(zoom) {
+                if (zoom >= 4) return 'zoom-large';
+                if (zoom >= 2) return 'zoom-medium';
+                return 'zoom-small';
+            }
+            
+            findOptimalLabelPosition(basePosition, labelSize) {
+                const basePoint = this.map.latLngToContainerPoint(basePosition);
+                const zoom = this.map.getZoom();
+                // REVERSED LOGIC: Make offset SMALLER at high zoom and LARGER at low zoom.
+                const offsetDistance = Math.max(15, 35 - (zoom * 3));
+                
+                const offsets = [
+                    [0, -offsetDistance], // Above
+                    [0, offsetDistance],  // Below
+                    [offsetDistance, 0],  // Right
+                    [-offsetDistance, 0], // Left
+                    [offsetDistance * 0.7, -offsetDistance * 0.7], // Top-right
+                    [-offsetDistance * 0.7, -offsetDistance * 0.7], // Top-left
+                    [offsetDistance * 0.7, offsetDistance * 0.7], // Bottom-right
+                    [-offsetDistance * 0.7, offsetDistance * 0.7]  // Bottom-left
+                ];
+
+                for (const [offsetX, offsetY] of offsets) {
+                    const newPoint = L.point(basePoint.x + offsetX, basePoint.y + offsetY);
+                    if (this.isPositionAvailable(newPoint, labelSize)) {
+                        return {
+                            positionLatLng: this.map.containerPointToLatLng(newPoint),
+                            positionPoint: newPoint
+                        };
+                    }
+                }
+                return null;
+            }
+            
+            isPositionAvailable(point, labelSize) {
+                const { width, height } = labelSize;
+                const gridSize = 10; // Pixel grid size for collision check
+                const startX = Math.floor((point.x - width / 2) / gridSize);
+                const endX = Math.floor((point.x + width / 2) / gridSize);
+                const startY = Math.floor((point.y - height / 2) / gridSize);
+                const endY = Math.floor((point.y + height / 2) / gridSize);
+
+                for (let x = startX; x <= endX; x++) {
+                    for (let y = startY; y <= endY; y++) {
+                        if (this.labelGrid.has(`${x},${y}`)) {
+                            return false;
+                        }
+                    }
+                }
+                return this.map.getPixelBounds().contains(point);
+            }
+            
+            markLabelArea(point, labelSize) {
+                const { width, height } = labelSize;
+                const gridSize = 10;
+                const startX = Math.floor((point.x - width / 2) / gridSize);
+                const endX = Math.floor((point.x + width / 2) / gridSize);
+                const startY = Math.floor((point.y - height / 2) / gridSize);
+                const endY = Math.floor((point.y + height / 2) / gridSize);
+
+                for (let x = startX; x <= endX; x++) {
+                    for (let y = startY; y <= endY; y++) {
+                        this.labelGrid.set(`${x},${y}`, true);
+                    }
+                }
+            }
+            
+            getWealthClass(wealthLevel) {
+                if (wealthLevel >= 4) return 'wealth-high';
+                if (wealthLevel >= 3) return 'wealth-medium';
+                return 'wealth-low';
+            }
+            
+            updateLabelsForZoom() {
+                if (this.showLabels) {
+                    clearTimeout(this.labelUpdateTimeout);
+                    this.labelUpdateTimeout = setTimeout(() => {
+                        this.addLocationLabels();
+                    }, 150);
+                }
+            }
+            
+            removeLocationLabels() {
+                this.locations.forEach(location => {
+                    if (location.label) {
+                        this.map.removeLayer(location.label);
+                        delete location.label;
+                    }
+                });
+                this.labelGrid.clear();
             }
             
             updateConnectionStatus(text, color) {
-                const statusEl = document.getElementById('connection-status');
-                statusEl.textContent = text;
-                statusEl.style.color = color;
+                const indicator = document.getElementById('connection-indicator');
+                const statusText = document.getElementById('connection-text');
+                
+                if (indicator && statusText) {
+                    indicator.style.color = color;
+                    statusText.textContent = text;
+                }
             }
             
-            setupLabelControls() {
-                // Main label toggle
-                document.getElementById('show-labels').addEventListener('change', (e) => {
-                    this.labelSettings.showLabels = e.target.checked;
-                    this.updateLabelVisibility();
-                });
-                
-                // Type-specific toggles
-                document.getElementById('show-colonies').addEventListener('change', (e) => {
-                    this.labelSettings.showColonies = e.target.checked;
-                    this.updateLabelVisibility();
-                });
-                
-                document.getElementById('show-stations').addEventListener('change', (e) => {
-                    this.labelSettings.showStations = e.target.checked;
-                    this.updateLabelVisibility();
-                });
-                
-                document.getElementById('show-outposts').addEventListener('change', (e) => {
-                    this.labelSettings.showOutposts = e.target.checked;
-                    this.updateLabelVisibility();
-                });
-                
-                document.getElementById('show-gates').addEventListener('change', (e) => {
-                    this.labelSettings.showGates = e.target.checked;
-                    this.updateLabelVisibility();
-                });
-                
-                // Update labels on zoom
-                this.map.on('zoomend', () => {
-                    this.updateLabelVisibility();
-                });
-            }
-            
-            setupEventListeners() {
-                // Legend toggle
-                document.getElementById('toggle-legend').addEventListener('click', () => {
-                    const legend = document.getElementById('legend');
-                    const toggleBtn = document.getElementById('toggle-legend');
-                    
-                    legend.classList.toggle('collapsed');
-                    toggleBtn.textContent = legend.classList.contains('collapsed') ? '+' : '−';
-                });
-                
-                // Location panel close
-                document.getElementById('close-panel').addEventListener('click', () => {
-                    this.hideLocationPanel();
-                });
-                
-                // Search functionality
-                const searchInput = document.getElementById('location-search');
-                const searchBtn = document.getElementById('search-btn');
-                
-                const performSearch = () => {
-                    this.searchLocations(searchInput.value);
-                };
-                
-                searchBtn.addEventListener('click', performSearch);
-                searchInput.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') {
-                        performSearch();
-                    }
-                });
-                
-                // Route plotting
-                document.getElementById('plot-route-btn').addEventListener('click', () => {
-                    const fromId = document.getElementById('route-from').value;
-                    const toId = document.getElementById('route-to').value;
-                    if (fromId && toId) {
-                        this.plotRoute(parseInt(fromId), parseInt(toId));
-                    }
-                });
-                
-                document.getElementById('clear-route-btn').addEventListener('click', () => {
-                    this.clearRoute();
-                    document.getElementById('route-from').value = '';
-                    document.getElementById('route-to').value = '';
-                });
-                
-                // Close panel when clicking outside
-                document.addEventListener('click', (e) => {
-                    const panel = document.getElementById('location-panel');
-                    if (!panel.contains(e.target) && !this.map.getContainer().contains(e.target)) {
-                        this.hideLocationPanel();
-                    }
-                });
-                
-                // Add label controls
-                this.setupLabelControls();
+            hideLoadingOverlay() {
+                const overlay = document.getElementById('loading-overlay');
+                if (overlay) {
+                    setTimeout(() => {
+                        overlay.classList.add('hidden');
+                    }, 1500);
+                }
             }
         }
 
@@ -1372,9 +2448,9 @@ class WebMapCog(commands.Cog, name="WebMap"):
         document.addEventListener('DOMContentLoaded', () => {
             new GalaxyMap();
         });'''
-        
+
         with open("web/static/js/map.js", "w", encoding='utf-8') as f:
-            f.write(js_content)      
+            f.write(js_content)
         
     def _setup_fastapi(self):
         """Setup FastAPI application"""
@@ -1541,7 +2617,37 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 disconnected.add(client)
         
         self.websocket_clients -= disconnected
-    
+    @tasks.loop(seconds=10)  # Update every 10 seconds instead of waiting for events
+    async def update_player_data_task(self):
+        """Regularly update player data for real-time map"""
+        if self.is_running and self.websocket_clients:
+            await self._broadcast_player_updates()
+    async def _broadcast_player_updates(self):
+        """Optimized player updates with caching"""
+        try:
+            # Get current player data
+            players_data = self.db.execute_query(
+                """SELECT c.name, c.current_location, c.is_logged_in, c.user_id
+                   FROM characters c
+                   WHERE c.is_logged_in = 1 AND c.current_location IS NOT NULL""",
+                fetch='all'
+            )
+            
+            current_players = [
+                {
+                    "name": player[0],
+                    "location_id": player[1],
+                    "is_logged_in": player[2] == 1,
+                    "user_id": player[3]
+                }
+                for player in players_data
+            ]
+            
+            # Broadcast immediately to all clients
+            await self._broadcast_update("player_update", current_players)
+            
+        except Exception as e:
+            print(f"Error broadcasting player updates: {e}")
     async def _start_update_loop(self):
         """Start the periodic update loop"""
         while self.is_running:
@@ -1720,12 +2826,6 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     value="Use `/webmap_set_ip <your_external_ip_or_domain>` to set the external address for remote users",
                     inline=False
                 )
-            
-            embed.add_field(
-                name="🏠 Local Access URL",
-                value=f"{local_url}",
-                inline=False
-            )
             
             embed.add_field(
                 name="🔄 Features",
@@ -1919,13 +3019,6 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         value="❌ Error detecting external IP\nUse `/webmap_set_ip` to set manually",
                         inline=False
                     )
-            
-            local_url = f"http://localhost:{self.port}"
-            embed.add_field(
-                name="Local URL",
-                value=f"{local_url}",
-                inline=False
-            )
             
             embed.add_field(
                 name="Connected Clients",

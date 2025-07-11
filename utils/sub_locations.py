@@ -745,6 +745,18 @@ class SubLocationServiceView(discord.ui.View):
                 style=discord.ButtonStyle.secondary,
                 service_type="security_consult"
             ))
+            self.add_item(SubLocationButton(
+                label="Request Escort", 
+                emoji="👮", 
+                style=discord.ButtonStyle.primary,
+                service_type="request_escort"
+            ))
+            self.add_item(SubLocationButton(
+                label="File Complaint", 
+                emoji="📝", 
+                style=discord.ButtonStyle.secondary,
+                service_type="file_complaint"
+            ))
 
         elif self.sub_type == 'gate_control':
             self.add_item(SubLocationButton(
@@ -815,7 +827,157 @@ class SubLocationServiceView(discord.ui.View):
                 style=discord.ButtonStyle.danger,
                 service_type="emergency_repairs"
             ))
-
+        elif self.sub_type == 'dormitory':
+            self.add_item(SubLocationButton(
+                label="Rest in Quarters", 
+                emoji="🛏️", 
+                style=discord.ButtonStyle.success,
+                service_type="rest_quarters"
+            ))
+            self.add_item(SubLocationButton(
+                label="Use Facilities", 
+                emoji="🚿", 
+                style=discord.ButtonStyle.secondary,
+                service_type="use_facilities"
+            ))
+            self.add_item(SubLocationButton(
+                label="Check Amenities", 
+                emoji="🏠", 
+                style=discord.ButtonStyle.secondary,
+                service_type="check_amenities"
+            ))
+            
+        elif self.sub_type == 'research':
+            self.add_item(SubLocationButton(
+                label="Browse Research", 
+                emoji="🔬", 
+                style=discord.ButtonStyle.primary,
+                service_type="browse_research"
+            ))
+            self.add_item(SubLocationButton(
+                label="Use Equipment", 
+                emoji="⚗️", 
+                style=discord.ButtonStyle.secondary,
+                service_type="use_equipment"
+            ))
+            self.add_item(SubLocationButton(
+                label="Review Data", 
+                emoji="📊", 
+                style=discord.ButtonStyle.secondary,
+                service_type="review_data"
+            ))
+            self.add_item(SubLocationButton(
+                label="Collaborate", 
+                emoji="🤝", 
+                style=discord.ButtonStyle.primary,
+                service_type="collaborate"
+            ))
+            
+        elif self.sub_type == 'hydroponics':
+            self.add_item(SubLocationButton(
+                label="Tour Gardens", 
+                emoji="🌱", 
+                style=discord.ButtonStyle.success,
+                service_type="tour_gardens"
+            ))
+            self.add_item(SubLocationButton(
+                label="Fresh Produce", 
+                emoji="🥬", 
+                style=discord.ButtonStyle.primary,
+                service_type="fresh_produce"
+            ))
+            self.add_item(SubLocationButton(
+                label="Learn Techniques", 
+                emoji="📚", 
+                style=discord.ButtonStyle.secondary,
+                service_type="learn_techniques"
+            ))
+            
+        elif self.sub_type == 'recreation':
+            self.add_item(SubLocationButton(
+                label="Play Games", 
+                emoji="🎮", 
+                style=discord.ButtonStyle.primary,
+                service_type="play_games"
+            ))
+            self.add_item(SubLocationButton(
+                label="Exercise", 
+                emoji="🏋️", 
+                style=discord.ButtonStyle.success,
+                service_type="exercise"
+            ))
+            self.add_item(SubLocationButton(
+                label="Join Activity", 
+                emoji="🏓", 
+                style=discord.ButtonStyle.secondary,
+                service_type="join_activity"
+            ))
+            self.add_item(SubLocationButton(
+                label="Relax & Unwind", 
+                emoji="😌", 
+                style=discord.ButtonStyle.secondary,
+                service_type="relax_unwind"
+            ))
+            
+        elif self.sub_type == 'communications':
+            self.add_item(SubLocationButton(
+                label="Send Message", 
+                emoji="📡", 
+                style=discord.ButtonStyle.primary,
+                service_type="send_message"
+            ))
+            self.add_item(SubLocationButton(
+                label="Check Signals", 
+                emoji="📻", 
+                style=discord.ButtonStyle.secondary,
+                service_type="check_signals"
+            ))
+            self.add_item(SubLocationButton(
+                label="Monitor Channels", 
+                emoji="🎧", 
+                style=discord.ButtonStyle.secondary,
+                service_type="monitor_channels"
+            ))
+            
+        elif self.sub_type == 'cafeteria':
+            self.add_item(SubLocationButton(
+                label="Order Meal", 
+                emoji="🍽️", 
+                style=discord.ButtonStyle.primary,
+                service_type="order_meal"
+            ))
+            self.add_item(SubLocationButton(
+                label="Check Menu", 
+                emoji="📋", 
+                style=discord.ButtonStyle.secondary,
+                service_type="check_menu"
+            ))
+            self.add_item(SubLocationButton(
+                label="Socialize", 
+                emoji="👥", 
+                style=discord.ButtonStyle.secondary,
+                service_type="socialize"
+            ))
+            
+        elif self.sub_type == 'transit_lounge':
+            self.add_item(SubLocationButton(
+                label="Wait Comfortably", 
+                emoji="🛋️", 
+                style=discord.ButtonStyle.success,
+                service_type="wait_comfortably"
+            ))
+            self.add_item(SubLocationButton(
+                label="Check Schedules", 
+                emoji="⏱️", 
+                style=discord.ButtonStyle.secondary,
+                service_type="check_schedules"
+            ))
+            self.add_item(SubLocationButton(
+                label="Get Travel Info", 
+                emoji="🗺️", 
+                style=discord.ButtonStyle.primary,
+                service_type="travel_info"
+            ))
         # Derelict area services
         elif self.sub_type in ['abandoned_quarters', 'emergency_shelter', 'salvage_yard', 'power_core', 'scavenger_den']:
             self.add_item(SubLocationButton(
@@ -888,7 +1050,56 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_browse_shops(interaction, char_name)
         elif service_type == "apply_permits":
             await self._handle_apply_permits(interaction, char_name, money)
-        
+        elif service_type == "request_escort":
+            await self._handle_request_escort(interaction, char_name)
+        elif service_type == "file_complaint":
+            await self._handle_file_complaint(interaction, char_name)
+        elif service_type == "rest_quarters":
+            await self._handle_rest_quarters(interaction, char_name, hp, max_hp)
+        elif service_type == "use_facilities":
+            await self._handle_use_facilities(interaction, char_name)
+        elif service_type == "check_amenities":
+            await self._handle_check_amenities(interaction, char_name)
+        elif service_type == "browse_research":
+            await self._handle_browse_research(interaction, char_name)
+        elif service_type == "use_equipment":
+            await self._handle_use_equipment(interaction, char_name)
+        elif service_type == "review_data":
+            await self._handle_review_data(interaction, char_name)
+        elif service_type == "collaborate":
+            await self._handle_collaborate(interaction, char_name)
+        elif service_type == "tour_gardens":
+            await self._handle_tour_gardens(interaction, char_name)
+        elif service_type == "fresh_produce":
+            await self._handle_fresh_produce(interaction, char_name, money)
+        elif service_type == "learn_techniques":
+            await self._handle_learn_techniques(interaction, char_name)
+        elif service_type == "play_games":
+            await self._handle_play_games(interaction, char_name)
+        elif service_type == "exercise":
+            await self._handle_exercise(interaction, char_name, hp, max_hp)
+        elif service_type == "join_activity":
+            await self._handle_join_activity(interaction, char_name)
+        elif service_type == "relax_unwind":
+            await self._handle_relax_unwind(interaction, char_name)
+        elif service_type == "send_message":
+            await self._handle_send_message(interaction, char_name, money)
+        elif service_type == "check_signals":
+            await self._handle_check_signals(interaction, char_name)
+        elif service_type == "monitor_channels":
+            await self._handle_monitor_channels(interaction, char_name)
+        elif service_type == "order_meal":
+            await self._handle_order_meal(interaction, char_name, money, hp, max_hp)
+        elif service_type == "check_menu":
+            await self._handle_check_menu(interaction, char_name)
+        elif service_type == "socialize":
+            await self._handle_socialize(interaction, char_name)
+        elif service_type == "wait_comfortably":
+            await self._handle_wait_comfortably(interaction, char_name, hp, max_hp)
+        elif service_type == "check_schedules":
+            await self._handle_check_schedules(interaction, char_name)
+        elif service_type == "travel_info":
+            await self._handle_travel_info(interaction, char_name)
         # New handlers for character info changes
         elif service_type == "change_name":
             modal = ChangeNameModal(
@@ -2942,7 +3153,586 @@ class SubLocationServiceView(discord.ui.View):
         embed.add_field(name="📋 Result", value=response, inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+    # Additional Security Services
+    async def _handle_request_escort(self, interaction, char_name: str):
+        """Handle requesting security escort"""
+        embed = discord.Embed(
+            title="👮 Security Escort",
+            description=f"**{char_name}** requests a security escort for safe passage.",
+            color=0x4169e1
+        )
+        embed.add_field(name="📋 Service", value="Security personnel will accompany you during travel if needed.", inline=False)
+        embed.add_field(name="💰 Cost", value="50 credits per corridor jump", inline=True)
+        embed.add_field(name="⏱️ Availability", value="Based on current security status", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    async def _handle_file_complaint(self, interaction, char_name: str):
+        """Handle filing a complaint"""
+        embed = discord.Embed(
+            title="📝 File Complaint",
+            description=f"**{char_name}** files an official complaint with security.",
+            color=0xff6347
+        )
+        embed.add_field(name="📋 Process", value="Your complaint has been logged and will be reviewed by security officials.", inline=False)
+        embed.add_field(name="🔍 Investigation", value="Serious complaints may result in formal investigations.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Dormitory Services
+    async def _handle_rest_quarters(self, interaction, char_name: str, hp: int, max_hp: int):
+        """Handle resting in quarters"""
+        if hp >= max_hp:
+            embed = discord.Embed(
+                title="🛏️ Well Rested",
+                description=f"**{char_name}** is already at full health and energy.",
+                color=0x90ee90
+            )
+        else:
+            # Restore some HP
+            hp_restored = min(max_hp - hp, 25)
+            new_hp = hp + hp_restored
+            
+            self.db.execute_query(
+                "UPDATE characters SET hp = ? WHERE user_id = ?",
+                (new_hp, interaction.user.id)
+            )
+            
+            embed = discord.Embed(
+                title="🛏️ Restful Sleep",
+                description=f"**{char_name}** gets some much-needed rest in comfortable quarters.",
+                color=0x90ee90
+            )
+            embed.add_field(name="💚 Health Restored", value=f"+{hp_restored} HP", inline=True)
+            embed.add_field(name="🏥 Current Health", value=f"{new_hp}/{max_hp} HP", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_use_facilities(self, interaction, char_name: str):
+        """Handle using dormitory facilities"""
+        facilities = [
+            "You enjoy a refreshing shower in the clean facilities.",
+            "The climate control keeps the quarters at perfect temperature.",
+            "You use the personal storage locker to organize your belongings.",
+            "The emergency communication system is tested and functional.",
+            "You appreciate the privacy and comfort of personal quarters."
+        ]
+        
+        embed = discord.Embed(
+            title="🚿 Facilities Access",
+            description=f"**{char_name}** makes use of the dormitory facilities.",
+            color=0x87ceeb
+        )
+        embed.add_field(name="🏠 Comfort", value=random.choice(facilities), inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_check_amenities(self, interaction, char_name: str):
+        """Handle checking dormitory amenities"""
+        amenities = [
+            "🛏️ Comfortable sleeping quarters with adjustable beds",
+            "🚿 Private hygiene facilities with hot water",
+            "📚 Personal storage and work spaces",
+            "🌡️ Climate control and air filtration",
+            "📞 Emergency communication systems",
+            "🔒 Secure personal lockers"
+        ]
+        
+        embed = discord.Embed(
+            title="🏠 Dormitory Amenities",
+            description=f"**{char_name}** reviews available amenities.",
+            color=0xdda0dd
+        )
+        embed.add_field(name="🏨 Available Features", value="\n".join(amenities), inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Research Lab Services
+    async def _handle_browse_research(self, interaction, char_name: str):
+        """Handle browsing research projects"""
+        research_topics = [
+            "Advanced corridor navigation algorithms",
+            "Static fog behavioral patterns",
+            "Improved life support efficiency systems",
+            "Communication relay enhancement studies",
+            "Resource extraction optimization",
+            "Ship hull integrity under corridor stress",
+            "Long-range sensor array improvements",
+            "Bio-containment protocols and safety"
+        ]
+        
+        topic = random.choice(research_topics)
+        
+        embed = discord.Embed(
+            title="🔬 Research Browse",
+            description=f"**{char_name}** reviews current research projects.",
+            color=0x4682b4
+        )
+        embed.add_field(name="📊 Current Study", value=f"*{topic}*", inline=False)
+        embed.add_field(name="🧪 Status", value="Ongoing research with preliminary results available", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_use_equipment(self, interaction, char_name: str):
+        """Handle using research equipment"""
+        equipment = [
+            "Advanced microscopy systems reveal microscopic details",
+            "Particle analyzers process complex material samples",
+            "Data processing arrays crunch numbers at incredible speeds",
+            "Simulation chambers test theoretical scenarios safely",
+            "Precision measurement tools provide exact specifications"
+        ]
+        
+        embed = discord.Embed(
+            title="⚗️ Equipment Access",
+            description=f"**{char_name}** gains access to sophisticated research equipment.",
+            color=0x20b2aa
+        )
+        embed.add_field(name="🔧 Equipment Used", value=random.choice(equipment), inline=False)
+        embed.add_field(name="📈 Result", value="Valuable data collected for further analysis", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_review_data(self, interaction, char_name: str):
+        """Handle reviewing research data"""
+        data_insights = [
+            "Recent corridor mapping shows unusual stability patterns",
+            "Life support efficiency can be improved by 12% with new protocols",
+            "Ship sensor arrays perform better with recalibrated algorithms",
+            "Material stress tests reveal optimal hull configurations",
+            "Communication range extends 15% further with relay adjustments"
+        ]
+        
+        embed = discord.Embed(
+            title="📊 Data Review",
+            description=f"**{char_name}** examines recent research findings.",
+            color=0x9370db
+        )
+        embed.add_field(name="💡 Key Finding", value=random.choice(data_insights), inline=False)
+        embed.add_field(name="🎓 Knowledge", value="You gain insight into current technological developments.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_collaborate(self, interaction, char_name: str):
+        """Handle collaborating with researchers"""
+        collaborations = [
+            "You assist with data analysis and spot an interesting pattern",
+            "Your practical experience provides valuable real-world context",
+            "You help troubleshoot a technical problem with your expertise",
+            "Your observations contribute to a breakthrough discovery",
+            "You participate in a productive brainstorming session"
+        ]
+        
+        embed = discord.Embed(
+            title="🤝 Research Collaboration",
+            description=f"**{char_name}** collaborates with the research team.",
+            color=0xffa500
+        )
+        embed.add_field(name="👥 Contribution", value=random.choice(collaborations), inline=False)
+        embed.add_field(name="🎯 Impact", value="Your collaboration advances the research project.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Hydroponics Services
+    async def _handle_tour_gardens(self, interaction, char_name: str):
+        """Handle touring the hydroponics gardens"""
+        garden_sights = [
+            "Rows of vibrant green vegetables grow in perfect conditions",
+            "Automated systems carefully monitor nutrition and water levels",
+            "The air is fresh and filled with the scent of growing plants",
+            "Exotic fruits from various worlds flourish in controlled environments",
+            "Advanced LED arrays provide optimal light spectrums for growth"
+        ]
+        
+        embed = discord.Embed(
+            title="🌱 Garden Tour",
+            description=f"**{char_name}** takes a guided tour of the hydroponics facility.",
+            color=0x32cd32
+        )
+        embed.add_field(name="🌿 Observation", value=random.choice(garden_sights), inline=False)
+        embed.add_field(name="📚 Learning", value="You gain appreciation for sustainable food production.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_fresh_produce(self, interaction, char_name: str, money: int):
+        """Handle buying fresh produce"""
+        cost = random.randint(15, 35)
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="❌ Insufficient Funds",
+                description=f"**{char_name}** cannot afford fresh produce right now.",
+                color=0xff4500
+            )
+            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
+        else:
+            produce_items = [
+                "fresh leafy greens",
+                "ripe hydroponic tomatoes", 
+                "crisp vegetables",
+                "exotic fruits",
+                "aromatic herbs"
+            ]
+            
+            item = random.choice(produce_items)
+            
+            self.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (cost, interaction.user.id)
+            )
+            
+            embed = discord.Embed(
+                title="🥬 Fresh Produce",
+                description=f"**{char_name}** purchases some {item}.",
+                color=0x9acd32
+            )
+            embed.add_field(name="🌱 Quality", value="Freshly harvested and nutrient-rich", inline=False)
+            embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_learn_techniques(self, interaction, char_name: str):
+        """Handle learning hydroponics techniques"""
+        techniques = [
+            "optimal nutrient solution mixing ratios",
+            "proper pH balance maintenance methods",
+            "efficient water circulation system design",
+            "pest management in closed environments",
+            "maximizing yield through lighting optimization",
+            "crop rotation strategies for continuous production"
+        ]
+        
+        embed = discord.Embed(
+            title="📚 Learning Experience",
+            description=f"**{char_name}** learns about hydroponics techniques.",
+            color=0x6b8e23
+        )
+        embed.add_field(name="🎓 Technique Learned", value=f"How to manage {random.choice(techniques)}", inline=False)
+        embed.add_field(name="🧠 Knowledge", value="This knowledge could be useful for future endeavors.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Recreation Services
+    async def _handle_play_games(self, interaction, char_name: str):
+        """Handle playing games in recreation"""
+        games = [
+            "VR simulations of exotic worlds",
+            "classic card games with other travelers",
+            "holographic puzzle challenges", 
+            "competitive strategy games",
+            "immersive adventure simulations",
+            "skill-based arcade challenges"
+        ]
+        
+        game = random.choice(games)
+        outcomes = ["won", "lost", "tied", "had fun with"]
+        outcome = random.choice(outcomes)
+        
+        embed = discord.Embed(
+            title="🎮 Gaming Session",
+            description=f"**{char_name}** plays {game} and {outcome}!",
+            color=0xff1493
+        )
+        embed.add_field(name="🎯 Result", value="An entertaining break from the rigors of space travel.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_exercise(self, interaction, char_name: str, hp: int, max_hp: int):
+        """Handle exercising in recreation"""
+        if hp >= max_hp:
+            fitness_boost = 0
+            message = "You maintain your excellent physical condition."
+        else:
+            fitness_boost = min(max_hp - hp, 15)
+            self.db.execute_query(
+                "UPDATE characters SET hp = hp + ? WHERE user_id = ?",
+                (fitness_boost, interaction.user.id)
+            )
+            message = f"The workout improves your physical condition! (+{fitness_boost} HP)"
+        
+        workouts = [
+            "cardiovascular training on the treadmill",
+            "strength exercises with resistance equipment",
+            "flexibility training and stretching",
+            "zero-gravity fitness routines",
+            "balance and coordination exercises"
+        ]
+        
+        embed = discord.Embed(
+            title="🏋️ Exercise Session",
+            description=f"**{char_name}** engages in {random.choice(workouts)}.",
+            color=0x32cd32
+        )
+        embed.add_field(name="💪 Fitness", value=message, inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_join_activity(self, interaction, char_name: str):
+        """Handle joining recreational activities"""
+        activities = [
+            "a friendly table tennis tournament",
+            "group meditation and relaxation session",
+            "collaborative art and crafts workshop",
+            "book club discussion about recent reads",
+            "movie night with classic space adventure films",
+            "music jam session with other talented travelers"
+        ]
+        
+        embed = discord.Embed(
+            title="🏓 Group Activity",
+            description=f"**{char_name}** joins {random.choice(activities)}.",
+            color=0xffd700
+        )
+        embed.add_field(name="👥 Social", value="You meet interesting people and make new connections.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_relax_unwind(self, interaction, char_name: str):
+        """Handle relaxing and unwinding"""
+        relaxation_activities = [
+            "You find a quiet corner to read and decompress",
+            "Soft music and ambient lighting help you unwind",
+            "You practice breathing exercises to reduce stress",
+            "The comfortable seating provides much-needed rest",
+            "You enjoy peaceful moments watching space through viewports"
+        ]
+        
+        embed = discord.Embed(
+            title="😌 Relaxation",
+            description=f"**{char_name}** takes time to relax and unwind.",
+            color=0x9370db
+        )
+        embed.add_field(name="🧘 Effect", value=random.choice(relaxation_activities), inline=False)
+        embed.add_field(name="💭 Mental State", value="You feel refreshed and mentally recharged.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Communications Services
+    async def _handle_send_message(self, interaction, char_name: str, money: int):
+        """Handle sending messages"""
+        cost = random.randint(10, 25)
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="❌ Insufficient Credits",
+                description=f"**{char_name}** cannot afford to send a message right now.",
+                color=0xff4500
+            )
+        else:
+            self.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (cost, interaction.user.id)
+            )
+            
+            destinations = [
+                "family back home",
+                "business contacts",
+                "fellow travelers",
+                "station administrators",
+                "trading partners"
+            ]
+            
+            embed = discord.Embed(
+                title="📡 Message Sent",
+                description=f"**{char_name}** sends a message to {random.choice(destinations)}.",
+                color=0x4169e1
+            )
+            embed.add_field(name="📨 Status", value="Message transmitted successfully", inline=False)
+            embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_check_signals(self, interaction, char_name: str):
+        """Handle checking communication signals"""
+        signals = [
+            "📡 Emergency beacon from a distant outpost",
+            "📻 Trading frequency broadcasting current prices",
+            "🎵 Music transmission from a nearby colony",
+            "📰 News updates from major system events",
+            "🚨 Safety warnings about corridor conditions",
+            "💼 Job postings and contract opportunities"
+        ]
+        
+        embed = discord.Embed(
+            title="📻 Signal Check",
+            description=f"**{char_name}** monitors communication channels.",
+            color=0x1e90ff
+        )
+        embed.add_field(name="📡 Detected Signal", value=random.choice(signals), inline=False)
+        embed.add_field(name="🔍 Information", value="You stay informed about current events and opportunities.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_monitor_channels(self, interaction, char_name: str):
+        """Handle monitoring communication channels"""
+        channel_activity = [
+            "Routine traffic control communications",
+            "Emergency services coordination chatter",
+            "Corporate data transmission bursts",
+            "Personal communications between travelers",
+            "Automated system status reports",
+            "Navigation updates and corridor conditions"
+        ]
+        
+        embed = discord.Embed(
+            title="🎧 Channel Monitoring",
+            description=f"**{char_name}** monitors various communication channels.",
+            color=0x6495ed
+        )
+        embed.add_field(name="📻 Activity", value=random.choice(channel_activity), inline=False)
+        embed.add_field(name="ℹ️ Insight", value="You gain awareness of local communication patterns.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Cafeteria Services
+    async def _handle_order_meal(self, interaction, char_name: str, money: int, hp: int, max_hp: int):
+        """Handle ordering a meal"""
+        meals = [
+            ("Hearty Protein Bowl", 25, 15),
+            ("Fresh Salad Medley", 15, 10),
+            ("Comfort Food Special", 30, 20),
+            ("Quick Energy Bar", 10, 5),
+            ("Gourmet Space Cuisine", 45, 25),
+            ("Traditional Home Cooking", 35, 18)
+        ]
+        
+        meal_name, cost, hp_restore = random.choice(meals)
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="❌ Insufficient Credits",
+                description=f"**{char_name}** cannot afford the {meal_name} right now.",
+                color=0xff4500
+            )
+        else:
+            # Calculate actual HP restored
+            actual_restore = min(hp_restore, max_hp - hp)
+            
+            self.db.execute_query(
+                "UPDATE characters SET money = money - ?, hp = hp + ? WHERE user_id = ?",
+                (cost, actual_restore, interaction.user.id)
+            )
+            
+            embed = discord.Embed(
+                title="🍽️ Meal Ordered",
+                description=f"**{char_name}** enjoys a delicious {meal_name}.",
+                color=0xffa500
+            )
+            embed.add_field(name="💚 Nourishment", value=f"+{actual_restore} HP restored", inline=True)
+            embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_check_menu(self, interaction, char_name: str):
+        """Handle checking the cafeteria menu"""
+        menu_items = [
+            "🥩 Protein Dishes: Grilled meats and plant-based alternatives",
+            "🥗 Fresh Salads: Hydroponically grown vegetables",
+            "🍲 Comfort Foods: Hearty soups and traditional favorites",
+            "🍰 Desserts: Sweet treats and energy bars",
+            "☕ Beverages: Coffee, tea, and nutritional drinks",
+            "🌮 Specialty Items: Regional cuisine from various worlds"
+        ]
+        
+        embed = discord.Embed(
+            title="📋 Cafeteria Menu",
+            description=f"**{char_name}** reviews today's menu offerings.",
+            color=0xdaa520
+        )
+        embed.add_field(name="🍽️ Available Items", value="\n".join(menu_items), inline=False)
+        embed.add_field(name="💰 Price Range", value="10-45 credits per item", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_socialize(self, interaction, char_name: str):
+        """Handle socializing in the cafeteria"""
+        social_encounters = [
+            "You join a conversation about recent corridor discoveries",
+            "Fellow travelers share stories of their journeys",
+            "You exchange contact information with a potential business partner",
+            "Local residents discuss recent events and news",
+            "You participate in friendly debates about space politics",
+            "Others share tips about navigation and travel safety"
+        ]
+        
+        embed = discord.Embed(
+            title="👥 Socializing",
+            description=f"**{char_name}** engages in conversation with fellow diners.",
+            color=0x20b2aa
+        )
+        embed.add_field(name="💬 Interaction", value=random.choice(social_encounters), inline=False)
+        embed.add_field(name="🤝 Networking", value="You build relationships within the community.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Transit Lounge Services
+    async def _handle_wait_comfortably(self, interaction, char_name: str, hp: int, max_hp: int):
+        """Handle waiting comfortably in transit lounge"""
+        if hp >= max_hp:
+            rest_bonus = 0
+            message = "You relax in comfort while maintaining peak condition."
+        else:
+            rest_bonus = min(max_hp - hp, 10)
+            self.db.execute_query(
+                "UPDATE characters SET hp = hp + ? WHERE user_id = ?",
+                (rest_bonus, interaction.user.id)
+            )
+            message = f"The comfortable seating helps you recover! (+{rest_bonus} HP)"
+        
+        embed = discord.Embed(
+            title="🛋️ Comfortable Wait",
+            description=f"**{char_name}** settles into the comfortable transit lounge.",
+            color=0x9370db
+        )
+        embed.add_field(name="😌 Comfort", value=message, inline=False)
+        embed.add_field(name="⏱️ Time", value="You pass the time in pleasant relaxation.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_check_schedules(self, interaction, char_name: str):
+        """Handle checking transit schedules"""
+        schedule_info = [
+            "📅 Next corridor opening: 15 minutes",
+            "🚀 Express service to major hub: 2 hours",
+            "🛸 Local shuttle departures: Every 30 minutes",
+            "⏰ Gate maintenance window: 3-4 hours daily",
+            "🎯 Priority transit available for emergency travel",
+            "📊 Current corridor stability: 87% optimal"
+        ]
+        
+        embed = discord.Embed(
+            title="⏱️ Transit Schedules",
+            description=f"**{char_name}** reviews current transit information.",
+            color=0x4682b4
+        )
+        embed.add_field(name="📋 Schedule Info", value="\n".join(random.sample(schedule_info, 4)), inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_travel_info(self, interaction, char_name: str):
+        """Handle getting travel information"""
+        travel_tips = [
+            "🗺️ Corridor maps show optimal routes to major destinations",
+            "⚠️ Current hazard warnings for specific corridor segments",
+            "💰 Transit fees and fuel costs for various destinations",
+            "🛡️ Safety protocols for corridor travel procedures",
+            "📡 Communication relay points along major routes",
+            "🔧 Emergency repair stations and their service capabilities"
+        ]
+        
+        embed = discord.Embed(
+            title="🗺️ Travel Information",
+            description=f"**{char_name}** gathers helpful travel information.",
+            color=0x32cd32
+        )
+        embed.add_field(name="ℹ️ Travel Tips", value="\n".join(random.sample(travel_tips, 3)), inline=False)
+        embed.add_field(name="🎯 Planning", value="This information will help you plan your journey more effectively.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 class SubLocationButton(discord.ui.Button):
     """Individual service button for sub-locations"""
     

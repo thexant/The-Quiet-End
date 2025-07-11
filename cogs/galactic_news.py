@@ -14,11 +14,11 @@ class GalacticNewsCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
         self.news_delivery_loop.start()
-        
+        self.shift_change_monitor.start()
     def cog_unload(self):
         """Clean up tasks when cog is unloaded"""
         self.news_delivery_loop.cancel()
-
+        self.shift_change_monitor.cancel()
     @tasks.loop(seconds=30)  # Check every 30 seconds for news to deliver
     async def news_delivery_loop(self):
         """Deliver scheduled news that has reached its delivery time"""
@@ -272,7 +272,113 @@ class GalacticNewsCog(commands.Cog):
             location_id = central_location[0] if central_location else None
             
             await self.queue_news(guild_id, 'corridor_shift', title, description, location_id)
+    @tasks.loop(minutes=5)  # Check every 5 minutes for shift changes
+    async def shift_change_monitor(self):
+        """Monitor for galactic shift changes"""
+        try:
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            
+            # Get last shift check time from database
+            last_check = self.db.execute_query(
+                "SELECT last_shift_check, current_shift FROM galaxy_info WHERE galaxy_id = 1",
+                fetch='one'
+            )
+            
+            if last_check:
+                last_check_time_str, current_stored_shift = last_check
+                if last_check_time_str:
+                    last_check_time = datetime.fromisoformat(last_check_time_str)
+                else:
+                    last_check_time = None
+            else:
+                last_check_time = None
+                current_stored_shift = None
+            
+            # Check for shift change
+            current_time = time_system.calculate_current_ingame_time()
+            if current_time:
+                shift_name, shift_period = time_system.get_current_shift()
+                
+                if current_stored_shift != shift_period:
+                    # Shift change detected!
+                    print(f"🔄 Shift change detected: {current_stored_shift} → {shift_period}")
+                    
+                    # Post shift change news
+                    await self.post_shift_change_news(shift_period, shift_name, current_time)
+                    
+                    # Update stored shift
+                    self.db.execute_query(
+                        "UPDATE galaxy_info SET last_shift_check = ?, current_shift = ? WHERE galaxy_id = 1",
+                        (current_time.isoformat(), shift_period)
+                    )
+                    
+                    print(f"📰 Posted shift change announcement: {shift_name}")
+                else:
+                    # Just update check time
+                    self.db.execute_query(
+                        "UPDATE galaxy_info SET last_shift_check = ? WHERE galaxy_id = 1",
+                        (current_time.isoformat(),)
+                    )
+            
+        except Exception as e:
+            print(f"❌ Error in shift change monitor: {e}")
 
+    @shift_change_monitor.before_loop
+    async def before_shift_change_monitor(self):
+        await self.bot.wait_until_ready()
+    async def post_shift_change_news(self, new_shift: str, shift_name: str, current_time: datetime):
+            """Post news about galactic shift changes"""
+            
+            # Get all guilds with galactic updates channels
+            guilds_with_updates = self.db.execute_query(
+                "SELECT guild_id FROM server_config WHERE galactic_updates_channel_id IS NOT NULL",
+                fetch='all'
+            )
+            
+            for guild_tuple in guilds_with_updates:
+                guild_id = guild_tuple[0]
+                
+                # Format date for announcement
+                today_date = current_time.strftime("%d-%m-%Y")
+
+                # Create shift-specific announcements
+                shift_announcements = {
+                    "morning": {
+                        "title": "🌅 Morning Shift Begins",
+                        "description": f"**Today's Date:** {today_date} ISST\n\nColony work shifts are beginning across human space. Facility operations are transitioning to day protocols. Increased activity expected on major trade routes."
+                    },
+                    "day": {
+                        "title": "☀️ Day Shift Active",
+                        "description": "Peak operational hours are now in effect. Maximum traffic reported on all corridor networks. Commercial and industrial activities at full capacity across the galaxy."
+                    },
+                    "evening": {
+                        "title": "🌆 Evening Shift Transition",
+                        "description": "Systems are transitioning to night operations. Reduced traffic expected as colonies shift to evening protocols. Non-essential services moving to standby."
+                    },
+                    "night": {
+                        "title": "🌙 Night Shift Operations",
+                        "description": "Minimal activity period now in effect. Most colonies operating on standby protocols. Emergency services remain active. Reduced corridor monitoring in low population areas."
+                    }
+                }
+                
+                announcement = shift_announcements.get(new_shift, {
+                    "title": "⏰ Shift Change",
+                    "description": "Galactic operations shift change in progress."
+                })
+                
+                title = announcement["title"]
+                description = announcement["description"]
+                
+                # Add operational impacts
+                if new_shift == "day":
+                    description += " Job opportunities and trade activities are at peak availability."
+                elif new_shift == "night":
+                    description += " Limited job postings and reduced commercial activity during this period."
+                else:
+                    description += " Moderate levels of commercial and employment opportunities available."
+                
+                await self.queue_news(guild_id, 'admin_announcement', title, description, None)
     async def post_obituary_news(self, character_name: str, location_id: int, cause: str = "unknown"):
         """Post obituary news for character deaths"""
         

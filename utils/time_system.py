@@ -22,7 +22,55 @@ class TimeSystem:
                 return None
         except ValueError:
             return None
-    
+    def get_current_shift(self) -> tuple:
+        """Get current shift name and period info"""
+        current_time = self.calculate_current_ingame_time()
+        if not current_time:
+            return None, None
+        
+        hour = current_time.hour
+        if 6 <= hour < 12:
+            return "Morning Shift", "morning"
+        elif 12 <= hour < 18:
+            return "Day Shift", "day"
+        elif 18 <= hour < 24:
+            return "Evening Shift", "evening"
+        else:
+            return "Night Shift", "night"
+
+    def get_shift_description(self, shift_period: str) -> str:
+        """Get description for shift period"""
+        descriptions = {
+            "morning": "Colony work shifts are beginning across human space.",
+            "day": "Peak operational hours - maximum traffic on all corridors.",
+            "evening": "Systems transitioning to night operations.",
+            "night": "Minimal activity - most colonies on standby operations."
+        }
+        return descriptions.get(shift_period, "Standard operations in effect.")
+
+    def detect_shift_change(self, last_check_time: datetime) -> tuple:
+        """Detect if a shift change occurred since last check"""
+        if not last_check_time:
+            return False, None, None
+        
+        # Get shift at last check
+        last_hour = last_check_time.hour
+        if 6 <= last_hour < 12:
+            last_shift = "morning"
+        elif 12 <= last_hour < 18:
+            last_shift = "day"
+        elif 18 <= last_hour < 24:
+            last_shift = "evening"
+        else:
+            last_shift = "night"
+        
+        # Get current shift
+        current_shift_name, current_shift = self.get_current_shift()
+        
+        if current_shift != last_shift:
+            return True, last_shift, current_shift
+        
+        return False, None, None
     def parse_datetime_string(self, datetime_str: str) -> Optional[datetime]:
         """Parse DD-MM-YYYY HH:MM format datetime string"""
         try:

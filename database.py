@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Tuple, Any
 
 class Database:
-    def __init__(self, db_path="thequietend.db"):
+    def __init__(self, db_path="thequietenddev.db"):  # EDIT THIS TO CHANGE DATABASE NAME OR SWITCH BETWEEN "SAVES"
         self.db_path = db_path
         self.lock = threading.Lock()
         self.init_database()
@@ -95,7 +95,8 @@ class Database:
                 FOREIGN KEY (user_id) REFERENCES characters (user_id),
                 FOREIGN KEY (birthplace_id) REFERENCES locations (location_id)
             )''',
-
+            '''ALTER TABLE galaxy_info ADD COLUMN last_shift_check TEXT''',
+            '''ALTER TABLE galaxy_info ADD COLUMN current_shift TEXT''',
             # Sub-locations within main locations
             '''CREATE TABLE IF NOT EXISTS sub_locations (
                 sub_location_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -182,7 +183,6 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )''',
             
-            # Corridors table (unchanged)
             '''CREATE TABLE IF NOT EXISTS corridors (
                 corridor_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -199,7 +199,6 @@ class Database:
                 FOREIGN KEY (destination_location) REFERENCES locations (location_id)
             )''',
             
-            # Groups table (unchanged)
             '''CREATE TABLE IF NOT EXISTS groups (
                 group_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT,
@@ -211,7 +210,6 @@ class Database:
                 FOREIGN KEY (current_location) REFERENCES locations (location_id)
             )''',
             
-            # Jobs table (unchanged)
             '''CREATE TABLE IF NOT EXISTS jobs (
                 job_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 location_id INTEGER NOT NULL,
@@ -234,7 +232,6 @@ class Database:
                 FOREIGN KEY (taken_by) REFERENCES characters (user_id)
             )''',
             
-            # Inventory table (unchanged)
             '''CREATE TABLE IF NOT EXISTS inventory (
                 item_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 owner_id INTEGER NOT NULL,
@@ -247,7 +244,6 @@ class Database:
                 FOREIGN KEY (owner_id) REFERENCES characters (user_id)
             )''',
             
-            # Travel sessions table (unchanged)
             '''CREATE TABLE IF NOT EXISTS travel_sessions (
                 session_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 group_id INTEGER,
@@ -266,7 +262,6 @@ class Database:
                 FOREIGN KEY (corridor_id) REFERENCES corridors (corridor_id)
             )''',
             
-            # Shop items table (unchanged)
             '''CREATE TABLE IF NOT EXISTS shop_items (
                 item_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 location_id INTEGER NOT NULL,
@@ -279,7 +274,6 @@ class Database:
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
             
-            # Server configuration table - ADD radio_channel_id field
             '''CREATE TABLE IF NOT EXISTS server_config (
                 guild_id INTEGER PRIMARY KEY,
                 colony_category_id INTEGER,
@@ -295,14 +289,12 @@ class Database:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )''',
             
-            # Galaxy generation settings (unchanged)
             '''CREATE TABLE IF NOT EXISTS galaxy_settings (
                 setting_name TEXT PRIMARY KEY,
                 setting_value TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )''',
             
-            # Radio repeaters table - NEW
             '''CREATE TABLE IF NOT EXISTS repeaters (
                 repeater_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 location_id INTEGER NOT NULL,
@@ -315,7 +307,6 @@ class Database:
                 FOREIGN KEY (location_id) REFERENCES locations (location_id),
                 FOREIGN KEY (owner_id) REFERENCES characters (user_id)
             )''',
-            # Add this table creation query to the queries list in init_database method
             '''CREATE TABLE IF NOT EXISTS corridor_events (
                 event_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 transit_channel_id INTEGER NOT NULL,
@@ -328,7 +319,6 @@ class Database:
                 responses TEXT
             )''',
 
-            # Add location items table for item system
             '''CREATE TABLE IF NOT EXISTS location_items (
                 item_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 location_id INTEGER NOT NULL,
@@ -355,7 +345,6 @@ class Database:
                 FOREIGN KEY (author_id) REFERENCES characters (user_id)
             )''',
 
-            # Combat encounters table
             '''CREATE TABLE IF NOT EXISTS combat_encounters (
                 encounter_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 participants TEXT NOT NULL,
@@ -369,7 +358,6 @@ class Database:
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
 
-            # Character experience and leveling
             '''CREATE TABLE IF NOT EXISTS character_experience (
                 user_id INTEGER PRIMARY KEY,
                 total_exp INTEGER DEFAULT 0,
@@ -378,7 +366,6 @@ class Database:
                 FOREIGN KEY (user_id) REFERENCES characters (user_id)
             )''',
 
-            # Ship upgrades and customization
             '''CREATE TABLE IF NOT EXISTS ship_upgrades (
                 upgrade_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ship_id INTEGER NOT NULL,
@@ -389,7 +376,6 @@ class Database:
                 FOREIGN KEY (ship_id) REFERENCES ships (ship_id)
             )''',
 
-            # Group ships
             '''CREATE TABLE IF NOT EXISTS group_ships (
                 group_id INTEGER PRIMARY KEY,
                 ship_id INTEGER NOT NULL,
@@ -399,7 +385,6 @@ class Database:
                 FOREIGN KEY (ship_id) REFERENCES ships (ship_id),
                 FOREIGN KEY (captain_id) REFERENCES characters (user_id)
             )''',
-            # Job tracking table - FIXED version
             '''CREATE TABLE IF NOT EXISTS job_tracking (
                 tracking_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_id INTEGER NOT NULL,
@@ -412,7 +397,6 @@ class Database:
                 FOREIGN KEY (user_id) REFERENCES characters (user_id),
                 FOREIGN KEY (start_location) REFERENCES locations (location_id)
             )''',
-            # Group invites table
             '''CREATE TABLE IF NOT EXISTS group_invites (
                 invite_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 group_id INTEGER NOT NULL,
@@ -425,7 +409,6 @@ class Database:
                 FOREIGN KEY (invitee_id) REFERENCES characters (user_id)
             )''',
 
-            # Group vote sessions table
             '''CREATE TABLE IF NOT EXISTS group_vote_sessions (
                 session_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 group_id INTEGER NOT NULL,
@@ -437,7 +420,6 @@ class Database:
                 FOREIGN KEY (group_id) REFERENCES groups (group_id)
             )''',
 
-            # Group votes table
             '''CREATE TABLE IF NOT EXISTS group_votes (
                 vote_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
@@ -447,7 +429,6 @@ class Database:
                 FOREIGN KEY (session_id) REFERENCES group_vote_sessions (session_id),
                 FOREIGN KEY (user_id) REFERENCES characters (user_id)
             )''',
-            # Add location status to characters (docked vs in-space)
             '''ALTER TABLE characters ADD COLUMN location_status TEXT DEFAULT 'docked' ''',
             '''CREATE TABLE IF NOT EXISTS user_location_panels (
                 user_id INTEGER,

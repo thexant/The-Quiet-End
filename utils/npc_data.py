@@ -185,7 +185,17 @@ OCCUPATIONS = {
 PERSONALITIES = [
     "Friendly and talkative", "Quiet and reserved", "Experienced and wise", "Young and enthusiastic",
     "Gruff but helpful", "Mysterious and cryptic", "Cheerful and optimistic", "Cynical but honest",
-    "Professional and efficient", "Eccentric and quirky", "Cautious and careful", "Bold and adventurous"
+    "Professional and efficient", "Eccentric and quirky", "Cautious and careful", "Bold and adventurous",
+    "Wary and observant", "Jaded and world-weary", "Pragmatic and resourceful", "Haunted by past traumas",
+    "Suspicious and distrustful", "Stoic and enduring", "Resigned to fate", "Driven by a hidden agenda",
+    "Bitter and resentful", "Loyal to a fault", "Opportunistic and selfish", "Numb to the suffering around them",
+    "Fanatical in their beliefs", "Desperate and vulnerable", "Calculating and manipulative", "Apathetic and indifferent",
+    "Pessimistic but resilient", "Ruthless when necessary", "Burdened by responsibility", "Searching for meaning in chaos",
+    "Guarded and secretive", "Quietly desperate", "Broken but still fighting", "Driven by a singular obsession",
+    "Grimly humorous", "Quietly defiant", "Scarred but unyielding", "Living on borrowed time",
+    "Obsessed with survival", "Filled with quiet despair",
+    "Methodical and precise", "Curious and inquisitive", "Optimistic and hopeful", "Disciplined and duty-bound",
+    "Calm and logical"
 ]
 
 TRADE_SPECIALTIES = [
