@@ -956,7 +956,33 @@ class SubLocationServiceView(discord.ui.View):
                 cost=50,
                 bot=self.bot
             )
-            await interaction.response.send_modal(modal)    
+            await interaction.response.send_modal(modal)
+        elif service_type == "check_traffic":
+            await self._handle_check_traffic(interaction, char_name)
+        elif service_type == "corridor_status":
+            await self._handle_corridor_status(interaction, char_name)
+        elif service_type == "rest_recuperate":
+            await self._handle_rest_recuperate(interaction, char_name, money)
+        elif service_type == "traveler_info":
+            await self._handle_traveler_info(interaction, char_name)
+        elif service_type == "security_scan":
+            await self._handle_security_scan(interaction, char_name)
+        elif service_type == "transit_papers":
+            await self._handle_transit_papers(interaction, char_name, money)
+        elif service_type == "priority_refuel":
+            await self._handle_priority_refuel(interaction, char_name, money)
+        elif service_type == "fuel_quality":
+            await self._handle_fuel_quality(interaction, char_name)
+        elif service_type == "pre_transit_check":
+            await self._handle_pre_transit_check(interaction, char_name)
+        elif service_type == "emergency_repairs":
+            await self._handle_emergency_repairs(interaction, char_name, money)
+        elif service_type == "search_supplies":
+            await self._handle_search_supplies(interaction, char_name)
+        elif service_type == "scavenge_parts":
+            await self._handle_scavenge_parts(interaction, char_name)
+        elif service_type == "emergency_medical":
+            await self._handle_emergency_medical(interaction, char_name, money)
         else:
             # Generic flavor response for unimplemented services
             await self._handle_generic_service(interaction, service_type, char_name)
@@ -981,7 +1007,391 @@ class SubLocationServiceView(discord.ui.View):
                 )
         except:
             pass
+    async def _handle_priority_refuel(self, interaction, char_name: str, money: int):
+        """Handle priority refueling service at gate fuel depot"""
+        ship_info = self.db.execute_query(
+            "SELECT fuel_capacity, current_fuel FROM ships WHERE owner_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            embed = discord.Embed(
+                title="⛽ Priority Refuel",
+                description="No ship found to refuel.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        fuel_capacity, current_fuel = ship_info
+        
+        if current_fuel >= fuel_capacity:
+            embed = discord.Embed(
+                title="⛽ Priority Refuel",
+                description=f"**{char_name}**, your ship's fuel tanks are already full.",
+                color=0x00ff00
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Priority refuel costs more but gives better fuel
+        fuel_needed = fuel_capacity - current_fuel
+        cost_per_fuel = 5  # More expensive than regular refuel
+        total_cost = fuel_needed * cost_per_fuel
+        
+        if money < total_cost:
+            max_affordable_fuel = money // cost_per_fuel
+            embed = discord.Embed(
+                title="⛽ Priority Refuel Service",
+                description=f"**Premium Refuel Cost:** {total_cost} credits\n**Your Credits:** {money}",
+                color=0xff6600
+            )
+            if max_affordable_fuel > 0:
+                embed.add_field(
+                    name="⛽ Partial Service Available",
+                    value=f"We can provide {max_affordable_fuel} premium fuel units for {max_affordable_fuel * cost_per_fuel} credits.",
+                    inline=False
+                )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Apply premium refueling (also gives small efficiency bonus)
+        self.db.execute_query(
+            "UPDATE ships SET current_fuel = ?, fuel_efficiency = fuel_efficiency + 1 WHERE owner_id = ?",
+            (fuel_capacity, interaction.user.id)
+        )
+        self.db.execute_query(
+            "UPDATE characters SET money = ? WHERE user_id = ?",
+            (money - total_cost, interaction.user.id)
+        )
+        
+        embed = discord.Embed(
+            title="⛽ Priority Refuel Complete",
+            description=f"**{char_name}**, your ship has been refueled with premium fuel.",
+            color=0x00ff00
+        )
+        embed.add_field(name="⛽ Fuel Level", value=f"{current_fuel} → {fuel_capacity}", inline=True)
+        embed.add_field(name="✨ Bonus", value="+1 Fuel Efficiency", inline=True)
+        embed.add_field(name="💰 Cost", value=f"{total_cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining Credits", value=f"{money - total_cost}", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
+    async def _handle_pre_transit_check(self, interaction, char_name: str):
+        """Handle pre-transit system check at gate mechanics"""
+        ship_info = self.db.execute_query(
+            "SELECT name, ship_type, fuel_capacity, current_fuel, hull_integrity, max_hull, fuel_efficiency FROM ships WHERE owner_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            embed = discord.Embed(
+                title="🔧 Pre-Transit Check",
+                description="No ship found for inspection.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        ship_name, ship_type, fuel_cap, current_fuel, hull, max_hull, fuel_eff = ship_info
+        
+        # Calculate readiness scores
+        fuel_readiness = (current_fuel / fuel_cap) * 100 if fuel_cap > 0 else 0
+        hull_readiness = (hull / max_hull) * 100 if max_hull > 0 else 0
+        
+        # Determine overall readiness
+        overall_readiness = (fuel_readiness + hull_readiness) / 2
+        
+        if overall_readiness >= 80:
+            status = "✅ CLEARED FOR TRANSIT"
+            color = 0x00ff00
+            recommendation = "All systems nominal. Safe travels!"
+        elif overall_readiness >= 60:
+            status = "⚠️ CAUTION ADVISED"
+            color = 0xffa500
+            recommendation = "Consider repairs or refueling before long-distance travel."
+        else:
+            status = "🚨 NOT RECOMMENDED"
+            color = 0xff0000
+            recommendation = "Immediate maintenance required before corridor transit."
+        
+        embed = discord.Embed(
+            title="🔧 Pre-Transit System Check",
+            description=f"**{char_name}**'s ship **{ship_name}** inspection results:",
+            color=color
+        )
+        
+        embed.add_field(name="🚀 Ship Type", value=ship_type, inline=True)
+        embed.add_field(name="📊 Overall Status", value=status, inline=True)
+        embed.add_field(name="⭐ Readiness Score", value=f"{overall_readiness:.1f}%", inline=True)
+        
+        embed.add_field(
+            name="🔍 System Details",
+            value=f"⛽ Fuel: {current_fuel}/{fuel_cap} ({fuel_readiness:.1f}%)\n🛡️ Hull: {hull}/{max_hull} ({hull_readiness:.1f}%)\n⚙️ Efficiency: {fuel_eff}",
+            inline=False
+        )
+        
+        embed.add_field(name="💡 Recommendation", value=recommendation, inline=False)
+        
+        if overall_readiness < 80:
+            services = []
+            if fuel_readiness < 80:
+                services.append("• Refuel at Fuel Depot")
+            if hull_readiness < 80:
+                services.append("• Hull repairs needed")
+            
+            if services:
+                embed.add_field(name="🛠️ Suggested Services", value="\n".join(services), inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_emergency_repairs(self, interaction, char_name: str, money: int):
+        """Handle emergency repair service at gate mechanics"""
+        ship_info = self.db.execute_query(
+            "SELECT hull_integrity, max_hull FROM ships WHERE owner_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            embed = discord.Embed(
+                title="🚨 Emergency Repairs",
+                description="No ship found for emergency repairs.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        hull_integrity, max_hull = ship_info
+        
+        if hull_integrity >= max_hull * 0.8:  # 80% or better
+            embed = discord.Embed(
+                title="🚨 Emergency Repairs",
+                description=f"**{char_name}**, your ship doesn't require emergency repairs.",
+                color=0x00ff00
+            )
+            embed.add_field(name="🛡️ Hull Status", value=f"{hull_integrity}/{max_hull} ({(hull_integrity/max_hull)*100:.1f}%)", inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Emergency repairs are expensive but fast
+        critical_repairs = min(max_hull - hull_integrity, max_hull // 2)  # Repair up to 50% or to full
+        cost_per_point = 40  # More expensive than regular repairs
+        total_cost = critical_repairs * cost_per_point
+        
+        if money < total_cost:
+            embed = discord.Embed(
+                title="🚨 Emergency Repair Service",
+                description=f"**Emergency Repair Cost:** {total_cost} credits\n**Your Credits:** {money}",
+                color=0xff0000
+            )
+            embed.add_field(
+                name="⚠️ Critical Notice",
+                value="Emergency repairs required for safe corridor transit. Consider requesting assistance or emergency funding.",
+                inline=False
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Apply emergency repairs
+        new_hull = hull_integrity + critical_repairs
+        self.db.execute_query(
+            "UPDATE ships SET hull_integrity = ? WHERE owner_id = ?",
+            (new_hull, interaction.user.id)
+        )
+        self.db.execute_query(
+            "UPDATE characters SET money = ? WHERE user_id = ?",
+            (money - total_cost, interaction.user.id)
+        )
+        
+        embed = discord.Embed(
+            title="🚨 Emergency Repairs Complete",
+            description=f"**{char_name}**, critical hull repairs have been completed.",
+            color=0x00ff00
+        )
+        embed.add_field(name="🛠️ Hull Integrity", value=f"{hull_integrity} → {new_hull}", inline=True)
+        embed.add_field(name="⚡ Service Type", value="Emergency Priority", inline=True)
+        embed.add_field(name="💰 Cost", value=f"{total_cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining Credits", value=f"{money - total_cost}", inline=True)
+        embed.add_field(
+            name="🛡️ Status", 
+            value="Ship cleared for corridor transit" if new_hull >= max_hull * 0.6 else "Additional repairs recommended", 
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_search_supplies(self, interaction, char_name: str):
+        """Handle searching for supplies in derelict areas"""
+        import random
+        
+        # Low chance of finding something useful
+        if random.random() < 0.3:  # 30% chance
+            found_items = [
+                ("Emergency Rations", "consumable", 1, "Expired but still edible emergency food", 5),
+                ("Scrap Metal", "material", random.randint(1, 3), "Useful salvaged metal", 8),
+                ("Broken Tool", "equipment", 1, "Damaged but potentially repairable tool", 15),
+                ("Power Cell", "equipment", 1, "Partially charged emergency power cell", 25)
+            ]
+            
+            item_name, item_type, quantity, description, value = random.choice(found_items)
+            
+            # Add to inventory
+            self.db.execute_query(
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
+                   VALUES (?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, item_name, item_type, quantity, description, value)
+            )
+            
+            embed = discord.Embed(
+                title="🔍 Supply Search",
+                description=f"**{char_name}** searches through the abandoned area...",
+                color=0x90EE90
+            )
+            embed.add_field(name="✨ Found", value=f"{quantity}x {item_name}", inline=False)
+            embed.add_field(name="📝 Description", value=description, inline=False)
+        else:
+            embed = discord.Embed(
+                title="🔍 Supply Search",
+                description=f"**{char_name}** searches but finds nothing useful.",
+                color=0x808080
+            )
+            embed.add_field(name="💭 Result", value="The area has been thoroughly picked clean by previous scavengers.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_scavenge_parts(self, interaction, char_name: str):
+        """Handle scavenging for ship parts in salvage yard"""
+        import random
+        
+        # Scavenging has costs (time/risk) but potential rewards
+        scavenge_cost = random.randint(10, 30)  # Time cost in "minutes"
+        
+        # Check if player wants to spend the time
+        success_chance = 0.4  # 40% chance of finding something useful
+        
+        if random.random() < success_chance:
+            # Found something useful
+            salvaged_items = [
+                ("Salvaged Hull Plating", "ship_part", 1, "Damaged but repairable hull material", 45),
+                ("Scrap Electronics", "component", random.randint(2, 5), "Useful electronic components", 15),
+                ("Fuel Line Segment", "ship_part", 1, "Replacement fuel system component", 35),
+                ("Navigation Computer Core", "component", 1, "Partially functional nav computer", 80),
+                ("Power Coupling", "component", random.randint(1, 3), "Standard power system parts", 25),
+                ("Thruster Nozzle", "ship_part", 1, "Worn but functional thruster component", 60),
+                ("Sensor Array Module", "component", 1, "Damaged sensor equipment", 55),
+                ("Emergency Beacon", "equipment", 1, "Distress signal transmitter", 40)
+            ]
+            
+            item_name, item_type, quantity, description, value = random.choice(salvaged_items)
+            
+            # Add to inventory
+            self.db.execute_query(
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
+                   VALUES (?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, item_name, item_type, quantity, description, value)
+            )
+            
+            embed = discord.Embed(
+                title="⚙️ Salvage Operation",
+                description=f"**{char_name}** spends {scavenge_cost} minutes carefully scavenging through the salvage yard.",
+                color=0x8B4513
+            )
+            embed.add_field(name="🔍 Discovery", value=f"{quantity}x {item_name}", inline=False)
+            embed.add_field(name="📝 Condition", value=description, inline=False)
+            embed.add_field(name="💰 Estimated Value", value=f"{value * quantity} credits", inline=True)
+            embed.add_field(name="🛠️ Usage", value="Can be sold or used for ship modifications", inline=True)
+            
+            # Small chance of finding something extra valuable
+            if random.random() < 0.1:  # 10% chance
+                embed.add_field(
+                    name="✨ Bonus Find", 
+                    value="You also discover some useful technical documentation!", 
+                    inline=False
+                )
+        else:
+            # Found nothing useful
+            nothing_found = [
+                "The area has been thoroughly picked clean by previous scavengers.",
+                "Most of the remaining parts are too damaged to be useful.",
+                "You find only worthless scrap metal and burned-out components.",
+                "Other scavengers have already taken anything of value.",
+                "The salvage appears to be from very old, incompatible ship designs."
+            ]
+            
+            embed = discord.Embed(
+                title="⚙️ Salvage Operation",
+                description=f"**{char_name}** spends {scavenge_cost} minutes searching the salvage yard.",
+                color=0x696969
+            )
+            embed.add_field(name="🔍 Result", value="Nothing useful found", inline=False)
+            embed.add_field(name="💭 Outcome", value=random.choice(nothing_found), inline=False)
+            embed.add_field(name="⏰ Time Spent", value=f"{scavenge_cost} minutes", inline=True)
+            
+            # Small chance of at least finding basic scrap
+            if random.random() < 0.3:  # 30% chance of consolation prize
+                self.db.execute_query(
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
+                       VALUES (?, ?, ?, ?, ?, ?)''',
+                    (interaction.user.id, "Scrap Metal", "material", random.randint(1, 2), "Basic salvaged metal", 3)
+                )
+                embed.add_field(name="🔩 Consolation", value="Found small amount of scrap metal", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_emergency_medical(self, interaction, char_name: str, money: int):
+        """Handle emergency medical treatment in derelict emergency shelter"""
+        cost = 50  # More expensive due to limited supplies
+        
+        char_info = self.db.execute_query(
+            "SELECT hp, max_hp FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            return
+        
+        hp, max_hp = char_info
+        
+        if hp >= max_hp:
+            embed = discord.Embed(
+                title="🩹 Emergency Medical",
+                description=f"**{char_name}**, you don't need medical attention.",
+                color=0x00ff00
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="🩹 Emergency Medical",
+                description=f"**{char_name}**, emergency medical treatment costs {cost} credits.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Limited healing (not full recovery like normal medical)
+        healing = min(max_hp - hp, random.randint(10, 25))
+        
+        self.db.execute_query(
+            "UPDATE characters SET hp = hp + ?, money = money - ? WHERE user_id = ?",
+            (healing, cost, interaction.user.id)
+        )
+        
+        embed = discord.Embed(
+            title="🩹 Emergency Treatment",
+            description=f"**{char_name}** uses the emergency medical supplies.",
+            color=0xff6600
+        )
+        embed.add_field(name="💚 Healing", value=f"+{healing} HP", inline=True)
+        embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
+        embed.add_field(name="⚠️ Note", value="Limited supplies - not full treatment", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
     async def _handle_medical_treatment(self, interaction, char_name: str, hp: int, max_hp: int, money: int):
         """Handle medical treatment service"""
         if hp >= max_hp:
