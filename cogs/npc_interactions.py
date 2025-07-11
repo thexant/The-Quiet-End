@@ -513,19 +513,6 @@ class NPCJobSelectView(discord.ui.View):
                 select = discord.ui.Select(placeholder="Choose a job to accept...", options=options)
                 select.callback = self.job_selected
                 self.add_item(select)
-    
-Hello! As a specialist in Python, Javascript, CSS, and SQL, I'd be happy to help you with your Discord bot. I've reviewed your request and the provided files. Here are the code fixes to address the issues with NPC jobs and to implement the NPC escort missions.
-
-Part 1: Fixing NPC Job Durations and Acceptance
-
-The main problems are that NPC job durations are too long, and when a player accepts an NPC job, it's not being correctly tracked by the main job system. Here are the changes to fix this.
-
-In cogs/npc_interactions.py:
-
-To make the job durations more reasonable, we'll adjust the base values in the generate_npc_jobs method. Replace the existing job_templates dictionary with this updated version:
-Python
-
-# In cogs/npc_interactions.py, inside the NPCInteractionsCog class, replace the job_templates dictionary
         job_templates = {
             "Farmer": [
                 ("Harvest Assistant Needed", "Help harvest crops during the busy season", 150, None, 0, 1, 30),

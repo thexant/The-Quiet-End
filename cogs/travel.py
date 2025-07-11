@@ -863,47 +863,47 @@ class TravelCog(commands.Cog):
 
     
     @travel_group.command(name="emergency_exit", description="Attempt an emergency exit from a corridor (EXTREMELY DANGEROUS)")
-        async def emergency_exit(self, interaction: discord.Interaction):
-            session = self.db.execute_query(
-                '''SELECT ts.*, c.danger_level, c.name as corridor_name
-                   FROM travel_sessions ts
-                   JOIN corridors c ON ts.corridor_id = c.corridor_id
-                   WHERE ts.user_id = ? AND ts.status = 'traveling' ''',
-                (interaction.user.id,),
-                fetch='one'
-            )
+    async def emergency_exit(self, interaction: discord.Interaction):
+        session = self.db.execute_query(
+            '''SELECT ts.*, c.danger_level, c.name as corridor_name
+               FROM travel_sessions ts
+               JOIN corridors c ON ts.corridor_id = c.corridor_id
+               WHERE ts.user_id = ? AND ts.status = 'traveling' ''',
+            (interaction.user.id,),
+            fetch='one'
+        )
 
-            if not session:
-                await interaction.response.send_message("You are not currently traveling.", ephemeral=True)
-                return
+        if not session:
+            await interaction.response.send_message("You are not currently traveling.", ephemeral=True)
+            return
 
-            corridor_name = session[11]
-            if "Approach" in corridor_name:
-                await interaction.response.send_message("You cannot perform an emergency exit in local space.", ephemeral=True)
-                return
+        corridor_name = session[11]
+        if "Approach" in corridor_name:
+            await interaction.response.send_message("You cannot perform an emergency exit in local space.", ephemeral=True)
+            return
 
-            embed = discord.Embed(
-                title="⚠️ EMERGENCY CORRIDOR EXIT",
-                description="**EXTREME WARNING**: This action has a high probability of resulting in **instant death**.\n\nSurviving the exit will cause catastrophic damage to your ship and severe injury. You will be end up in a random location.",
-                color=0xff0000
-            )
+        embed = discord.Embed(
+            title="⚠️ EMERGENCY CORRIDOR EXIT",
+            description="**EXTREME WARNING**: This action has a high probability of resulting in **instant death**.\n\nSurviving the exit will cause catastrophic damage to your ship and severe injury. You will be end up in a random location.",
+            color=0xff0000
+        )
 
-            danger_level = session[10]
-            survival_chance = max(10, 50 - (danger_level * 10))  # High risk of death
+        danger_level = session[10]
+        survival_chance = max(10, 50 - (danger_level * 10))  # High risk of death
 
-            embed.add_field(
-                name="Estimated Survival Chance",
-                value=f"**{survival_chance}%** (Danger Level: {danger_level})",
-                inline=False
-            )
-            embed.add_field(
-                name="Recommendation",
-                value="**DO NOT ATTEMPT** unless certain death is imminent. It is always safer to complete the journey.",
-                inline=False
-            )
+        embed.add_field(
+            name="Estimated Survival Chance",
+            value=f"**{survival_chance}%** (Danger Level: {danger_level})",
+            inline=False
+        )
+        embed.add_field(
+            name="Recommendation",
+            value="**DO NOT ATTEMPT** unless certain death is imminent. It is always safer to complete the journey.",
+            inline=False
+        )
 
-            view = EmergencyExitView(self.bot, interaction.user.id, session[0])
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        view = EmergencyExitView(self.bot, interaction.user.id, session[0])
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
     @travel_group.command(name="fuel_estimate", description="Calculate fuel needed for various routes")
     async def fuel_estimate(self, interaction: discord.Interaction):

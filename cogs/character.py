@@ -979,7 +979,7 @@ class CharacterCog(commands.Cog):
     @character_group.command(name="login", description="Log into the game and restore your character")
     async def login_character(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(
-            "SELECT name, current_location, is_logged_in, group_id FROM characters WHERE user_id = ?",
+            "SELECT name, current_location, is_logged_in, group_id, current_ship_id FROM characters WHERE user_id = ?",
             (interaction.user.id,),
             fetch='one'
         )
@@ -991,7 +991,7 @@ class CharacterCog(commands.Cog):
             )
             return
         
-        char_name, current_location, is_logged_in, group_id = char_data
+        char_name, current_location, is_logged_in, group_id, current_ship_id = char_data
         
         if is_logged_in:
             await interaction.response.send_message(
