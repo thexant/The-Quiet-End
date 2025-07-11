@@ -356,33 +356,15 @@ class EventsCog(commands.Cog):
     
     @tasks.loop(hours=2)
     async def job_generation(self):
-        """Generate new jobs at locations, adjusted for time of day"""
+        """Generate new jobs at locations with increased frequency and quantity"""
         try:
-            # Get the time system to determine the current shift
-            from utils.time_system import TimeSystem
-            time_system = TimeSystem(self.bot)
-            current_time = time_system.calculate_current_ingame_time()
-
-            if not current_time:
-                print("⚠️ Cannot generate jobs, time system unavailable.")
-                return
-
-            hour = current_time.hour
-            # Determine job generation multiplier based on the shift
-            if 6 <= hour < 12:  # Morning Shift
-                job_multiplier = 1.2
-            elif 12 <= hour < 18:  # Day Shift
-                job_multiplier = 1.5
-            elif 18 <= hour < 24:  # Evening Shift
-                job_multiplier = 1.0
-            else:  # Night Shift
-                job_multiplier = 0.5
-
+            # Get locations that can have jobs
             locations = self.db.execute_query(
                 "SELECT location_id, wealth_level, location_type FROM locations WHERE has_jobs = 1",
                 fetch='all'
             )
             
+            # ADD THIS CHECK RIGHT HERE:
             if not locations:
                 print("⚠️ No locations available for job generation")
                 return
@@ -390,37 +372,61 @@ class EventsCog(commands.Cog):
             jobs_generated = 0
             
             for location_id, wealth, location_type in locations:
+                # Check current job count
                 current_jobs = self.db.execute_query(
                     "SELECT COUNT(*) FROM jobs WHERE location_id = ? AND is_taken = 0",
                     (location_id,),
                     fetch='one'
                 )[0]
                 
-                # Adjust max jobs based on the shift multiplier
+                # Increased job limits based on wealth and type
                 if location_type == 'space_station':
-                    base_max = max(6, wealth)
+                    max_jobs = max(6, wealth)  # 6-10 jobs for stations
                 elif location_type == 'colony':
-                    base_max = max(4, wealth // 2 + 3)
-                else:
-                    base_max = max(2, wealth // 3 + 1)
+                    max_jobs = max(4, wealth // 2 + 3)  # 4-8 jobs for colonies
+                elif location_type == 'outpost':
+                    max_jobs = max(2, wealth // 3 + 1)  # 2-4 jobs for outposts
+                else:  # gates
+                    max_jobs = max(3, wealth // 2 + 1)  # 3-6 jobs for gates
                 
-                max_jobs = int(base_max * job_multiplier)
-
-                jobs_to_generate = min(max_jobs - current_jobs, 3)
+                # Generate multiple jobs if under limit
+                jobs_to_generate = min(max_jobs - current_jobs, 3)  # Generate up to 3 at once
                 
-                if jobs_to_generate > 0 and random.random() < 0.8:
+                if jobs_to_generate > 0 and random.random() < 0.8:  # 80% chance
                     for _ in range(jobs_to_generate):
-                        if random.random() < 0.7:
+                        if random.random() < 0.7:  # 70% chance for each job
                             await self._generate_location_job(location_id, wealth, location_type)
                             jobs_generated += 1
             
+            # Random bonus job generation burst
+            if random.random() < 0.2:  # 20% chance for bonus generation
+                # CHANGE this line to ADD the check:
+                if locations:  # ADD THIS CHECK
+                    bonus_location = random.choice(locations)
+                    await self._generate_location_job(bonus_location[0], bonus_location[1], bonus_location[2])
+                    jobs_generated += 1
+                    print(f"🎲 Bonus job generated!")
+            
             if jobs_generated > 0:
-                print(f"Generated {jobs_generated} new jobs (Multiplier: {job_multiplier}x)")
+                print(f"Generated {jobs_generated} new jobs")
         
         except Exception as e:
             print(f"Error in job generation: {e}")
+            # ADD this line for better debugging:
             import traceback
             traceback.print_exc()
+
+    @job_generation.before_loop
+    async def before_job_generation(self):
+        """Wait until the bot is ready before starting the task."""
+        await self.bot.wait_until_ready()
+
+    @commands.group(name="events", description="Event system management")
+    async def events_group(self, ctx):
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("Administrator permissions required.")
+            return
+
     
     @tasks.loop(hours=1)
     async def shift_change_monitor(self):
