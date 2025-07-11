@@ -33,7 +33,7 @@ class NPCCog(commands.Cog):
             try:
                 # Get all alive dynamic NPCs
                 npcs = self.db.execute_query(
-                    """SELECT n.npc_id, n.name, n.callsign, n.ship_name, n.current_location, 
+                    """SELECT n.npc_id, n.name, n.callsign, n.ship_name, n.current_location,
                               l.name as location_name, l.system_name, l.x_coord, l.y_coord,
                               n.last_radio_message
                        FROM dynamic_npcs n
@@ -41,20 +41,25 @@ class NPCCog(commands.Cog):
                        WHERE n.is_alive = 1 AND n.current_location IS NOT NULL""",
                     fetch='all'
                 )
-                
+
                 if npcs:
                     # Each NPC has a chance to send a message (not all at once)
                     for npc_data in npcs:
                         npc_id, name, callsign, ship_name, location_id, location_name, system_name, x_coord, y_coord, last_message = npc_data
-                        
+
                         # 3% chance each cycle for any given NPC to send a message
                         if random.random() < 0.03:
                             # Check cooldown (don't spam messages from same NPC)
                             if last_message:
-                                last_time = datetime.fromisoformat(last_message)
-                                if datetime.now() - last_time < timedelta(hours=2):
-                                    continue
-                            
+                                try:
+                                    last_time = datetime.fromisoformat(last_message)
+                                    if datetime.now() - last_time < timedelta(hours=2):
+                                        continue
+                                except (ValueError, TypeError):
+                                    # Handle cases where last_message is not a valid ISO format string
+                                    pass
+
+
                             # Get random message template and format it
                             message_template = get_random_radio_message()
                             message = message_template.format(
@@ -64,24 +69,24 @@ class NPCCog(commands.Cog):
                                 location=location_name or "Unknown",
                                 system=system_name or "Unknown"
                             )
-                            
+
                             # Send the message
                             await self._send_npc_radio_message(name, callsign, location_name or "Deep Space", system_name or "Unknown", message)
-                            
+
                             # Update last radio message time
                             self.db.execute_query(
                                 "UPDATE dynamic_npcs SET last_radio_message = ? WHERE npc_id = ?",
                                 (datetime.now().isoformat(), npc_id)
                             )
-                            
+
                             # Small delay between messages if multiple NPCs are sending
-                            await asyncio.sleep(random.uniform(5, 30))
-                
+                            await asyncio.sleep(random.uniform(300, 1200))
+
             except Exception as e:
                 print(f"❌ Error in NPC radio message loop: {e}")
-            
-            # Wait random time before next cycle (15-45 minutes)
-            next_delay = random.uniform(15 * 60, 45 * 60)  # Convert to seconds
+
+            # Wait random time before next cycle (30-90 minutes)
+            next_delay = random.uniform(30 * 60, 90 * 60)  # Convert to seconds
             await asyncio.sleep(next_delay)
 
     async def _dynamic_npc_movement_loop(self):
