@@ -587,28 +587,29 @@ class CorridorEventView(discord.ui.View):
             skill_used = "engineering"
             skill_value = engineering
         
-        # Calculate difficulty based on response type and severity
-        base_difficulty = severity * 15  # 15-75 base difficulty
-        
+        # --- REBALANCED DIFFICULTY ---
+        # Base difficulty is higher now
+        base_difficulty = 30 + (severity * 10) # Range: 40-80
+
+        # Skill provides a direct bonus
+        skill_bonus = skill_value * 2
+
+        # Response type now acts as a multiplier on your skill bonus
         if response_type == 'emergency_protocols':
-            # Emergency protocols: High skill bonus but risk of critical failure
-            skill_bonus = skill_value * 8
+            # High risk, high reward: Full skill bonus but high failure penalty
             difficulty = base_difficulty - skill_bonus
-            crit_fail_chance = 0.15  # 15% chance of critical failure
+            crit_fail_chance = 0.10  # 10% chance of critical failure
         elif response_type == 'standard_protocols':
-            # Standard protocols: Moderate skill bonus, low failure risk
-            skill_bonus = skill_value * 6
-            difficulty = base_difficulty - skill_bonus
-            crit_fail_chance = 0.05  # 5% chance of critical failure
+            # Standard: Good bonus, low failure risk
+            difficulty = base_difficulty - (skill_bonus * 0.75)
+            crit_fail_chance = 0.05  # 5% chance
         elif response_type == 'basic_response':
-            # Basic response: Low skill bonus but very safe
-            skill_bonus = skill_value * 4
-            difficulty = base_difficulty - skill_bonus
-            crit_fail_chance = 0.02  # 2% chance of critical failure
+            # Basic: Low bonus, very safe
+            difficulty = base_difficulty - (skill_bonus * 0.4)
+            crit_fail_chance = 0.02  # 2% chance
         else:  # no_response
-            # No response: No skill bonus, automatic failure
             difficulty = 100
-            crit_fail_chance = 0.3  # 30% chance of critical failure
+            crit_fail_chance = 0.3
             skill_bonus = 0
         
         # Roll d100

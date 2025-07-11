@@ -612,159 +612,177 @@ class EconomyCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @job_group.command(name="complete", description="Complete your current job")
-    async def job_complete(self, interaction: discord.Interaction):
-        # Fetch the active job
-        job_info = self.db.execute_query(
-            '''SELECT j.job_id, j.title, j.reward_money, j.danger_level, j.taken_at,
-                      j.duration_minutes, l.name AS location_name, j.job_status,
-                      j.description, j.location_id, j.destination_location_id -- ADD THIS LINE
-               FROM jobs j
-               JOIN locations l ON j.location_id = l.location_id
-               WHERE j.taken_by = ? AND j.is_taken = 1''',
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not job_info:
-            await interaction.response.send_message(
-                "You don't have an active job to complete.", 
-                ephemeral=True
-            )
-            return
-
-        # UPDATE unpacking to include destination_location_id
-        job_id, title, reward, danger, taken_at, duration_minutes, location_name, job_status, description, job_location_id, destination_location_id = job_info
-
-        # Check if job was already completed
-        if job_status == 'completed':
-            await interaction.response.send_message(
-                "This job has already been completed!",
-                ephemeral=True
-            )
-            return
-
-        # Determine job type from title and description
-        title_lower = title.lower()
-        desc_lower = description.lower()
-        is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger']) or \
-                          any(word in desc_lower for word in ['transport', 'deliver', 'courier'])
-
-        # Get player's current location
-        player_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not player_location or not player_location[0]:
-            await interaction.response.send_message(
-                "You cannot complete jobs while in transit!",
-                ephemeral=True
-            )
-            return
-        
-        current_location = player_location[0]
-
-        if is_transport_job:
-            # TRANSPORT JOB LOGIC - Check if at correct destination, then do unloading phase
-            
-            # Check if this is a finalization attempt for transport jobs
-            if job_status == 'awaiting_finalization':
-                # Transport job is in finalization phase - complete immediately
-                await self._finalize_transport_job(interaction, job_id, title, reward)
-                return
-            
-            # Check if player is at the correct destination for transport jobs (destination_location_id)
-            if current_location != destination_location_id: # MODIFIED THIS LINE
-                # Get destination location name from the destination_location_id
-                final_dest_name = self.db.execute_query(
-                    "SELECT name FROM locations WHERE location_id = ?",
-                    (destination_location_id,), # Use the destination_location_id
-                    fetch='one'
-                )[0]
-                
-                await interaction.response.send_message(
-                    f"❌ **Wrong destination!**\n\nThis transport job must be completed at **{final_dest_name}**.\nYou are currently at {location_name}.",
-                    ephemeral=True
-                )
-                return
-            
-            # Player is at correct destination - start unloading phase
-            await self._start_transport_unloading(interaction, job_id, title, reward)
-            
-        else:
-            # STATIONARY JOB LOGIC - Use existing time-based completion
-            
-            # Parse the time the job was taken
-            taken_time = datetime.fromisoformat(taken_at)
-            now = datetime.now()
-            elapsed_minutes = (now - taken_time).total_seconds() / 60
-
-            # Check location-based tracking for stationary jobs
-            tracking = self.db.execute_query(
-                "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
-                (job_id, interaction.user.id),
-                fetch='one'
-            )
-            
-            if not tracking:
-                await interaction.response.send_message(
-                    "❌ **Job tracking error**\n\nNo tracking record found. Please abandon and re-accept this job.",
-                    ephemeral=True
-                )
-                return
-
-            time_at_location, required_duration = tracking
-            if time_at_location < required_duration:
-                remaining = required_duration - time_at_location
-                await interaction.response.send_message(
-                    f"⏳ **Job not ready for completion**\n\nYou need **{remaining:.1f} more minutes** at this location.\n\nProgress: {time_at_location:.1f}/{required_duration} minutes",
-                    ephemeral=True
-                )
-                return
-
-            # Stationary job is ready - complete with success/failure checks
-            await interaction.response.defer(ephemeral=True)
-
-            # Calculate success chance for stationary jobs
-            base_success = max(20, 80 - (danger * 10))
-            time_bonus = 5 if elapsed_minutes <= duration_minutes + 5 else 0
-            success_chance = max(20, min(95, base_success + time_bonus))
-            
-            roll = random.randint(1, 100)
-            success = roll <= success_chance
-
-            # Check if this is a group job
-            # Check if this is a group job
-            group_id = self.db.execute_query(
-                "SELECT group_id FROM characters WHERE user_id = ?",
+        async def job_complete(self, interaction: discord.Interaction):
+            # Fetch the active job with skill requirements
+            job_info = self.db.execute_query(
+                '''SELECT j.job_id, j.title, j.reward_money, j.danger_level, j.taken_at,
+                          j.duration_minutes, l.name AS location_name, j.job_status,
+                          j.description, j.location_id, j.required_skill, j.min_skill_level
+                   FROM jobs j
+                   JOIN locations l ON j.location_id = l.location_id
+                   WHERE j.taken_by = ? AND j.is_taken = 1''',
                 (interaction.user.id,),
                 fetch='one'
             )
+            
+            if not job_info:
+                await interaction.response.send_message(
+                    "You don't have an active job to complete.", 
+                    ephemeral=True
+                )
+                return
 
-            if group_id and group_id[0]:
-                # Check if the job was taken by the group
-                job_taken_by_group = self.db.execute_query(
-                    "SELECT 1 FROM jobs WHERE job_id = ? AND taken_by = ?",
-                    (job_id, group_id[0]),
+            job_id, title, reward, danger, taken_at, duration_minutes, location_name, job_status, description, job_location_id, required_skill, min_skill_level = job_info
+
+            # Check if job was already completed
+            if job_status == 'completed':
+                await interaction.response.send_message(
+                    "This job has already been completed!",
+                    ephemeral=True
+                )
+                return
+
+            # Determine job type from title and description
+            title_lower = title.lower()
+            desc_lower = description.lower()
+            is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger']) or \
+                              any(word in desc_lower for word in ['transport', 'deliver', 'courier'])
+
+            # Get player's current location
+            player_location = self.db.execute_query(
+                "SELECT current_location FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not player_location or not player_location[0]:
+                await interaction.response.send_message(
+                    "You cannot complete jobs while in transit!",
+                    ephemeral=True
+                )
+                return
+            
+            current_location = player_location[0]
+
+            if is_transport_job:
+                # TRANSPORT JOB LOGIC - Check if at correct destination, then do unloading phase
+                
+                # Check if this is a finalization attempt for transport jobs
+                if job_status == 'awaiting_finalization':
+                    # Transport job is in finalization phase - complete immediately
+                    await self._finalize_transport_job(interaction, job_id, title, reward)
+                    return
+                
+                # Check if player is at the job's destination (the location where job was posted)
+                if current_location != job_location_id:
+                    # Get destination location name
+                    dest_location_name = self.db.execute_query(
+                        "SELECT name FROM locations WHERE location_id = ?",
+                        (job_location_id,),
+                        fetch='one'
+                    )[0]
+                    
+                    await interaction.response.send_message(
+                        f"❌ **Wrong destination!**\n\nThis transport job must be completed at **{dest_location_name}**.\nYou are currently at {location_name}.",
+                        ephemeral=True
+                    )
+                    return
+                
+                # Player is at correct destination - start unloading phase
+                await self._start_transport_unloading(interaction, job_id, title, reward)
+                
+            else:
+                # STATIONARY JOB LOGIC - Use existing time-based completion
+                
+                # Parse the time the job was taken
+                taken_time = datetime.fromisoformat(taken_at)
+                now = datetime.now()
+                elapsed_minutes = (now - taken_time).total_seconds() / 60
+
+                # Check location-based tracking for stationary jobs
+                tracking = self.db.execute_query(
+                    "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
+                    (job_id, interaction.user.id),
                     fetch='one'
                 )
                 
-                if job_taken_by_group:
-                    # Group job
-                    await self._complete_group_job(interaction, job_id, title, reward, roll, success_chance, success)
+                if not tracking:
+                    await interaction.response.send_message(
+                        "❌ **Job tracking error**\n\nNo tracking record found. Please abandon and re-accept this job.",
+                        ephemeral=True
+                    )
+                    return
+
+                time_at_location, required_duration = tracking
+                if time_at_location < required_duration:
+                    remaining = required_duration - time_at_location
+                    await interaction.response.send_message(
+                        f"⏳ **Job not ready for completion**\n\nYou need **{remaining:.1f} more minutes** at this location.\n\nProgress: {time_at_location:.1f}/{required_duration} minutes",
+                        ephemeral=True
+                    )
+                    return
+
+                # Stationary job is ready - complete with success/failure checks
+                await interaction.response.defer(ephemeral=True)
+
+                # --- ENHANCED SKILL CHECK ---
+                base_success = max(20, 75 - (danger * 10))
+                
+                # Get character skills
+                char_skills = self.db.execute_query(
+                    "SELECT engineering, navigation, combat, medical FROM characters WHERE user_id = ?",
+                    (interaction.user.id,),
+                    fetch='one'
+                )
+                
+                skill_map = {
+                    'engineering': char_skills[0] if char_skills else 0,
+                    'navigation': char_skills[1] if char_skills else 0,
+                    'combat': char_skills[2] if char_skills else 0,
+                    'medical': char_skills[3] if char_skills else 0
+                }
+                
+                skill_bonus = 0
+                if required_skill and required_skill in skill_map:
+                    player_skill_level = skill_map[required_skill]
+                    # More rewarding skill bonus: +3% per point above requirement
+                    skill_bonus = (player_skill_level - min_skill_level) * 3
+                
+                # Final success chance calculation
+                success_chance = max(15, min(98, base_success + skill_bonus))
+                roll = random.randint(1, 100)
+                success = roll <= success_chance
+
+                # Check if this is a group job
+                group_id = self.db.execute_query(
+                    "SELECT group_id FROM characters WHERE user_id = ?",
+                    (interaction.user.id,),
+                    fetch='one'
+                )
+
+                if group_id and group_id[0]:
+                    # Check if the job was taken by the group
+                    job_taken_by_group = self.db.execute_query(
+                        "SELECT 1 FROM jobs WHERE job_id = ? AND taken_by = ?",
+                        (job_id, group_id[0]),
+                        fetch='one'
+                    )
+                    
+                    if job_taken_by_group:
+                        # Group job
+                        await self._complete_group_job(interaction, job_id, title, reward, roll, success_chance, success)
+                    else:
+                        # Solo job while in a group
+                        if success:
+                            await self._complete_job_immediately(interaction, job_id, title, reward, roll, success_chance, "stationary")
+                        else:
+                            await self._complete_job_failed(interaction, job_id, title, reward, roll, success_chance)
                 else:
-                    # Solo job while in a group
+                    # Solo job
                     if success:
                         await self._complete_job_immediately(interaction, job_id, title, reward, roll, success_chance, "stationary")
                     else:
                         await self._complete_job_failed(interaction, job_id, title, reward, roll, success_chance)
-            else:
-                # Solo job
-                if success:
-                    await self._complete_job_immediately(interaction, job_id, title, reward, roll, success_chance, "stationary")
-                else:
-                    await self._complete_job_failed(interaction, job_id, title, reward, roll, success_chance)
 
     async def _auto_complete_transport_job(self, user_id: int, job_id: int, title: str, reward: int, delay_minutes: int):
         """Automatically complete a transport job after unloading delay"""

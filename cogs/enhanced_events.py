@@ -931,7 +931,7 @@ class EnhancedEventsCog(commands.Cog):
             
             await channel.send(embed=embed, view=view)
 
-    async def _handle_scavenger_swarm(self, channel, user_id, event_data):
+async def _handle_scavenger_swarm(self, channel, user_id, event_data):
         """Handle scavenger drone encounter"""
         embed = discord.Embed(
             title="🤖 Automated Scavenger Swarm",
@@ -970,7 +970,11 @@ class EnhancedEventsCog(commands.Cog):
             
             char_name, eng_skill = char_data
             
-            if eng_skill >= 12:
+            # Rebalanced skill check
+            success_chance = min(90, 40 + (eng_skill - 10) * 2.5)
+            roll = random.randint(1, 100)
+            
+            if roll <= success_chance:
                 await interaction.response.send_message(
                     f"🛡️ **{char_name}** successfully activates ship defenses, repelling the scavenger drones!",
                     ephemeral=False
@@ -1004,7 +1008,8 @@ class EnhancedEventsCog(commands.Cog):
             
             char_name, nav_skill = char_data
             
-            success_chance = min(75, 45 + nav_skill * 2)
+            # Rebalanced skill check
+            success_chance = min(90, 50 + (nav_skill - 10) * 2)
             roll = random.randint(1, 100)
             
             if roll <= success_chance:
@@ -1158,8 +1163,8 @@ class EnhancedEventsCog(commands.Cog):
             
             char_name, combat_skill = char_data
             
-            # Fighting corporate security is very risky
-            success_chance = min(60, 20 + combat_skill * 2)
+            # Rebalanced skill check
+            success_chance = min(85, 30 + (combat_skill - 10) * 2.5)
             roll = random.randint(1, 100)
             
             if roll <= success_chance:
@@ -1231,8 +1236,8 @@ class EnhancedEventsCog(commands.Cog):
             
             char_name, navigation_skill = char_data
             
-            import random
-            success_chance = min(95, 50 + navigation_skill * 3)
+            # Rebalanced skill check
+            success_chance = min(98, 60 + (navigation_skill - 10) * 2)
             roll = random.randint(1, 100)
             
             if roll <= success_chance:
@@ -1242,16 +1247,19 @@ class EnhancedEventsCog(commands.Cog):
                 )
                 # Bonus: Reduce fuel consumption for this trip
                 self.bot.db.execute_query(
-                    "UPDATE characters SET ship_fuel = ship_fuel + 5 WHERE user_id = ?",
+                    "UPDATE ships SET current_fuel = current_fuel + 5 WHERE owner_id = ?",
                     (user_id,)
                 )
             else:
                 damage = random.randint(5, 15)
+                self.bot.db.execute_query(
+                    "UPDATE ships SET hull_integrity = GREATEST(1, hull_integrity - ?) WHERE owner_id = ?",
+                    (damage, user_id)
+                )
                 await interaction.response.send_message(
                     f"💥 Despite careful navigation, **{char_name}**'s ship scrapes against debris. Hull takes {damage} damage.",
                     ephemeral=False
                 )
-                # Apply hull damage (if hull system exists)
         
         async def speed_callback(interaction):
             if interaction.user.id != user_id:
@@ -1270,8 +1278,8 @@ class EnhancedEventsCog(commands.Cog):
             
             char_name, navigation_skill = char_data
             
-            import random
-            success_chance = min(80, 30 + navigation_skill * 2)
+            # Rebalanced skill check
+            success_chance = min(85, 40 + (navigation_skill - 10) * 2)
             roll = random.randint(1, 100)
             
             if roll <= success_chance:
@@ -1283,14 +1291,13 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 damage = random.randint(15, 35)
                 fuel_loss = random.randint(10, 20)
+                self.bot.db.execute_query(
+                    "UPDATE ships SET hull_integrity = GREATEST(1, hull_integrity - ?), current_fuel = GREATEST(0, current_fuel - ?) WHERE owner_id = ?",
+                    (damage, fuel_loss, user_id)
+                )
                 await interaction.response.send_message(
                     f"💥 **{char_name}**'s reckless speed causes multiple collisions! Hull damage: {damage}, Fuel lost: {fuel_loss}",
                     ephemeral=False
-                )
-                # Apply damage and fuel loss
-                self.bot.db.execute_query(
-                    "UPDATE characters SET ship_fuel = GREATEST(0, ship_fuel - ?) WHERE user_id = ?",
-                    (fuel_loss, user_id)
                 )
         
         careful_button.callback = careful_callback
@@ -1358,11 +1365,11 @@ class EnhancedEventsCog(commands.Cog):
             char_name, combat_skill, medical_skill = char_data
             
             if is_trap:
-                # Pirate trap!
-                combat_chance = min(90, combat_skill * 8)
+                # Rebalanced skill check for pirate trap
+                success_chance = min(95, 40 + (combat_skill - 10) * 3)
                 roll = random.randint(1, 100)
                 
-                if roll <= combat_chance:
+                if roll <= success_chance:
                     reward = random.randint(200, 500)
                     self.bot.db.execute_query(
                         "UPDATE characters SET money = money + ? WHERE user_id = ?",
@@ -1376,7 +1383,7 @@ class EnhancedEventsCog(commands.Cog):
                     damage = random.randint(20, 40)
                     credits_lost = random.randint(50, 200)
                     self.bot.db.execute_query(
-                        "UPDATE characters SET health = GREATEST(1, health - ?), money = GREATEST(0, money - ?) WHERE user_id = ?",
+                        "UPDATE characters SET hp = GREATEST(1, hp - ?), money = GREATEST(0, money - ?) WHERE user_id = ?",
                         (damage, credits_lost, user_id)
                     )
                     await interaction.response.send_message(
@@ -1422,19 +1429,6 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(ignore_button)
         
         await channel.send(embed=embed, view=view)
-
-    async def _execute_travel_event(self, channel, event, user_id, corridor_name):
-        """Execute a travel event"""
-        embed = discord.Embed(
-            title=f"🚀 Travel Event: {corridor_name}",
-            description=event['description'],
-            color=event['color']
-        )
-        
-        if event.get('interactive') and event.get('handler'):
-            await event['handler'](channel, user_id, event)
-        else:
-            await channel.send(embed=embed)
 
 
 class PirateEncounterView(discord.ui.View):
