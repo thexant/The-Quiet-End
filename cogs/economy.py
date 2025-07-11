@@ -924,6 +924,39 @@ class EconomyCog(commands.Cog):
         asyncio.create_task(self._auto_complete_transport_job(interaction.user.id, job_id, title, reward, unloading_minutes))
     async def _complete_job_immediately(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int, job_type: str):
         """Complete a job immediately with full reward"""
+
+        # Check if this is an escort job
+        if title.startswith("[ESCORT]"):
+            # Extract destination name from the title
+            match = re.search(r"to (.+)", title)
+            if match:
+                dest_name = match.group(1)
+                
+                # Find the destination location ID
+                dest_location = self.db.execute_query(
+                    "SELECT location_id FROM locations WHERE name = ?",
+                    (dest_name,),
+                    fetch='one'
+                )
+                
+                if dest_location:
+                    dest_id = dest_location[0]
+                    
+                    # Get the NPC ID from the npc_job_completions table
+                    npc_job_info = self.db.execute_query(
+                        "SELECT npc_id FROM npc_job_completions WHERE job_id = ?",
+                        (job_id,),
+                        fetch='one'
+                    )
+                    
+                    if npc_job_info:
+                        npc_id = npc_job_info[0]
+                        # Move the NPC to the new location
+                        self.db.execute_query(
+                            "UPDATE static_npcs SET location_id = ? WHERE npc_id = ?",
+                            (dest_id, npc_id)
+                        )
+
         # Give full reward
         self.db.execute_query(
             "UPDATE characters SET money = money + ? WHERE user_id = ?",

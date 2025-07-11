@@ -85,34 +85,65 @@ class NPCInteractionsCog(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     async def generate_npc_jobs(self, npc_id: int, npc_type: str, location_id: int, occupation: str = None):
-        """Generate jobs for an NPC based on their role"""
+        """Generate jobs for an NPC based on their role, including escort missions."""
         
+        # 20% chance to generate an escort job instead of a regular one
+        if random.random() < 0.2:
+            # Get possible destinations (at least 2 jumps away)
+            galaxy_cog = self.bot.get_cog('GalaxyGeneratorCog')
+            if galaxy_cog:
+                routes = await galaxy_cog._find_route_to_destination(location_id, max_jumps=4)
+                # Filter for routes with 2 or 3 jumps
+                valid_destinations = [r for r in routes if r[2] in [2, 3]]
+                
+                if valid_destinations:
+                    dest_id, dest_name, jumps = random.choice(valid_destinations)
+                    
+                    # Create escort job
+                    title = f"[ESCORT] Escort to {dest_name}"
+                    description = f"Safely escort this NPC from their current location to {dest_name}. The journey is estimated to be {jumps} jumps."
+                    reward = 150 * jumps + random.randint(50, 200)
+                    danger = jumps + random.randint(0, 2)
+                    duration = 30 * jumps  # Rough duration estimate
+
+                    self.db.execute_query(
+                        '''INSERT INTO npc_jobs 
+                           (npc_id, npc_type, job_title, job_description, reward_money,
+                            required_skill, min_skill_level, danger_level, duration_minutes, expires_at)
+                           VALUES (?, ?, ?, ?, ?, 'combat', 10, ?, ?, datetime('now', '+1 day'))''',
+                        (npc_id, npc_type, title, description, reward, danger, duration)
+                    )
+                    return # Stop after creating an escort job
+
         # Job templates based on occupation
         job_templates = {
             "Farmer": [
-                ("Harvest Assistant Needed", "Help harvest crops during the busy season", 150, None, 0, 1, 120),
-                ("Livestock Care", "Tend to farm animals and ensure their health", 200, "medical", 5, 1, 180),
-                ("Equipment Maintenance", "Repair and maintain farming equipment", 250, "engineering", 8, 2, 90)
+                ("Harvest Assistant Needed", "Help harvest crops during the busy season", 150, None, 0, 1, 30),
+                ("Livestock Care", "Tend to farm animals and ensure their health", 200, "medical", 5, 1, 45),
+                ("Equipment Maintenance", "Repair and maintain farming equipment", 250, "engineering", 8, 2, 60)
             ],
             "Engineer": [
-                ("System Diagnostics", "Run diagnostics on critical station systems", 300, "engineering", 10, 2, 60),
-                ("Equipment Calibration", "Calibrate sensitive technical equipment", 400, "engineering", 15, 1, 90),
-                ("Emergency Repair", "Fix urgent system failures", 500, "engineering", 18, 3, 45)
+                ("System Diagnostics", "Run diagnostics on critical station systems", 300, "engineering", 10, 2, 45),
+                ("Equipment Calibration", "Calibrate sensitive technical equipment", 400, "engineering", 15, 1, 60),
+                ("Emergency Repair", "Fix urgent system failures", 500, "engineering", 18, 3, 30)
             ],
             "Medic": [
-                ("Medical Supply Inventory", "Organize and catalog medical supplies", 180, "medical", 5, 1, 60),
-                ("Health Screening", "Assist with routine health examinations", 220, "medical", 10, 1, 90),
-                ("Emergency Response", "Provide medical aid during emergencies", 400, "medical", 15, 2, 30)
+                ("Medical Supply Inventory", "Organize and catalog medical supplies", 180, "medical", 5, 1, 30),
+                ("Health Screening", "Assist with routine health examinations", 220, "medical", 10, 1, 60),
+                ("Emergency Response", "Provide medical aid during emergencies", 400, "medical", 15, 2, 20)
             ],
             "Merchant": [
-                ("Market Research", "Investigate trade opportunities", 200, "navigation", 8, 1, 120),
-                ("Cargo Escort", "Provide security for valuable shipments", 350, "combat", 12, 3, 180),
-                ("Price Negotiation", "Help negotiate better trade deals", 300, "navigation", 10, 1, 90)
+                ("Market Research", "Investigate trade opportunities", 200, "navigation", 8, 1, 60),
+                ("Cargo Escort", "Provide security for valuable shipments", 350, "combat", 12, 3, 90),
+                ("Price Negotiation", "Help negotiate better trade deals", 300, "navigation", 10, 1, 45)
             ],
             "Security Guard": [
-                ("Patrol Duty", "Conduct security patrols of the facility", 180, "combat", 5, 2, 120),
-                ("Equipment Check", "Inspect and maintain security equipment", 200, "engineering", 8, 1, 60),
-                ("Threat Assessment", "Evaluate security risks and vulnerabilities", 300, "combat", 15, 2, 90)
+                ("Patrol Duty", "Conduct security patrols of the facility", 180, "combat", 5, 2, 60),
+                ("Equipment Check", "Inspect and maintain security equipment", 200, "engineering", 8, 1, 30),
+                ("Threat Assessment", "Evaluate security risks and vulnerabilities", 300, "combat", 15, 2, 60)
+            ],
+            "Escort": [
+                ("Escort to {dest_name}", "Provide safe passage for an NPC to a new location.", 300, "combat", 10, 2, 60)
             ]
         }
         
@@ -152,7 +183,6 @@ class NPCInteractionsCog(commands.Cog):
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (npc_id, npc_type, title, desc, reward, reward_items, skill, min_skill, danger, duration, expires_at)
             )
-
     async def generate_npc_trade_inventory(self, npc_id: int, npc_type: str, trade_specialty: str = None):
         """Generate trade inventory for an NPC"""
         
@@ -484,6 +514,46 @@ class NPCJobSelectView(discord.ui.View):
                 select.callback = self.job_selected
                 self.add_item(select)
     
+Hello! As a specialist in Python, Javascript, CSS, and SQL, I'd be happy to help you with your Discord bot. I've reviewed your request and the provided files. Here are the code fixes to address the issues with NPC jobs and to implement the NPC escort missions.
+
+Part 1: Fixing NPC Job Durations and Acceptance
+
+The main problems are that NPC job durations are too long, and when a player accepts an NPC job, it's not being correctly tracked by the main job system. Here are the changes to fix this.
+
+In cogs/npc_interactions.py:
+
+To make the job durations more reasonable, we'll adjust the base values in the generate_npc_jobs method. Replace the existing job_templates dictionary with this updated version:
+Python
+
+# In cogs/npc_interactions.py, inside the NPCInteractionsCog class, replace the job_templates dictionary
+        job_templates = {
+            "Farmer": [
+                ("Harvest Assistant Needed", "Help harvest crops during the busy season", 150, None, 0, 1, 30),
+                ("Livestock Care", "Tend to farm animals and ensure their health", 200, "medical", 5, 1, 45),
+                ("Equipment Maintenance", "Repair and maintain farming equipment", 250, "engineering", 8, 2, 60)
+            ],
+            "Engineer": [
+                ("System Diagnostics", "Run diagnostics on critical station systems", 300, "engineering", 10, 2, 45),
+                ("Equipment Calibration", "Calibrate sensitive technical equipment", 400, "engineering", 15, 1, 60),
+                ("Emergency Repair", "Fix urgent system failures", 500, "engineering", 18, 3, 30)
+            ],
+            "Medic": [
+                ("Medical Supply Inventory", "Organize and catalog medical supplies", 180, "medical", 5, 1, 30),
+                ("Health Screening", "Assist with routine health examinations", 220, "medical", 10, 1, 60),
+                ("Emergency Response", "Provide medical aid during emergencies", 400, "medical", 15, 2, 20)
+            ],
+            "Merchant": [
+                ("Market Research", "Investigate trade opportunities", 200, "navigation", 8, 1, 60),
+                ("Cargo Escort", "Provide security for valuable shipments", 350, "combat", 12, 3, 90),
+                ("Price Negotiation", "Help negotiate better trade deals", 300, "navigation", 10, 1, 45)
+            ],
+            "Security Guard": [
+                ("Patrol Duty", "Conduct security patrols of the facility", 180, "combat", 5, 2, 60),
+                ("Equipment Check", "Inspect and maintain security equipment", 200, "engineering", 8, 1, 30),
+                ("Threat Assessment", "Evaluate security risks and vulnerabilities", 300, "combat", 15, 2, 60)
+            ]
+        }
+
     async def job_selected(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your interaction!", ephemeral=True)
@@ -531,19 +601,39 @@ class NPCJobSelectView(discord.ui.View):
                     ephemeral=True
                 )
                 return
-        
+
+        # Get character's current location to assign the job correctly
+        char_location_id = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+
         # Accept the job (create a regular job entry)
         expire_time = datetime.now() + timedelta(hours=6)
         
         self.bot.db.execute_query(
             '''INSERT INTO jobs 
                (location_id, title, description, reward_money, required_skill, min_skill_level,
-                danger_level, duration_minutes, expires_at, is_taken, taken_by, taken_at)
-               VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'))''',
-            (title, desc, reward_money, required_skill, min_skill_level, danger_level, 
-             duration_minutes, expire_time, interaction.user.id)
+                danger_level, duration_minutes, expires_at, is_taken, taken_by, taken_at, job_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), 'active')''',
+            (char_location_id, title, desc, reward_money, required_skill, min_skill_level, danger_level, 
+             duration_minutes, expire_time.isoformat(), interaction.user.id)
         )
         
+        # Get the new job_id
+        new_job_id = self.bot.db.execute_query(
+            "SELECT last_insert_rowid()",
+            fetch='one'
+        )[0]
+
+        # Add to job_tracking for stationary jobs
+        self.bot.db.execute_query(
+            '''INSERT INTO job_tracking (job_id, user_id, start_location, required_duration)
+               VALUES (?, ?, ?, ?)''',
+            (new_job_id, interaction.user.id, char_location_id, duration_minutes)
+        )
+
         # Record completion for tracking
         self.bot.db.execute_query(
             "INSERT INTO npc_job_completions (npc_job_id, user_id) VALUES (?, ?)",
@@ -585,7 +675,6 @@ class NPCJobSelectView(discord.ui.View):
         embed.add_field(name="Danger", value="⚠️" * danger_level if danger_level > 0 else "Safe", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
 class NPCTradeSelectView(discord.ui.View):
     def __init__(self, bot, user_id: int, npc_id: int, npc_type: str, trade_items: list):
         super().__init__(timeout=120)
