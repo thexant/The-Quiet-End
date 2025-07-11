@@ -12,12 +12,15 @@ class EconomyCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
         self.job_tracking_task = None
+        # DON'T start background tasks in __init__
         
     shop_group = app_commands.Group(name="shop", description="Buy and sell items")
     job_group  = app_commands.Group(name="job",  description="Find and complete jobs")
+    
     async def cog_load(self):
         """Called when the cog is loaded - safer place to start background tasks"""
-        await self.start_job_tracking()
+        # Start background task after cog is fully loaded
+        self.job_tracking_task = self.bot.loop.create_task(self.start_job_tracking())
 
     async def cog_unload(self):
         """Called when the cog is unloaded - clean up tasks"""
@@ -32,18 +35,8 @@ class EconomyCog(commands.Cog):
     async def start_job_tracking(self):
         """Start the job tracking background task"""
         await self.bot.wait_until_ready()  # Wait for bot to be ready
-        
-        # Cancel existing task if it exists
-        if self.job_tracking_task and not self.job_tracking_task.done():
-            self.job_tracking_task.cancel()
-            try:
-                await self.job_tracking_task
-            except asyncio.CancelledError:
-                pass
-        
-        # Create new task
-        self.job_tracking_task = self.bot.loop.create_task(self.job_tracking_loop())
-        print("🔄 Job tracking task started")
+        print("🔄 Starting job tracking task...")
+        await self.job_tracking_loop()
 
     async def job_tracking_loop(self):
         """The actual job tracking loop"""
@@ -55,92 +48,9 @@ class EconomyCog(commands.Cog):
                 await asyncio.sleep(60)  # Check every minute
                 iteration += 1
                 
-                # Log every 5 minutes to show it's running
-                if iteration % 5 == 0:
+                # Log every 10 minutes to show it's running
+                if iteration % 10 == 0:
                     print(f"🔄 Job tracking running (iteration {iteration})")
-
-                # Get all active job tracking records
-                active_tracking = self.db.execute_query(
-                    '''
-                    SELECT
-                      jt.tracking_id,
-                      jt.job_id,
-                      jt.user_id,
-                      jt.start_location,
-                      jt.required_duration,
-                      jt.time_at_location,
-                      jt.last_location_check,
-                      j.title
-                    FROM job_tracking jt
-                    JOIN jobs j ON jt.job_id = j.job_id
-                    WHERE j.is_taken = 1
-                    ''',
-                    fetch='all'
-                )
-
-                if not active_tracking:
-                    if iteration % 10 == 0:  # Log every 10 minutes when no jobs
-                        print("🔄 No active job tracking records found")
-                    continue
-
-                print(f"🔄 Processing {len(active_tracking)} job tracking records")
-                updated_count = 0
-                
-                for record in active_tracking:
-                    try:
-                        tracking_id, job_id, user_id, start_location, required_duration, time_at_location, last_check, job_title = record
-                        
-                        # Check if user is still at the required location
-                        current_location_result = self.db.execute_query(
-                            "SELECT current_location FROM characters WHERE user_id = ?",
-                            (user_id,),
-                            fetch='one'
-                        )
-                        
-                        if not current_location_result:
-                            print(f"⚠️ Character not found for user {user_id}")
-                            continue
-                        
-                        current_location = current_location_result[0]
-                        
-                        if current_location == start_location:
-                            # User is at correct location, add time
-                            # Always add 1 minute since this runs every minute
-                            new_time_at_location = float(time_at_location or 0) + 1.0
-                            
-                            # Update the tracking record
-                            self.db.execute_query(
-                                '''UPDATE job_tracking
-                                   SET time_at_location = ?, 
-                                       last_location_check = datetime('now')
-                                   WHERE tracking_id = ?''',
-                                (new_time_at_location, tracking_id)
-                            )
-                            
-                            print(f"✅ Updated job tracking for user {user_id} (job: {job_title[:30]}): +1.0min (total: {new_time_at_location:.1f}/{required_duration})")
-                            updated_count += 1
-                        else:
-                            # User not at location, just update timestamp
-                            self.db.execute_query(
-                                "UPDATE job_tracking SET last_location_check = datetime('now') WHERE tracking_id = ?",
-                                (tracking_id,)
-                            )
-                            
-                            if iteration % 5 == 0:  # Log occasionally
-                                print(f"📍 User {user_id} not at job location (at {current_location}, needs {start_location})")
-                    
-                    except Exception as record_error:
-                        print(f"❌ Error processing tracking record {tracking_id}: {record_error}")
-                        continue
-                
-                if updated_count > 0:
-                    print(f"✅ Updated {updated_count} job tracking records")
-
-            except Exception as e:
-                print(f"❌ Critical error in job tracking loop: {e}")
-                import traceback
-                traceback.print_exc()
-                await asyncio.sleep(60)  # Wait before retrying
     async def check_location_access_fee(self, user_id: int, location_id: int) -> tuple:
         """Check if user needs to pay a fee to access this location"""
         # Check if location is owned and has access controls

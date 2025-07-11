@@ -39,46 +39,63 @@ class RPGBot(commands.Bot):
         self.income_task = None
     async def setup_hook(self):
         """This function is called when the bot is preparing to start."""
-        # Initialize the database
-        await self.db.initialize()
-        
-        # Initialize the activity tracker BEFORE trying to use it
-        self.activity_tracker = ActivityTracker(self)
-        
-        # Cancel existing tasks if they exist
-        if hasattr(self, 'monitor_task') and self.monitor_task and not self.monitor_task.done():
-            self.monitor_task.cancel()
-            try:
-                await self.monitor_task
-            except asyncio.CancelledError:
-                pass
-        
-        if hasattr(self, 'income_task') and self.income_task and not self.income_task.done():
-            self.income_task.cancel()
-            try:
-                await self.income_task
-            except asyncio.CancelledError:
-                pass
-        
-        # Load all cogs from the 'cogs' directory
-        for filename in os.listdir('./cogs'):
-            if filename.endswith('.py'):
-                try:
-                    await self.load_extension(f'cogs.{filename[:-3]}')
-                    self.logger.info(f"Loaded cog: {filename}")
-                except Exception as e:
-                    self.logger.error(f"Failed to load cog {filename}: {e}")
-        
-        # Now we can safely start the activity tracker's loop
-        self.monitor_task = asyncio.create_task(self.activity_tracker.monitor_activity())
-        self.income_task = self.loop.create_task(self.generate_location_income())
-        
-        # Sync slash commands
         try:
-            synced = await self.tree.sync()
-            print(f"🔄 Synced {len(synced)} slash commands")
+            print("🔧 Initializing database...")
+            # Initialize the database
+            await self.db.initialize()
+            print("✅ Database initialized")
+            
+            print("📊 Initializing activity tracker...")
+            # Initialize the activity tracker BEFORE trying to use it
+            self.activity_tracker = ActivityTracker(self)
+            print("✅ Activity tracker initialized")
+            
+            # Cancel existing tasks if they exist
+            if hasattr(self, 'monitor_task') and self.monitor_task and not self.monitor_task.done():
+                self.monitor_task.cancel()
+                try:
+                    await self.monitor_task
+                except asyncio.CancelledError:
+                    pass
+            
+            if hasattr(self, 'income_task') and self.income_task and not self.income_task.done():
+                self.income_task.cancel()
+                try:
+                    await self.income_task
+                except asyncio.CancelledError:
+                    pass
+            
+            print("🧩 Loading cogs...")
+            # Load all cogs from the 'cogs' directory
+            loaded_cogs = 0
+            for filename in os.listdir('./cogs'):
+                if filename.endswith('.py') and not filename.startswith('_'):
+                    cog_name = filename[:-3]  # Remove .py extension
+                    try:
+                        print(f"  Loading {cog_name}...")
+                        await self.load_extension(f'cogs.{cog_name}')
+                        loaded_cogs += 1
+                        print(f"  ✅ {cog_name} loaded")
+                    except Exception as e:
+                        print(f"  ❌ Failed to load {cog_name}: {e}")
+                        import traceback
+                        traceback.print_exc()
+            
+            print(f"✅ Loaded {loaded_cogs} cogs successfully")
+            
+            # Start background monitoring tasks AFTER cogs are loaded
+            print("🔄 Starting background tasks...")
+            self.monitor_task = self.loop.create_task(self.activity_tracker.monitor_activity())
+            self.income_task = self.loop.create_task(self.generate_location_income())
+            print("✅ Background tasks started")
+            
+            print("🎮 Bot setup complete!")
+            
         except Exception as e:
-            print(f"❌ Failed to sync commands: {e}")
+            print(f"❌ Error in setup_hook: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     async def on_ready(self):
         print(f'🚀 {self.user} has landed in human space!')

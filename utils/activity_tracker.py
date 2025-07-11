@@ -47,17 +47,19 @@ class ActivityTracker:
     
     async def monitor_activity(self):
         """Background task to monitor user activity and trigger AFK warnings"""
+        await self.bot.wait_until_ready()  # Wait for bot to be ready first
+        print("👁️ Activity monitoring started")
+        
         while True:
             try:
                 await asyncio.sleep(300)  # Check every 5 minutes
                 
                 # Find users who have been inactive for 2 hours
-                # Use datetime.utcnow() to match SQLite's CURRENT_TIMESTAMP (which is UTC)
                 two_hours_ago = datetime.utcnow() - timedelta(hours=2)
                 inactive_users = self.db.execute_query(
                     '''SELECT user_id, name FROM characters 
                        WHERE is_logged_in = 1 
-                       AND datetime(last_activity) < datetime(?) 
+                       AND datetime(last_activity) < datetime(?)
                        AND user_id NOT IN (SELECT user_id FROM afk_warnings WHERE is_active = 1)''',
                     (two_hours_ago.isoformat(),),
                     fetch='all'
@@ -71,10 +73,10 @@ class ActivityTracker:
                     # Start AFK warning process
                     warning_task = asyncio.create_task(self._start_afk_warning(user_id, char_name))
                     self.warning_tasks[user_id] = warning_task
-                
+                    
             except Exception as e:
                 print(f"Error in activity monitor: {e}")
-                await asyncio.sleep(60)
+                await asyncio.sleep(60)  # Wait before retrying
     
     async def _start_afk_warning(self, user_id: int, char_name: str):
         """Start the AFK warning process for a user"""
