@@ -1061,9 +1061,9 @@ class EventsCog(commands.Cog):
         self.db.execute_query(
             '''INSERT INTO jobs
                (location_id, title, description, reward_money, required_skill, min_skill_level,
-                danger_level, duration_minutes, expires_at, is_taken, job_status)
-               VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0, 'available')''',
-            (location_id, title, desc, final_reward, dest_info['danger'], total_duration, expire_str)
+                danger_level, duration_minutes, expires_at, is_taken, job_status, destination_location_id)
+               VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0, 'available', ?)''', # ADD destination_location_id and its placeholder
+            (location_id, title, desc, final_reward, dest_info['danger'], total_duration, expire_str, dest_info['dest_id']) # ADD dest_info['dest_id']
         )
         
         return True
@@ -1140,9 +1140,9 @@ class EventsCog(commands.Cog):
         self.db.execute_query(
             '''INSERT INTO jobs
                (location_id, title, description, reward_money, required_skill, min_skill_level,
-                danger_level, duration_minutes, expires_at, is_taken)
-               VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0)''',
-            (location_id, title, desc, reward, danger, duration, expire_str)
+                danger_level, duration_minutes, expires_at, is_taken, destination_location_id)
+               VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0, ?)''', # ADD destination_location_id and its placeholder
+            (location_id, title, desc, reward, danger, duration, expire_str, location_id) # ADD location_id for destination
         )
 async def setup(bot):
     await bot.add_cog(EventsCog(bot))

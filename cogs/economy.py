@@ -617,7 +617,7 @@ class EconomyCog(commands.Cog):
         job_info = self.db.execute_query(
             '''SELECT j.job_id, j.title, j.reward_money, j.danger_level, j.taken_at,
                       j.duration_minutes, l.name AS location_name, j.job_status,
-                      j.description, j.location_id
+                      j.description, j.location_id, j.destination_location_id -- ADD THIS LINE
                FROM jobs j
                JOIN locations l ON j.location_id = l.location_id
                WHERE j.taken_by = ? AND j.is_taken = 1''',
@@ -632,7 +632,8 @@ class EconomyCog(commands.Cog):
             )
             return
 
-        job_id, title, reward, danger, taken_at, duration_minutes, location_name, job_status, description, job_location_id = job_info
+        # UPDATE unpacking to include destination_location_id
+        job_id, title, reward, danger, taken_at, duration_minutes, location_name, job_status, description, job_location_id, destination_location_id = job_info
 
         # Check if job was already completed
         if job_status == 'completed':
@@ -673,17 +674,17 @@ class EconomyCog(commands.Cog):
                 await self._finalize_transport_job(interaction, job_id, title, reward)
                 return
             
-            # Check if player is at the job's destination (the location where job was posted)
-            if current_location != job_location_id:
-                # Get destination location name
-                dest_location_name = self.db.execute_query(
+            # Check if player is at the correct destination for transport jobs (destination_location_id)
+            if current_location != destination_location_id: # MODIFIED THIS LINE
+                # Get destination location name from the destination_location_id
+                final_dest_name = self.db.execute_query(
                     "SELECT name FROM locations WHERE location_id = ?",
-                    (job_location_id,),
+                    (destination_location_id,), # Use the destination_location_id
                     fetch='one'
                 )[0]
                 
                 await interaction.response.send_message(
-                    f"❌ **Wrong destination!**\n\nThis transport job must be completed at **{dest_location_name}**.\nYou are currently at {location_name}.",
+                    f"❌ **Wrong destination!**\n\nThis transport job must be completed at **{final_dest_name}**.\nYou are currently at {location_name}.",
                     ephemeral=True
                 )
                 return
@@ -809,9 +810,24 @@ class EconomyCog(commands.Cog):
                     embed.add_field(name="⭐ Experience Gained", value=f"+{exp_gain} EXP", inline=True)
                     embed.add_field(name="📦 Status", value="Cargo delivered successfully", inline=True)
                     
-                    await user.send(embed=embed)
-                except:
-                    pass  # Failed to send DM
+                    # Get the current location channel and send there instead of DM
+                    # Assuming the user is at the destination location when this auto-completes
+                    current_location_id = self.db.execute_query(
+                        "SELECT current_location FROM characters WHERE user_id = ?", (user_id,), fetch='one'
+                    )[0]
+                    location_channel_id = self.db.execute_query(
+                        "SELECT channel_id FROM locations WHERE location_id = ?", (current_location_id,), fetch='one'
+                    )[0]
+                    
+                    if location_channel_id:
+                        channel = self.bot.get_channel(location_channel_id)
+                        if channel:
+                            await channel.send(embed=embed) # Public message in location channel
+                    else:
+                        await user.send(embed=embed) # Fallback to DM if no channel
+                except Exception as e:
+                    print(f"❌ Failed to send transport job auto-completion message to user {user_id}: {e}")
+                    pass  # Failed to send DM or channel message
 
             # Check for level up
             char_cog = self.bot.get_cog('CharacterCog')
@@ -852,7 +868,8 @@ class EconomyCog(commands.Cog):
         if char_cog:
             await char_cog.level_up_check(interaction.user.id)
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # Send publicly in the current channel
+        await interaction.response.send_message(embed=embed, ephemeral=False) # MODIFIED THIS LINE
     async def _start_transport_unloading(self, interaction: discord.Interaction, job_id: int, title: str, reward: int):
         """Start the unloading phase for transport jobs (1-3 minutes)"""
         import random
@@ -935,7 +952,7 @@ class EconomyCog(commands.Cog):
         if char_cog:
             await char_cog.level_up_check(interaction.user.id)
         
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=False)
 
     async def _complete_job_failed(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int):
         """Complete a failed job with partial reward"""
@@ -1535,7 +1552,7 @@ class EconomyCog(commands.Cog):
         embed.add_field(name="Danger", value="⚠️" * danger if danger > 0 else "Safe", inline=True)
         embed.add_field(name="Location", value=location_name[:1020] if len(location_name) > 1020 else location_name, inline=True)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _manual_job_update(self, user_id: int):
         """Manually update job tracking for a specific user"""

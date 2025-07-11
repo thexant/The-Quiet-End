@@ -226,8 +226,10 @@ class Database:
                 taken_by INTEGER,
                 taken_at TIMESTAMP,
                 expires_at TIMESTAMP,
+                destination_location_id INTEGER, -- ADD THIS LINE
                 FOREIGN KEY (location_id) REFERENCES locations (location_id),
-                FOREIGN KEY (taken_by) REFERENCES characters (user_id)
+                FOREIGN KEY (taken_by) REFERENCES characters (user_id),
+                FOREIGN KEY (destination_location_id) REFERENCES locations (location_id) -- ADD THIS LINE for foreign key
             )''',
             
             # Inventory table (unchanged)
