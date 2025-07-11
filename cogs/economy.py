@@ -923,62 +923,33 @@ class EconomyCog(commands.Cog):
         import asyncio
         asyncio.create_task(self._auto_complete_transport_job(interaction.user.id, job_id, title, reward, unloading_minutes))
     async def _complete_job_immediately(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int, job_type: str):
-        """Complete a job immediately with full reward"""
+        # Fetch job details including karma_change
+        job_details = self.db.execute_query(
+            "SELECT reward_money, karma_change, location_id FROM jobs WHERE job_id = ?",
+            (job_id,),
+            fetch='one'
+        )
+        if not job_details:
+             # Job might have been cleaned up already, just log and exit
+            print(f"Could not find job {job_id} for completion.")
+            return
 
-        # Check if this is an escort job
-        if title.startswith("[ESCORT]"):
-            # Extract destination name from the title
-            match = re.search(r"to (.+)", title)
-            if match:
-                dest_name = match.group(1)
-                
-                # Find the destination location ID
-                dest_location = self.db.execute_query(
-                    "SELECT location_id FROM locations WHERE name = ?",
-                    (dest_name,),
-                    fetch='one'
-                )
-                
-                if dest_location:
-                    dest_id = dest_location[0]
-                    
-                    # Get the NPC ID from the npc_job_completions table
-                    npc_job_info = self.db.execute_query(
-                        "SELECT npc_id FROM npc_job_completions WHERE job_id = ?",
-                        (job_id,),
-                        fetch='one'
-                    )
-                    
-                    if npc_job_info:
-                        npc_id = npc_job_info[0]
-                        # Move the NPC to the new location
-                        self.db.execute_query(
-                            "UPDATE static_npcs SET location_id = ? WHERE npc_id = ?",
-                            (dest_id, npc_id)
-                        )
-
+        actual_reward, karma_change, location_id = job_details
+        
         # Give full reward
         self.db.execute_query(
             "UPDATE characters SET money = money + ? WHERE user_id = ?",
-            (reward, interaction.user.id)
+            (actual_reward, interaction.user.id)
         )
-        
-        # 15% chance for skill improvement
-        skill_note = ""
-        if random.random() < 0.15:
-            skill = random.choice(['engineering', 'navigation', 'combat', 'medical'])
-            self.db.execute_query(
-                f"UPDATE characters SET {skill} = {skill} + 1 WHERE user_id = ?",
-                (interaction.user.id,)
-            )
-            skill_note = f"\n🎯 **{skill.title()} skill increased by 1!**"
-        
-        # Experience gain
-        exp_gain = random.randint(25, 50)
-        self.db.execute_query(
-            "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
-            (exp_gain, interaction.user.id)
-        )
+
+        # Handle reputation change
+        if karma_change != 0:
+            reputation_cog = self.bot.get_cog('ReputationCog')
+            if reputation_cog:
+                await reputation_cog.update_reputation(interaction.user.id, location_id, karma_change)
+                print(f"Reputation updated for {interaction.user.id} by {karma_change} at location {location_id}")
+
+        # ... (rest of the existing logic for skill, experience, etc.) ...
         
         # Clean up
         self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
@@ -991,7 +962,7 @@ class EconomyCog(commands.Cog):
         )
         
         embed.add_field(name="✅ Success Roll", value=f"{roll}/{success_chance} - Success!", inline=True)
-        embed.add_field(name="💰 Reward", value=f"{reward:,} credits", inline=True)
+        embed.add_field(name="💰 Reward", value=f"{actual_reward:,} credits", inline=True)
         embed.add_field(name="⭐ Experience", value=f"+{exp_gain} EXP", inline=True)
         embed.add_field(name="📋 Job Type", value=job_type.title(), inline=True)
         

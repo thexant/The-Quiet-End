@@ -80,7 +80,14 @@ class Database:
                 time_paused_at TIMESTAMP,
                 current_ingame_time TIMESTAMP
             )''',
-
+            '''CREATE TABLE IF NOT EXISTS character_reputation (
+                user_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                reputation INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, location_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id) ON DELETE CASCADE,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id) ON DELETE CASCADE
+            )''',
             # Character birth and identity info
             '''CREATE TABLE IF NOT EXISTS character_identity (
                 user_id INTEGER PRIMARY KEY,
@@ -198,7 +205,13 @@ class Database:
                 FOREIGN KEY (origin_location) REFERENCES locations (location_id),
                 FOREIGN KEY (destination_location) REFERENCES locations (location_id)
             )''',
-            
+            # In database.py, at the end of the init_database method's queries list
+
+            # Add faction to locations
+            '''ALTER TABLE locations ADD COLUMN faction TEXT DEFAULT 'neutral' ''',
+
+            # Add karma change to jobs
+            '''ALTER TABLE jobs ADD COLUMN karma_change INTEGER DEFAULT 0''',
             # Groups table (unchanged)
             '''CREATE TABLE IF NOT EXISTS groups (
                 group_id INTEGER PRIMARY KEY AUTOINCREMENT,

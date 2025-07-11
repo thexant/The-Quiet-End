@@ -981,16 +981,38 @@ class EventsCog(commands.Cog):
                 await enhanced_events_cog.generate_location_event(location_id, location_type, wealth, len(players_present))
     
     async def _generate_location_job(self, location_id: int, wealth: int, location_type: str):
-        """Generate a new job at a location with more variety"""
+        """Generate a new job at a location with more variety, including desperation jobs."""
         
-        # First try to generate travel jobs (80% of jobs should be travel)
+        # Check for Desperation Job possibility
+        if wealth <= 3 and random.random() < 0.4: # 40% chance for a desperation job in poor locations
+            desperation_jobs = [
+                ("Smuggle 'Medical Supplies'", "Transport a discreet package of 'medical supplies' to a nearby system. No questions asked. High risk, high reward.", random.randint(300, 700), -15, 4),
+                ("Silence a Witness", "A local contact needs a problem to 'disappear'. Handle it quietly.", random.randint(500, 800), -25, 5),
+                ("Plant a 'Device'", "A local concealing his face has offered you a reward to plant a suspicious looking electronic device on government infrastructure, no questions asked.", random.randint(650, 1000), -30, 5),
+                ("Staged Robbery", "Commit an armed robbery at a rival shopfront to drive customers away due to 'danger'.", random.randint(200, 400), -10, 5)
+            ]
+            title, desc, reward, karma, danger = random.choice(desperation_jobs)
+            
+            # This is a stationary job for now, but could be adapted to travel
+            duration = random.randint(30, 90)
+            expire_time = datetime.now() + timedelta(hours=random.randint(2, 6))
+            expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
+
+            self.db.execute_query(
+                '''INSERT INTO jobs
+                   (location_id, title, description, reward_money, danger_level, duration_minutes, expires_at, is_taken, job_status, karma_change)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'available', ?)''',
+                (location_id, title, desc, reward, danger, duration, expire_str, karma)
+            )
+            print(f"🩸 Generated Desperation Job at location {location_id}: {title}")
+            return
+
+        # If not a desperation job, generate a travel or stationary job
         if random.random() < 0.8:
-            # Try to generate travel job
             travel_job_generated = await self._generate_travel_job(location_id, wealth, location_type)
             if travel_job_generated:
                 return
         
-        # Fallback to stationary job or if travel job failed
         await self._generate_stationary_job(location_id, wealth, location_type)
     async def _generate_travel_job(self, location_id: int, wealth: int, location_type: str) -> bool:
         """Generate a travel job with support for multi-jump destinations and async yielding"""

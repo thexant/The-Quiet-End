@@ -741,30 +741,42 @@ class GalaxyGeneratorCog(commands.Cog):
         x = radius * math.cos(angle)
         y = radius * math.sin(angle)
         
-        # Determine base properties by type
+        faction_roll = random.random()
+        if faction_roll < 0.05:
+            faction = 'government'
+        elif faction_roll < 0.10:
+            faction = 'bandit'
+        else:
+            faction = 'neutral'
+
         # Check for derelict status first (5% chance)
         is_derelict = random.random() < 0.05
 
         if is_derelict:
             # Derelict locations have very low wealth and population
             wealth = random.randint(1, 3)
+            faction = 'neutral'
             population = 0
             description = self._generate_derelict_description(name, loc_type, system, establishment_date)
         else:
             # Normal location generation
             if loc_type == 'colony':
                 wealth = random.randint(1, 8)
+                'faction': faction,
                 population = random.randint(80, 250) * (wealth + 2)
                 description = self._generate_colony_description(name, system, establishment_date, wealth, population)
             elif loc_type == 'space_station':
                 wealth = random.randint(4, 10)
+                'faction': faction,
                 population = random.randint(100, 300) * wealth
                 description = self._generate_station_description(name, system, establishment_date, wealth, population)
             else:  # outpost
                 wealth = random.randint(1, 5)
+                'faction': faction,
                 population = random.randint(10, 50)
                 description = self._generate_outpost_description(name, system, establishment_date, wealth, population)
-        
+        if faction == 'bandit':
+            loc['has_black_market'] = True
         # Build the dict with defaults
         # Build the dict with derelict-aware defaults
         if is_derelict:
@@ -2456,16 +2468,17 @@ class GalaxyGeneratorCog(commands.Cog):
             '''INSERT INTO locations 
                (name, location_type, description, wealth_level, population,
                 x_coord, y_coord, system_name, established_date, has_jobs, has_shops, has_medical, 
-                has_repairs, has_fuel, has_upgrades, has_black_market, is_generated) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                has_repairs, has_fuel, has_upgrades, has_black_market, is_generated, is_derelict, faction) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             (location['name'], location['type'], location['description'], 
              location['wealth_level'], location['population'], location['x_coord'], 
              location['y_coord'], location['system_name'], location.get('established_date'),
              location['has_jobs'], location['has_shops'], location['has_medical'], 
              location['has_repairs'], location['has_fuel'], location['has_upgrades'],
-             location.get('has_black_market', False), location['is_generated'])
+             location.get('has_black_market', False), location['is_generated'], 
+             location.get('is_derelict', False), location['faction']) # ADD FACTION HERE
         )
-        
+            
         return self.db.execute_query(
             "SELECT location_id FROM locations WHERE name = ? ORDER BY location_id DESC LIMIT 1",
             (location['name'],),

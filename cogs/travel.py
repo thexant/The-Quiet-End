@@ -8,6 +8,53 @@ import random
 from utils.channel_manager import ChannelManager
 from cogs.corridor_events import CorridorEventsCog
 
+class DockingFeeView(discord.ui.View):
+    def __init__(self, bot, user_id, location_id, fee, origin_location_id):
+        super().__init__(timeout=300) # 5 minute timeout
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.fee = fee
+        self.origin_location_id = origin_location_id
+        self.decision = asyncio.Future()
+
+    @discord.ui.button(label="Pay Fee", style=discord.ButtonStyle.success)
+    async def pay_fee(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your docking decision.", ephemeral=True)
+            return
+
+        # Check if user can afford it
+        money = self.bot.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?", (self.user_id,), fetch='one'
+        )[0]
+
+        if money < self.fee:
+            await interaction.response.send_message(f"You cannot afford the {self.fee:,} credit docking fee.", ephemeral=True)
+            self.decision.set_result('leave')
+            self.stop()
+            return
+
+        # Deduct fee
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?", (self.fee, self.user_id)
+        )
+        await interaction.response.send_message(f"You paid the {self.fee:,} credit docking fee.", ephemeral=True)
+        self.decision.set_result('pay')
+        self.stop()
+
+    @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger)
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your docking decision.", ephemeral=True)
+            return
+        
+        await interaction.response.send_message("You decide to leave the area.", ephemeral=True)
+        self.decision.set_result('leave')
+        self.stop()
+
+    async def wait_for_decision(self):
+        return await self.decision
 class TravelCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -598,73 +645,154 @@ class TravelCog(commands.Cog):
         embed.set_footer(text="Auto-updating every 30 seconds")
         
         return embed
+# In cogs/travel.py, replace the _complete_travel_after_delay method
+
     async def _complete_travel_after_delay(self, user_id, corridor_id, travel_time, dest_name, transit_chan, guild):
-        """Complete travel after the specified delay (travel_time already includes ship efficiency)"""
-        await asyncio.sleep(travel_time)  # travel_time is already modified for ship efficiency
-        
+        """Waits for travel time and then hands off to the arrival handler."""
+        await asyncio.sleep(travel_time)
+
         try:
-            # Mark session completed
+            # Get destination and origin info from the completed travel session
+            session_info = self.db.execute_query(
+                "SELECT destination_location, origin_location FROM travel_sessions WHERE user_id=? AND corridor_id=? AND status='traveling' ORDER BY session_id DESC LIMIT 1",
+                (user_id, corridor_id), fetch='one'
+            )
+            if not session_info:
+                print(f"No active travel session found for user {user_id} on completion.")
+                return
+
+            dest_location_id, origin_location_id = session_info
+
+            # Mark session as arrived before handling access
             self.db.execute_query(
-                "UPDATE travel_sessions SET status='completed' WHERE user_id=? AND corridor_id=? AND status='traveling'",
+                "UPDATE travel_sessions SET status='arrived' WHERE user_id=? AND corridor_id=? AND status='traveling'",
                 (user_id, corridor_id)
             )
-            
-            # Get destination
-            dest_location_id = self.db.execute_query(
-                "SELECT destination_location FROM corridors WHERE corridor_id=?",
-                (corridor_id,), fetch='one'
-            )[0]
-            
-            # Move character to destination and update ship docking location
-            self.db.execute_query(
-                "UPDATE characters SET current_location=? WHERE user_id=?",
-                (dest_location_id, user_id)
-            )
-            
-            # If character has a ship, update its docking location
-            ship_id = self.db.execute_query(
-                "SELECT ship_id FROM characters WHERE user_id = ?",
-                (user_id,), fetch='one'
-            )
-            if ship_id and ship_id[0]:
-                self.db.execute_query(
-                    "UPDATE ships SET docked_at_location = ? WHERE ship_id = ?",
-                    (dest_location_id, ship_id[0])
-                )
 
-            # Give channel access to destination
-            await self.channel_mgr.update_channel_on_player_movement(
-                guild, user_id, None, dest_location_id
-            )
+            # Handle the arrival access check
+            await self._handle_arrival_access(user_id, dest_location_id, origin_location_id, guild, transit_chan)
 
-            # Clean up progress tracking
-            session_key = f"{user_id}_{corridor_id}"
-            if session_key in self.active_status_messages:
-                # Send final completion message to progress embed
-                try:
-                    final_embed = discord.Embed(
-                        title="✅ Journey Complete!",
-                        description=f"Successfully arrived at **{dest_name}**!",
-                        color=0x00ff00
-                    )
-                    final_embed.add_field(
-                        name="🎉 Welcome",
-                        value="You have safely completed your journey. Check your new location channel!",
-                        inline=False
-                    )
-                    await self.active_status_messages[session_key]['message'].edit(embed=final_embed)
-                except:
-                    pass
-                
-                del self.active_status_messages[session_key]
-
-            # Cleanup transit channel
-            if transit_chan:
-                await transit_chan.send(f"🚀 Arrived at **{dest_name}**! Journey complete.")
-                await self.channel_mgr.cleanup_transit_channel(transit_chan.id, delay_seconds=30)
-                
         except Exception as e:
-            print(f"❌ Error completing travel: {e}")
+            print(f"❌ Error during initial travel completion: {e}")
+
+
+    async def _handle_arrival_access(self, user_id: int, dest_location_id: int, origin_location_id: int, guild: discord.Guild, transit_chan: discord.TextChannel):
+        """Handles docking access checks, fees, and combat for faction-controlled areas."""
+        try:
+            # Get destination and character info
+            location_info = self.db.execute_query("SELECT name, faction FROM locations WHERE location_id = ?", (dest_location_id,), fetch='one')
+            if not location_info: return
+            dest_name, faction = location_info
+
+            rep_cog = self.bot.get_cog('ReputationCog')
+            if not rep_cog:
+                print("ReputationCog not found, cannot check access.")
+                # Fallback to default behavior if rep system is offline
+                await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
+                return
+
+            rep_entry = self.db.execute_query("SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?", (user_id, dest_location_id), fetch='one')
+            reputation = rep_entry[0] if rep_entry else 0
+            rep_tier = rep_cog.get_reputation_tier(reputation)
+
+            access_granted = False
+            message = ""
+            view = None
+
+            # Faction Logic
+            if faction == 'government':
+                if rep_tier in ['Heroic', 'Good']:
+                    access_granted = True
+                    message = f"Welcome to the secure government area of {dest_name}, your reputation precedes you."
+                elif rep_tier == 'Neutral':
+                    fee = (50 - reputation) * 10
+                    message = f"{dest_name} is a secure government area. Due to your neutral reputation, a docking fee of **{fee:,} credits** is required."
+                    view = DockingFeeView(self.bot, user_id, dest_location_id, fee, origin_location_id)
+                else: # Bad or Evil
+                    message = f"🚨 **HOSTILE DETECTED!** 🚨\nYour criminal reputation is known here. {dest_name} security forces engage on sight! You are forced to retreat."
+                    await self._force_retreat(user_id, origin_location_id, guild, transit_chan, message)
+                    return
+
+            elif faction == 'bandit':
+                if rep_tier in ['Evil', 'Bad']:
+                    access_granted = True
+                    message = f"Welcome to {dest_name}, friend. We don't ask questions here."
+                elif rep_tier == 'Neutral':
+                    fee = (50 + reputation) * 10
+                    message = f"{dest_name} is a haven for those outside the law. To prove you're not a spy, a 'contribution' of **{fee:,} credits** is required to dock."
+                    view = DockingFeeView(self.bot, user_id, dest_location_id, fee, origin_location_id)
+                else: # Good or Heroic
+                    message = f"⚔️ **LAWMAN DETECTED!** ⚔️\nYour kind isn't welcome at {dest_name}. The locals open fire, forcing you to retreat!"
+                    await self._force_retreat(user_id, origin_location_id, guild, transit_chan, message)
+                    return
+
+            else: # Neutral faction
+                access_granted = True
+                message = f"You have arrived at {dest_name}."
+
+            # Process access
+            if access_granted:
+                await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, message)
+            elif view:
+                # Send message and wait for fee payment
+                if transit_chan: await transit_chan.send(message, view=view)
+                decision = await view.wait_for_decision()
+                if decision == 'pay':
+                    await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, f"Docking fees paid. You are cleared to land at {dest_name}.")
+                else: # Leave
+                    await self._force_retreat(user_id, origin_location_id, guild, transit_chan, f"You refused to pay the fee and have returned to your previous location.")
+
+        except Exception as e:
+            print(f"❌ Error in arrival access handling: {e}")
+            # Fallback to granting access on error to avoid trapping players
+            await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, "An error occurred during docking, but you have been granted access.")
+
+
+    async def _grant_final_access(self, user_id: int, dest_location_id: int, guild: discord.Guild, transit_chan: discord.TextChannel, arrival_message: str = ""):
+        """Finalizes arrival, updates DB and channels, and cleans up."""
+        self.db.execute_query(
+            "UPDATE characters SET current_location=? WHERE user_id=?",
+            (dest_location_id, user_id)
+        )
+        
+        # Update ship docking location
+        ship_id_result = self.db.execute_query("SELECT active_ship_id FROM characters WHERE user_id=?", (user_id,), fetch='one')
+        if ship_id_result and ship_id_result[0]:
+            self.db.execute_query("UPDATE ships SET docked_at_location=? WHERE ship_id=?", (dest_location_id, ship_id_result[0]))
+
+        # Give channel access
+        await self.channel_mgr.update_channel_on_player_movement(guild, user_id, None, dest_location_id)
+
+        # Send arrival message
+        if transit_chan:
+            await transit_chan.send(arrival_message)
+            await self.channel_mgr.cleanup_transit_channel(transit_chan.id, delay_seconds=30)
+        
+        # Cleanup progress tracking
+        # This part assumes you have a way to derive the corridor_id for the session_key.
+        # Since it's complex, we'll just attempt a generic cleanup.
+        for key in list(self.active_status_messages.keys()):
+            if key.startswith(f"{user_id}_"):
+                del self.active_status_messages[key]
+                break
+
+
+    async def _force_retreat(self, user_id: int, origin_location_id: int, guild: discord.Guild, transit_chan: discord.TextChannel, reason: str):
+        """Forces a player to retreat back to their origin location."""
+        if transit_chan: await transit_chan.send(reason)
+        
+        # Move character back to origin
+        self.db.execute_query(
+            "UPDATE characters SET current_location = ? WHERE user_id = ?",
+            (origin_location_id, user_id)
+        )
+
+        # Give channel access back to origin
+        await self.channel_mgr.give_user_location_access(guild.get_member(user_id), origin_location_id)
+
+        # Cleanup transit channel
+        if transit_chan:
+            await self.channel_mgr.cleanup_transit_channel(transit_chan.id, delay_seconds=15)
 
     @travel_group.command(name="routes", description="View available travel routes from current location")
     async def view_routes(self, interaction: discord.Interaction):

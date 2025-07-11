@@ -65,6 +65,7 @@ class RPGBot(commands.Bot):
             'cogs.npcs',
             'cogs.npc_interactions',
             'cogs.web_map',
+            'cogs.reputation',
         ]
         
         print("🔧 Loading cogs...")
