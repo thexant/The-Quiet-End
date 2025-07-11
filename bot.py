@@ -4,7 +4,7 @@ from discord.ext import commands
 import asyncio
 import os
 from database import Database
-
+from utils.activity_tracker import ActivityTracker
 # Try to load configuration
 try:
     from config import BOT_CONFIG, DISCORD_CONFIG
@@ -42,6 +42,9 @@ class RPGBot(commands.Bot):
         # Initialize the database
         await self.db.initialize()
         
+        # Initialize the activity tracker BEFORE trying to use it
+        self.activity_tracker = ActivityTracker(self)
+        
         # Load all cogs from the 'cogs' directory
         for filename in os.listdir('./cogs'):
             if filename.endswith('.py'):
@@ -51,9 +54,10 @@ class RPGBot(commands.Bot):
                 except Exception as e:
                     self.logger.error(f"Failed to load cog {filename}: {e}")
         
-        # ADD THIS LINE to correctly start the activity tracker's loop
+        # Now we can safely start the activity tracker's loop
         self.monitor_task = asyncio.create_task(self.activity_tracker.monitor_activity())
         self.income_task = self.loop.create_task(self.generate_location_income())
+        
         # Sync slash commands
         try:
             synced = await self.tree.sync()
