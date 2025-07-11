@@ -50,12 +50,21 @@ class GalaxyGeneratorCog(commands.Cog):
             "Gate", "Portal", "Threshold", "Aperture", "Junction", "Hub", "Transit Point", "Lock", "Array", "Span", "Entry", "Access Point", "Anchor", "Bridgehead", "Nexus", "Entry Point", "Gateway", "Clamp",  "Coupler", "Link Point", "Staging Point", "Terminal", "Interface", "Aligner", "Valve", "Pylon", "Support Frame", "Corridor Dock", "Transfer Node", "Inlet", "Alignment Frame", "Convergence", "Transit Frame", "Hardpoint", "Transit Ring", "Vector Dock", "Intersection", "Perch", "Mount", "Manifold", "Cradle", "Routing Point", "Connective Node", "Anchor Frame"
 
         ]
+    async def cog_load(self):
+        """Called when the cog is loaded"""
         # Start automatic corridor shifts when cog loads
-        self.auto_shift_task = self.bot.loop.create_task(self._auto_corridor_shift_loop())
+        if self.auto_shift_task is None or self.auto_shift_task.done():
+            self.auto_shift_task = self.bot.loop.create_task(self._auto_corridor_shift_loop())
+            print("🌌 Started automatic corridor shift task")
     async def cog_unload(self):
         """Clean up background tasks when cog is unloaded"""
-        if self.auto_shift_task:
+        if self.auto_shift_task and not self.auto_shift_task.done():
             self.auto_shift_task.cancel()
+            try:
+                await self.auto_shift_task
+            except asyncio.CancelledError:
+                pass
+            print("🌌 Cancelled automatic corridor shift task")
             
     
     galaxy_group = app_commands.Group(name="galaxy", description="Galaxy generation and mapping")

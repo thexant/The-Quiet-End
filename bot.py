@@ -45,6 +45,21 @@ class RPGBot(commands.Bot):
         # Initialize the activity tracker BEFORE trying to use it
         self.activity_tracker = ActivityTracker(self)
         
+        # Cancel existing tasks if they exist
+        if hasattr(self, 'monitor_task') and self.monitor_task and not self.monitor_task.done():
+            self.monitor_task.cancel()
+            try:
+                await self.monitor_task
+            except asyncio.CancelledError:
+                pass
+        
+        if hasattr(self, 'income_task') and self.income_task and not self.income_task.done():
+            self.income_task.cancel()
+            try:
+                await self.income_task
+            except asyncio.CancelledError:
+                pass
+        
         # Load all cogs from the 'cogs' directory
         for filename in os.listdir('./cogs'):
             if filename.endswith('.py'):
@@ -83,12 +98,10 @@ class RPGBot(commands.Bot):
         else:
             print(f"🗺️ Galaxy contains {location_count} locations")
             
-            # Start automatic corridor shifts if galaxy exists
+            # Don't start auto corridor shifts here - let the cog handle it
             galaxy_cog = self.get_cog('GalaxyGeneratorCog')
-            if galaxy_cog and hasattr(galaxy_cog, '_auto_corridor_shift_loop'):
-                if not hasattr(galaxy_cog, 'auto_shift_task') or galaxy_cog.auto_shift_task is None or galaxy_cog.auto_shift_task.done():
-                    galaxy_cog.auto_shift_task = self.loop.create_task(galaxy_cog._auto_corridor_shift_loop())
-                    print("🌌 Automatic corridor shift system initialized")
+            if galaxy_cog:
+                print("🌌 Galaxy cog loaded, auto corridor shifts handled by cog")
     
     async def on_command_error(self, ctx, error):
         """Handle command errors gracefully"""
@@ -184,9 +197,19 @@ if __name__ == "__main__":
     else:
         print("🎮 Starting Discord RPG Bot...")
         try:
+            # Import asyncio for proper cleanup
+            import asyncio
+            
+            # Create new event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Run the bot
             bot.run(BOT_TOKEN)
         except discord.LoginFailure:
             print("❌ Invalid bot token!")
             print("🔗 Please check your token at: https://discord.com/developers/applications")
         except Exception as e:
             print(f"❌ Failed to start bot: {e}")
+            import traceback
+            traceback.print_exc()

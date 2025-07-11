@@ -18,18 +18,32 @@ class EconomyCog(commands.Cog):
     async def cog_load(self):
         """Called when the cog is loaded - safer place to start background tasks"""
         await self.start_job_tracking()
-    async def start_job_tracking(self):
-        """Start the job tracking background task"""
-        await self.bot.wait_until_ready()  # Wait for bot to be ready
-        if self.job_tracking_task is None or self.job_tracking_task.done():
-            self.job_tracking_task = self.bot.loop.create_task(self.job_tracking_loop())
-            print("🔄 Job tracking task started")
 
     async def cog_unload(self):
         """Called when the cog is unloaded - clean up tasks"""
-        if self.job_tracking_task:
+        if self.job_tracking_task and not self.job_tracking_task.done():
             self.job_tracking_task.cancel()
+            try:
+                await self.job_tracking_task
+            except asyncio.CancelledError:
+                pass
             print("🔄 Job tracking task stopped")
+
+    async def start_job_tracking(self):
+        """Start the job tracking background task"""
+        await self.bot.wait_until_ready()  # Wait for bot to be ready
+        
+        # Cancel existing task if it exists
+        if self.job_tracking_task and not self.job_tracking_task.done():
+            self.job_tracking_task.cancel()
+            try:
+                await self.job_tracking_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Create new task
+        self.job_tracking_task = self.bot.loop.create_task(self.job_tracking_loop())
+        print("🔄 Job tracking task started")
 
     async def job_tracking_loop(self):
         """The actual job tracking loop"""

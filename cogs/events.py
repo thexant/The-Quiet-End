@@ -9,15 +9,31 @@ class EventsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
+        self.corridor_management_task = None
+    async def cog_load(self):
+        """Called when the cog is loaded"""
+        # Start all the loop tasks
         self.cleanup_tasks.start()
         self.random_events.start()
         self.job_generation.start()
         self.micro_events.start()
         self.enhanced_random_events.start()
-        # Start variable corridor management
-        self.corridor_management_task = self.bot.loop.create_task(self._start_corridor_management_loop()) # Store the task
         self.shift_change_monitor.start()
-
+        
+        # Start corridor management task
+        if self.corridor_management_task is None or self.corridor_management_task.done():
+            self.corridor_management_task = self.bot.loop.create_task(self._start_corridor_management_loop())
+    def cog_unload(self):
+        """Clean up tasks when cog is unloaded"""
+        # Cancel all background tasks correctly
+        if self.corridor_management_task and not self.corridor_management_task.done():
+            self.corridor_management_task.cancel()
+        self.cleanup_tasks.cancel()
+        self.random_events.cancel()
+        self.job_generation.cancel()
+        self.micro_events.cancel()
+        self.enhanced_random_events.cancel()
+        self.shift_change_monitor.cancel()        
     async def _start_corridor_management_loop(self):
         """Start variable interval corridor management"""
         await self.bot.wait_until_ready()
