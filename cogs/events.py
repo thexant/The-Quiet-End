@@ -686,6 +686,15 @@ class EventsCog(commands.Cog):
         # Notify players at affected locations
         await self._notify_location_of_corridor_loss(origin_id, corridor_name, dest_name)
         await self._notify_location_of_corridor_loss(dest_id, corridor_name, origin_name)
+
+        # Post news of the collapse
+        news_cog = self.bot.get_cog('GalacticNewsCog')
+        if news_cog:
+            await news_cog.post_corridor_shift_news({
+                'deactivated': 1,
+                'activated': 0
+            }, intensity=3)
+
     
     async def _handle_corridor_shift(self, corridor_id: int, corridor_name: str):
         """Handle a corridor shift event"""

@@ -85,7 +85,8 @@ class AdminCog(commands.Cog):
                 'station': '🛰️ SPACE STATIONS', 
                 'outpost': '🛤️ OUTPOSTS',
                 'gate': '🚪 GATES',
-                'transit': '🚀 IN TRANSIT'
+                'transit': '🚀 IN TRANSIT',
+                'ship_interiors': '🚀 SHIP INTERIORS'
             }
             
             for cat_type, cat_name in category_names.items():
@@ -124,11 +125,11 @@ class AdminCog(commands.Cog):
             self.db.execute_query(
                 '''INSERT OR REPLACE INTO server_config 
                    (guild_id, colony_category_id, station_category_id, outpost_category_id, 
-                    gate_category_id, transit_category_id, galactic_updates_channel_id, setup_completed)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 1)''',
+                    gate_category_id, transit_category_id, ship_interiors_category_id, galactic_updates_channel_id, setup_completed)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)''',
                 (interaction.guild.id, categories.get('colony'), categories.get('station'),
                  categories.get('outpost'), categories.get('gate'), categories.get('transit'),
-                 news_channel.id if news_channel else None)
+                 categories.get('ship_interiors'), news_channel.id if news_channel else None)
             )
             
             # Send a welcome message to the galactic news channel
@@ -219,8 +220,8 @@ class AdminCog(commands.Cog):
         """Show current server configuration"""
         config = self.db.execute_query(
             '''SELECT colony_category_id, station_category_id, outpost_category_id,
-                      gate_category_id, transit_category_id, max_location_channels,
-                      channel_timeout_hours, auto_cleanup_enabled
+                      gate_category_id, transit_category_id, ship_interiors_category_id, 
+                      max_location_channels, channel_timeout_hours, auto_cleanup_enabled
                FROM server_config WHERE guild_id = ?''',
             (interaction.guild.id,),
             fetch='one'
@@ -242,7 +243,8 @@ class AdminCog(commands.Cog):
             'Space Stations': config[1], 
             'Outposts': config[2],
             'Gates': config[3],
-            'Transit': config[4]
+            'Transit': config[4],
+            'Ship Interiors': config[5]
         }
         
         category_status = []
@@ -264,7 +266,7 @@ class AdminCog(commands.Cog):
         
         embed.add_field(
             name="🔧 Channel Settings",
-            value=f"• Max channels: {config[5]}\n• Timeout: {config[6]} hours\n• Auto-cleanup: {'Enabled' if config[7] else 'Disabled'}",
+            value=f"• Max channels: {config[6]}\n• Timeout: {config[7]} hours\n• Auto-cleanup: {'Enabled' if config[8] else 'Disabled'}",
             inline=True
         )
         

@@ -860,7 +860,7 @@ class CharacterCog(commands.Cog):
         
         # Get current location for announcement
         location_info = self.db.execute_query(
-            "SELECT l.name, l.channel_id FROM characters c JOIN locations l ON c.current_location = l.location_id WHERE c.user_id = ?",
+            "SELECT l.location_id, l.name, l.channel_id FROM characters c JOIN locations l ON c.current_location = l.location_id WHERE c.user_id = ?",
             (user_id,),
             fetch='one'
         )
@@ -931,13 +931,13 @@ class CharacterCog(commands.Cog):
                 pass  # Failed to DM user
         
         # Announce in location channel if it exists
-        if location_info and location_info[1]:
-            location_channel = guild.get_channel(location_info[1])
+        if location_info and location_info[2]:
+            location_channel = guild.get_channel(location_info[2])
             if location_channel:
                 try:
                     death_announcement = discord.Embed(
                         title="💀 Tragedy Strikes",
-                        description=f"**{char_name}** has died at {location_info[0]}.",
+                        description=f"**{char_name}** has died at {location_info[1]}.",
                         color=0x8b0000
                     )
                     death_announcement.add_field(
@@ -951,15 +951,7 @@ class CharacterCog(commands.Cog):
         # Post obituary news
         news_cog = self.bot.get_cog('GalacticNewsCog')
         if news_cog and location_info and location_info[0]:
-            # Get the location ID from current location
-            current_location_id = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
-                (user_id,),
-                fetch='one'
-            )
-            
-            if current_location_id and current_location_id[0]:
-                await news_cog.post_obituary_news(char_name, current_location_id[0], "circumstances under investigation")
+            await news_cog.post_obituary_news(char_name, location_info[0], "circumstances under investigation")
         print(f"💀 Character death (automatic): {char_name} (ID: {user_id}) - HP reached 0")
 
     # Add this method to check for death after HP changes

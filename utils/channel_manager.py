@@ -1246,25 +1246,25 @@ class ChannelManager:
 
     async def _get_or_create_ship_category(self, guild: discord.Guild) -> Optional[discord.CategoryChannel]:
         """
-        Get or create category for ship channels
+        Get the ship interiors category from the server config.
         """
-        category_name = '🚀 SHIP INTERIORS'
+        category_id = self.db.execute_query(
+            "SELECT ship_interiors_category_id FROM server_config WHERE guild_id = ?",
+            (guild.id,),
+            fetch='one'
+        )
         
-        # Look for existing category
-        for category in guild.categories:
-            if category.name == category_name:
+        if category_id and category_id[0]:
+            category = guild.get_channel(category_id[0])
+            if isinstance(category, discord.CategoryChannel):
                 return category
         
-        # Create new category if it doesn't exist
-        try:
-            category = await guild.create_category(
-                category_name,
-                reason="Auto-created category for ship interior channels"
-            )
-            return category
-        except Exception as e:
-            print(f"❌ Failed to create ship category {category_name}: {e}")
-            return None
+        # Fallback for safety, though it shouldn't be needed after setup
+        for cat in guild.categories:
+            if cat.name == '🚀 SHIP INTERIORS':
+                return cat
+        
+        return None
 
     async def _send_ship_welcome(self, channel: discord.TextChannel, ship_info: tuple):
         """Send a welcome message to a newly created ship channel"""

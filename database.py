@@ -285,6 +285,7 @@ class Database:
                 outpost_category_id INTEGER,
                 gate_category_id INTEGER,
                 transit_category_id INTEGER,
+                ship_interiors_category_id INTEGER,
                 max_location_channels INTEGER DEFAULT 50,
                 channel_timeout_hours INTEGER DEFAULT 48,
                 auto_cleanup_enabled BOOLEAN DEFAULT 1,
