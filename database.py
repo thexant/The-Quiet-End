@@ -97,6 +97,18 @@ class Database:
             )''',
             '''ALTER TABLE galaxy_info ADD COLUMN last_shift_check TEXT''',
             '''ALTER TABLE galaxy_info ADD COLUMN current_shift TEXT''',
+            # Character reputation system
+            '''CREATE TABLE IF NOT EXISTS character_reputation (
+                reputation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                reputation INTEGER DEFAULT 0,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                UNIQUE(user_id, location_id)
+            )''',
+            '''ALTER TABLE locations ADD COLUMN faction TEXT DEFAULT 'Independent' ''',
             # Sub-locations within main locations
             '''CREATE TABLE IF NOT EXISTS sub_locations (
                 sub_location_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,7 +123,32 @@ class Database:
                 last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (parent_location_id) REFERENCES locations (location_id)
             )''',
+            # Supply and demand economy tracking
+            '''CREATE TABLE IF NOT EXISTS location_economy (
+                economy_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id INTEGER NOT NULL,
+                item_category TEXT,
+                item_name TEXT,
+                status TEXT NOT NULL CHECK(status IN ('in_demand', 'surplus', 'normal')),
+                price_modifier REAL DEFAULT 1.0,
+                stock_modifier REAL DEFAULT 1.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                UNIQUE(location_id, item_category, item_name)
+            )''',
 
+            # Economic news events
+            '''CREATE TABLE IF NOT EXISTS economic_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                item_category TEXT,
+                item_name TEXT,
+                description TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
             # Black market information
             '''CREATE TABLE IF NOT EXISTS black_markets (
                 market_id INTEGER PRIMARY KEY AUTOINCREMENT,

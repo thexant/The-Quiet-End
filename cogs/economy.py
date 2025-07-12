@@ -192,7 +192,7 @@ class EconomyCog(commands.Cog):
         # Default: allow with no fee
         return True, 0
     async def _generate_shop_items(self, location_id: int, wealth_level: int, location_type: str):
-        """Generate shop items using the new item configuration system"""
+        """Generate shop items using the new item configuration system with supply/demand"""
         from utils.item_config import ItemConfig
         
         # Get base items that should appear everywhere
@@ -239,22 +239,28 @@ class EconomyCog(commands.Cog):
                 if random.random() < final_chance:
                     items_to_add.append(item_name)
         
-        # Add items to shop
+        # Add items to shop with economic modifiers
         for item_name in items_to_add:
             item_def = ItemConfig.get_item_definition(item_name)
             if not item_def:
                 continue
             
-            # Calculate price and stock
+            # Calculate base price and stock
             base_value = item_def["base_value"]
             price_modifier = 1.5 - (wealth_level * 0.05)  # Wealthy locations have better prices
-            price = max(1, int(base_value * price_modifier))
+            base_price = max(1, int(base_value * price_modifier))
             
             # Stock based on rarity and wealth
             rarity = item_def.get("rarity", "common")
             base_stock = {"common": 8, "uncommon": 4, "rare": 2, "legendary": 1}[rarity]
             stock_modifier = 0.5 + (wealth_level * 0.1)
-            stock = max(1, int(base_stock * stock_modifier))
+            base_stock = max(1, int(base_stock * stock_modifier))
+            
+            # Apply economic modifiers
+            status, price_mod, stock_mod = self.get_economic_modifiers(location_id, item_name, item_def["type"])
+            final_price, final_stock = self.apply_economic_modifiers(
+                base_price, base_stock, status, price_mod, stock_mod, is_buying=True
+            )
             
             # Create metadata
             metadata = ItemConfig.create_item_metadata(item_name)
@@ -262,7 +268,7 @@ class EconomyCog(commands.Cog):
             self.db.execute_query(
                 '''INSERT INTO shop_items (location_id, item_name, item_type, price, stock, description, metadata)
                    VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (location_id, item_name, item_def["type"], price, stock, 
+                (location_id, item_name, item_def["type"], final_price, final_stock, 
                  item_def["description"], metadata)
             )
     # Shop Commands
@@ -318,18 +324,34 @@ class EconomyCog(commands.Cog):
         )
         
         if items:
-            # Group items by type
+            # Group items by type and show economic status
             item_types = {}
             for item_name, item_type, price, stock, description in items:
                 if item_type not in item_types:
                     item_types[item_type] = []
                 
+                # Check economic status
+                status, _, _ = self.get_economic_modifiers(char_location[0], item_name, item_type)
+                status_emoji = ""
+                if status == 'in_demand':
+                    status_emoji = " 🔥"  # Hot demand
+                elif status == 'surplus':
+                    status_emoji = " 📦"  # Surplus
+                
                 stock_text = f"({stock} in stock)" if stock != -1 else "(Unlimited)"
-                item_types[item_type].append(f"**{item_name}** - {price:,} credits {stock_text}")
+                item_types[item_type].append(f"**{item_name}** - {price:,} credits {stock_text}{status_emoji}")
             
             for item_type, type_items in item_types.items():
+                # Check if entire category has economic status
+                category_status, _, _ = self.get_economic_modifiers(char_location[0], None, item_type)
+                category_emoji = ""
+                if category_status == 'in_demand':
+                    category_emoji = " 🔥 HIGH DEMAND"
+                elif category_status == 'surplus':
+                    category_emoji = " 📦 SURPLUS"
+                
                 embed.add_field(
-                    name=item_type.replace('_', ' ').title(),
+                    name=f"{item_type.replace('_', ' ').title()}{category_emoji}",
                     value="\n".join(type_items[:5]),  # Limit to 5 items per type
                     inline=True
                 )
@@ -343,6 +365,30 @@ class EconomyCog(commands.Cog):
             value=f"{wealth_text} Wealth Level: {location_info[2]}/10",
             inline=False
         )
+        
+        # Check for any economic events at this location
+        economic_status = self.db.execute_query(
+            '''SELECT item_category, item_name, status FROM location_economy 
+               WHERE location_id = ? AND expires_at > datetime('now')''',
+            (char_location[0],),
+            fetch='all'
+        )
+        
+        if economic_status:
+            status_text = []
+            for category, item, status in economic_status:
+                item_desc = item if item else f"{category} items"
+                if status == 'in_demand':
+                    status_text.append(f"🔥 **{item_desc}** in high demand")
+                elif status == 'surplus':
+                    status_text.append(f"📦 **{item_desc}** in surplus")
+            
+            if status_text:
+                embed.add_field(
+                    name="📈 Economic Status",
+                    value="\n".join(status_text),
+                    inline=False
+                )
         
         embed.add_field(
             name="💡 How to Buy",
@@ -488,11 +534,25 @@ class EconomyCog(commands.Cog):
         inv_id, actual_name, current_qty, base_value, item_type, description = inventory_item
 
         
-        # Calculate sell price (typically 60-80% of base value depending on location wealth)
+        # Calculate sell price with economic modifiers (replace existing calculation)
         wealth_level = has_shops[1]
-        sell_multiplier = 0.5 + (wealth_level * 0.03)  # 50% to 80% based on wealth
-        sell_price = max(1, int(base_value * sell_multiplier))
-        total_earnings = sell_price * quantity
+        base_multiplier = 0.5 + (wealth_level * 0.03)  # 50% to 80% based on wealth
+        base_sell_price = max(1, int(base_value * base_multiplier))
+
+        # Apply economic modifiers
+        status, price_mod, stock_mod = self.get_economic_modifiers(current_location, actual_name, item_type)
+        final_sell_price, _ = self.apply_economic_modifiers(
+            base_sell_price, 1, status, price_mod, stock_mod, is_buying=False
+        )
+
+        total_earnings = final_sell_price * quantity
+
+        # Add economic status message
+        status_message = ""
+        if status == 'in_demand':
+            status_message = f"\n🔥 **{actual_name}** is in high demand here!"
+        elif status == 'surplus':
+            status_message = f"\n📦 Market is saturated with **{actual_name}**."
         
         # Update inventory
         if current_qty == quantity:
@@ -836,7 +896,57 @@ class EconomyCog(commands.Cog):
                     await self._complete_job_immediately(interaction, job_id, title, reward, roll, success_chance, "stationary")
                 else:
                     await self._complete_job_failed(interaction, job_id, title, reward, roll, success_chance)
+    def get_economic_modifiers(self, location_id: int, item_name: str, item_type: str) -> tuple:
+        """Get supply/demand modifiers for an item at a location"""
+        # Check for specific item demand/surplus
+        specific_modifier = self.db.execute_query(
+            '''SELECT status, price_modifier, stock_modifier FROM location_economy 
+               WHERE location_id = ? AND item_name = ? AND expires_at > datetime('now')''',
+            (location_id, item_name),
+            fetch='one'
+        )
+        
+        if specific_modifier:
+            return specific_modifier
+        
+        # Check for category demand/surplus
+        category_modifier = self.db.execute_query(
+            '''SELECT status, price_modifier, stock_modifier FROM location_economy 
+               WHERE location_id = ? AND item_category = ? AND expires_at > datetime('now')''',
+            (location_id, item_type),
+            fetch='one'
+        )
+        
+        if category_modifier:
+            return category_modifier
+        
+        return ('normal', 1.0, 1.0)
 
+    def apply_economic_modifiers(self, base_price: int, base_stock: int, status: str, price_mod: float, stock_mod: float, is_buying: bool) -> tuple:
+        """Apply economic modifiers to price and stock"""
+        if status == 'in_demand':
+            if is_buying:
+                # Buying from shop - prices are higher due to scarcity
+                modified_price = int(base_price * price_mod * 1.2)  # 20% higher
+            else:
+                # Selling to shop - get bonus for in-demand items
+                modified_price = int(base_price * price_mod * 1.15)  # 15% bonus
+            modified_stock = max(0, int(base_stock * stock_mod * 0.3))  # Much lower stock
+        
+        elif status == 'surplus':
+            if is_buying:
+                # Buying from shop - prices are lower due to surplus
+                modified_price = int(base_price * price_mod * 0.8)  # 20% lower
+            else:
+                # Selling to shop - get less due to surplus
+                modified_price = int(base_price * price_mod * 0.7)  # 30% less
+            modified_stock = int(base_stock * stock_mod * 2.0)  # Double stock
+        
+        else:  # normal
+            modified_price = int(base_price * price_mod)
+            modified_stock = int(base_stock * stock_mod)
+        
+        return max(1, modified_price), max(0, modified_stock)
     async def _auto_complete_transport_job(self, user_id: int, job_id: int, title: str, reward: int, delay_minutes: int):
         """Automatically complete a transport job after unloading delay"""
         import asyncio

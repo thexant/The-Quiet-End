@@ -116,7 +116,7 @@ class GalacticNewsCog(commands.Cog):
             'pirate_activity': '☠️ Security Alert',
             'corporate_news': '🏢 Corporate',
             'discovery': '🔬 Discovery',
-            'economic': '💰 Economic',
+            'economic': '📈 Economic',
             'admin_announcement': '🌐 Earth Government'  # Add this line
         }
         

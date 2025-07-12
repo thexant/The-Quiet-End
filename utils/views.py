@@ -379,6 +379,7 @@ class LocationView(discord.ui.View):
                 await cog.dock_ship.callback(cog, interaction)
             dock_btn.callback = dock_callback
             self.add_item(dock_btn)
+            
     # Add this method to LocationView class
     async def _check_ownership_status(self, location_id: int) -> dict:
         """Get ownership information for a location"""
@@ -1313,9 +1314,11 @@ class PersistentLocationView(discord.ui.View):
             self.add_item(self.sub_areas)
             self.add_item(self.npc_interactions)
             self.add_item(self.undock_button)
+            self.add_item(self.route_button)
         else:  # in_space
             self.add_item(self.travel_button)
             self.add_item(self.dock_button)
+            self.add_item(self.route_button)
     
     async def refresh_view(self, interaction: discord.Interaction = None):
         """Refresh the view when dock status changes"""
@@ -1515,8 +1518,16 @@ class PersistentLocationView(discord.ui.View):
         
         travel_cog = self.bot.get_cog('TravelCog')
         if travel_cog:
+            await travel_cog.travel_go.callback(travel_cog, interaction)
+    @discord.ui.button(label="View Routes", style=discord.ButtonStyle.primary, emoji="📋")
+    async def route_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        travel_cog = self.bot.get_cog('TravelCog')
+        if travel_cog:
             await travel_cog.view_routes.callback(travel_cog, interaction)
-    
     @discord.ui.button(label="Dock", style=discord.ButtonStyle.success, emoji="🛬")
     async def dock_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:

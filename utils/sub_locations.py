@@ -1891,7 +1891,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Check if user has a character
         char_info = self.db.execute_query(
-            "SELECT name, hp, max_hp, money, current_location FROM characters WHERE user_id = ?",
+            "SELECT name, hp, max_hp, money, current_location, appearance FROM characters WHERE user_id = ?",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1900,7 +1900,7 @@ class SubLocationServiceView(discord.ui.View):
             await interaction.response.send_message("You need a character to use services!", ephemeral=True)
             return
         
-        char_name, hp, max_hp, money, current_location = char_info
+        char_name, hp, max_hp, money, current_location, appearance = char_info
         
         # Check if user is at this location
         if current_location != self.location_id:
@@ -1936,6 +1936,56 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_browse_shops(interaction, char_name)
         elif service_type == "apply_permits":
             await self._handle_apply_permits(interaction, char_name, money)
+        elif service_type == "request_escort":
+            await self._handle_request_escort(interaction, char_name)
+        elif service_type == "file_complaint":
+            await self._handle_file_complaint(interaction, char_name)
+        elif service_type == "rest_quarters":
+            await self._handle_rest_quarters(interaction, char_name, hp, max_hp)
+        elif service_type == "use_facilities":
+            await self._handle_use_facilities(interaction, char_name)
+        elif service_type == "check_amenities":
+            await self._handle_check_amenities(interaction, char_name)
+        elif service_type == "browse_research":
+            await self._handle_browse_research(interaction, char_name)
+        elif service_type == "use_equipment":
+            await self._handle_use_equipment(interaction, char_name)
+        elif service_type == "review_data":
+            await self._handle_review_data(interaction, char_name)
+        elif service_type == "collaborate":
+            await self._handle_collaborate(interaction, char_name)
+        elif service_type == "tour_gardens":
+            await self._handle_tour_gardens(interaction, char_name)
+        elif service_type == "fresh_produce":
+            await self._handle_fresh_produce(interaction, char_name, money)
+        elif service_type == "learn_techniques":
+            await self._handle_learn_techniques(interaction, char_name)
+        elif service_type == "play_games":
+            await self._handle_play_games(interaction, char_name)
+        elif service_type == "exercise":
+            await self._handle_exercise(interaction, char_name, hp, max_hp)
+        elif service_type == "join_activity":
+            await self._handle_join_activity(interaction, char_name)
+        elif service_type == "relax_unwind":
+            await self._handle_relax_unwind(interaction, char_name)
+        elif service_type == "send_message":
+            await self._handle_send_message(interaction, char_name, money)
+        elif service_type == "check_signals":
+            await self._handle_check_signals(interaction, char_name)
+        elif service_type == "monitor_channels":
+            await self._handle_monitor_channels(interaction, char_name)
+        elif service_type == "order_meal":
+            await self._handle_order_meal(interaction, char_name, money, hp, max_hp)
+        elif service_type == "check_menu":
+            await self._handle_check_menu(interaction, char_name)
+        elif service_type == "socialize":
+            await self._handle_socialize(interaction, char_name)
+        elif service_type == "wait_comfortably":
+            await self._handle_wait_comfortably(interaction, char_name, hp, max_hp)
+        elif service_type == "check_schedules":
+            await self._handle_check_schedules(interaction, char_name)
+        elif service_type == "travel_info":
+            await self._handle_travel_info(interaction, char_name)
         elif service_type == "check_traffic":
             await self._handle_check_traffic(interaction, char_name)
         elif service_type == "corridor_status":
@@ -1961,10 +2011,87 @@ class SubLocationServiceView(discord.ui.View):
         elif service_type == "scavenge_parts":
             await self._handle_scavenge_parts(interaction, char_name)
         elif service_type == "emergency_medical":
-            await self._handle_emergency_medical(interaction, char_name, money)    
-        else:
-            # Generic flavor response for unimplemented services
-            await self._handle_generic_service(interaction, service_type, char_name)
+            await self._handle_emergency_medical(interaction, char_name, money)
+        elif service_type == "equipment_mods":
+            await self._handle_equipment_mods(interaction, char_name, money)
+        elif service_type == "ship_storage":
+            await self._handle_ship_storage(interaction, char_name, money)
+        elif service_type == "cargo_services":
+            await self._handle_cargo_services(interaction, char_name, money)
+        elif service_type == "check_prices":
+            await self._handle_check_prices(interaction, char_name)
+        elif service_type == "specialty_vendors":
+            await self._handle_specialty_vendors(interaction, char_name, money)
+
+        # Administration services - these use modals
+        elif service_type == "change_name":
+            modal = ChangeNameModal(
+                title="Change Character Name",
+                field_label="New Name",
+                placeholder="Enter the new name for your character.",
+                current_value=char_name,
+                cost=50,
+                bot=self.bot
+            )
+            await interaction.response.send_modal(modal)
+            
+        elif service_type == "change_description":
+            modal = ChangeDescriptionModal(
+                title="Change Character Description",
+                field_label="New Appearance Description",
+                placeholder="Describe your character's appearance.",
+                current_value=appearance,
+                cost=50,
+                bot=self.bot
+            )
+            await interaction.response.send_modal(modal)
+
+        elif service_type == "change_bio":
+            bio = self.db.execute_query(
+                "SELECT biography FROM character_identity WHERE user_id = ?",
+                (interaction.user.id,), fetch='one'
+            )
+            modal = ChangeBioModal(
+                title="Change Character Biography",
+                field_label="New Biography",
+                placeholder="Tell your character's story...",
+                current_value=bio[0] if bio else "",
+                cost=25,
+                bot=self.bot
+            )
+            await interaction.response.send_modal(modal)
+
+        elif service_type == "change_dob":
+            dob = self.db.execute_query(
+                "SELECT birth_month, birth_day FROM character_identity WHERE user_id = ?",
+                (interaction.user.id,), fetch='one'
+            )
+            current_dob = f"{dob[0]:02d}/{dob[1]:02d}" if dob else ""
+            modal = ChangeDOBModal(
+                title="Change Date of Birth",
+                field_label="New Birth Date (MM/DD)",
+                placeholder="e.g., 03/15 for March 15th",
+                current_value=current_dob,
+                cost=500,
+                bot=self.bot
+            )
+            await interaction.response.send_modal(modal)
+            
+        elif service_type == "take_id_photo":
+            current_image = self.db.execute_query(
+                "SELECT image_url FROM characters WHERE user_id = ?",
+                (interaction.user.id,), fetch='one'
+            )
+            current_url = current_image[0] if current_image else ""
+            modal = ChangeImageModal(
+                title="Take ID Photo",
+                field_label="Image URL",
+                placeholder="Enter the URL of your character's photo",
+                current_value=current_url,
+                cost=50,
+                bot=self.bot
+            )
+            await interaction.response.send_modal(modal)
     
     async def _handle_medical_treatment(self, interaction, char_name: str, hp: int, max_hp: int, money: int):
         """Handle medical treatment service"""

@@ -399,7 +399,7 @@ class ChannelManager:
         # Usage instructions
         embed.add_field(
             name="🎮 Getting Started",
-            value="• Use `/character location` for interactive options\n• Use `/travel routes` to see detailed travel info\n• Use `/shop list` and `/job list` to see what's available",
+            value="• Use `/here` for interactive options\n• Use `/travel routes` to see detailed travel info\n• Use `/shop list` and `/job list` to see what's available\n• Use `/status` to see information about your character.",
             inline=False
         )
         

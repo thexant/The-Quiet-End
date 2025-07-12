@@ -44,7 +44,8 @@ class EventsCog(commands.Cog):
                 print(f"❌ Error starting event tasks: {e}")
                 import traceback
                 traceback.print_exc()
-        
+            print("📈 Starting economic fluctuation...")
+            self.economic_fluctuation.start()
     def cog_unload(self):
         """Clean up tasks when cog is unloaded"""
         print("🎲 Stopping event background tasks...")
@@ -53,6 +54,7 @@ class EventsCog(commands.Cog):
             self.random_events.cancel()
             self.job_generation.cancel()
             self.micro_events.cancel()
+            self.economic_fluctuation.cancel()
             self.enhanced_random_events.cancel()
         except:
             pass
@@ -173,6 +175,193 @@ class EventsCog(commands.Cog):
         
         except Exception as e:
             print(f"Error in corridor management: {e}")
+    @tasks.loop(hours=3)  # Economic changes every 6 hours
+    async def economic_fluctuation(self):
+        """Generate economic supply and demand changes"""
+        try:
+            # Get all locations with shops
+            locations = self.db.execute_query(
+                "SELECT location_id, name, wealth_level, location_type FROM locations WHERE has_shops = 1",
+                fetch='all'
+            )
+            
+            changes_made = 0
+            news_events = []
+            
+            for location_id, location_name, wealth_level, location_type in locations:
+                # 30% chance for economic change per location
+                if random.random() < 0.3:
+                    change_type = await self._generate_economic_change(location_id, location_name, wealth_level, location_type)
+                    if change_type:
+                        changes_made += 1
+                        news_events.append((location_id, location_name, change_type))
+            
+            # Post economic news if changes occurred
+            if changes_made > 0:
+                await self._post_economic_news(news_events)
+                print(f"📈 Generated {changes_made} economic changes")
+                
+        except Exception as e:
+            print(f"Error in economic fluctuation: {e}")
+
+    async def _generate_economic_change(self, location_id: int, location_name: str, wealth_level: int, location_type: str) -> dict:
+        """Generate a specific economic change for a location"""
+        from utils.item_config import ItemConfig
+        
+        # Clear expired economic statuses
+        self.db.execute_query(
+            "DELETE FROM location_economy WHERE location_id = ? AND expires_at <= datetime('now')",
+            (location_id,)
+        )
+        
+        # Check current economic events
+        current_events = self.db.execute_query(
+            "SELECT COUNT(*) FROM location_economy WHERE location_id = ? AND expires_at > datetime('now')",
+            (location_id,),
+            fetch='one'
+        )[0]
+        
+        # Limit to 2 economic events per location
+        if current_events >= 2:
+            return None
+        
+        # Determine event type
+        event_types = ['demand', 'surplus']
+        weights = [0.7, 0.3]  # Demand more common than surplus
+        event_type = random.choices(event_types, weights=weights)[0]
+        
+        # Determine scope (category vs specific item)
+        is_category = random.random() < 0.6  # 60% chance for category-wide
+        
+        if is_category:
+            # Category-wide event
+            categories = list(ItemConfig.LOCATION_SPAWN_MODIFIERS.get(location_type, {}).keys())
+            if not categories:
+                categories = ["medical", "equipment", "consumable", "fuel", "trade"]
+            
+            target_category = random.choice(categories)
+            target_item = None
+            event_description = f"{target_category.replace('_', ' ').title()} items"
+        else:
+            # Specific item event
+            all_items = list(ItemConfig.ITEM_DEFINITIONS.keys())
+            target_item = random.choice(all_items)
+            target_category = None
+            event_description = target_item
+        
+        # Set modifiers based on event type
+        if event_type == 'demand':
+            price_modifier = random.uniform(1.1, 1.3)  # 10-30% price increase
+            stock_modifier = random.uniform(0.2, 0.5)  # 20-50% stock reduction
+            status = 'in_demand'
+            event_title = f"High Demand for {event_description}"
+        else:  # surplus
+            price_modifier = random.uniform(0.7, 0.9)  # 10-30% price decrease
+            stock_modifier = random.uniform(1.5, 2.5)  # 50-150% stock increase
+            status = 'surplus'
+            event_title = f"Market Surplus of {event_description}"
+        
+        # Duration: 12-48 hours
+        duration_hours = random.randint(12, 48)
+        expire_time = datetime.now() + timedelta(hours=duration_hours)
+        
+        # Insert economic event
+        self.db.execute_query(
+            '''INSERT INTO location_economy 
+               (location_id, item_category, item_name, status, price_modifier, stock_modifier, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+            (location_id, target_category, target_item, status, price_modifier, stock_modifier, expire_time.isoformat())
+        )
+        
+        # Clear existing shop items for this location to force regeneration
+        if target_category:
+            self.db.execute_query(
+                "DELETE FROM shop_items WHERE location_id = ? AND item_type = ?",
+                (location_id, target_category)
+            )
+        elif target_item:
+            self.db.execute_query(
+                "DELETE FROM shop_items WHERE location_id = ? AND item_name = ?",
+                (location_id, target_item)
+            )
+        
+        return {
+            'type': event_type,
+            'status': status,
+            'item_description': event_description,
+            'title': event_title,
+            'duration': duration_hours,
+            'location_id': location_id,
+            'location_name': location_name
+        }
+
+    async def _post_economic_news(self, news_events: list):
+        """Post economic news about market changes"""
+        news_cog = self.bot.get_cog('GalacticNewsCog')
+        if not news_cog:
+            return
+        
+        # Group events by type for news
+        demand_events = [e for e in news_events if e[2]['type'] == 'demand']
+        surplus_events = [e for e in news_events if e[2]['type'] == 'surplus']
+        
+        # Post demand news
+        if demand_events:
+            await self._post_demand_news(news_cog, demand_events)
+        
+        # Post surplus news  
+        if surplus_events:
+            await self._post_surplus_news(news_cog, surplus_events)
+
+    async def _post_demand_news(self, news_cog, demand_events: list):
+        """Post news about items in high demand"""
+        if len(demand_events) == 1:
+            event = demand_events[0][2]
+            title = f"Market Alert: {event['title']}"
+            description = f"Economic analysts report increased demand for {event['item_description']} at {demand_events[0][1]}. Traders are advised that selling these items to this location may yield higher profits than usual."
+        else:
+            locations = [e[1] for e in demand_events]
+            title = "Multiple Market Opportunities Detected"
+            description = f"High demand situations have been identified at {len(demand_events)} locations: {', '.join(locations[:3])}{'and others' if len(locations) > 3 else ''}. Various commodities are experiencing supply shortages."
+        
+        description += " Market conditions are expected to remain active for 12-48 hours."
+        
+        # Get all guilds with galactic updates
+        guilds_with_updates = news_cog.db.execute_query(
+            "SELECT guild_id FROM server_config WHERE galactic_updates_channel_id IS NOT NULL",
+            fetch='all'
+        )
+        
+        for guild_tuple in guilds_with_updates:
+            guild_id = guild_tuple[0]
+            await news_cog.queue_news(guild_id, 'economic', title, description, demand_events[0][0])
+
+    async def _post_surplus_news(self, news_cog, surplus_events: list):
+        """Post news about items in surplus"""
+        if len(surplus_events) == 1:
+            event = surplus_events[0][2]
+            title = f"Market Alert: {event['title']}"
+            description = f"Market analysts report oversupply of {event['item_description']} at {surplus_events[0][1]}. Reduced prices and increased availability expected, though profit margins for sellers may be lower."
+        else:
+            locations = [e[1] for e in surplus_events]
+            title = "Market Surplus Conditions Reported"
+            description = f"Surplus conditions identified at {len(surplus_events)} locations: {', '.join(locations[:3])}{'and others' if len(locations) > 3 else ''}. Various commodities are experiencing oversupply."
+        
+        description += " Buyers may find discounted prices during this period."
+        
+        # Get all guilds with galactic updates
+        guilds_with_updates = news_cog.db.execute_query(
+            "SELECT guild_id FROM server_config WHERE galactic_updates_channel_id IS NOT NULL",
+            fetch='all'
+        )
+        
+        for guild_tuple in guilds_with_updates:
+            guild_id = guild_tuple[0]
+            await news_cog.queue_news(guild_id, 'economic', title, description, surplus_events[0][0])
+
+    @economic_fluctuation.before_loop
+    async def before_economic_fluctuation(self):
+        await self.bot.wait_until_ready()
     async def _random_corridor_event(self):
         """Generate a random corridor-wide event"""
         events = [
