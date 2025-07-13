@@ -2,7 +2,7 @@
 import discord
 import random
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Tuple, Dict
 import uuid
 
@@ -580,7 +580,15 @@ class LocationView(discord.ui.View):
         
         if has_upgrades:
             services.append(f"⬆️ **Ship Upgrades** - Performance enhancements available")
-        
+        # Check for logbook availability
+        has_logbook = self.bot.db.execute_query(
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            (char_location[0],),
+            fetch='one'
+        )[0] > 0
+
+        if has_logbook:
+            services.append(f"📜 **Logbook Access** - View and add entries")
         if services:
             embed.add_field(name="Available Services", value="\n".join(services), inline=False)
         else:
@@ -742,7 +750,22 @@ class LocationView(discord.ui.View):
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+{} hours'))'''.format(expire_hours),
                 (location_id, title, desc, reward, skill, min_skill, danger, duration)
             )
+class RoutePlottingModal(discord.ui.Modal, title="Plot Route"):
+    """A modal for plotting a route to a destination."""
+    destination_input = discord.ui.TextInput(
+        label="Destination Name",
+        placeholder="Enter the name of your destination...",
+        required=True,
+        style=discord.TextStyle.short
+    )
 
+    def __init__(self, travel_cog):
+        super().__init__()
+        self.travel_cog = travel_cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # This calls the handler function in the TravelCog
+        await self.travel_cog.plot_route_callback(interaction, self.destination_input.value)
 class TravelSelectView(discord.ui.View):
     def __init__(self, bot, user_id: int, corridors: List[Tuple]):
         super().__init__(timeout=60)
@@ -1319,7 +1342,8 @@ class PersistentLocationView(discord.ui.View):
             self.add_item(self.travel_button)
             self.add_item(self.dock_button)
             self.add_item(self.route_button)
-    
+            self.add_item(self.plot_route_button)
+    from cogs.travel import TravelCog
     async def refresh_view(self, interaction: discord.Interaction = None):
         """Refresh the view when dock status changes"""
         char_data = self.bot.db.execute_query(
@@ -1445,7 +1469,19 @@ class PersistentLocationView(discord.ui.View):
             )
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
+    @discord.ui.button(label="Plot Route", style=discord.ButtonStyle.success, emoji="📐", row=1)
+    async def plot_route_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Opens a modal to plot a travel route."""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+
+        travel_cog = self.bot.get_cog('TravelCog')
+        if travel_cog: 
+            modal = RoutePlottingModal(travel_cog)
+            await interaction.response.send_modal(modal)
+        else:
+            await interaction.response.send_message("Travel system is currently unavailable.", ephemeral=True)
     @discord.ui.button(label="Jobs", style=discord.ButtonStyle.primary, emoji="💼")
     async def jobs_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
@@ -1551,6 +1587,489 @@ class PersistentLocationView(discord.ui.View):
             await char_cog.undock_ship.callback(char_cog, interaction)
             # Refresh the view after undocking
             await self.refresh_view()
+class EphemeralLocationView(discord.ui.View):
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)  # 5 minute timeout for ephemeral views
+        self.bot = bot
+        self.user_id = user_id
+        
+        # Get current location and status
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            (user_id,),
+            fetch='one'
+        )
+        
+        if char_data:
+            self.current_location_id = char_data[0]
+            location_status = char_data[1]
+        else:
+            self.current_location_id = None
+            location_status = "docked"
+        
+        # Configure buttons based on dock status
+        self._configure_buttons(location_status)
+    
+    def _configure_buttons(self, location_status: str):
+        """Configure button states based on dock status"""
+        self.clear_items()
+        
+        # Status-dependent buttons
+        if location_status == "docked":
+            self.add_item(self.jobs_panel)
+            self.add_item(self.shop_management)
+            self.add_item(self.services) 
+            self.add_item(self.sub_areas)
+            self.add_item(self.npc_interactions)
+            self.add_item(self.undock_button)
+            self.add_item(self.route_button)
+        else:  # in_space
+            self.add_item(self.travel_button)
+            self.add_item(self.dock_button)
+            self.add_item(self.route_button)
+            self.add_item(self.plot_route_button)
+    
+    async def refresh_view(self, interaction: discord.Interaction):
+        """Refresh the view when dock status changes"""
+        char_data = self.bot.db.execute_query(
+            "SELECT location_status, current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if char_data:
+            location_status, current_location = char_data
+            self._configure_buttons(location_status)
+            
+            # Get location name
+            location_name = "Unknown Location"
+            if current_location:
+                location_info = self.bot.db.execute_query(
+                    "SELECT name FROM locations WHERE location_id = ?",
+                    (current_location,),
+                    fetch='one'
+                )
+                if location_info:
+                    location_name = location_info[0]
+            
+            # Update embed
+            embed = discord.Embed(
+                title="📍 Location Panel",
+                description=f"**{location_name}** - Interactive Control Panel",
+                color=0x4169E1
+            )
+            
+            status_emoji = "🛬" if location_status == "docked" else "🚀"
+            embed.add_field(
+                name="Status",
+                value=f"{status_emoji} {location_status.replace('_', ' ').title()}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="Available Actions",
+                value="Use the buttons below to interact with this location",
+                inline=False
+            )
+            
+            embed.set_footer(text="This panel is private to you and will update when your status changes")
+            
+            await interaction.edit_original_response(embed=embed, view=self)
+    
+    # Copy all the button methods from PersistentLocationView but modify dock/undock to refresh
+    @discord.ui.button(label="NPCs", style=discord.ButtonStyle.secondary, emoji="👤")
+    async def npc_interactions(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle NPC interactions button - same as PersistentLocationView"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Same NPC logic as PersistentLocationView
+        char_info = self.bot.db.execute_query(
+            "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info or not char_info[1]:
+            await interaction.response.send_message("You must be logged in to interact with NPCs!", ephemeral=True)
+            return
+        
+        location_id = char_info[0]
+        if not location_id:
+            await interaction.response.send_message("You must be at a location to interact with NPCs!", ephemeral=True)
+            return
+        
+        # Get NPCs at this location
+        static_npcs = self.bot.db.execute_query(
+            '''SELECT npc_id, name, age, occupation, personality, trade_specialty
+               FROM static_npcs WHERE location_id = ?''',
+            (location_id,),
+            fetch='all'
+        )
+        
+        dynamic_npcs = self.bot.db.execute_query(
+            '''SELECT npc_id, name, age, ship_name, ship_type
+               FROM dynamic_npcs 
+               WHERE current_location = ? AND is_alive = 1 AND travel_start_time IS NULL''',
+            (location_id,),
+            fetch='all'
+        )
+        
+        if not static_npcs and not dynamic_npcs:
+            await interaction.response.send_message("No NPCs are available for interaction at this location.", ephemeral=True)
+            return
+        
+        # Import the NPCSelectView class and create the view
+        from cogs.npc_interactions import NPCSelectView
+        view = NPCSelectView(self.bot, interaction.user.id, location_id, static_npcs, dynamic_npcs)
+        
+        embed = discord.Embed(
+            title="👥 NPCs at Location",
+            description="Select an NPC to interact with:",
+            color=0x6c5ce7
+        )
+        
+        # Add some info about available NPCs
+        if static_npcs:
+            static_list = [f"• **{name}** - {occupation}" for npc_id, name, age, occupation, personality, trade_specialty in static_npcs[:5]]
+            embed.add_field(
+                name="🏢 Residents and locals",
+                value="\n".join(static_list) + (f"\n*...and {len(static_npcs)-5} more*" if len(static_npcs) > 5 else ""),
+                inline=False
+            )
+        
+        if dynamic_npcs:
+            dynamic_list = [f"• **{name}** - Captain of {ship_name}" for npc_id, name, age, ship_name, ship_type in dynamic_npcs[:5]]
+            embed.add_field(
+                name="🚀 Visiting Travellers",
+                value="\n".join(dynamic_list) + (f"\n*...and {len(dynamic_npcs)-5} more*" if len(dynamic_npcs) > 5 else ""),
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    @discord.ui.button(label="Services", style=discord.ButtonStyle.secondary, emoji="🔧")
+    async def services(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get current location services
+        char_location = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_location:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        location_services = self.bot.db.execute_query(
+            '''SELECT name, has_medical, has_repairs, has_fuel, has_upgrades, wealth_level
+               FROM locations WHERE location_id = ?''',
+            (char_location[0],),
+            fetch='one'
+        )
+        
+        if not location_services:
+            await interaction.response.send_message("Location information not found!", ephemeral=True)
+            return
+        
+        name, has_medical, has_repairs, has_fuel, has_upgrades, wealth = location_services
+        
+        embed = discord.Embed(
+            title=f"Services - {name}",
+            description="Available services at this location",
+            color=0x4169E1
+        )
+        
+        services = []
+        if has_fuel:
+            fuel_price = max(5, 10 - wealth)  # Better locations have cheaper fuel
+            services.append(f"⛽ **Fuel Refill** - {fuel_price} credits per unit")
+        
+        if has_repairs:
+            repair_quality = "Premium" if wealth >= 7 else "Standard" if wealth >= 4 else "Basic"
+            services.append(f"🔨 **Ship Repairs** - {repair_quality} quality")
+        
+        if has_medical:
+            medical_quality = "Advanced" if wealth >= 8 else "Standard" if wealth >= 5 else "Basic"
+            services.append(f"⚕️ **Medical Treatment** - {medical_quality} care")
+        
+        if has_upgrades:
+            services.append(f"⬆️ **Ship Upgrades** - Performance enhancements available")
+        
+        # Check for logbook availability
+        has_logbook = self.bot.db.execute_query(
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            (char_location[0],),
+            fetch='one'
+        )[0] > 0
+
+        if has_logbook:
+            services.append(f"📜 **Logbook Access** - View and add entries")
+        
+        if services:
+            embed.add_field(name="Available Services", value="\n".join(services), inline=False)
+        else:
+            embed.add_field(name="No Services", value="This location offers no services.", inline=False)
+        
+        # Add wealth indicator
+        wealth_text = "💰" * min(wealth // 2, 5) if wealth > 0 else "💸"
+        embed.add_field(name="Economic Status", value=f"{wealth_text} Wealth Level: {wealth}/10", inline=False)
+        
+        view = ServicesView(self.bot, interaction.user.id)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    @discord.ui.button(label="Plot Route", style=discord.ButtonStyle.success, emoji="📐", row=1)
+    async def plot_route_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Opens a modal to plot a travel route."""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+
+        travel_cog = self.bot.get_cog('TravelCog')
+        if travel_cog: 
+            modal = RoutePlottingModal(travel_cog)
+            await interaction.response.send_modal(modal)
+        else:
+            await interaction.response.send_message("Travel system is currently unavailable.", ephemeral=True)
+
+    @discord.ui.button(label="Jobs", style=discord.ButtonStyle.primary, emoji="💼")
+    async def jobs_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        economy_cog = self.bot.get_cog('EconomyCog')
+        if economy_cog:
+            await economy_cog.job_list.callback(economy_cog, interaction)
+
+    @discord.ui.button(label="Shop", style=discord.ButtonStyle.success, emoji="🛒")
+    async def shop_management(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        economy_cog = self.bot.get_cog('EconomyCog')
+        if economy_cog:
+            await economy_cog.shop_list.callback(economy_cog, interaction)
+
+    @discord.ui.button(label="Sub-Areas", style=discord.ButtonStyle.secondary, emoji="🏢")
+    async def sub_areas(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Same sub-areas logic as PersistentLocationView
+        char_location = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_location:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        from utils.sub_locations import SubLocationManager
+        sub_manager = SubLocationManager(self.bot)
+        
+        available_subs = await sub_manager.get_available_sub_locations(char_location[0])
+        
+        if not available_subs:
+            await interaction.response.send_message("No sub-areas available at this location.", ephemeral=True)
+            return
+        
+        view = SubLocationSelectView(self.bot, interaction.user.id, char_location[0], available_subs)
+        
+        embed = discord.Embed(
+            title="🏢 Sub-Areas",
+            description="Choose an area to visit within this location",
+            color=0x6a5acd
+        )
+        
+        for sub in available_subs:
+            status = "🟢 Active" if sub['exists'] else "⚫ Create"
+            embed.add_field(
+                name=f"{sub['icon']} {sub['name']}",
+                value=f"{sub['description'][:100]}...\n**Status:** {status}",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @discord.ui.button(label="Travel", style=discord.ButtonStyle.primary, emoji="🚀")
+    async def travel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        travel_cog = self.bot.get_cog('TravelCog')
+        if travel_cog:
+            await travel_cog.travel_go.callback(travel_cog, interaction)
+
+    @discord.ui.button(label="View Routes", style=discord.ButtonStyle.primary, emoji="📋")
+    async def route_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        travel_cog = self.bot.get_cog('TravelCog')
+        if travel_cog:
+            await travel_cog.view_routes.callback(travel_cog, interaction)
+
+    @discord.ui.button(label="Dock", style=discord.ButtonStyle.success, emoji="🛬")
+    async def dock_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Defer the response since we'll be doing database operations
+        await interaction.response.defer(ephemeral=True)
+        
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            # Call the dock ship logic directly
+            char_data = char_cog.db.execute_query(
+                "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not char_data:
+                await interaction.followup.send("Character not found!", ephemeral=True)
+                return
+            
+            current_location, location_status = char_data
+            
+            if not current_location:
+                await interaction.followup.send("You're in deep space and cannot dock!", ephemeral=True)
+                return
+            
+            if location_status == "docked":
+                await interaction.followup.send("You're already docked at this location!", ephemeral=True)
+                return
+            
+            # Dock the ship
+            char_cog.db.execute_query(
+                "UPDATE characters SET location_status = 'docked' WHERE user_id = ?",
+                (interaction.user.id,)
+            )
+            
+            location_name = char_cog.db.execute_query(
+                "SELECT name FROM locations WHERE location_id = ?",
+                (current_location,),
+                fetch='one'
+            )[0]
+            
+            # Send confirmation message
+            embed = discord.Embed(
+                title="🛬 Ship Docked",
+                description=f"Your ship has docked at **{location_name}**.",
+                color=0x00ff00
+            )
+            
+            embed.add_field(
+                name="Status Change",
+                value="• You can now engage in personal combat\n• Access to all location services\n• Limited radio range (location only)",
+                inline=False
+            )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+            # Refresh the view to show updated buttons
+            await self.refresh_view(interaction)
+        else:
+            await interaction.followup.send("Character system unavailable.", ephemeral=True)
+
+    @discord.ui.button(label="Undock", style=discord.ButtonStyle.primary, emoji="🚀")
+    async def undock_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Defer the response since we'll be doing database operations
+        await interaction.response.defer(ephemeral=True)
+        
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            char_data = char_cog.db.execute_query(
+                "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not char_data:
+                await interaction.followup.send("Character not found!", ephemeral=True)
+                return
+            
+            current_location, location_status = char_data
+            
+            # Check for active stationary jobs
+            active_jobs = char_cog.db.execute_query(
+                '''SELECT COUNT(*) FROM jobs j 
+                   JOIN job_tracking jt ON j.job_id = jt.job_id
+                   WHERE j.taken_by = ? AND j.job_status = 'active' AND jt.start_location = ?''',
+                (interaction.user.id, current_location),
+                fetch='one'
+            )[0]
+            
+            if active_jobs > 0:
+                embed = discord.Embed(
+                    title="⚠️ Active Job Warning",
+                    description=f"You have {active_jobs} active job(s) at this location. Undocking will cancel them!",
+                    color=0xff9900
+                )
+                embed.add_field(
+                    name="Confirm Undocking?",
+                    value="This will cancel your active jobs without reward.",
+                    inline=False
+                )
+                
+                view = UndockJobConfirmView(char_cog.bot, interaction.user.id, current_location)
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+                return
+            
+            if not current_location:
+                await interaction.followup.send("You're in deep space!", ephemeral=True)
+                return
+            
+            if location_status == "in_space":
+                await interaction.followup.send("You're already in space near this location!", ephemeral=True)
+                return
+            
+            # Undock the ship
+            char_cog.db.execute_query(
+                "UPDATE characters SET location_status = 'in_space' WHERE user_id = ?",
+                (interaction.user.id,)
+            )
+            
+            location_name = char_cog.db.execute_query(
+                "SELECT name FROM locations WHERE location_id = ?",
+                (current_location,),
+                fetch='one'
+            )[0]
+            
+            # Send confirmation message
+            embed = discord.Embed(
+                title="🚀 Ship Undocked",
+                description=f"Your ship is now in space near **{location_name}**.",
+                color=0x4169e1
+            )
+            
+            embed.add_field(
+                name="Status Change",
+                value="• You can now engage in ship combat\n• Limited access to location services\n• Full radio range available",
+                inline=False
+            )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+            # Refresh the view to show updated buttons
+            await self.refresh_view(interaction)
+        else:
+            await interaction.followup.send("Character system unavailable.", ephemeral=True)
 class JobSelectView(discord.ui.View):
     def __init__(self, bot, user_id: int, jobs: List[Tuple], location_name: str):
         super().__init__(timeout=60)
@@ -1848,6 +2367,73 @@ class ServicesView(discord.ui.View):
             fetch='one'
         )
         await self._handle_medical_treatment(interaction, char_info[0], char_info[1], char_info[2], char_info[3])
+    # In views.py, add this method to the ServicesView class
+
+    @discord.ui.button(label="Logbook", style=discord.ButtonStyle.secondary, emoji="📜")
+    async def logbook(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get current location
+        char_location = self.bot.db.execute_query(
+            '''SELECT c.current_location, l.name, l.location_type
+               FROM characters c
+               JOIN locations l ON c.current_location = l.location_id
+               WHERE c.user_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_location:
+            await interaction.response.send_message("Location not found!", ephemeral=True)
+            return
+        
+        location_id, location_name, location_type = char_location
+        
+        # Check if this location has a logbook
+        has_log = self.bot.db.execute_query(
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )[0] > 0
+        
+        if not has_log:
+            await interaction.response.send_message(
+                f"📜 No logbook found at {location_name}.", 
+                ephemeral=True
+            )
+            return
+        
+        # Create logbook interaction view
+        view = LogbookInteractionView(self.bot, interaction.user.id, location_id, location_name)
+        
+        embed = discord.Embed(
+            title=f"📜 {location_name} - Logbook",
+            description="Access the location's logbook to view entries or add your own.",
+            color=0x8b4513
+        )
+        
+        # Get recent entries count
+        recent_count = self.bot.db.execute_query(
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = ? AND posted_at > datetime('now', '-7 days')",
+            (location_id,),
+            fetch='one'
+        )[0]
+        
+        total_count = self.bot.db.execute_query(
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )[0]
+        
+        embed.add_field(
+            name="📊 Logbook Status", 
+            value=f"Total entries: {total_count}\nRecent entries (7 days): {recent_count}",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 class SubLocationSelectView(discord.ui.View):
     def __init__(self, bot, user_id: int, location_id: int, available_subs: list):
         super().__init__(timeout=120)
@@ -2017,5 +2603,169 @@ class LogoutConfirmView(discord.ui.View):
             value=f"Your {self.active_jobs} active job(s) will continue.",
             inline=False
         )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+ 
+# In views.py, add this new class
+
+class LogbookInteractionView(discord.ui.View):
+    def __init__(self, bot, user_id: int, location_id: int, location_name: str):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.location_name = location_name
+    
+    @discord.ui.button(label="View Entries", style=discord.ButtonStyle.primary, emoji="👁️")
+    async def view_entries(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get log entries (most recent first)
+        entries = self.bot.db.execute_query(
+            '''SELECT author_name, message, posted_at, is_generated
+               FROM location_logs
+               WHERE location_id = ?
+               ORDER BY posted_at DESC
+               LIMIT 10''',
+            (self.location_id,),
+            fetch='all'
+        )
+        
+        embed = discord.Embed(
+            title=f"📜 {self.location_name} - Logbook Entries",
+            description=f"Recent entries from this location's logbook",
+            color=0x8b4513
+        )
+        
+        if entries:
+            log_text = []
+            for author, message, posted_at, is_generated in entries:
+                # Format timestamp - try to use in-game time if available
+                try:
+                    from utils.time_system import TimeSystem
+                    time_system = TimeSystem(self.bot)
+                    
+                    # Convert stored time to display format
+                    if posted_at:
+                        posted_time = datetime.fromisoformat(posted_at.replace('Z', '+00:00') if 'Z' in posted_at else posted_at)
+                        time_str = posted_time.strftime("%d-%m-%Y")
+                    else:
+                        time_str = "Unknown date"
+                except:
+                    # Fallback to simple date format
+                    if posted_at:
+                        posted_time = datetime.fromisoformat(posted_at.replace('Z', '+00:00') if 'Z' in posted_at else posted_at)
+                        time_str = posted_time.strftime("%Y-%m-%d")
+                    else:
+                        time_str = "Unknown date"
+                
+                # Different formatting for generated vs player entries
+                if is_generated:
+                    log_text.append(f"**[{time_str}] {author}**")
+                    log_text.append(f"*{message}*")
+                else:
+                    log_text.append(f"**[{time_str}] {author}**")
+                    log_text.append(f'"{message}"')
+                log_text.append("")
+            
+            # Split into multiple fields if too long
+            full_text = "\n".join(log_text)
+            if len(full_text) > 1024:
+                # Split into chunks
+                chunks = []
+                current_chunk = ""
+                for line in log_text:
+                    if len(current_chunk + line + "\n") > 1000:
+                        chunks.append(current_chunk)
+                        current_chunk = line + "\n"
+                    else:
+                        current_chunk += line + "\n"
+                if current_chunk:
+                    chunks.append(current_chunk)
+                
+                for i, chunk in enumerate(chunks[:3]):  # Max 3 fields
+                    field_name = "📖 Log Entries" if i == 0 else f"📖 Log Entries (cont. {i+1})"
+                    embed.add_field(name=field_name, value=chunk, inline=False)
+            else:
+                embed.add_field(name="📖 Log Entries", value=full_text, inline=False)
+        else:
+            embed.add_field(name="📖 Empty Log", value="No entries found.", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    @discord.ui.button(label="Add Entry", style=discord.ButtonStyle.success, emoji="✍️")
+    async def add_entry(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = LogbookEntryModal(self.bot, self.location_id, self.location_name)
+        await interaction.response.send_modal(modal)
+        
+# In views.py, add this new class
+
+class LogbookEntryModal(discord.ui.Modal):
+    def __init__(self, bot, location_id: int, location_name: str):
+        super().__init__(title=f"Add Entry - {location_name}")
+        self.bot = bot
+        self.location_id = location_id
+        self.location_name = location_name
+        
+        self.message_input = discord.ui.TextInput(
+            label="Logbook Entry",
+            placeholder="Write your entry for the location logbook...",
+            style=discord.TextStyle.paragraph,
+            max_length=500,
+            required=True
+        )
+        self.add_item(self.message_input)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Get character info
+        char_info = self.bot.db.execute_query(
+            '''SELECT name FROM characters WHERE user_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        char_name = char_info[0]
+        message = self.message_input.value
+        
+        # Get in-game timestamp
+        try:
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            current_ingame = time_system.calculate_current_ingame_time()
+            
+            if current_ingame:
+                # Use in-game time
+                timestamp = current_ingame.isoformat()
+            else:
+                # Fallback to real time
+                timestamp = datetime.now().isoformat()
+        except:
+            # Fallback to real time if time system fails
+            timestamp = datetime.now().isoformat()
+        
+        # Add entry with in-game timestamp
+        self.bot.db.execute_query(
+            '''INSERT INTO location_logs (location_id, author_id, author_name, message, posted_at)
+               VALUES (?, ?, ?, ?, ?)''',
+            (self.location_id, interaction.user.id, char_name, message, timestamp)
+        )
+        
+        embed = discord.Embed(
+            title="✍️ Logbook Entry Added",
+            description=f"Your entry has been added to the {self.location_name} logbook.",
+            color=0x00ff00
+        )
+        
+        embed.add_field(name="Your Entry", value=f'"{message}"', inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)

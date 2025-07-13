@@ -15,6 +15,7 @@ class NPCCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
+        self.endgame_active = False
         self.dynamic_npc_tasks = {}  # Track active NPC tasks
         # Start initial tasks
         self.bot.loop.create_task(self._start_variable_tasks())
@@ -117,7 +118,82 @@ class NPCCog(commands.Cog):
             # Wait random time before next cycle (30-90 minutes)
             next_delay = random.uniform(30 * 60, 90 * 60)  # Convert to seconds
             await asyncio.sleep(next_delay)
+    def generate_npc_alignment(self, location_id: int) -> str:
+        """Generate NPC alignment based on location reputation and special rules"""
+        
+        # Check if location has special alignment requirements
+        location_data = self.db.execute_query(
+            "SELECT has_black_market, wealth_level, location_type FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_data:
+            return "neutral"
+        
+        has_black_market, wealth_level, location_type = location_data
+        
+        # Black market locations = only bandits
+        if has_black_market:
+            return "bandit"
+        
+        # High wealth federal locations = only loyalists
+        if wealth_level >= 8:
+            return "loyal"
+        
+        # Check average reputation at location to determine dominant faction
+        avg_reputation = self.db.execute_query(
+            """SELECT AVG(reputation) FROM character_reputation 
+               WHERE location_id = ? AND ABS(reputation) > 10""",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if avg_reputation and avg_reputation[0]:
+            avg_rep = avg_reputation[0]
+            if avg_rep > 30:  # High positive rep = loyal area
+                return "loyal"
+            elif avg_rep < -30:  # High negative rep = bandit area
+                return "bandit"
+        
+        # Default distribution: 15% loyal, 15% bandit, 70% neutral
+        rand = random.random()
+        if rand < 0.15:
+            return "loyal"
+        elif rand < 0.30:
+            return "bandit"
+        else:
+            return "neutral"
 
+    def generate_npc_combat_stats(self, alignment: str) -> tuple:
+        """Generate combat stats for an NPC based on alignment"""
+        
+        # Base stats ranges by alignment
+        stat_ranges = {
+            "loyal": (3, 8),      # Trained but not aggressive
+            "neutral": (2, 6),    # Average civilians
+            "bandit": (4, 9)      # More combat-focused
+        }
+        
+        min_combat, max_combat = stat_ranges.get(alignment, (2, 6))
+        combat_rating = random.randint(min_combat, max_combat)
+        
+        # HP based on combat rating
+        base_hp = random.randint(60, 120)
+        hp_bonus = combat_rating * 5
+        max_hp = base_hp + hp_bonus
+        
+        # Credits based on alignment and combat skill
+        credit_ranges = {
+            "loyal": (100, 500),
+            "neutral": (50, 300),
+            "bandit": (20, 200)
+        }
+        
+        min_credits, max_credits = credit_ranges.get(alignment, (50, 300))
+        credits = random.randint(min_credits, max_credits) + (combat_rating * 10)
+        
+        return combat_rating, max_hp, credits
     async def _dynamic_npc_actions_loop(self):
         """Variable interval actions task"""
         while True:
@@ -495,100 +571,196 @@ class NPCCog(commands.Cog):
         for task in self.dynamic_npc_tasks.values():
             task.cancel()
 
-    async def create_static_npcs_for_location(self, location_id: int, population: int):
-        """Create static NPCs for a location based on population"""
+    async def create_static_npcs_for_location(self, location_id: int, population: int, location_type: str = None, wealth_level: int = None) -> int:
+        """Create static NPCs for a location with combat stats and alignment"""
         
-        # Get location info first
-        location_info = self.db.execute_query(
-            "SELECT location_type, wealth_level FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
+        # Get location data if not provided
+        if location_type is None or wealth_level is None:
+            location_data = self.db.execute_query(
+                "SELECT location_type, wealth_level FROM locations WHERE location_id = ?",
+                (location_id,),
+                fetch='one'
+            )
+            if location_data:
+                location_type = location_type or location_data[0]
+                wealth_level = wealth_level or location_data[1]
+            else:
+                # Fallback defaults
+                location_type = location_type or 'colony'
+                wealth_level = wealth_level or 5
         
-        if not location_info:
-            return 0
-        
-        location_type, wealth_level = location_info
-        
-        # Special handling for gates - they always have maintenance staff regardless of population
+        # Calculate number of NPCs (1-15 based on population)
         if location_type == 'gate':
-            npc_count = random.randint(2, 4)  # Gates always have 2-4 maintenance staff
-        elif population == 0:
-            return 0  # Other locations with 0 population get no NPCs
-        elif population < 5:
-            npc_count = 1
-        elif population <= 20:
-            npc_count = random.randint(1, 3)
+            npc_count = random.randint(1, 3)  # Gates always have 2-4 maintenance staff
+        if population < 50:
+            npc_count = random.randint(1, 5)
+        elif population < 200:
+            npc_count = random.randint(2, 6)
+        elif population < 1000:
+            npc_count = random.randint(4, 10)
+        elif population < 2000:
+            npc_count = random.randint(6, 12)
         else:
-            npc_count = random.randint(3, 5)
+            npc_count = random.randint(8, 15)
         
-        # Get current galaxy year for age calculation
-        galaxy_info = self.db.execute_query(
-            "SELECT start_date FROM galaxy_info WHERE galaxy_id = 1",
-            fetch='one'
-        )
+        created_count = 0
         
-        current_year = 2751  # Default year
-        if galaxy_info:
-            start_date = galaxy_info[0]
-            current_year = int(start_date.split('-')[0])
-        
-        npcs_created = 0
         for _ in range(npc_count):
-            first_name, last_name = generate_npc_name()
-            name = f"{first_name} {last_name}"
-            age = random.randint(18, 80)
+            # Generate basic NPC data
+            name_tuple = generate_npc_name()
+            name = f"{name_tuple[0]} {name_tuple[1]}" if isinstance(name_tuple, tuple) else str(name_tuple)
+            age = random.randint(25, 65)
             occupation = get_occupation(location_type, wealth_level)
             personality = random.choice(PERSONALITIES)
             trade_specialty = random.choice(TRADE_SPECIALTIES) if random.random() < 0.3 else None
             
+            # Generate alignment based on location
+            alignment = self.generate_npc_alignment(location_id)
+            
+            # Generate combat stats
+            combat_rating, max_hp, credits = self.generate_npc_combat_stats(alignment)
+            
+            # Insert NPC with combat stats
             self.db.execute_query(
                 """INSERT INTO static_npcs 
-                   (location_id, name, age, occupation, personality, trade_specialty)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (location_id, name, age, occupation, personality, trade_specialty)
+                   (location_id, name, age, occupation, personality, trade_specialty, 
+                    alignment, hp, max_hp, combat_rating, credits)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (location_id, name, age, occupation, personality, trade_specialty,
+                 alignment, max_hp, max_hp, combat_rating, credits)
             )
-            npcs_created += 1
             
-            if location_type == 'gate':
-                print(f"🔧 Created gate maintenance NPC: {name} ({occupation}) at gate {location_id}")
+            created_count += 1
         
-        return npcs_created
+        return created_count
 
-    async def create_dynamic_npc(self) -> int:
-        """Create a new dynamic NPC"""
-        # Get a random location for spawning
-        spawn_location = self.db.execute_query(
-            "SELECT location_id FROM locations WHERE location_type != 'gate' ORDER BY RANDOM() LIMIT 1",
+    async def spawn_dynamic_npc(self, start_location: int, destination_location: int = None, start_traveling: bool = True) -> Optional[int]:
+        """Spawn a single dynamic NPC with combat stats"""
+        
+        # Validate start location exists
+        location_exists = self.db.execute_query(
+            "SELECT location_id FROM locations WHERE location_id = ?",
+            (start_location,),
             fetch='one'
         )
         
-        if not spawn_location:
-            return 0
+        if not location_exists:
+            print(f"⚠️ Cannot spawn dynamic NPC: location {start_location} does not exist")
+            return None
         
-        location_id = spawn_location[0]
-        
-        first_name, last_name = generate_npc_name()
-        name = f"{first_name} {last_name}"
+        # Generate basic NPC data
+        name_tuple = generate_npc_name()
+        name = f"{name_tuple[0]} {name_tuple[1]}" if isinstance(name_tuple, tuple) else str(name_tuple)
         callsign = self._generate_unique_callsign()
-        age = random.randint(18, 80)
+        age = random.randint(25, 65)
         ship_name = generate_ship_name()
         ship_type = random.choice(SHIP_TYPES)
-        credits = random.randint(5000, 50000)
         
-        # Insert the NPC
-        self.db.execute_query(
-            """INSERT INTO dynamic_npcs 
-               (name, callsign, age, ship_name, ship_type, current_location, credits)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (name, callsign, age, ship_name, ship_type, location_id, credits)
-        )
+        # Generate alignment - dynamic NPCs follow same rules as static for start location
+        alignment = self.generate_npc_alignment(start_location)
         
-        npc_id = self.db.execute_query("SELECT last_insert_rowid()", fetch='one')[0]
+        # Generate combat stats
+        combat_rating, max_hp, credits = self.generate_npc_combat_stats(alignment)
         
-        print(f"🤖 Created dynamic NPC: {name} ({callsign}) aboard {ship_name} at location {location_id}")
-        return npc_id
+        # Ship hull based on ship type and combat rating
+        ship_hull_ranges = {
+            "Basic Hauler": (80, 150),
+            "Fast Courier": (60, 120),
+            "Heavy Freighter": (120, 200),
+            "Combat Vessel": (100, 180),
+            "Research Ship": (70, 130)
+        }
+        
+        min_hull, max_hull = ship_hull_ranges.get(ship_type, (80, 150))
+        max_ship_hull = random.randint(min_hull, max_hull) + (combat_rating * 10)
+        
+        # Choose destination if not provided and if starting traveling
+        if start_traveling:
+            if not destination_location:
+                nearby_locations = self.db.execute_query(
+                    """SELECT destination_location FROM corridors 
+                       WHERE origin_location = ? AND is_active = 1""",
+                    (start_location,),
+                    fetch='all'
+                )
+                
+                if nearby_locations:
+                    destination_location = random.choice(nearby_locations)[0]
+                else:
+                    # If no valid destinations, don't start traveling
+                    start_traveling = False
+            
+            # Calculate travel time if traveling
+            if start_traveling:
+                travel_duration = random.randint(300, 1800)  # 5-30 minutes
+        
+        try:
+            if start_traveling and destination_location:
+                # Insert dynamic NPC in traveling state
+                self.db.execute_query(
+                    """INSERT INTO dynamic_npcs 
+                       (name, callsign, age, ship_name, ship_type, current_location, 
+                        destination_location, travel_start_time, travel_duration, credits,
+                        alignment, hp, max_hp, combat_rating, ship_hull, max_ship_hull)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (name, callsign, age, ship_name, ship_type, start_location,
+                     destination_location, datetime.now().isoformat(), travel_duration, credits,
+                     alignment, max_hp, max_hp, combat_rating, max_ship_hull, max_ship_hull)
+                )
+            else:
+                # Insert dynamic NPC in stationary state
+                self.db.execute_query(
+                    """INSERT INTO dynamic_npcs 
+                       (name, callsign, age, ship_name, ship_type, current_location, 
+                        destination_location, travel_start_time, travel_duration, credits,
+                        alignment, hp, max_hp, combat_rating, ship_hull, max_ship_hull)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (name, callsign, age, ship_name, ship_type, start_location,
+                     None, None, None, credits,
+                     alignment, max_hp, max_hp, combat_rating, max_ship_hull, max_ship_hull)
+                )
 
+            # Get the ID of the inserted NPC
+            npc_id = self.db.execute_query(
+                "SELECT npc_id FROM dynamic_npcs WHERE callsign = ? ORDER BY npc_id DESC LIMIT 1",
+                (callsign,),
+                fetch='one'
+            )[0]
+            
+            if start_traveling and destination_location:
+                # Schedule arrival
+                arrival_time = datetime.now() + timedelta(seconds=travel_duration)
+                delay = (arrival_time - datetime.now()).total_seconds()
+                
+                if delay > 0:
+                    task = asyncio.create_task(self._handle_npc_arrival_delayed(npc_id, name, destination_location, self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (destination_location,), fetch='one')[0], delay))
+                    self.dynamic_npc_tasks[npc_id] = task
+            
+            return npc_id  # Return the NPC ID on success
+            
+        except Exception as e:
+            print(f"❌ Failed to create dynamic NPC: {e}")
+            return None
+    async def create_dynamic_npc(self, start_location: int = None, start_traveling: bool = None) -> Optional[int]:
+        """Create a single dynamic NPC at a random or specified location"""
+        
+        if start_location is None:
+            # Pick a random major location (not a gate) as starting point
+            major_locations = self.db.execute_query(
+                "SELECT location_id FROM locations WHERE location_type IN ('colony', 'space_station', 'outpost')",
+                fetch='all'
+            )
+            
+            if not major_locations:
+                return None
+            
+            start_location = random.choice(major_locations)[0]
+        
+        # 60% chance to start stationary, 40% chance to start traveling
+        if start_traveling is None:
+            start_traveling = random.random() < 0.4
+        
+        return await self.spawn_dynamic_npc(start_location, start_traveling=start_traveling)
     def _generate_unique_callsign(self) -> str:
         """Generate a unique callsign for dynamic NPCs"""
         while True:
@@ -614,8 +786,12 @@ class NPCCog(commands.Cog):
             fetch='one'
         )[0]
         
-        # Target about (major_locations ÷ 5) NPCs
-        target_count = max(5, major_location_count // 5)
+        if major_location_count == 0:
+            print("⚠️ No major locations found, skipping initial dynamic NPC spawn")
+            return
+        
+        # Target about (major_locations ÷ 3) NPCs
+        target_count = max(5, major_location_count // 3)
         
         # Add some randomness (±30%)
         variation = int(target_count * 0.3)
@@ -623,9 +799,25 @@ class NPCCog(commands.Cog):
         
         print(f"🤖 Spawning {target_count} initial dynamic NPCs...")
         
-        for _ in range(target_count):
-            await self.create_dynamic_npc()
-            await asyncio.sleep(0.1)  # Small delay to prevent overwhelming
+        # Create mix of stationary and traveling NPCs
+        stationary_count = int(target_count * 0.6)  # 60% stationary
+        traveling_count = target_count - stationary_count  # 40% traveling
+        
+        # Spawn stationary NPCs first
+        for _ in range(stationary_count):
+            npc_id = await self.create_dynamic_npc(start_traveling=False)
+            if npc_id:
+                await asyncio.sleep(0.1)  # Small delay to prevent overwhelming
+            else:
+                break  # Stop if we can't create NPCs
+        
+        # Then spawn traveling NPCs
+        for _ in range(traveling_count):
+            npc_id = await self.create_dynamic_npc(start_traveling=True)
+            if npc_id:
+                await asyncio.sleep(0.1)  # Small delay to prevent overwhelming
+            else:
+                break  # Stop if we can't create NPCs
 
 
     async def _send_npc_radio_message(self, npc_name: str, callsign: str, location_name: str, system_name: str, message: str):
@@ -920,6 +1112,8 @@ class NPCCog(commands.Cog):
 
     async def _spawn_replacement_npcs(self, count: int):
         """Spawn replacement NPCs after a delay"""
+        if getattr(self, 'endgame_active', False):
+            return None  # Don't spawn NPCs during endgame
         # Wait random time between 1-6 hours
         delay_hours = random.uniform(1.0, 6.0)
         await asyncio.sleep(delay_hours * 3600)

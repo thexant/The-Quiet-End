@@ -192,16 +192,19 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     <span>LEGEND</span>
                 </div>
             </div>
-            <div class="legend-items">
-                <div class="legend-item"><span class="marker colony"></span> COLONIES</div>
-                <div class="legend-item"><span class="marker station"></span> STATIONS</div>
-                <div class="legend-item"><span class="marker outpost"></span> OUTPOSTS</div>
-                <div class="legend-item"><span class="marker gate"></span> GATES</div>
-                <div class="legend-item"><span class="corridor gated"></span> GATED</div>
-                <div class="legend-item"><span class="corridor ungated"></span> UNGATED</div>
-                <div class="legend-item"><span class="player-indicator"></span> CONTACTS</div>
-                <div class="legend-item"><span class="npc-indicator"></span> NPCS</div>
-            </div>
+                <div class="legend-items">
+                    <div class="legend-item"><span class="marker colony"></span> COLONIES (●)</div>
+                    <div class="legend-item"><span class="marker station"></span> STATIONS (▲)</div>
+                    <div class="legend-item"><span class="marker outpost"></span> OUTPOSTS (■)</div>
+                    <div class="legend-item"><span class="marker gate"></span> GATES (◆)</div>
+                    <div class="legend-item"><span class="alignment-marker loyalist"></span> LOYALIST</div>
+                    <div class="legend-item"><span class="alignment-marker outlaw"></span> OUTLAW</div>
+                    <div class="legend-item"><span class="corridor gated"></span> GATED</div>
+                    <div class="legend-item"><span class="corridor ungated"></span> UNGATED</div>
+                    <div class="legend-item"><span class="corridor approach"></span> LOCAL SPACE</div>
+                    <div class="legend-item"><span class="player-indicator"></span> CONTACTS</div>
+                    <div class="legend-item"><span class="npc-indicator"></span> NPCS</div>
+                </div>
         </div>
 
         <div id="loading-overlay" class="loading-overlay">
@@ -304,7 +307,50 @@ class WebMapCog(commands.Cog, name="WebMap"):
             --text-secondary: #cc88dd;
             --border-color: #220033;
         }
+        /* Alignment-specific location colors */
+        .location-loyalist {
+            filter: drop-shadow(0 0 8px #4169E1) !important;
+        }
 
+        .location-outlaw {
+            filter: drop-shadow(0 0 8px #DC143C) !important;
+        }
+
+        .location-neutral {
+            filter: drop-shadow(0 0 6px #ffffff) !important;
+        }
+
+        /* Alignment panel styling */
+        .alignment-panel {
+            background: linear-gradient(145deg, rgba(var(--glow-primary), 0.3), rgba(var(--glow-secondary), 0.2));
+            border: 2px solid var(--primary-color);
+            border-radius: 6px;
+            padding: 0.5rem 1rem;
+            margin-bottom: 1rem;
+            text-align: center;
+            font-weight: bold;
+            font-family: 'Tektur', monospace;
+            text-shadow: 0 0 8px var(--glow-primary);
+            box-shadow: 
+                0 0 20px var(--glow-primary),
+                inset 0 1px 0 rgba(var(--glow-primary), 0.3);
+        }
+
+        .alignment-loyalist {
+            --primary-color: #4169E1;
+            --glow-primary: rgba(65, 105, 225, 0.6);
+            --glow-secondary: rgba(65, 105, 225, 0.4);
+            color: #4169E1;
+            border-color: #4169E1;
+        }
+
+        .alignment-outlaw {
+            --primary-color: #DC143C;
+            --glow-primary: rgba(220, 20, 60, 0.6);
+            --glow-secondary: rgba(220, 20, 60, 0.4);
+            color: #DC143C;
+            border-color: #DC143C;
+        }
         * {
             box-sizing: border-box;
         }
@@ -872,21 +918,74 @@ class WebMapCog(commands.Cog, name="WebMap"):
             color: var(--text-secondary);
         }
 
-        /* Marker styles in legend */
+        /* Marker styles in legend
         .marker {
             width: 12px;
             height: 12px;
-            border-radius: 50%;
             margin-right: 0.5rem;
-            border: 2px solid var(--text-primary);
+            border: 2px solid white;
             box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+            background: white;
         }
 
-        .marker.colony { background: var(--success-color); border-color: var(--success-color); }
-        .marker.station { background: var(--primary-color); border-color: var(--primary-color); }
-        .marker.outpost { background: var(--warning-color); border-color: var(--warning-color); }
-        .marker.gate { background: #ffdd00; border-color: #ffdd00; }
+        .marker.colony { 
+            border-radius: 50%; /* Circle - correct */
+        }
 
+        .marker.station { 
+            border-radius: 0; /* Square */
+            clip-path: polygon(50% 0%, 0% 100%, 100% 100%); /* Triangle - fixed */
+        }
+
+        .marker.outpost { 
+            border-radius: 0; /* Square - fixed */
+            /* No clip-path needed for square */
+        }
+
+        .marker.gate { 
+            border-radius: 0; /* Square */
+            transform: rotate(45deg); /* Diamond - correct */
+            margin-right: 0.75rem; /* Extra margin due to rotation */
+        }
+        .alignment-marker {
+            width: 12px;
+            height: 12px;
+            margin-right: 0.5rem;
+            border: 2px solid;
+            border-radius: 50%;
+            display: inline-block;
+            position: relative;
+        }
+
+        .alignment-marker.loyalist {
+            border-color: #4169E1;
+            background: #4169E1;
+            box-shadow: 0 0 8px rgba(65, 105, 225, 0.6);
+        }
+
+        .alignment-marker.outlaw {
+            border-color: #DC143C;
+            background: #DC143C;
+            box-shadow: 0 0 8px rgba(220, 20, 60, 0.6);
+        }
+
+        .alignment-marker.loyalist::before {
+            content: "🛡️";
+            position: absolute;
+            top: -6px;
+            left: -6px;
+            font-size: 8px;
+            z-index: 1;
+        }
+
+        .alignment-marker.outlaw::before {
+            content: "⚔️";
+            position: absolute;
+            top: -6px;
+            left: -6px;
+            font-size: 8px;
+            z-index: 1;
+        }
         .corridor {
             width: 20px;
             height: 3px;
@@ -896,7 +995,10 @@ class WebMapCog(commands.Cog, name="WebMap"):
 
         .corridor.gated { background: var(--success-color); }
         .corridor.ungated { background: var(--warning-color); }
-
+        .corridor.approach { 
+            background: #8c75ff; 
+            opacity: 0.6;
+        }
         .player-indicator {
             width: 12px;
             height: 12px;
@@ -967,13 +1069,13 @@ class WebMapCog(commands.Cog, name="WebMap"):
             opacity: 0.8;
         }
 
-        /* Enhanced Location Labels - Zoom Responsive */
+        /* Enhanced Location Labels with proper text containment */
         .location-label {
-            background: linear-gradient(145deg, rgba(0, 0, 0, 0.9), rgba(var(--glow-secondary), 0.2)) !important;
+            background: linear-gradient(145deg, rgba(0, 0, 0, 0.95), rgba(var(--glow-secondary), 0.3)) !important;
             border: 2px solid var(--primary-color) !important;
-            border-radius: 6px !important;
-            padding: 4px 8px !important;
-            font-size: 12px !important;
+            border-radius: 8px !important;
+            padding: 6px 10px !important;
+            font-size: 11px !important;
             font-weight: bold !important;
             color: var(--text-primary) !important;
             font-family: 'Share Tech Mono', monospace !important;
@@ -985,10 +1087,90 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 0 0 20px var(--glow-primary),
                 inset 0 1px 0 rgba(var(--glow-primary), 0.3) !important;
             backdrop-filter: blur(5px) !important;
-            min-width: 80px !important;
             text-align: center !important;
             letter-spacing: 0.5px !important;
             transition: all 0.3s ease !important;
+            overflow: hidden !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+
+        .label-text {
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            line-height: 1.2;
+        }
+
+        /* Enhanced marker shapes */
+        .triangle-marker {
+            filter: drop-shadow(0 0 8px var(--primary-color)) !important;
+        }
+
+        .square-marker {
+            filter: drop-shadow(0 0 6px var(--warning-color)) !important;
+        }
+
+        .diamond-marker {
+            filter: drop-shadow(0 0 10px #ffdd00) !important;
+        }
+
+        /* Pulsing animation for active corridors */
+        /* Player transit corridors - blue pulse */
+        .corridor-player-transit {
+            stroke: #00aaff !important;
+            stroke-width: 4 !important;
+            stroke-opacity: 1 !important;
+            animation: corridor-player-pulse 2s ease-in-out infinite !important;
+            filter: drop-shadow(0 0 8px #00aaff) !important;
+            z-index: 1000 !important;
+        }
+
+        @keyframes corridor-player-pulse {
+            0%, 100% { 
+                stroke-opacity: 0.8; 
+                stroke-width: 4px;
+                filter: drop-shadow(0 0 8px #00aaff);
+            }
+            50% { 
+                stroke-opacity: 1; 
+                stroke-width: 6px;
+                filter: drop-shadow(0 0 20px #00aaff);
+            }
+        }
+
+        /* NPC transit corridors - faint yellow pulse */
+        .corridor-npc-transit {
+            stroke: #ffcc44 !important;
+            stroke-width: 3 !important;
+            stroke-opacity: 0.6 !important;
+            animation: corridor-npc-pulse 3s ease-in-out infinite !important;
+            filter: drop-shadow(0 0 6px #ffcc44) !important;
+            z-index: 999 !important;
+        }
+
+        @keyframes corridor-npc-pulse {
+            0%, 100% { 
+                stroke-opacity: 0.4; 
+                stroke-width: 3px;
+                filter: drop-shadow(0 0 6px #ffcc44);
+            }
+            50% { 
+                stroke-opacity: 0.8; 
+                stroke-width: 4px;
+                filter: drop-shadow(0 0 15px #ffcc44);
+            }
+        }
+
+        /* Corridor selection styling */
+        .corridor-selected {
+            stroke: #ffff00 !important;
+            stroke-width: 5 !important;
+            stroke-opacity: 1 !important;
+            filter: drop-shadow(0 0 12px #ffff00) !important;
+            z-index: 999 !important;
         }
 
         .location-label.wealth-high {
@@ -1223,6 +1405,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
             opacity: 0 !important;
             pointer-events: none !important;
             transition: opacity 0.3s ease !important;
+            z-index: -1 !important; /* Ensure hidden routes go behind everything */
         }
 
         /* Mobile Responsiveness */
@@ -1497,6 +1680,77 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 stroke-opacity: 0.6;
                 filter: drop-shadow(0 0 4px var(--warning-color));
             }
+        }
+        /* Corridor information panel */
+        .corridor-info-overlay {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: var(--gradient-panel);
+            border: 2px solid var(--primary-color);
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 
+                0 0 40px var(--glow-primary),
+                0 8px 32px var(--shadow-dark);
+            z-index: 2000;
+            min-width: 300px;
+            max-width: 500px;
+            backdrop-filter: blur(10px);
+            display: none;
+        }
+
+        .corridor-info-panel h3 {
+            margin: 0 0 15px 0;
+            color: var(--primary-color);
+            text-shadow: 0 0 10px var(--glow-primary);
+            font-family: 'Tektur', monospace;
+        }
+
+        .corridor-details p {
+            margin: 8px 0;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .transit-players {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .transit-players h4 {
+            margin: 0 0 10px 0;
+            color: var(--success-color);
+            font-size: 0.9rem;
+        }
+
+        .transit-player {
+            background: rgba(var(--glow-secondary), 0.2);
+            padding: 5px 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            color: var(--text-primary);
+        }
+
+        .corridor-info-panel button {
+            margin-top: 15px;
+            background: var(--primary-color);
+            color: var(--primary-bg);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: 'Share Tech Mono', monospace;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+
+        .corridor-info-panel button:hover {
+            background: var(--secondary-color);
+            box-shadow: 0 0 15px var(--glow-primary);
         }'''
         with open("web/static/css/map.css", "w", encoding='utf-8') as f:
             f.write(css_content)
@@ -1510,6 +1764,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         this.corridors = new Map();
                         this.players = new Map();
                         this.npcs = new Map();  // ADD THIS LINE
+                        this.npcsInTransit = new Map();
                         this.selectedLocation = null;
                         this.routePolylines = [];
                         this.highlightedLocations = [];
@@ -1517,15 +1772,20 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         this.labels = new Map();
                         this.routeMode = false;
                         this.showLabels = false;
-                        this.showRoutes = true;
+                        this.showRoutes = false;
                         this.showNPCs = true;  // ADD THIS LINE
                         this.headerExpanded = true;
                         this.reconnectAttempts = 0;
                         this.maxReconnectAttempts = 10;
                         this.reconnectDelay = 1000;
                         this.labelGrid = new Map();
-                        
+                        this.selectedCorridor = null;
+                        this.corridorPolylines = new Map(); // Track corridor polylines
+                        this.showRoutes = false; // Change default to false (hidden)
+                        this.playersInTransit = new Map(); // Track players in transit
+                        this.pendingLabelTimeouts = [];
                         this.initializeColorScheme();
+                        console.log('🎨 Color scheme initialized');
                         this.init();
                     }
                     
@@ -1539,10 +1799,15 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     }
                     
                     init() {
+                        console.log('🗺️ Setting up map...');
                         this.setupMap();
+                        console.log('🎛️ Setting up event listeners...');
                         this.setupEventListeners();
+                        console.log('🔌 Connecting WebSocket...');
                         this.connectWebSocket();
+                        console.log('👁️ Hiding loading overlay...');
                         this.hideLoadingOverlay();
+                        console.log('✅ Map initialization complete');
                     }
                     
                     setupMap() {
@@ -1579,7 +1844,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             }
                         });
                     }
-                    
+
                     setupEventListeners() {
                         // Header toggle
                         const headerToggle = document.getElementById('header-toggle');
@@ -1665,22 +1930,37 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         });
                         
                         // View controls
+                        // View controls
                         const fitBoundsBtn = document.getElementById('fit-bounds-btn');
                         const toggleLabelsBtn = document.getElementById('toggle-labels-btn');
                         const toggleRoutesBtn = document.getElementById('toggle-routes-btn');
-                        
+                        const toggleNPCsBtn = document.getElementById('toggle-npcs-btn');
+
                         fitBoundsBtn?.addEventListener('click', () => {
                             this.fitMapToBounds();
                         });
-                        
+
                         toggleLabelsBtn?.addEventListener('click', () => {
                             this.toggleLabels();
                         });
-                        
+
+                        // Route toggle - single event listener only
                         toggleRoutesBtn?.addEventListener('click', () => {
                             this.toggleRoutes();
                         });
-                        
+
+                        // Set initial button state
+                        if (toggleRoutesBtn) {
+                            toggleRoutesBtn.textContent = 'SHOW ROUTES';
+                            toggleRoutesBtn.classList.remove('toggle-active');
+                        }
+
+                        if (toggleNPCsBtn) {
+                            toggleNPCsBtn.addEventListener('click', () => {
+                                this.toggleNPCs();
+                            });
+                        }
+
                         // Panel close
                         const closePanel = document.getElementById('close-panel');
                         closePanel?.addEventListener('click', () => {
@@ -1697,11 +1977,6 @@ class WebMapCog(commands.Cog, name="WebMap"):
                                 this.hideLocationPanel();
                             }
                         });
-                        const toggleNPCsBtn = document.getElementById('toggle-npcs-btn');
-                        
-                            toggleNPCsBtn?.addEventListener('click', () => {
-                                this.toggleNPCs();
-                            });
                         // Keyboard shortcuts
                         document.addEventListener('keydown', (e) => {
                             if (e.target.tagName.toLowerCase() === 'input' || e.target.tagName.toLowerCase() === 'select') return;
@@ -1762,9 +2037,9 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             console.log('🔌 WebSocket disconnected');
                             this.scheduleReconnect();
                         };
-                        
+
                         this.websocket.onerror = (error) => {
-                            console.error('WebSocket error:', error);
+                            console.error('❌ WebSocket error:', error);
                             this.updateConnectionStatus('ERROR', 'var(--warning-color)');
                         };
                     }
@@ -1793,11 +2068,17 @@ class WebMapCog(commands.Cog, name="WebMap"):
                                 this.updatePlayers(data.data);
                                 break;
                             case 'npc_update':
-                                this.updateNPCs(data.data);  // ADD THIS LINE
+                                this.updateNPCs(data.data);
+                                break;
+                            case 'transit_update':  // Add this new case
+                                this.updatePlayersInTransit(data.data);
                                 break;
                             case 'location_update':
                                 this.updateLocation(data.data);
                                 break;
+                            case 'npc_transit_update':
+                                this.updateNPCsInTransit(data.data);
+                                break;    
                             default:
                                 console.warn('Unknown WebSocket message type:', data.type);
                         }
@@ -1813,6 +2094,8 @@ class WebMapCog(commands.Cog, name="WebMap"):
                                     this.map.removeLayer(layer);
                                 }
                             });
+                            this.updatePlayersInTransit(data.players_in_transit || []);
+                            this.updateNPCsInTransit(data.npcs_in_transit || []);
                             
                             data.locations.forEach(location => {
                                 this.addLocation(location);
@@ -1856,53 +2139,271 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             'Transit Gate': '#ffdd00'
                         };
                         
-                        const color = colors[location.location_type] || '#ffffff';
-                        const size = this.getMarkerSize(location.location_type);
+                        // Override color based on alignment
+                        let color = colors[location.location_type] || '#ffffff';
                         
-                        return L.circleMarker([location.y_coord, location.x_coord], {
-                            radius: size,
-                            fillColor: color,
-                            color: '#ffffff',
-                            weight: 2,
-                            opacity: 1,
-                            fillOpacity: 0.9,
-                            className: `location-marker ${location.location_type.toLowerCase().replace(' ', '-')}`
-                        });
-                    }
-                    
-                    getMarkerSize(locationType) {
-                        const sizes = {
-                            'Colony': 12,
-                            'Space Station': 15,
-                            'Outpost': 10,
-                            'Transit Gate': 11
+                        if (location.alignment === 'loyalist') {
+                            color = '#4169E1'; // Royal Blue for Loyalists
+                        } else if (location.alignment === 'outlaw') {
+                            color = '#DC143C'; // Crimson for Outlaws
+                        }
+                        
+                        const zoom = this.map.getZoom();
+                        
+                        // Apply consistent zoom scaling to ALL locations
+                        let finalSize;
+                        if (zoom < -1) {
+                            finalSize = 12; // All tiny when zoomed way out
+                        } else if (zoom < 0) {
+                            finalSize = 13; // All small when zoomed out
+                        } else if (zoom < 1) {
+                            finalSize = 14; // All medium when mid-zoom
+                        } else {
+                            finalSize = 15; // All normal when zoomed in
+                        }
+                        
+                        const marker = this.createShapedMarker(location, color, finalSize);
+                        
+                        // Add alignment class to marker element for additional styling
+                        if (location.alignment !== 'neutral') {
+                            marker.on('add', () => {
+                                const element = marker.getElement();
+                                if (element) {
+                                    element.classList.add(`location-${location.alignment}`);
+                                }
+                            });
+                        }
+                        
+                        return marker;
+                    }    
+                    getZoomAdjustedBaseSize(locationType) {
+                        const zoom = this.map.getZoom();
+                        
+                        // Force complete uniformity at low zoom levels
+                        if (zoom < -0.5) {
+                            return 14; // Everyone gets exactly the same size when zoomed way out
+                        }
+                        
+                        const baseSizes = {
+                            'colony': 15,
+                            'space_station': 15, 
+                            'outpost': 15,
+                            'gate': 15
                         };
-                        return sizes[locationType] || 10;
-                    }
-                    
-                    addCorridor(corridor) {
-                        const isGated = corridor.name && corridor.name.toLowerCase().includes('gate');
-                        const color = isGated ? 'var(--success-color)' : 'var(--warning-color)';
                         
+                        const baseSize = baseSizes[locationType.toLowerCase()] || 14;
+                        
+                        if (zoom < 1.5) {
+                            // Still zoomed out: very minimal differences (max 1px variance)
+                            const uniformSize = 15;
+                            const variance = (baseSize - uniformSize) * 0.2; // Only 20% of type difference
+                            return uniformSize + variance;
+                        } else {
+                            // Zoomed in enough: allow full differences
+                            return baseSize;
+                        }
+                    }
+                    addCorridor(corridor) {
+                        // Improved corridor type detection
+                        let corridorType = 'ungated'; // default
+                        let color = 'var(--warning-color)'; // orange for ungated
+                        
+                        // Detect corridor type based on name patterns
+                        if (corridor.name.toLowerCase().includes('approach')) {
+                            corridorType = 'approach';
+                            color = '#8c75ff'; // light green for local space
+                        } else if (corridor.name.toLowerCase().includes('ungated')) {
+                            corridorType = 'ungated';
+                            color = 'var(--warning-color)'; // orange for ungated
+                        } else {
+                            // Check if route connects to gates by looking at endpoint types
+                            const originIsGate = this.locations.get(corridor.origin_location)?.location_type === 'gate';
+                            const destIsGate = this.locations.get(corridor.destination_location)?.location_type === 'gate';
+                            
+                            if (originIsGate || destIsGate) {
+                                corridorType = 'gated';
+                                color = 'var(--success-color)'; // green for gated
+                            }
+                        }
+                        
+                        // Create invisible thick line for better click targets
+                        const clickTarget = L.polyline([
+                            [corridor.origin_y, corridor.origin_x],
+                            [corridor.dest_y, corridor.dest_x]
+                        ], {
+                            color: 'transparent',
+                            weight: 12,
+                            opacity: 0,
+                            interactive: true
+                        });
+
+                        // Create visible line with proper styling
                         const polyline = L.polyline([
                             [corridor.origin_y, corridor.origin_x],
                             [corridor.dest_y, corridor.dest_x]
                         ], {
                             color: color,
-                            weight: isGated ? 2 : 3,
+                            weight: corridorType === 'gated' ? 2 : corridorType === 'approach' ? 1.5 : 3,
                             opacity: 0.7,
-                            dashArray: isGated ? null : '8, 5',
-                            className: `corridor ${isGated ? 'gated' : 'ungated'}`
+                            dashArray: corridorType === 'ungated' ? '8, 5' : corridorType === 'approach' ? '4, 2' : null,
+                            className: `corridor ${corridorType}`,
+                            corridorId: corridor.corridor_id,
+                            interactive: false
+                        });
+
+                        // Add both to map
+                        clickTarget.addTo(this.map);
+                        polyline.addTo(this.map);
+
+                        // Make click target interactive
+                        clickTarget.on('click', (e) => {
+                            L.DomEvent.stopPropagation(e);
+                            this.selectCorridor(corridor, polyline);
                         });
                         
-                        polyline.addTo(this.map);
+                        // Add mouseover effects to click target
+                        clickTarget.on('mouseover', () => {
+                            if (!polyline.getElement()?.classList.contains('corridor-selected')) {
+                                polyline.setStyle({opacity: 1, weight: polyline.options.weight + 1});
+                            }
+                        });
+
+                        clickTarget.on('mouseout', () => {
+                            if (!polyline.getElement()?.classList.contains('corridor-selected')) {
+                                polyline.setStyle({opacity: 0.7, weight: polyline.options.weight - 1});
+                            }
+                        });
+                        
+                        // Store both polylines for later reference
+                        this.corridorPolylines.set(corridor.corridor_id, polyline);
+
                         this.corridors.set(corridor.corridor_id, {
                             ...corridor,
                             polyline: polyline,
-                            isGated: isGated
+                            clickTarget: clickTarget,
+                            isGated: corridorType === 'gated',
+                            corridorType: corridorType
                         });
                     }
-                    
+
+                    // Add corridor selection functionality
+                    selectCorridor(corridor, polyline) {
+                        // Clear previous selection
+                        if (this.selectedCorridor) {
+                            this.selectedCorridor.polyline.getElement()?.classList.remove('corridor-selected');
+                        }
+                        
+                        // Select new corridor
+                        this.selectedCorridor = {corridor, polyline};
+                        polyline.getElement()?.classList.add('corridor-selected');
+                        
+                        // Show corridor information panel
+                        this.showCorridorInfo(corridor);
+                    }
+
+                    // Add corridor information panel
+                    showCorridorInfo(corridor) {
+                        // Get players and NPCs in this corridor
+                        const playersInCorridor = this.playersInTransit.get(corridor.corridor_id) || [];
+                        const npcsInCorridor = this.npcsInTransit.get(corridor.corridor_id) || [];
+                        
+                        const panelContent = `
+                            <div class="corridor-info-panel">
+                                <h3>${corridor.name}</h3>
+                                <div class="corridor-details">
+                                    <p><strong>Type:</strong> ${corridor.name.includes('Ungated') ? 'Ungated (Dangerous)' : 'Gated (Safe)'}</p>
+                                    <p><strong>Travel Time:</strong> ${Math.floor(corridor.travel_time / 60)} minutes ${corridor.travel_time % 60} seconds</p>
+                                    <p><strong>Fuel Cost:</strong> ${corridor.fuel_cost} units</p>
+                                    <p><strong>Danger Level:</strong> ${corridor.danger_level}/5</p>
+                                </div>
+                                ${playersInCorridor.length > 0 ? `
+                                    <div class="transit-players">
+                                        <h4>Players in Transit:</h4>
+                                        ${playersInCorridor.map(player => `
+                                            <div class="transit-player">
+                                                ${player.name} (${player.origin} → ${player.destination})
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                ` : ''}
+                                ${npcsInCorridor.length > 0 ? `
+                                    <div class="transit-players">
+                                        <h4>NPCs in Transit:</h4>
+                                        ${npcsInCorridor.map(npc => `
+                                            <div class="transit-player" style="color: var(--warning-color);">
+                                                ${npc.name} (${npc.callsign}) - ${npc.ship_name}<br>
+                                                ${npc.origin} → ${npc.destination}
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                ` : ''}
+                                ${playersInCorridor.length === 0 && npcsInCorridor.length === 0 ? '<p>No players or NPCs currently in transit</p>' : ''}
+                                <button onclick="galaxyMap.clearCorridorSelection()">Close</button>
+                            </div>
+                        `;
+                        
+                        // Create or update info panel
+                        let infoPanel = document.getElementById('corridor-info-panel');
+                        if (!infoPanel) {
+                            infoPanel = document.createElement('div');
+                            infoPanel.id = 'corridor-info-panel';
+                            infoPanel.className = 'corridor-info-overlay';
+                            document.body.appendChild(infoPanel);
+                        }
+                        
+                        infoPanel.innerHTML = panelContent;
+                        infoPanel.style.display = 'block';
+                    }
+                    // Clear corridor selection
+                    clearCorridorSelection() {
+                        if (this.selectedCorridor) {
+                            this.selectedCorridor.polyline.getElement()?.classList.remove('corridor-selected');
+                            this.selectedCorridor = null;
+                        }
+                        
+                        const infoPanel = document.getElementById('corridor-info-panel');
+                        if (infoPanel) {
+                            infoPanel.style.display = 'none';
+                        }
+                    }
+                    updatePlayersInTransit(transitData) {
+                        this.playersInTransit.clear();
+                        
+                        transitData.forEach(player => {
+                            if (!this.playersInTransit.has(player.corridor_id)) {
+                                this.playersInTransit.set(player.corridor_id, []);
+                            }
+                            this.playersInTransit.get(player.corridor_id).push(player);
+                        });
+                        
+                        // Update corridor highlighting
+                        this.updateCorridorHighlighting();
+                    }
+
+                    // Highlight corridors with players in transit
+                    updateCorridorHighlighting() {
+                        this.corridorPolylines.forEach((polyline, corridorId) => {
+                            const hasPlayers = this.playersInTransit.has(corridorId);
+                            const hasNPCs = this.npcsInTransit.has(corridorId);
+                            const element = polyline.getElement();
+                            
+                            if (element) {
+                                // Remove all transit classes
+                                element.classList.remove('corridor-active', 'corridor-player-transit', 'corridor-npc-transit');
+                                
+                                if (hasPlayers && hasNPCs) {
+                                    // Both players and NPCs - use player color (blue) as priority
+                                    element.classList.add('corridor-player-transit');
+                                } else if (hasPlayers) {
+                                    // Only players - blue pulse
+                                    element.classList.add('corridor-player-transit');
+                                } else if (hasNPCs) {
+                                    // Only NPCs - yellow pulse
+                                    element.classList.add('corridor-npc-transit');
+                                }
+                            }
+                        });
+                    }
                     toggleRoutes() {
                         this.showRoutes = !this.showRoutes;
                         const btn = document.getElementById('toggle-routes-btn');
@@ -1911,11 +2412,13 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         
                         if (btn) {
                             if (this.showRoutes) {
-                                btn.textContent = 'ROUTES';
+                                btn.textContent = 'HIDE ROUTES';
                                 btn.classList.add('toggle-active');
                             } else {
-                                btn.textContent = 'ROUTES';
+                                btn.textContent = 'SHOW ROUTES';
                                 btn.classList.remove('toggle-active');
+                                // Clear corridor selection when hiding routes
+                                this.clearCorridorSelection();
                             }
                         }
                     }
@@ -1949,11 +2452,23 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     }
                     applyRouteVisibility() {
                         this.corridors.forEach(corridor => {
+                            // Apply visibility to the visible polyline
                             if (corridor.polyline) {
                                 if (this.showRoutes) {
                                     corridor.polyline.getElement()?.classList.remove('routes-hidden');
                                 } else {
                                     corridor.polyline.getElement()?.classList.add('routes-hidden');
+                                }
+                            }
+                            
+                            // Apply interactivity to the click target
+                            if (corridor.clickTarget) {
+                                if (this.showRoutes) {
+                                    corridor.clickTarget.setStyle({interactive: true});
+                                    corridor.clickTarget.getElement()?.classList.remove('routes-hidden');
+                                } else {
+                                    corridor.clickTarget.setStyle({interactive: false});
+                                    corridor.clickTarget.getElement()?.classList.add('routes-hidden');
                                 }
                             }
                         });
@@ -2016,7 +2531,11 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     updatePlayers(players) {
                         const playerCount = document.getElementById('player-count');
                         if (playerCount) {
-                            playerCount.textContent = `${players.length} CONTACTS`;
+                            // Use total count from server data, or calculate if not provided
+                            const totalCount = this.galaxyData?.total_player_count || 
+                                              (players.length + (this.playersInTransit.size > 0 ? 
+                                               Array.from(this.playersInTransit.values()).flat().length : 0));
+                            playerCount.textContent = `${totalCount} CONTACTS`;
                         }
                         
                         this.players.clear();
@@ -2066,7 +2585,19 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             marker.bringToFront();
                         }
                     }
-                    
+                    updateNPCsInTransit(transitData) {
+                        this.npcsInTransit.clear();
+                        
+                        transitData.forEach(npc => {
+                            if (!this.npcsInTransit.has(npc.corridor_id)) {
+                                this.npcsInTransit.set(npc.corridor_id, []);
+                            }
+                            this.npcsInTransit.get(npc.corridor_id).push(npc);
+                        });
+                        
+                        // Update corridor highlighting
+                        this.updateCorridorHighlighting();
+                    }
                     selectLocation(location) {
                         this.selectedLocation = location;
                         this.updateLocationPanel(location);
@@ -2086,12 +2617,30 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         
                         const playersHere = this.players.get(location.location_id) || [];
                         const npcsHere = this.npcs.get(location.location_id) || [];
+                        const staticNPCs = location.static_npcs || [];
                         const subLocations = await this.getSubLocations(location.location_id);
                         
                         const wealthDisplay = this.getWealthDisplay(location.wealth_level);
                         const typeIcon = this.getLocationTypeIcon(location.location_type);
                         
+                        // Create alignment panel if not neutral
+                        let alignmentPanel = '';
+                        if (location.alignment === 'loyalist') {
+                            alignmentPanel = `
+                                <div class="alignment-panel alignment-loyalist">
+                                    🛡️ LOYALISTS
+                                </div>
+                            `;
+                        } else if (location.alignment === 'outlaw') {
+                            alignmentPanel = `
+                                <div class="alignment-panel alignment-outlaw">
+                                    ⚔️ OUTLAWS
+                                </div>
+                            `;
+                        }
+                        
                         const detailsHtml = `
+                            ${alignmentPanel}
                             <div class="location-detail">
                                 <strong>${typeIcon} TYPE:</strong> ${location.location_type.toUpperCase()}
                             </div>
@@ -2142,11 +2691,26 @@ class WebMapCog(commands.Cog, name="WebMap"):
                                     `).join('')}
                                 </div>
                             ` : ''}
-                            ${playersHere.length === 0 && npcsHere.length === 0 ? '<div class="location-detail"><em>No contacts or NPCs currently present</em></div>' : ''}
+                            ${staticNPCs.length > 0 ? `
+                                <div class="players-list">
+                                    <strong>👤 NOTABLE INHABITANTS (${staticNPCs.length}):</strong>
+                                    ${staticNPCs.map(npc => `
+                                        <div class="player-item">
+                                            <span class="status-indicator" style="background: var(--accent-color); box-shadow: 0 0 8px var(--accent-color);"></span>
+                                            ${npc.name.toUpperCase()} (${npc.age}) - ${npc.occupation.toUpperCase()}
+                                            <div style="font-size: 0.7rem; color: var(--text-muted); margin-left: 1rem; font-style: italic;">
+                                                ${npc.personality}
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : ''}
+                            ${playersHere.length === 0 && npcsHere.length === 0 && staticNPCs.length === 0 ? '<div class="location-detail"><em>No contacts, NPCs, or notable inhabitants currently present</em></div>' : ''}
                         `;
                         
                         detailsElement.innerHTML = detailsHtml;
                     }
+                    
                     
                     getWealthDisplay(wealthLevel) {
                         if (wealthLevel >= 9) return '👑 OPULENT';
@@ -2396,10 +2960,16 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     
                     if (this.showLabels) {
                         this.addLocationLabels();
-                        if (btn) btn.textContent = 'HIDE LABELS';
+                        if (btn) {
+                            btn.textContent = 'HIDE LABELS';
+                            btn.classList.add('toggle-active');
+                        }
                     } else {
                         this.removeLocationLabels();
-                        if (btn) btn.textContent = 'LABELS';
+                        if (btn) {
+                            btn.textContent = 'SHOW LABELS';
+                            btn.classList.remove('toggle-active');
+                        }
                     }
                 }
                 
@@ -2443,29 +3013,33 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         locationsToLabel = visibleLocations.slice(0, Math.min(10, visibleLocations.length));
                     }
 
-                    // Add labels with simple spacing - no complex collision detection
-                    locationsToLabel.forEach((location, index) => {
-                        // Small delay to prevent all labels from appearing at once
-                        setTimeout(() => {
-                            this.addSimpleLabel(location);
-                        }, index * 10);
+                    // Initialize timeout tracking
+                    if (!this.pendingLabelTimeouts) {
+                        this.pendingLabelTimeouts = [];
+                    }
+
+                    // Add labels immediately instead of with delays to prevent conflicts
+                    locationsToLabel.forEach((location) => {
+                        this.addSimpleLabel(location);
                     });
                 }
+
                 
+                // Replace the existing addSimpleLabel function
                 addSimpleLabel(location) {
                     const zoom = this.map.getZoom();
                     const labelSize = this.getSimpleLabelSize(zoom);
                     
                     // Simple offset pattern - cycle through positions to avoid overlap
                     const offsetPatterns = [
-                        [0, -30],      // Above
-                        [25, -15],     // Top-right
-                        [25, 15],      // Bottom-right
-                        [0, 30],       // Below
-                        [-25, 15],     // Bottom-left
-                        [-25, -15],    // Top-left
-                        [35, 0],       // Right
-                        [-35, 0]       // Left
+                        [0, -35],      // Above
+                        [30, -20],     // Top-right
+                        [30, 20],      // Bottom-right
+                        [0, 35],       // Below
+                        [-30, 20],     // Bottom-left
+                        [-30, -20],    // Top-left
+                        [40, 0],       // Right
+                        [-40, 0]       // Left
                     ];
                     
                     // Use location ID to get consistent positioning
@@ -2488,34 +3062,31 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         const fallbackPoint = L.point(basePoint.x - finalOffsetX, basePoint.y - finalOffsetY);
                         const fallbackPosition = this.map.containerPointToLatLng(fallbackPoint);
                         if (this.map.getBounds().contains(fallbackPosition)) {
-                            const wealthClass = this.getWealthClass(location.wealth_level);
-                            const zoomClass = this.getZoomClass(zoom);
-
-                            const label = L.marker(fallbackPosition, {
-                                icon: L.divIcon({
-                                    className: `location-label ${wealthClass} ${zoomClass}`,
-                                    html: this.formatLabelText(location.name, zoom),
-                                    iconSize: [labelSize.width, labelSize.height],
-                                    iconAnchor: [labelSize.width / 2, labelSize.height / 2]
-                                }),
-                                interactive: false
-                            });
-
-                            label.addTo(this.map);
-                            location.label = label;
+                            this.createLabelMarker(location, fallbackPosition, labelSize, zoom);
                         }
                         return;
                     }
                     
+                    this.createLabelMarker(location, labelPosition, labelSize, zoom);
+                }
+
+                // Add this new function to create properly sized label markers
+                createLabelMarker(location, position, labelSize, zoom) {
                     const wealthClass = this.getWealthClass(location.wealth_level);
                     const zoomClass = this.getZoomClass(zoom);
-
-                    const label = L.marker(labelPosition, {
+                    const labelText = this.formatLabelText(location.name, zoom);
+                    
+                    // Calculate proper text dimensions
+                    const textLength = labelText.length;
+                    const charWidth = zoom >= 2 ? 8 : zoom >= 0 ? 7 : 6;
+                    const calculatedWidth = Math.max(labelSize.width, textLength * charWidth + 20);
+                    
+                    const label = L.marker(position, {
                         icon: L.divIcon({
                             className: `location-label ${wealthClass} ${zoomClass}`,
-                            html: this.formatLabelText(location.name, zoom),
-                            iconSize: [labelSize.width, labelSize.height],
-                            iconAnchor: [labelSize.width / 2, labelSize.height / 2]
+                            html: `<div class="label-text">${labelText}</div>`,
+                            iconSize: [calculatedWidth, labelSize.height],
+                            iconAnchor: [calculatedWidth / 2, labelSize.height / 2]
                         }),
                         interactive: false
                     });
@@ -2523,7 +3094,6 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     label.addTo(this.map);
                     location.label = label;
                 }
-                
                 formatLabelText(name, zoom) {
                     // Truncate long names at low zoom levels
                     if (zoom < -1 && name.length > 12) {
@@ -2533,7 +3103,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     }
                     return name.toUpperCase();
                 }
-                
+
                 getSimpleLabelSize(zoom) {
                     if (zoom >= 3) {
                         return { width: 120, height: 28 };
@@ -2545,7 +3115,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         return { width: 70, height: 18 };
                     }
                 }
-                
+
                 getLocationImportance(location) {
                     const typeWeights = {
                         'Space Station': 100,
@@ -2560,36 +3130,155 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     
                     return baseScore + wealthBonus + populationBonus;
                 }
-                
+
                 getWealthClass(wealthLevel) {
                     if (wealthLevel >= 7) return 'wealth-high';
                     if (wealthLevel >= 4) return 'wealth-medium';
                     return 'wealth-low';
                 }
-                
+
                 getZoomClass(zoom) {
                     if (zoom >= 3) return 'zoom-large';
                     if (zoom >= 0) return 'zoom-medium';
                     return 'zoom-small';
                 }
-                
+
                 updateLabelsForZoom() {
                     if (this.showLabels) {
-                        // Use a longer delay to prevent rapid updates during zoom/pan
                         clearTimeout(this.labelUpdateTimeout);
                         this.labelUpdateTimeout = setTimeout(() => {
                             this.addLocationLabels();
-                        }, 300);
+                        }, 200);
                     }
                 }
-                
+                // Fix the removeLocationLabels function
                 removeLocationLabels() {
                     this.locations.forEach(location => {
                         if (location.label) {
                             this.map.removeLayer(location.label);
-                            delete location.label;
+                            location.label = null;
                         }
                     });
+                }
+
+                // Update the createLocationMarker function to use different shapes and sizes
+                createLocationMarker(location) {
+                    const colors = {
+                        'Colony': 'var(--success-color)',
+                        'Space Station': 'var(--primary-color)',
+                        'Outpost': 'var(--warning-color)',
+                        'Transit Gate': '#ffdd00'
+                    };
+                    
+                    const color = colors[location.location_type] || '#ffffff';
+                    const zoom = this.map.getZoom();
+                    
+                    // Apply consistent zoom scaling to ALL locations
+                    let finalSize;
+                    if (zoom < -1) {
+                        finalSize = 12; // All tiny when zoomed way out
+                    } else if (zoom < 0) {
+                        finalSize = 13; // All small when zoomed out
+                    } else if (zoom < 1) {
+                        finalSize = 14; // All medium when mid-zoom
+                    } else {
+                        finalSize = 15; // All normal when zoomed in
+                    }
+                    
+                    return this.createShapedMarker(location, color, finalSize);
+                }
+                calculatePopulationSize(population) {
+                    // Disabled to ensure uniform scaling
+                    return 0;
+                }
+                getBaseMarkerSize(locationType) {
+                    // Uniform base size - differentiation comes from shape, not size
+                    return 15;
+                }
+                createShapedMarker(location, color, size) {
+                    const markerOptions = {
+                        radius: size,
+                        fillColor: '#ffffff',
+                        color: '#ffffff',
+                        weight: 2,
+                        opacity: 1,
+                        fillOpacity: 0.9,
+                        className: `location-marker ${location.location_type.toLowerCase().replace(' ', '-')}`
+                    };
+
+                    let marker;
+                    
+                    // Use different shapes based on location type
+                    switch(location.location_type.toLowerCase()) {
+                        case 'colony':
+                            marker = L.circleMarker([location.y_coord, location.x_coord], markerOptions);
+                            break;
+                            
+                        case 'space_station':
+                            const trianglePoints = this.getTrianglePoints(location.x_coord, location.y_coord, size);
+                            marker = L.polygon(trianglePoints, {
+                                ...markerOptions,
+                                className: `${markerOptions.className} triangle-marker`
+                            });
+                            break;
+                            
+                        case 'outpost':
+                            const squarePoints = this.getSquarePoints(location.x_coord, location.y_coord, size);
+                            marker = L.polygon(squarePoints, {
+                                ...markerOptions,
+                                className: `${markerOptions.className} square-marker`
+                            });
+                            break;
+                            
+                        case 'gate':
+                            const diamondPoints = this.getDiamondPoints(location.x_coord, location.y_coord, size);
+                            marker = L.polygon(diamondPoints, {
+                                ...markerOptions,
+                                className: `${markerOptions.className} diamond-marker`
+                            });
+                            break;
+                            
+                        default:
+                            marker = L.circleMarker([location.y_coord, location.x_coord], markerOptions);
+                            break;
+                    }
+                    
+                    marker.on('click', (e) => {
+                        L.DomEvent.stopPropagation(e);
+                        this.selectLocation(location);  // ✅ CORRECT - passing location object
+                    });
+                    
+                    return marker;
+                }
+                            
+
+                getTrianglePoints(x, y, size) {
+                    const offset = size * 0.018; // Slightly larger for better visibility
+                    return [
+                        [y + offset, x],           // Top
+                        [y - offset, x - offset],  // Bottom left
+                        [y - offset, x + offset]   // Bottom right
+                    ];
+                }
+
+                getSquarePoints(x, y, size) {
+                    const offset = size * 0.015; // Slightly larger for better visibility
+                    return [
+                        [y + offset, x - offset],  // Top left
+                        [y + offset, x + offset],  // Top right
+                        [y - offset, x + offset],  // Bottom right
+                        [y - offset, x - offset]   // Bottom left
+                    ];
+                }
+
+                getDiamondPoints(x, y, size) {
+                    const offset = size * 0.018; // Slightly larger for better visibility
+                    return [
+                        [y + offset, x],           // Top
+                        [y, x + offset],           // Right
+                        [y - offset, x],           // Bottom
+                        [y, x - offset]            // Left
+                    ];
                 }
                     
                     updateConnectionStatus(text, color) {
@@ -2612,9 +3301,11 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     }
                 }
 
+                let galaxyMap;
+
                 // Initialize map when page loads
                 document.addEventListener('DOMContentLoaded', () => {
-                    new GalaxyMap();
+                    galaxyMap = new GalaxyMap();
                 });'''
 
         with open("web/static/js/map.js", "w", encoding='utf-8') as f:
@@ -2699,6 +3390,12 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         "type": "galaxy_data",
                         "data": galaxy_data
                     }))
+                    
+                    # Send transit data
+                    await websocket.send_text(json.dumps({
+                        "type": "transit_update",
+                        "data": galaxy_data.get("players_in_transit", [])
+                    }))
                     print(f"✅ WebSocket client connected and sent initial data")
                 except Exception as e:
                     print(f"❌ Error sending initial galaxy data: {e}")
@@ -2711,7 +3408,8 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             "locations": [],
                             "corridors": [],
                             "players": [],
-                            "dynamic_npcs": []
+                            "dynamic_npcs": [],
+                            "players_in_transit": []
                         }
                     }))
                 
@@ -2730,7 +3428,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         return app
     
     async def _get_galaxy_data(self):
-        """Get current galaxy data"""
+        """Get current galaxy data with transit information"""
         # Get galaxy info
         from utils.time_system import TimeSystem
         time_system = TimeSystem(self.bot)
@@ -2741,34 +3439,158 @@ class WebMapCog(commands.Cog, name="WebMap"):
         current_time = time_system.calculate_current_ingame_time()
         formatted_time = time_system.format_ingame_datetime(current_time) if current_time else "Unknown"
         
-        # Get locations
-        locations = self.db.execute_query(
-            """SELECT location_id, name, location_type, x_coord, y_coord, 
-                      wealth_level, population, description
-               FROM locations ORDER BY name""",
-            fetch='all'
-        )
+        # Define alignment function properly
+        def determine_location_alignment(has_black_market, has_federal_supplies, wealth_level):
+            """Determine location alignment based on properties"""
+            if has_black_market:
+                return "outlaw"
+            elif has_federal_supplies or wealth_level >= 8:
+                return "loyalist"
+            else:
+                return "neutral"
         
+        # Get locations
+        try:
+            locations = self.db.execute_query(
+                """SELECT location_id, name, location_type, x_coord, y_coord, 
+                          wealth_level, population, description, has_black_market, has_federal_supplies
+                   FROM locations ORDER BY name""",
+                fetch='all'
+            )
+            if locations is None:
+                locations = []
+        except Exception as e:
+            print(f"Error fetching locations: {e}")
+            locations = []
+        
+        # Ensure locations is not None
+        if locations is None:
+            locations = []
+        # Get static NPCs for each location FIRST
+        static_npcs_by_location = {}
+        try:
+            static_npcs = self.db.execute_query(
+                """SELECT location_id, name, age, occupation, personality 
+                   FROM static_npcs ORDER BY location_id, name""",
+                fetch='all'
+            )
+            if static_npcs:
+                for location_id, name, age, occupation, personality in static_npcs:
+                    if location_id not in static_npcs_by_location:
+                        static_npcs_by_location[location_id] = []
+                    static_npcs_by_location[location_id].append({
+                        "name": name,
+                        "age": age,
+                        "occupation": occupation,
+                        "personality": personality
+                    })
+        except Exception as e:
+            print(f"Warning: Could not fetch static NPCs: {e}")
+            static_npcs_by_location = {}
+
+        # Process locations with alignment
+        processed_locations = []
+        for loc in (locations or []):
+            alignment = determine_location_alignment(loc[8], loc[9], loc[5])
+            processed_locations.append({
+                "location_id": loc[0],
+                "name": loc[1],
+                "location_type": loc[2],
+                "x_coord": loc[3],
+                "y_coord": loc[4],
+                "wealth_level": loc[5],
+                "population": loc[6],
+                "description": loc[7],
+                "alignment": alignment,
+                "static_npcs": static_npcs_by_location.get(loc[0], [])
+            })
         # Get active corridors
-        corridors = self.db.execute_query(
-            '''SELECT c.corridor_id, c.name, c.danger_level, c.origin_location, c.destination_location,
-                      ol.x_coord as origin_x, ol.y_coord as origin_y,
-                      dl.x_coord as dest_x, dl.y_coord as dest_y, ol.location_type as origin_type
-               FROM corridors c
-               JOIN locations ol ON c.origin_location = ol.location_id
-               JOIN locations dl ON c.destination_location = dl.location_id
-               WHERE c.is_active = 1''',
-            fetch='all'
-        )
+        try:
+            corridors = self.db.execute_query(
+                '''SELECT c.corridor_id, c.name, c.danger_level, c.travel_time, c.fuel_cost,
+                          c.origin_location, c.destination_location,
+                          ol.x_coord as origin_x, ol.y_coord as origin_y,
+                          dl.x_coord as dest_x, dl.y_coord as dest_y, ol.location_type as origin_type
+                   FROM corridors c
+                   JOIN locations ol ON c.origin_location = ol.location_id
+                   JOIN locations dl ON c.destination_location = dl.location_id
+                   WHERE c.is_active = 1''',
+                fetch='all'
+            )
+            if corridors is None:
+                corridors = []
+        except Exception as e:
+            print(f"Error fetching corridors: {e}")
+            corridors = []
         
         # Get online players
-        players = self.db.execute_query(
-            """SELECT c.name, c.current_location, c.is_logged_in
-               FROM characters c
-               WHERE c.is_logged_in = 1""",
-            fetch='all'
-        )
+        # Get online players with better error handling
+        try:
+            players = self.db.execute_query(
+                """SELECT c.name, c.current_location, c.is_logged_in
+                   FROM characters c
+                   WHERE c.is_logged_in = 1""",
+                fetch='all'
+            )
+            if players is None:
+                players = []
+        except Exception as e:
+            print(f"Error fetching players: {e}")
+            players = []
         
+        try:
+            players_in_transit = self.db.execute_query(
+                """SELECT ts.corridor_id, c.name as character_name, ts.origin_location, ts.destination_location,
+                          ol.name as origin_name, dl.name as dest_name, c.user_id
+                   FROM travel_sessions ts
+                   JOIN characters c ON ts.user_id = c.user_id
+                   JOIN locations ol ON ts.origin_location = ol.location_id
+                   JOIN locations dl ON ts.destination_location = dl.location_id
+                   WHERE ts.status = 'traveling'""",
+                fetch='all'
+            )
+            if players_in_transit is None:
+                players_in_transit = []
+        except Exception as e:
+            print(f"Error fetching players in transit: {e}")
+            players_in_transit = []
+        # Get NPCs in transit using their own travel system
+        npcs_in_transit = []
+        try:
+            npcs_in_transit = self.db.execute_query(
+                """SELECT n.npc_id, n.name, n.callsign, n.ship_name, 
+                          n.current_location as origin_location, n.destination_location,
+                          ol.name as origin_name, dl.name as dest_name, c.corridor_id
+                   FROM dynamic_npcs n
+                   JOIN locations ol ON n.current_location = ol.location_id
+                   JOIN locations dl ON n.destination_location = dl.location_id
+                   JOIN corridors c ON (c.origin_location = n.current_location AND c.destination_location = n.destination_location)
+                   WHERE n.travel_start_time IS NOT NULL AND n.destination_location IS NOT NULL AND n.is_alive = 1""",
+                fetch='all'
+            )
+            if npcs_in_transit is None:
+                npcs_in_transit = []
+        except Exception as e:
+            print(f"Warning: Could not fetch NPCs in transit: {e}")
+            npcs_in_transit = []
+        except Exception as e:
+            # If that fails, try a simpler approach or just return empty list
+            print(f"Warning: Could not fetch NPCs in transit (travel_sessions approach): {e}")
+            try:
+                # Alternative: just return NPCs that have travel_start_time set (but no destination info)
+                npcs_with_travel_time = self.db.execute_query(
+                    """SELECT n.npc_id, n.name, n.callsign, n.ship_name, n.current_location
+                       FROM dynamic_npcs n
+                       WHERE n.travel_start_time IS NOT NULL AND n.is_alive = 1""",
+                    fetch='all'
+                )
+                # For now, we can't determine their destination, so return empty list
+                npcs_in_transit = []
+                if npcs_with_travel_time:
+                    print(f"Found {len(npcs_with_travel_time)} NPCs with travel_start_time set, but no destination info available")
+            except Exception as e2:
+                print(f"Warning: Could not fetch NPCs in transit (fallback approach): {e2}")
+                npcs_in_transit = []
         # Get dynamic NPCs - with error handling
         dynamic_npcs = []
         try:
@@ -2789,30 +3611,20 @@ class WebMapCog(commands.Cog, name="WebMap"):
         return {
             "galaxy_name": galaxy_name,
             "current_time": formatted_time,
-            "locations": [
-                {
-                    "location_id": loc[0],
-                    "name": loc[1],
-                    "location_type": loc[2],
-                    "x_coord": loc[3],
-                    "y_coord": loc[4],
-                    "wealth_level": loc[5],
-                    "population": loc[6],
-                    "description": loc[7]
-                }
-                for loc in (locations or [])
-            ],
+            "locations": processed_locations,
             "corridors": [
                 {
                     "corridor_id": cor[0],
                     "name": cor[1],
                     "danger_level": cor[2],
-                    "origin_location": cor[3],
-                    "destination_location": cor[4],
-                    "origin_x": cor[5],
-                    "origin_y": cor[6],
-                    "dest_x": cor[7],
-                    "dest_y": cor[8]
+                    "travel_time": cor[3],
+                    "fuel_cost": cor[4],
+                    "origin_location": cor[5],
+                    "destination_location": cor[6],
+                    "origin_x": cor[7],
+                    "origin_y": cor[8],
+                    "dest_x": cor[9],
+                    "dest_y": cor[10]
                 }
                 for cor in (corridors or [])
             ],
@@ -2824,6 +3636,29 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 }
                 for player in (players or [])
             ],
+            "players_in_transit": [
+                {
+                    "corridor_id": transit[0],
+                    "name": transit[1],
+                    "origin": transit[4],
+                    "destination": transit[5],
+                    "user_id": transit[6]
+                }
+                for transit in (players_in_transit or [])
+            ],
+            # Add NPC transit data
+            "npcs_in_transit": [
+                {
+                    "npc_id": npc[0],
+                    "name": npc[1],
+                    "callsign": npc[2], 
+                    "ship_name": npc[3],
+                    "origin": npc[6],
+                    "destination": npc[7],
+                    "corridor_id": npc[8]
+                }
+                for npc in npcs_in_transit
+            ] if npcs_in_transit else [],
             "dynamic_npcs": [
                 {
                     "name": npc[0],
@@ -2834,9 +3669,10 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     "is_alive": npc[5]
                 }
                 for npc in dynamic_npcs
-            ]
+            ],
+            # Add total player count including transit
+            "total_player_count": len(players or []) + len(players_in_transit or [])
         }
-    
     async def _broadcast_update(self, update_type: str, data: dict):
         """Broadcast update to all connected WebSocket clients"""
         if not self.websocket_clients:
@@ -2888,7 +3724,36 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 }
                 for player in players_data
             ]
-            
+            # Get NPCs in transit using their own travel system
+            npcs_in_transit = []
+            try:
+                npcs_in_transit_data = self.db.execute_query(
+                    """SELECT n.npc_id, n.name, n.callsign, n.ship_name, 
+                              n.current_location as origin_location, n.destination_location,
+                              ol.name as origin_name, dl.name as dest_name, c.corridor_id
+                       FROM dynamic_npcs n
+                       JOIN locations ol ON n.current_location = ol.location_id
+                       JOIN locations dl ON n.destination_location = dl.location_id
+                       JOIN corridors c ON (c.origin_location = n.current_location AND c.destination_location = n.destination_location)
+                       WHERE n.travel_start_time IS NOT NULL AND n.destination_location IS NOT NULL AND n.is_alive = 1""",
+                    fetch='all'
+                )
+                if npcs_in_transit_data:
+                    npcs_in_transit = [
+                        {
+                            "npc_id": npc[0],
+                            "name": npc[1],
+                            "callsign": npc[2],
+                            "ship_name": npc[3],
+                            "origin": npc[6],
+                            "destination": npc[7],
+                            "corridor_id": npc[8]
+                        }
+                        for npc in npcs_in_transit_data
+                    ]
+            except Exception as e:
+                print(f"Warning: Could not fetch NPCs in transit: {e}")
+                npcs_in_transit = []
             # Get current dynamic NPC data
             npcs_data = []
             try:
@@ -2919,6 +3784,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
             # Broadcast both updates
             await self._broadcast_update("player_update", current_players)
             await self._broadcast_update("npc_update", current_npcs)
+            await self._broadcast_update("npc_transit_update", npcs_in_transit)
             
         except Exception as e:
             print(f"Error broadcasting updates: {e}")
@@ -3052,9 +3918,11 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 self.is_running = False
                 return
             
-            # Start update loop
+            # Set state and start updates
             self.is_running = True
-            asyncio.create_task(self._start_update_loop())
+
+            # Update game panels with proper sequencing
+            await self._update_game_panels_for_map_status()
             
             # Try to detect external IP
             external_ip = None
@@ -3106,8 +3974,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 value="• Real-time player positions\n• Interactive location details\n• Zoomable/scrollable map\n• Live updates every minute\n• Route planning\n• Location search",
                 inline=False
             )
-            
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             
         except Exception as e:
             await interaction.followup.send(f"❌ Failed to start web map server: {str(e)}")
@@ -3229,16 +4096,15 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 except:
                     pass
             self.websocket_clients.clear()
-            
-            # The server thread will stop when the main process stops
-            # FastAPI/Uvicorn doesn't have a clean shutdown method when run in thread
+
+            # Update panels with the correct sequence
+            await self._update_game_panels_for_map_status()
             
             embed = discord.Embed(
                 title="🛑 Web Map Server Stopped",
                 description="Interactive galaxy map has been shut down.",
                 color=0xff0000
             )
-            
             await interaction.response.send_message(embed=embed)
             print("🛑 Web map server stopped")
             
@@ -3347,7 +4213,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
+    
     async def _calculate_route(self, from_id: int, to_id: int) -> dict:
         """Calculate the shortest route between two locations using Dijkstra's algorithm"""
         
@@ -3436,5 +4302,92 @@ class WebMapCog(commands.Cog, name="WebMap"):
             "total_fuel": total_fuel,
             "distance": len(path) - 1
         }
+    async def _update_game_panels_for_map_status(self):
+        """Update all game panels when webmap status changes"""
+        try:
+            panel_cog = self.bot.get_cog('GamePanelCog')
+            if not panel_cog:
+                return
+                
+            # Get all active panels
+            panels = self.bot.db.execute_query(
+                "SELECT guild_id, channel_id, message_id FROM game_panels",
+                fetch='all'
+            )
+            
+            if not panels:
+                return
+                
+            print(f"🔄 Updating {len(panels)} game panels with webmap status: {self.is_running}")
+            
+            for guild_id, channel_id, message_id in panels:
+                try:
+                    guild = self.bot.get_guild(guild_id)
+                    if not guild:
+                        continue
+                    
+                    channel = guild.get_channel(channel_id)
+                    if not channel:
+                        continue
+                    
+                    # Create fresh embed and view for each panel
+                    embed = await panel_cog.create_panel_embed(guild)
+                    new_view = await panel_cog.create_panel_view()
+                    
+                    try:
+                        message = await channel.fetch_message(message_id)
+                        await message.edit(embed=embed, view=new_view)
+                        print(f"✅ Updated game panel in {guild.name} with webmap status: {self.is_running}")
+                    except discord.NotFound:
+                        # Message was deleted, remove from database
+                        self.bot.db.execute_query(
+                            "DELETE FROM game_panels WHERE message_id = ?",
+                            (message_id,)
+                        )
+                        print(f"🗑️ Removed orphaned panel record for message {message_id}")
+                    except discord.Forbidden:
+                        print(f"❌ No permission to update panel in {guild.name}")
+                    except Exception as e:
+                        print(f"❌ Error updating panel message {message_id}: {e}")
+                
+                except Exception as e:
+                    print(f"❌ Error processing panel update for guild {guild_id}: {e}")
+            
+            # Force refresh persistent views after updating messages
+            await panel_cog.refresh_all_panel_views()
+        
+        except Exception as e:
+            print(f"❌ Error in _update_game_panels_for_map_status: {e}")
+            import traceback
+            traceback.print_exc()
+    # cogs/web_map.py
+
+    async def get_final_map_url(self) -> tuple[str, str]:
+        """
+        Get the final, user-facing map URL.
+        This method checks for overrides, then attempts to detect the external IP.
+        Returns the final URL and an optional note.
+        """
+        # 1. Check for an explicit IP/domain override
+        if self.external_ip_override:
+            url = f"http://{self.external_ip_override}:{self.port}"
+            note = f"Map available at your custom address."
+            return url, note
+
+        # 2. If no override, try to detect the external IP
+        try:
+            external_ip = await self._get_external_ip()
+            if external_ip:
+                url = f"http://{external_ip}:{self.port}"
+                note = "URL is based on auto-detected server IP."
+                return url, note
+        except Exception as e:
+            print(f"Failed to get external IP for panel: {e}")
+
+        # 3. Fallback if override is not set and detection fails
+        url = f"http://http://184.64.30.214:8090/"
+        note = "Could not determine server IP. Admin should use `/webmap_set_ip`."
+        return url, note
+        
 async def setup(bot):
     await bot.add_cog(WebMapCog(bot))

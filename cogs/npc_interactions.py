@@ -157,7 +157,7 @@ class NPCInteractionsCog(commands.Cog):
         # Generate 1-3 jobs
         num_jobs = random.randint(2, 4)
         for _ in range(num_jobs):
-            template = random.choice(job_templates)
+            template = random.choice(templates)
             title, desc, base_reward, skill, min_skill, danger, duration = template
             
             # Add some randomization

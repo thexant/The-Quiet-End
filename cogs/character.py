@@ -134,7 +134,12 @@ class CharacterCog(commands.Cog):
             return
         
         current_location, location_status = char_data
-        
+        if self.bot.get_cog('CombatCog') and self.bot.get_cog('CombatCog').check_combat_status(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You cannot dock while in combat!",
+                ephemeral=True
+            )
+            return
         if not current_location:
             await interaction.response.send_message("You're in deep space and cannot dock!", ephemeral=True)
             return
@@ -180,7 +185,12 @@ class CharacterCog(commands.Cog):
         if not char_data:
             await interaction.response.send_message("Character not found!", ephemeral=True)
             return
-        
+        if self.bot.get_cog('CombatCog') and self.bot.get_cog('CombatCog').check_combat_status(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You cannot undock while in combat!",
+                ephemeral=True
+            )
+            return    
         current_location, location_status = char_data
         
         # NEW: Check for active stationary jobs
@@ -404,21 +414,10 @@ class CharacterCog(commands.Cog):
             return
         
         location_name, channel_id = location_info
-        location_channel = interaction.guild.get_channel(channel_id)
         
-        if not location_channel:
-            await interaction.response.send_message(
-                "Location channel not found!",
-                ephemeral=True
-            )
-            return
-        
-        # Remove any existing location panel for this user
-        await self._remove_existing_location_panel(user_id, location_channel)
-        
-        # Create and send new persistent location panel
-        from utils.views import PersistentLocationView
-        view = PersistentLocationView(self.bot, user_id)
+        # Create ephemeral location panel
+        from utils.views import EphemeralLocationView
+        view = EphemeralLocationView(self.bot, user_id)
         
         embed = discord.Embed(
             title="📍 Location Panel",
@@ -440,60 +439,12 @@ class CharacterCog(commands.Cog):
             inline=False
         )
         
-        embed.set_footer(text="This panel will update when your status changes")
+        embed.set_footer(text="Use the buttons to interact with the location!")
         
-        # Send to location channel (not ephemeral)
-        panel_message = await location_channel.send(embed=embed, view=view)
-        
-        # Store panel message ID for future updates
-        self.db.execute_query(
-            "INSERT OR REPLACE INTO user_location_panels (user_id, location_id, message_id, channel_id) VALUES (?, ?, ?, ?)",
-            (user_id, current_location, panel_message.id, channel_id)
-        )
-        
-        await interaction.response.send_message(
-            f"✅ Location panel created in {location_channel.mention}",
-            ephemeral=True
-        )
+        # Send ephemeral response
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    async def _remove_existing_location_panel(self, user_id: int, channel: discord.TextChannel):
-        """Remove any existing location panel for this user"""
-        panel_data = self.db.execute_query(
-            "SELECT message_id FROM user_location_panels WHERE user_id = ? AND channel_id = ?",
-            (user_id, channel.id),
-            fetch='one'
-        )
-        
-        if panel_data:
-            try:
-                message = await channel.fetch_message(panel_data[0])
-                await message.delete()
-            except:
-                pass  # Message might already be deleted
-            
-            self.db.execute_query(
-                "DELETE FROM user_location_panels WHERE user_id = ? AND channel_id = ?",
-                (user_id, channel.id)
-            )
-    async def _refresh_location_panel(self, user_id: int):
-        """Refresh the user's location panel after dock/undock"""
-        panel_data = self.db.execute_query(
-            "SELECT message_id, channel_id FROM user_location_panels WHERE user_id = ?",
-            (user_id,),
-            fetch='one'
-        )
-        
-        if panel_data:
-            message_id, channel_id = panel_data
-            channel = self.bot.get_channel(channel_id)
-            if channel:
-                try:
-                    message = await channel.fetch_message(message_id)
-                    view = message.view
-                    if hasattr(view, 'refresh_view'):
-                        await view.refresh_view()
-                except:
-                    pass  # Message might be deleted
+
     @character_group.command(name="inventory", description="View your inventory")
     async def view_inventory(self, interaction: discord.Interaction):
         char_check = self.db.execute_query(

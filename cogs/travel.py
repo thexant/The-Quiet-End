@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import random
 from utils.channel_manager import ChannelManager
 from cogs.corridor_events import CorridorEventsCog
-
+import sqlite3
 class DockingFeeView(discord.ui.View):
     def __init__(self, bot, user_id, location_id, fee, origin_location_id):
         super().__init__(timeout=300) # 5 minute timeout
@@ -136,7 +136,12 @@ class TravelCog(commands.Cog):
         )
         if not row:
             return await interaction.response.send_message("🚫 Character not found.", ephemeral=True)
-        
+        if self.bot.get_cog('CombatCog') and self.bot.get_cog('CombatCog').check_combat_status(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You cannot travel while in combat!",
+                ephemeral=True
+            )
+            return
         origin_id, status = row
         # block if docked
         if status == "docked":
@@ -172,6 +177,13 @@ class TravelCog(commands.Cog):
                 "❌ You must be logged in to travel! Use `/character login` first.",
                 ephemeral=True
             )
+        travel_restriction = await self.check_travel_restrictions(interaction.user.id)
+        if travel_restriction:
+            await interaction.response.send_message(
+                f"❌ {travel_restriction}",
+                ephemeral=True
+            )
+            return 
         # Check if character has an active ship    
         active_ship = self.db.execute_query(
             "SELECT active_ship_id FROM characters WHERE user_id = ?",
@@ -241,6 +253,13 @@ class TravelCog(commands.Cog):
 
         select = ui.Select(placeholder="Choose your corridor", options=options, min_values=1, max_values=1)
         
+        async def check_travel_restrictions(self, user_id: int) -> Optional[str]:
+            """Check if user has travel restrictions from bounty captures"""
+            bounty_cog = self.bot.get_cog('BountyCog')
+            if bounty_cog:
+                return await bounty_cog.check_travel_ban(user_id)
+            return None
+
         async def on_select(inter: discord.Interaction):
             if inter.user.id != interaction.user.id:
                 return await inter.response.send_message("This isn't your travel menu!", ephemeral=True)
@@ -588,7 +607,7 @@ class TravelCog(commands.Cog):
         )
         
         # Time information
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         elapsed = (now - start_time).total_seconds()
         remaining = max(0, (end_time - now).total_seconds())
         
@@ -652,7 +671,6 @@ class TravelCog(commands.Cog):
         await asyncio.sleep(travel_time)
 
         try:
-            # Get destination and origin info from the completed travel session
             session_info = self.db.execute_query(
                 "SELECT destination_location, origin_location FROM travel_sessions WHERE user_id=? AND corridor_id=? AND status='traveling' ORDER BY session_id DESC LIMIT 1",
                 (user_id, corridor_id), fetch='one'
@@ -663,29 +681,41 @@ class TravelCog(commands.Cog):
 
             dest_location_id, origin_location_id = session_info
 
-            # Mark session as arrived before handling access
             self.db.execute_query(
                 "UPDATE travel_sessions SET status='arrived' WHERE user_id=? AND corridor_id=? AND status='traveling'",
                 (user_id, corridor_id)
             )
-
-            # Handle the arrival access check
+            
             await self._handle_arrival_access(user_id, dest_location_id, origin_location_id, guild, transit_chan)
-
         except Exception as e:
             print(f"❌ Error during initial travel completion: {e}")
+        finally:
+            # ✅ FIXED: Ensure channel is always cleaned up here, after arrival is fully handled.
+            if transit_chan:
+                await self.channel_mgr.cleanup_transit_channel(transit_chan.id, delay_seconds=60)
 
 
     async def _handle_arrival_access(self, user_id: int, dest_location_id: int, origin_location_id: int, guild: discord.Guild, transit_chan: discord.TextChannel):
         """Handles docking access checks, fees, and combat for faction-controlled areas."""
+        # Get destination and character info with fallback for missing faction column
         try:
-            # Get destination and character info
             location_info = self.db.execute_query("SELECT name, faction FROM locations WHERE location_id = ?", (dest_location_id,), fetch='one')
             if not location_info: 
                 await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
                 return
-            
             dest_name, faction = location_info
+        except sqlite3.OperationalError as e:
+            if "no such column: faction" in str(e):
+                # Fallback to just getting name, assume neutral faction
+                location_info = self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (dest_location_id,), fetch='one')
+                if not location_info:
+                    await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
+                    return
+                dest_name = location_info[0]
+                faction = 'neutral'  # Default faction
+                print(f"⚠️ Faction column missing, using default 'neutral' for {dest_name}")
+            else:
+                raise e
 
             rep_cog = self.bot.get_cog('ReputationCog')
             if not rep_cog:
@@ -800,10 +830,7 @@ class TravelCog(commands.Cog):
                     await transit_chan.send(arrival_message)
                 except Exception as msg_error:
                     print(f"❌ Failed to send arrival message: {msg_error}")
-                
-                # Always clean up transit channel
-                await self.channel_mgr.cleanup_transit_channel(transit_chan.id, delay_seconds=30)
-            
+                        
             # Cleanup progress tracking
             for key in list(self.active_status_messages.keys()):
                 if key.startswith(f"{user_id}_"):
@@ -835,9 +862,6 @@ class TravelCog(commands.Cog):
         # Give channel access back to origin
         await self.channel_mgr.give_user_location_access(guild.get_member(user_id), origin_location_id)
 
-        # Cleanup transit channel
-        if transit_chan:
-            await self.channel_mgr.cleanup_transit_channel(transit_chan.id, delay_seconds=15)
 
     @travel_group.command(name="routes", description="View available travel routes from current location")
     async def view_routes(self, interaction: discord.Interaction):
@@ -954,84 +978,6 @@ class TravelCog(commands.Cog):
             inline=False
         )
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    
-    @travel_group.command(name="status", description="Show your current travel progress")
-    async def travel_status(self, interaction: discord.Interaction):
-        record = self.db.execute_query(
-            """
-            SELECT
-              ts.start_time,
-              ts.end_time,
-              ts.temp_channel_id,
-              c.name        AS corridor_name,
-              dest.name     AS dest_name,
-              orig.name     AS origin_name
-            FROM travel_sessions ts
-            JOIN corridors c  ON ts.corridor_id       = c.corridor_id
-            JOIN locations dest ON ts.destination_location = dest.location_id
-            JOIN locations orig ON ts.origin_location      = orig.location_id
-            WHERE ts.user_id = ? AND ts.status = 'traveling'
-            """,
-            (interaction.user.id,),
-            fetch='one'
-        )
-
-        if not record:
-            return await interaction.response.send_message(
-                "You are not currently traveling.", ephemeral=True
-            )
-
-        try:
-            start_str, end_str, temp_chan_id, corridor_name, dest_name, origin_name = record
-            start_dt = datetime.fromisoformat(start_str)
-            end_dt   = datetime.fromisoformat(end_str)
-            now      = datetime.utcnow()  # Use UTC to match database times
-            remaining = end_dt - now
-
-            if remaining.total_seconds() <= 0:
-                return await interaction.response.send_message(
-                    "Your journey should be completing soon.", ephemeral=True
-                )
-
-            # Calculate travel time and progress
-            total_journey_secs = (end_dt - start_dt).total_seconds()
-            elapsed = (now - start_dt).total_seconds()
-            progress = max(0, min(100, (elapsed / total_journey_secs) * 100)) if total_journey_secs > 0 else 0
-
-            # Create the same style embed as the auto-refreshing one
-            embed = self._create_progress_embed(progress, total_journey_secs, start_dt, end_dt, dest_name)
-            
-            # Add route information
-            embed.insert_field_at(0, name="🗺️ Route", value=f"**{origin_name}** → **{dest_name}**\nvia *{corridor_name}*", inline=False)
-
-            if temp_chan_id:
-                temp_chan = self.bot.get_channel(temp_chan_id)
-                if temp_chan:
-                    embed.add_field(name="Transit Channel", value=temp_chan.mention, inline=True)
-
-            # ADD THIS SHIP EFFICIENCY CODE HERE:
-            # Get ship efficiency for accurate time calculation
-            ship_efficiency = self.db.execute_query(
-                "SELECT fuel_efficiency FROM ships WHERE owner_id = ?",
-                (interaction.user.id,), fetch='one'
-            )
-
-            if ship_efficiency:
-                ship_eff_value = ship_efficiency[0]
-                embed.add_field(
-                    name="🚀 Ship Efficiency", 
-                    value=f"Level {ship_eff_value}/10 (affects travel speed)", 
-                    inline=True
-                )
-        except Exception as e:
-            print(f"[TravelStatus] error calculating progress: {e}")
-            embed = discord.Embed(
-                title="Travel Status Error",
-                description="Unable to calculate travel progress. Contact an administrator.",
-                color=0xff0000
-            )
-
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     
@@ -1322,6 +1268,105 @@ class TravelCog(commands.Cog):
                 "❌ An error occurred while calculating the route. Please try again.",
                 ephemeral=True
             )
+
+    async def plot_route_callback(self, interaction: discord.Interaction, destination: str):
+        """Callback function to handle route plotting from the modal."""
+        # Ensure the user is logged in
+        login_status = self.db.execute_query(
+            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        if not login_status or not login_status[0]:
+            await interaction.response.send_message(
+                "❌ You must be logged in to plot routes! Use `/character login` first.",
+                ephemeral=True
+            )
+            return
+
+        # Get character's current location
+        char_location = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        if not char_location or not char_location[0]:
+            await interaction.response.send_message(
+                "❌ You must be at a location to plot routes. Complete your current travel first.",
+                ephemeral=True
+            )
+            return
+        
+        current_location_id = char_location[0]
+        
+        # Defer the response as route calculation can take time
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        try:
+            # Find the destination
+            destination_matches = self.db.execute_query(
+                "SELECT location_id, name, location_type FROM locations WHERE name LIKE ? ORDER BY name",
+                (f"%{destination}%",),
+                fetch='all'
+            )
+            
+            if not destination_matches:
+                await interaction.followup.send(
+                    f"❌ No location found matching '{destination}'. Try a different search term.",
+                    ephemeral=True
+                )
+                return
+
+            # Handle multiple matches
+            if len(destination_matches) > 1:
+                exact_match = next((m for m in destination_matches if m[1].lower() == destination.lower()), None)
+                if exact_match:
+                    destination_matches = [exact_match]
+                else:
+                    # Handle too many matches and show options
+                    if len(destination_matches) > 10:
+                        destination_matches = destination_matches[:10]
+                    
+                    options = [
+                        f"{'🛰️' if l_type == 'space_station' else 'COL' if l_type == 'colony' else 'OUT'} **{name}**"
+                        for _, name, l_type in destination_matches
+                    ]
+                    embed = discord.Embed(
+                        title="Multiple Locations Found",
+                        description=f"Your search for '{destination}' returned multiple results:",
+                        color=discord.Color.gold()
+                    )
+                    embed.add_field(name="Matches", value="\\n".join(options))
+                    embed.set_footer(text="Tip: Try a more specific name or the exact name.")
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    return
+
+            destination_id, dest_name, _ = destination_matches[0]
+
+            if destination_id == current_location_id:
+                await interaction.followup.send(f"❌ You are already at **{dest_name}**!", ephemeral=True)
+                return
+
+            # Calculate the route
+            route = await self._calculate_shortest_route(current_location_id, destination_id)
+
+            if not route:
+                current_name = self.db.get_location_name(current_location_id)
+                embed = discord.Embed(
+                    title="🚫 No Route Available",
+                    description=f"Could not find a route from **{current_name}** to **{dest_name}**.",
+                    color=discord.Color.red()
+                )
+                embed.add_field(name="Possible Reasons", value="• No direct or connecting corridors exist.\\n• The system network may be temporarily fragmented.")
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                return
+
+            # Send the results
+            await self._send_route_embeds(interaction, route, dest_name)
+
+        except Exception as e:
+            print(f"Error in plot_route_callback: {e}")
+            await interaction.followup.send("An error occurred while calculating the route.", ephemeral=True)
 
     async def _calculate_shortest_route(self, start_id: int, end_id: int) -> list:
         """Calculate shortest route using BFS pathfinding"""

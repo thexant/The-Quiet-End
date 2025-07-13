@@ -11,7 +11,9 @@ FIRST_NAMES = [
     "Chen", "Wei", "Mei", "Jin", "Raj", "Priya", "Dev", "Nala", "Zain", "Layla",
     "Omar", "Fatima", "Hassan", "Amara", "Kofi", "Nia", "Kwame", "Adah", "Lars", "Astrid",
     "Erik", "Ingrid", "Soren", "Freya", "Kai", "Nora", "Finn", "Saga", "Cruz", "Diego",
-    "Carmen", "Sofia", "Mateo", "Lucia", "Ezra", "Thea", "Arlo", "Zoe", "Milo", "Cora"
+    "Carmen", "Sofia", "Mateo", "Lucia", "Ezra", "Thea", "Arlo", "Zoe", "Milo", "Cora",
+    "John", "Benjamin", "Jack", "Kate", "Arthur", "Dutch", "Isaac", "Zach", "Nicole", "Kendra",
+    "Desmond", "Hugo", "Ana", "Lucia", "Sun", "Micheal", "Walter", "Vincent"
 ]
 
 LAST_NAMES = [
@@ -24,14 +26,19 @@ LAST_NAMES = [
     "Hassan", "Ahmed", "Ali", "Omar", "Said", "Ibrahim", "Mahmoud", "Youssef",
     "Okonkwo", "Adeola", "Chike", "Amara", "Kwaku", "Asante", "Nkomo", "Banda",
     "Larsen", "Hansen", "Nielsen", "Andersen", "Petersen", "Kristensen", "Rasmussen",
-    "Rodriguez", "Martinez", "Lopez", "Gonzalez", "Perez", "Sanchez", "Ramirez", "Torres"
+    "Rodriguez", "Martinez", "Lopez", "Gonzalez", "Perez", "Sanchez", "Ramirez", "Torres",
+    "Campbell", "Head", "Locke", "Linus", "Shepard", "Morgan", "Van de Sterren", "Clarke",
+    "Brennan", "Daniels", "Hammond", "O'Bannon", "O'Malley", "MacGregor", "Hume", "Garcia",
+    "Cortez"
 ]
 
 SHIP_PREFIXES = [
     "Stellar", "Cosmic", "Void", "Nova", "Nebula", "Solar", "Lunar", "Astro", "Quantum", "Plasma",
     "Iron", "Steel", "Titanium", "Crystal", "Diamond", "Golden", "Silver", "Copper", "Neon",
     "Swift", "Fast", "Quick", "Rapid", "Lightning", "Thunder", "Storm", "Wind", "Gale",
-    "Free", "Wild", "Brave", "Bold", "Fierce", "Strong", "Mighty", "Grand", "Royal", "Noble"
+    "Free", "Wild", "Brave", "Bold", "Fierce", "Strong", "Mighty", "Grand", "Royal", "Noble",
+    "Empowered", "Radiant", "Viscious", "Immediate", "Kindred", "Scalding", "Dripping", "Finnicky",
+    "Rusting", "Traded", "Forsaken", "Boundary", "Radical", "Zany", "Whimsical"
 ]
 
 SHIP_SUFFIXES = [
@@ -68,7 +75,7 @@ RADIO_MESSAGES = [
     "This is {callsign}, just wanted to say the staff at {location} are incredibly helpful.",
     "Any familiar voices out there? {callsign} getting lonely on these long hauls.",
     "Captain {name} logging off for rest cycle. {callsign} will be monitoring emergency frequencies.",
-    
+    "Test, test... Does this thing work?",
     # Technical and maintenance
     "{callsign} requesting mechanic availability at {location}. Minor engine calibration needed.",
     "This is {callsign}, completed system diagnostics. All green across the board.",
@@ -94,7 +101,10 @@ RADIO_MESSAGES = [
     "Captain {name} logging personal note: {location} has the best coffee in three systems.",
     "{callsign} to old friends, still flying the trade routes. Hope to cross paths again soon.",
     "This is {callsign}, teaching the new crew member about proper radio etiquette. Wave hello everyone!",
-    
+    "Hello? {name} here, passing through {system}. Anyone nearby? Want to meet for drinks?",
+    "{callsign} CALLING IN, I AM FULL OF SPACE MILK!",
+    "Just got a new ship, The {ship}. Let's see how this thing flies!",
+    # Grim Realities
     "This is {callsign} to anyone on this frequency... My nav-computer is cycling, showing a corridor that shouldn't be here. Is... is anyone else seeing this?",
     "{callsign} requesting updated corridor stability data. My last chart is three cycles old and I don't trust it. Anything more recent would be appreciated.",
     "This is {callsign}, making my approach to {location}. Looks like another one of your docking lights is out. You guys should really get that fixed before someone clips the bay.",
@@ -205,7 +215,16 @@ TRADE_SPECIALTIES = [
 
 def generate_npc_name() -> Tuple[str, str]:
     """Generate a random first and last name for an NPC"""
-    return random.choice(FIRST_NAMES), random.choice(LAST_NAMES)
+    first_name = random.choice(FIRST_NAMES)
+    last_name = random.choice(LAST_NAMES)
+    
+    if random.random() < 0.2:
+        available_last_names = [name for name in LAST_NAMES if name != last_name]
+        if available_last_names:
+            second_last_name = random.choice(available_last_names)
+            last_name = f"{last_name}-{second_last_name}"
+    
+    return first_name, last_name
 
 def generate_ship_name() -> str:
     """Generate a random ship name"""

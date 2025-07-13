@@ -5,7 +5,8 @@ from discord import app_commands
 from typing import Dict, List
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
 
 class GroupsCog(commands.Cog):
     def __init__(self, bot):
@@ -682,8 +683,7 @@ class GroupsCog(commands.Cog):
                 await location_channel.send(embed=notification_embed)
     
     @group_group.command(name="travel_vote", description="Start a vote for group travel (leader only)")
-    @app_commands.describe(destination="Destination to travel to")
-    async def travel_vote(self, interaction: discord.Interaction, destination: str):
+    async def travel_vote(self, interaction: discord.Interaction):
         # Check if user is group leader
         group_info = self.db.execute_query(
             '''SELECT g.group_id, g.name, g.leader_id, g.current_location
@@ -693,110 +693,161 @@ class GroupsCog(commands.Cog):
             (interaction.user.id,),
             fetch='one'
         )
-        
+
         if not group_info:
-            await interaction.response.send_message("You're not in a group.", ephemeral=True)
+            await interaction.response.send_message("You're not in a group or not the leader.", ephemeral=True)
             return
-        
-        group_id, group_name, leader_id, current_location = group_info
-        
+
+        group_id, group_name, leader_id, _ = group_info
+
+        # --- FIX: Sync group's location with leader's location before proceeding ---
+        current_location = await self._sync_group_location(group_id, leader_id)
+        if current_location is None:
+            await interaction.response.send_message("Cannot start a vote because the group leader is currently in transit.", ephemeral=True)
+            return
+        # --- END FIX ---
+
         if leader_id != interaction.user.id:
             await interaction.response.send_message("Only the group leader can start travel votes.", ephemeral=True)
             return
-        
+
+        # Check for an existing active vote
         current_timestamp = int(datetime.now().timestamp())
         existing_vote = self.db.execute_query(
             "SELECT session_id FROM group_vote_sessions WHERE group_id = ? AND expires_at > ?",
             (group_id, current_timestamp),
             fetch='one'
         )
-        
+
         if existing_vote:
             await interaction.response.send_message("There is already an active vote for this group.", ephemeral=True)
             return
-        
-        # Find destination corridor
-        corridor = self.db.execute_query(
-            '''SELECT c.corridor_id, c.name, l.name as dest_name, c.travel_time, c.fuel_cost, c.danger_level
+
+        # Fetch all available corridors from the group's (now correct) current location
+        corridors = self.db.execute_query(
+            '''SELECT c.corridor_id, c.name, l.name AS dest_name, c.travel_time, c.fuel_cost, c.danger_level
                FROM corridors c
                JOIN locations l ON c.destination_location = l.location_id
-               WHERE c.origin_location = ? AND LOWER(l.name) LIKE LOWER(?) AND c.is_active = 1''',
-            (current_location, f"%{destination}%"),
-            fetch='one'
-        )
-        
-        if not corridor:
-            await interaction.response.send_message(f"No active corridor to '{destination}' found.", ephemeral=True)
-            return
-        
-        corridor_id, corridor_name, dest_name, travel_time, fuel_cost, danger = corridor
-        
-        # Get group members
-        members = self.db.execute_query(
-            "SELECT user_id, name FROM characters WHERE group_id = ?",
-            (group_id,),
+               WHERE c.origin_location = ? AND c.is_active = 1''',
+            (current_location,),
             fetch='all'
         )
-        
-        if len(members) < 2:
-            await interaction.response.send_message("You need at least 2 group members to start a vote.", ephemeral=True)
+
+        if not corridors:
+            location_name = self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (current_location,), fetch='one')[0]
+            await interaction.response.send_message(f"There are no available travel routes from the group's current location: **{location_name}**.", ephemeral=True)
             return
-        
-        # Create vote session
-        vote_data = {
-            'type': 'travel',
-            'corridor_id': corridor_id,
-            'destination': dest_name,
-            'corridor_name': corridor_name,
-            'travel_time': travel_time,
-            'fuel_cost': fuel_cost,
-            'danger_level': danger
-        }
-        
-        import json
-        expire_timestamp = datetime.now() + timedelta(minutes=10)
-        
-        # Create the vote session
-        self.db.execute_query(
-            '''INSERT INTO group_vote_sessions (group_id, vote_type, vote_data, channel_id, expires_at) 
-               VALUES (?, ?, ?, ?, ?)''',
-            (group_id, 'travel', json.dumps(vote_data), interaction.channel.id, expire_timestamp.isoformat())
-        )
-        
-        session_id = self.db.execute_query(
-            "SELECT session_id FROM group_vote_sessions WHERE group_id = ? ORDER BY session_id DESC LIMIT 1",
-            (group_id,),
+
+        # (The rest of the function remains the same as the previous fix)
+        # Build the dropdown for the leader to select a route
+        options = []
+        for cid, cname, dest_name, ttime, cost, danger in corridors[:25]:
+            time_text = f"{ttime//60}m"
+            danger_text = "⚠️" * danger if danger > 0 else "Safe"
+            options.append(discord.SelectOption(
+                label=f"To: {dest_name}",
+                description=f"via {cname[:20]}.. | {time_text} | {cost} fuel | {danger_text}",
+                value=str(cid)
+            ))
+
+        select = discord.ui.Select(placeholder="Choose a destination to start a vote...", options=options)
+
+        async def select_callback(inter: discord.Interaction):
+            if inter.user.id != leader_id:
+                await inter.response.send_message("Only the group leader can make this selection.", ephemeral=True)
+                return
+
+            chosen_corridor_id = int(select.values[0])
+            corridor = next((c for c in corridors if c[0] == chosen_corridor_id), None)
+
+            if not corridor:
+                await inter.response.edit_message(content="Error: Selected corridor not found.", view=None)
+                return
+
+            corridor_id, corridor_name, dest_name, travel_time, fuel_cost, danger = corridor
+
+            members = self.db.execute_query(
+                "SELECT user_id, name FROM characters WHERE group_id = ?",
+                (group_id,),
+                fetch='all'
+            )
+
+            if len(members) < 2:
+                await inter.response.edit_message(content="You need at least 2 group members to start a vote.", view=None)
+                return
+
+            vote_data = {
+                'type': 'travel', 'corridor_id': corridor_id, 'destination': dest_name,
+                'corridor_name': corridor_name, 'travel_time': travel_time,
+                'fuel_cost': fuel_cost, 'danger_level': danger
+            }
+
+            expire_datetime = datetime.now() + timedelta(minutes=10)
+
+            self.db.execute_query(
+                '''INSERT INTO group_vote_sessions (group_id, vote_type, vote_data, channel_id, expires_at)
+                   VALUES (?, ?, ?, ?, ?)''',
+                (group_id, 'travel', json.dumps(vote_data), inter.channel.id, expire_datetime.isoformat())
+            )
+
+            session_id = self.db.execute_query(
+                "SELECT session_id FROM group_vote_sessions WHERE group_id = ? ORDER BY session_id DESC LIMIT 1",
+                (group_id,), fetch='one'
+            )[0]
+
+            embed = discord.Embed(
+                title="🗳️ Group Travel Vote",
+                description=f"**{group_name}** - Vote to travel to **{dest_name}**",
+                color=0x4169E1
+            )
+            time_text_display = f"{travel_time//60}m {travel_time%60}s"
+            danger_text_display = "⚠️" * danger if danger else "Safe"
+
+            embed.add_field(name="Destination", value=dest_name, inline=True)
+            embed.add_field(name="Via", value=corridor_name, inline=True)
+            embed.add_field(name="Travel Time", value=time_text_display, inline=True)
+            embed.add_field(name="Fuel Cost", value=f"{fuel_cost} per ship", inline=True)
+            embed.add_field(name="Danger Level", value=danger_text_display, inline=True)
+            embed.add_field(name="Vote Duration", value="10 minutes", inline=True)
+            embed.add_field(
+                name="📋 How to Vote",
+                value=f"All group members must use `/group vote yes` or `/group vote no` in this channel.",
+                inline=False
+            )
+            
+            await inter.response.edit_message(content=f"✅ Travel vote for **{dest_name}** has been started in the channel.", embed=None, view=None)
+            await inter.channel.send(embed=embed)
+
+            asyncio.create_task(self._process_vote_timeout(session_id, 600))
+
+        select.callback = select_callback
+        view = discord.ui.View()
+        view.add_item(select)
+
+        await interaction.response.send_message("Select a destination for the group travel vote:", view=view, ephemeral=True)
+    async def _sync_group_location(self, group_id: int, leader_id: int) -> int | None:
+        """
+        Ensures the group's location is synced with the leader's current location.
+        Returns the synchronized location ID or None if the leader is in transit.
+        """
+        # Get the leader's current location from the characters table
+        leader_location_data = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (leader_id,),
             fetch='one'
-        )[0]
-        
-        # Create embed for vote
-        embed = discord.Embed(
-            title="🗳️ Group Travel Vote",
-            description=f"**{group_name}** - Vote to travel to **{dest_name}**",
-            color=0x4169E1
         )
+
+        if leader_location_data and leader_location_data[0] is not None:
+            leader_location_id = leader_location_data[0]
+            # Update the groups table with the correct location
+            self.db.execute_query(
+                "UPDATE groups SET current_location = ? WHERE group_id = ?",
+                (leader_location_id, group_id)
+            )
+            return leader_location_id
         
-        time_text = f"{travel_time//60}m {travel_time%60}s"
-        danger_text = "⚠️" * danger if danger else "Safe"
-        
-        embed.add_field(name="Destination", value=dest_name, inline=True)
-        embed.add_field(name="Via", value=corridor_name, inline=True)
-        embed.add_field(name="Travel Time", value=time_text, inline=True)
-        embed.add_field(name="Fuel Cost", value=f"{fuel_cost} per ship", inline=True)
-        embed.add_field(name="Danger Level", value=danger_text or "Safe", inline=True)
-        embed.add_field(name="Vote Duration", value="10 minutes", inline=True)
-        
-        embed.add_field(
-            name="📋 How to Vote",
-            value=f"All group members must use `/group vote yes` or `/group vote no` to participate.",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed)
-        
-        # Schedule vote cleanup
-        asyncio.create_task(self._process_vote_timeout(session_id, 600))  # 10 minutes
-    
+        # Leader is in transit or has no location, so we can't sync
+        return None
     @group_group.command(name="vote", description="Cast your vote in an active group vote")
     @app_commands.describe(choice="Your vote choice")
     @app_commands.choices(choice=[
@@ -995,7 +1046,6 @@ class GroupsCog(commands.Cog):
     async def _initiate_group_travel(self, group_id, corridor_id, vote_data, interaction):
         """Initiate group travel for all members"""
         from utils.channel_manager import ChannelManager
-        from datetime import datetime, timedelta
         import asyncio
         
         # Get all group members
@@ -1095,7 +1145,7 @@ class GroupsCog(commands.Cog):
         actual_travel_time = max(int(travel_time * efficiency_modifier), 60)
         
         # Create travel sessions for all members
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         end_time = start_time + timedelta(seconds=actual_travel_time)
         
         for member_id, member_name in members:
@@ -1150,57 +1200,74 @@ class GroupsCog(commands.Cog):
         ))
 
     async def _complete_group_travel(self, group_id, members, destination_location, dest_name, transit_channel, guild, travel_time):
-        """Complete group travel after delay"""
+        """Complete group travel after delay by handing off to the TravelCog arrival handler for each member."""
         await asyncio.sleep(travel_time)
-        
-        from utils.channel_manager import ChannelManager
-        channel_manager = ChannelManager(self.bot)
-        
+
+        travel_cog = self.bot.get_cog('TravelCog')
+        if not travel_cog:
+            print("❌ CRITICAL: TravelCog not found during group travel completion.")
+            if transit_channel:
+                # Attempt to get channel manager for cleanup even if cog is missing
+                from utils.channel_manager import ChannelManager
+                channel_manager = ChannelManager(self.bot)
+                await channel_manager.cleanup_transit_channel(transit_channel.id, delay_seconds=5)
+            return
+
         try:
-            # Update all members' locations and give destination access
+            arrival_statuses = []
             for member_id, member_name in members:
-                # Mark session completed
+                # Get this member's session info to check status and get origin
+                session_info = self.db.execute_query(
+                    "SELECT origin_location, status FROM travel_sessions WHERE user_id=? AND group_id=? ORDER BY session_id DESC LIMIT 1",
+                    (member_id, group_id), fetch='one'
+                )
+
+                # Skip if session is missing or already processed (e.g., by an event)
+                if not session_info or session_info[1] != 'traveling':
+                    continue
+
+                origin_location_id, _ = session_info
+
+                # Mark as 'arrived' to signal the arrival handler this session is ready for processing
                 self.db.execute_query(
-                    "UPDATE travel_sessions SET status='completed' WHERE user_id=? AND group_id=? AND status='traveling'",
+                    "UPDATE travel_sessions SET status='arrived' WHERE user_id=? AND group_id=? AND status='traveling'",
                     (member_id, group_id)
                 )
-                
-                # Move character to destination
-                self.db.execute_query(
-                    "UPDATE characters SET current_location=? WHERE user_id=?",
-                    (destination_location, member_id)
-                )
-                
-                # Give channel access
-                member_user = guild.get_member(member_id)
-                if member_user:
-                    await channel_manager.give_user_location_access(member_user, destination_location)
-            
-            # Update group location
-            self.db.execute_query(
-                "UPDATE groups SET current_location=? WHERE group_id=?",
-                (destination_location, group_id)
-            )
-            
-            # Send completion message
-            if transit_channel:
-                embed = discord.Embed(
-                    title="✅ Group Journey Complete!",
-                    description=f"All group members have arrived at **{dest_name}**!",
-                    color=0x00ff00
-                )
-                embed.add_field(
-                    name="🎉 Welcome",
-                    value="Check your new location channel for available services and opportunities.",
-                    inline=False
-                )
-                await transit_channel.send(embed=embed)
-                
-                # Cleanup transit channel
-                await channel_manager.cleanup_transit_channel(transit_channel.id, delay_seconds=30)
-                
+
+                # Use the robust arrival handler from TravelCog for each member
+                await travel_cog._handle_arrival_access(member_id, destination_location, origin_location_id, guild, transit_channel)
+
+                # Check the final outcome for the summary message
+                final_loc_id = self.db.execute_query("SELECT current_location FROM characters WHERE user_id = ?", (member_id,), fetch='one')[0]
+                if final_loc_id == destination_location:
+                    arrival_statuses.append(f"✅ **{member_name}** has arrived at {dest_name}.")
+                else:
+                    # This case handles retreats or diversions
+                    final_loc_name = "an unknown location"
+                    if final_loc_id:
+                         final_loc_name_res = self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (final_loc_id,), fetch='one')
+                         if final_loc_name_res:
+                            final_loc_name = f"**{final_loc_name_res[0]}**"
+
+                    arrival_statuses.append(f"❌ **{member_name}** was diverted and ended up at {final_loc_name}.")
+
+            # Update group's location in DB if anyone made it
+            if any("✅" in s for s in arrival_statuses):
+                self.db.execute_query("UPDATE groups SET current_location=? WHERE group_id=?", (destination_location, group_id))
+
+            # Post a final summary in the transit channel
+            if transit_channel and arrival_statuses:
+                summary_embed = discord.Embed(title="Group Arrival Complete", description=f"The group's journey to **{dest_name}** has concluded.", color=0x00ff00)
+                summary_embed.add_field(name="Arrival Log", value="\n".join(arrival_statuses), inline=False)
+                await transit_channel.send(embed=summary_embed)
+
         except Exception as e:
-            print(f"❌ Error completing group travel: {e}")
+            print(f"❌ Error during group travel completion for group {group_id}: {e}")
+        finally:
+            # The manager of the travel session is responsible for the final cleanup
+            if transit_channel:
+                await travel_cog.channel_mgr.cleanup_transit_channel(transit_channel.id, delay_seconds=45)
+              
     async def _process_vote_timeout(self, session_id: int, timeout_seconds: int):
         """Process vote timeout after specified duration"""
         await asyncio.sleep(timeout_seconds)

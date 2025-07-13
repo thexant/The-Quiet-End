@@ -175,7 +175,7 @@ class EventsCog(commands.Cog):
         
         except Exception as e:
             print(f"Error in corridor management: {e}")
-    @tasks.loop(hours=3)  # Economic changes every 6 hours
+    @tasks.loop(hours=6)  # Economic changes every 6 hours
     async def economic_fluctuation(self):
         """Generate economic supply and demand changes"""
         try:
@@ -189,8 +189,8 @@ class EventsCog(commands.Cog):
             news_events = []
             
             for location_id, location_name, wealth_level, location_type in locations:
-                # 30% chance for economic change per location
-                if random.random() < 0.3:
+                # 5% chance for economic change per location
+                if random.random() < 0.05:
                     change_type = await self._generate_economic_change(location_id, location_name, wealth_level, location_type)
                     if change_type:
                         changes_made += 1
@@ -322,7 +322,7 @@ class EventsCog(commands.Cog):
         else:
             locations = [e[1] for e in demand_events]
             title = "Multiple Market Opportunities Detected"
-            description = f"High demand situations have been identified at {len(demand_events)} locations: {', '.join(locations[:3])}{'and others' if len(locations) > 3 else ''}. Various commodities are experiencing supply shortages."
+            description = f"High demand situations have been identified at {len(demand_events)} locations: {', '.join(locations[:3])}{' and others' if len(locations) > 3 else ''}. Various commodities are experiencing supply shortages."
         
         description += " Market conditions are expected to remain active for 12-48 hours."
         

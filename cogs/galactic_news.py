@@ -6,7 +6,7 @@ import random
 import asyncio
 import json
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List
 
 class GalacticNewsCog(commands.Cog):
@@ -95,7 +95,8 @@ class GalacticNewsCog(commands.Cog):
             'corporate_news': 0x4169E1,  # Royal blue
             'discovery': 0x32CD32,       # Lime green
             'economic': 0xFFD700,        # Gold
-            'admin_announcement': 0x14F4FF  # Earth Blue
+            'admin_announcement': 0x14F4FF,  # Earth Blue
+            'bounty': 0xff6600 
         }
         
         color = colors.get(news_type, 0x2F4F4F)
@@ -104,7 +105,7 @@ class GalacticNewsCog(commands.Cog):
             title=f"📰 {title}",
             description=description,
             color=color,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         
         # Add news type indicator

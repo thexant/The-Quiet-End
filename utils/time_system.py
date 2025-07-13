@@ -109,28 +109,45 @@ class TimeSystem:
         
         # Use time_started_at if available, otherwise use created_at
         real_start_time = datetime.fromisoformat(time_started_at) if time_started_at else datetime.fromisoformat(created_at)
-        
-        # Calculate elapsed real time since galaxy creation (or since unpause)
         current_real_time = datetime.now()
+        time_scale_factor = time_scale if time_scale else 4.0
         
-        # If we were paused, we need to account for the pause time
-        if paused_at and current_ingame:
-            # Start from where we paused
+        # Check if we're resuming from a pause (only if we're not currently paused)
+        if not is_paused and paused_at and current_ingame:
+            # We're resuming from a pause - calculate from the pause point
             base_ingame_time = datetime.fromisoformat(current_ingame)
-            # Add time since unpause
-            elapsed_since_unpause = current_real_time - datetime.fromisoformat(paused_at)
-            time_scale_factor = time_scale if time_scale else 4.0
-            scaled_elapsed = elapsed_since_unpause * time_scale_factor
+            pause_time = datetime.fromisoformat(paused_at)
+            
+            # Add time since resume with current time scale
+            elapsed_since_resume = current_real_time - pause_time
+            scaled_elapsed = elapsed_since_resume * time_scale_factor
             current_ingame_datetime = base_ingame_time + scaled_elapsed
         else:
             # Normal calculation from start
             elapsed_real_time = current_real_time - real_start_time
-            time_scale_factor = time_scale if time_scale else 4.0
             elapsed_ingame_time = elapsed_real_time * time_scale_factor
             current_ingame_datetime = start_date + elapsed_ingame_time
         
         return current_ingame_datetime
-    
+    def set_time_scale(self, new_scale: float) -> bool:
+        """Set time scale factor and properly rebase the time calculation"""
+        # Get current time before changing scale
+        current_time = self.calculate_current_ingame_time()
+        if not current_time:
+            return False
+        
+        # Update the scale and rebase the calculation
+        current_real = datetime.now()
+        self.db.execute_query(
+            """UPDATE galaxy_info SET 
+               time_scale_factor = ?,
+               current_ingame_time = ?,
+               time_paused_at = ?,
+               is_time_paused = 0
+               WHERE galaxy_id = 1""",
+            (new_scale, current_time.isoformat(), current_real.isoformat())
+        )
+        return True
     def format_ingame_datetime(self, dt: datetime) -> str:
         """Format in-game date and time for display with ISST timezone"""
         date_str = dt.strftime("%d-%m-%Y")
@@ -175,13 +192,23 @@ class TimeSystem:
     
     def resume_time(self) -> bool:
         """Resume the time system"""
+        # Get the current paused time before resuming
+        galaxy_info = self.get_galaxy_info()
+        if not galaxy_info or not galaxy_info[5]:  # not paused
+            return False
+        
+        current_ingame = galaxy_info[7]  # current_ingame_time
+        if not current_ingame:
+            return False
+        
         current_real = datetime.now()
         self.db.execute_query(
             """UPDATE galaxy_info SET 
                is_time_paused = 0,
-               time_paused_at = ?
+               time_paused_at = ?,
+               current_ingame_time = ?
                WHERE galaxy_id = 1""",
-            (current_real.isoformat(),)
+            (current_real.isoformat(), current_ingame)
         )
         return True
     

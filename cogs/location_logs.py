@@ -4,6 +4,7 @@ from discord.ext import commands
 from discord import app_commands
 import random
 from datetime import datetime, timedelta
+from utils.npc_data import generate_npc_name, get_occupation
 
 class LocationLogsCog(commands.Cog):
     def __init__(self, bot):
@@ -169,73 +170,146 @@ class LocationLogsCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
     
     async def _generate_initial_log(self, location_id: int, location_name: str, location_type: str):
-        """Generate initial log entries for a location"""
+        """Generate initial log entries for a location using dynamic NPCs with location-specific content"""
         
         # Generate 3-7 initial entries
         num_entries = random.randint(3, 7)
         
-        # Entry templates based on location type
-        if location_type == 'colony':
-            entry_templates = [
-                ("Colonial Administrator", "New mining quotas established. Productivity up 12% this quarter."),
-                ("Chief Engineer", "Atmospheric processors running at 94% efficiency. Recommend maintenance cycle next month."),
-                ("Security Chief", "Perimeter patrol completed. No hostile contacts detected."),
-                ("Medical Officer", "Radiation exposure levels within acceptable parameters. No health incidents reported."),
-                ("Supply Coordinator", "Inbound cargo shipment delayed due to corridor instabilities. Expect 3-day delay."),
-                ("Mining Foreman", "Rich ore vein discovered in Sector 7. Recommending immediate extraction."),
-                ("Communications Tech", "Long-range communications restored. Contact with headquarters reestablished."),
-                ("Unknown Trader", "Good rates here for processed materials. Fair dealing, would recommend."),
-                ("Passing Pilot", "Safe harbor in this part of space. Fuel prices reasonable."),
-                ("Maintenance Crew", "Life support systems overhauled. All green lights across the board.")
+        # Location-specific message templates
+        location_messages = {
+            'colony': [
+                "Agricultural output exceeding projections this quarter.",
+                "Population growth steady. Housing expansion approved.",
+                "Mining operations proceeding on schedule.",
+                "Trade relations with neighboring systems improving.",
+                "Colonial infrastructure upgrade project initiated.",
+                "Atmospheric processors maintaining optimal conditions.",
+                "New settlers orientation program completed successfully.",
+                "Local star radiation levels fluctuated today.",
+                "Large planetary storm hit the colony.",
+                "Resource extraction quotas met ahead of deadline."
+            ],
+            'space_station': [
+                "Docking bay efficiency improved with new traffic protocols.",
+                "Station rotation mechanics functioning within normal parameters.",
+                "Merchant traffic up 15% compared to last cycle.",
+                "Artificial gravity generators running smoothly.",
+                "Recycling systems processing waste at maximum efficiency.",
+                "How much further to Earth?",
+                "Tourist accommodation bookings at capacity.",
+                "Station-wide maintenance inspection scheduled for next week.",
+                "Emergency response drill conducted successfully."
+            ],
+            'outpost': [
+                "Long-range communications restored after equipment failure.",
+                "Supply cache inventory updated and secured.",
+                "Mineral survey scan detected ores.",
+                "Perimeter sensors detecting normal background activity only.",
+                "Generator fuel reserves adequate for six months operation.",
+                "Weather monitoring equipment requires minor calibration.",
+                "Emergency beacon tested and confirmed operational.",
+                "Staff rotation schedule updated for next assignment period.",
+                "Isolation protocols reviewed and updated."
+            ],
+            'gate': [
+                "Corridor stability measurements within acceptable variance.",
+                "Transit queue processing efficiently during peak hours.",
+                "Gate energy consumption optimized for cost savings.",
+                "Safety protocols updated following recent navigation incidents.",
+                "Decontamination procedures enhanced per Federal directives.",
+                "Navigation beacon alignment verified and corrected.",
+                "Traffic control systems upgraded to latest specification.",
+                "Emergency transit procedures drilled with all staff."
             ]
+        }
         
-        elif location_type == 'space_station':
-            entry_templates = [
-                ("Station Commander", "Traffic control operating efficiently. 47 ships processed this cycle."),
-                ("Docking Supervisor", "Bay 7 cleared for heavy freight operations. Reinforcement complete."),
-                ("Trade Representative", "Market prices stable. Recommend bulk commodity trading."),
-                ("Security Detail", "Contraband scan negative. All incoming cargo cleared."),
-                ("Navigation Officer", "Updated stellar cartography data uploaded to public terminals."),
-                ("Medical Bay", "Emergency medical supplies restocked. Ready for trauma cases."),
-                ("Merchant Captain", "Excellent trading post. Wide selection, fair prices, good security."),
-                ("Freelance Pilot", "Perfect stopover point. Everything a traveler needs."),
-                ("Corporate Inspector", "Station meets all safety and operational standards. Certification renewed."),
-                ("Visiting Diplomat", "Impressed by the professionalism and efficiency of station operations.")
-            ]
+        # Generic messages that work for any location
+        generic_messages = [
+            "Completed daily inspection rounds. All systems nominal.",
+            "Shift report: No incidents to report. Operations running smoothly.",
+            "Updated safety protocols as per latest regulations.",
+            "Monthly evaluation complete. Performance metrics within acceptable range.",
+            "Routine maintenance scheduled for next cycle.",
+            "Quality control checks passed. Standards maintained.",
+            "Staff briefing conducted. New procedures implemented.",
+            "Equipment calibration complete. Ready for continued operations.",
+            "Inventory audit finished. Supplies adequate for current needs.",
+            "Training session completed for new personnel.",
+            "All systems green. No anomalies detected.",
+            "Environmental conditions stable.",
+            "Security sweep complete. Perimeter secure.",
+            "Communications array functioning normally.",
+            "Power grid operating at optimal efficiency.",
+            "Life support systems within normal parameters.",
+            "Navigation beacons updated and verified.",
+            "Emergency systems tested and confirmed operational.",
+            "Radiation levels remain within safe limits.",
+            "Structural integrity checks completed successfully.",
+            "Another quiet day. Good for getting caught up on paperwork.",
+            "Coffee supply running low. Need to add that to the next order.",
+            "Met some interesting travelers today. Always enjoy hearing their stories.",
+            "Long shift, but someone has to keep things running.",
+            "Received a message from family today. Always brightens the mood.",
+            "Weather patterns have been unusual lately. Hope it doesn't affect operations.",
+            "New arrival seemed nervous. First time this far from home, I'd guess.",
+            "Reminder to self: check the backup generators tomorrow.",
+            "Quiet night shift. Perfect time for reading technical manuals.",
+            "Looking forward to my next leave. Could use a change of scenery.",
+            "Cargo manifests reviewed and approved for processing.",
+            "Price negotiations concluded. Fair deal reached.",
+            "Supply shipment arrived on schedule. Quality goods as usual.",
+            "Market analysis complete. Prices holding steady.",
+            "New trade agreement signed. Should improve local economy.",
+            "Customs inspection finished. All documentation in order.",
+            "Freight scheduling updated. Traffic flow optimized.",
+            "Quality assessment of incoming goods complete. Standards met.",
+            "Export permits processed. Shipments cleared for departure.",
+            "Trade route security briefing attended. Safety first.",
+            "Diagnostic complete. Minor adjustments made to improve efficiency.",
+            "Software update installed. No compatibility issues detected.",
+            "Preventive maintenance performed on critical systems.",
+            "Backup systems tested. Failsafes functioning properly.",
+            "Network connectivity stable. Data transmission normal.",
+            "Sensor array recalibrated for optimal performance.",
+            "Firmware update applied successfully. System restart completed.",
+            "Performance metrics analyzed. Operating within design parameters.",
+            "Component replacement scheduled for next maintenance window.",
+            "System logs reviewed. No error conditions found."
+        ]
         
-        elif location_type == 'outpost':
-            entry_templates = [
-                ("Outpost Manager", "Supply drop successful. Should last us another 6 months."),
-                ("Communications Op", "Long-range array repaired. Back in contact with the sector."),
-                ("Mechanic", "Fixed the atmospheric recycler again. Really need replacement parts."),
-                ("Patrol Leader", "Perimeter sensors functional. No anomalous readings."),
-                ("Solo Trader", "Basic supplies available. Don't expect luxury here."),
-                ("Explorer", "Good waypoint for deep space operations. Minimal but essential services."),
-                ("Refugee", "Grateful for shelter. Small but welcoming community."),
-                ("Surveyor", "Used this as base camp for sector mapping. Adequate facilities."),
-                ("Maintenance Bot", "AUTO-LOG: Systems nominal. Efficiency at 67% of optimal."),
-                ("Unknown Visitor", "Quiet place. Good for laying low and making repairs.")
-            ]
+        # Combine location-specific and generic messages
+        specific_messages = location_messages.get(location_type, [])
+        all_messages = specific_messages + generic_messages
         
-        else:  # gate
-            entry_templates = [
-                ("Gate Operator", "Corridor stabilization parameters within normal range. Transit approved."),
-                ("Transit Authority", "Safety inspection complete. Gate cleared for continued operation."),
-                ("Navigation Beacon", "AUTO-LOG: Position verified. Stellar drift compensated."),
-                ("Maintenance Crew", "Gate matrix realigned. Improved transit efficiency by 8%."),
-                ("Corporate Transport", "Efficient gate operation. Transit time reduced significantly."),
-                ("Independent Hauler", "Clean gate - no radiation spikes during transit. Recommend route."),
-                ("Gate Engineer", "Upgraded decontamination systems online. Improved safety margins."),
-                ("Safety Inspector", "All safety protocols in compliance. Operation authorized."),
-                ("Freight Captain", "Smooth transit. Gate crew knows their business."),
-                ("Research Team", "Collected valuable data on corridor mechanics. Fascinating phenomena.")
-            ]
-        
-        # Select random entries
-        selected_entries = random.sample(entry_templates, min(num_entries, len(entry_templates)))
-        
-        # Generate entries with random timestamps (past 30 days)
-        for author, message in selected_entries:
+        # Generate entries with random NPCs
+        for _ in range(num_entries):
+            # Generate NPC
+            first_name, last_name = generate_npc_name()
+            full_name = f"{first_name} {last_name}"
+            
+            # Determine wealth level (weighted toward middle values for more variety)
+            wealth_level = random.choices(
+                range(1, 11), 
+                weights=[1, 2, 3, 4, 5, 5, 4, 3, 2, 1]  # Bell curve distribution
+            )[0]
+            
+            # Get occupation based on location type and wealth
+            occupation = get_occupation(location_type, wealth_level)
+            
+            # Create author name format variety
+            name_format = random.choice([
+                f"{full_name}, {occupation}",  # Full formal
+                f"{first_name} {last_name}",   # Just name
+                f"{occupation} {last_name}",   # Title + surname
+                f"{first_name}, {occupation}"  # First name + title
+            ])
+            
+            # Select message (favor location-specific if available)
+            if specific_messages and random.random() < 0.6:  # 60% chance for location-specific
+                message = random.choice(specific_messages)
+            else:
+                message = random.choice(generic_messages)
+            
             # Random time in past 30 days
             days_ago = random.randint(1, 30)
             hours_ago = random.randint(0, 23)
@@ -245,7 +319,7 @@ class LocationLogsCog(commands.Cog):
                 '''INSERT INTO location_logs 
                    (location_id, author_id, author_name, message, posted_at, is_generated)
                    VALUES (?, ?, ?, ?, ?, 1)''',
-                (location_id, 0, author, message, entry_time.isoformat())
+                (location_id, 0, name_format, message, entry_time.isoformat())
             )
 
 async def setup(bot):

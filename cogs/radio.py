@@ -202,10 +202,9 @@ class RadioCog(commands.Cog):
         )
 
     # Modify _calculate_radio_propagation to accept the new corridor_type.
-    # Find the existing _calculate_radio_propagation method and modify its signature and content.
     async def _calculate_radio_propagation(self, sender_x: float, sender_y: float, 
                                          sender_system: str, message: str, guild_id: int, 
-                                         sender_corridor_type: str = "normal") -> List[Dict]: # Added sender_corridor_type
+                                         sender_corridor_type: str = "normal") -> List[Dict]:
         """Calculate radio signal propagation and recipients"""
         
         # Get all players and their locations
@@ -218,49 +217,146 @@ class RadioCog(commands.Cog):
             fetch='all'
         )
         
-        if not all_players:
-            return []
-        
-        # Calculate direct transmission to all players
         recipients = []
         
-        for player in all_players:
-            user_id, char_name, callsign, loc_id, loc_name, x, y, system = player
-            
-            # Skip sender
-            if x == sender_x and y == sender_y:
-                continue
-            
-            # Calculate distance
-            distance = math.sqrt((x - sender_x) ** 2 + (y - sender_y) ** 2)
-            system_distance = int(distance / 10)  # Convert to "systems" (rough approximation)
-            
-            if system_distance <= 10:  # Within max range (10 systems default for direct)
-                # Apply message degradation based on distance AND sender's corridor type
-                degraded_message = self._degrade_message(message, system_distance, sender_corridor_type) # Passed sender_corridor_type
+        # Process players at locations
+        if all_players:
+            for player in all_players:
+                user_id, char_name, callsign, loc_id, loc_name, x, y, system = player
                 
+                # Skip sender
+                if x == sender_x and y == sender_y:
+                    continue
+                
+                # Calculate distance
+                distance = math.sqrt((x - sender_x) ** 2 + (y - sender_y) ** 2)
+                system_distance = int(distance / 10)  # Convert to "systems" (rough approximation)
+                
+                if system_distance <= 10:  # Within max range (10 systems default for direct)
+                    # Apply message degradation based on distance AND sender's corridor type
+                    degraded_message = self._degrade_message(message, system_distance, sender_corridor_type)
+                    
+                    recipients.append({
+                        'user_id': user_id,
+                        'char_name': char_name,
+                        'callsign': callsign,
+                        'location_id': loc_id,
+                        'location': loc_name,
+                        'system': system,
+                        'distance': system_distance,
+                        'message': degraded_message,
+                        'signal_strength': max(0, 100 - (system_distance * 10)),
+                        'relay_path': []
+                    })
+        
+        # NEW: Get all players currently in transit
+        transit_players = self.db.execute_query(
+            '''SELECT ts.user_id, c.name, c.callsign, ts.corridor_id,
+                      cor.name as corridor_name, 
+                      ol.location_id as origin_id, ol.name as origin_name, 
+                      ol.x_coord as origin_x, ol.y_coord as origin_y, ol.system_name as origin_system,
+                      dl.location_id as dest_id, dl.name as dest_name,
+                      dl.x_coord as dest_x, dl.y_coord as dest_y, dl.system_name as dest_system
+               FROM travel_sessions ts
+               JOIN characters c ON ts.user_id = c.user_id
+               JOIN corridors cor ON ts.corridor_id = cor.corridor_id
+               JOIN locations ol ON ts.origin_location = ol.location_id
+               JOIN locations dl ON ts.destination_location = dl.location_id
+               WHERE ts.status = 'traveling' AND c.is_logged_in = 1''',
+            fetch='all'
+        )
+        
+        # Process players in transit
+        for transit_player in transit_players:
+            (user_id, char_name, callsign, corridor_id, corridor_name,
+             origin_id, origin_name, origin_x, origin_y, origin_system,
+             dest_id, dest_name, dest_x, dest_y, dest_system) = transit_player
+            
+            # Determine corridor type for additional degradation
+            is_ungated = "Ungated" in corridor_name
+            receiver_corridor_type = "ungated" if is_ungated else "gated"
+            
+            # Check if signal can reach either end of the corridor
+            signal_received = False
+            best_signal_strength = 0
+            best_relay_path = []
+            best_message = message
+            best_distance = float('inf')
+            
+            # Check origin end
+            origin_distance = math.sqrt((origin_x - sender_x) ** 2 + (origin_y - sender_y) ** 2)
+            origin_system_distance = int(origin_distance / 10)
+            
+            if origin_system_distance <= 10:  # Within range
+                # Calculate degradation: sender's corridor type + receiver's corridor type + distance
+                total_degradation_distance = origin_system_distance
+                
+                # Apply sender's corridor degradation
+                degraded_message = self._degrade_message(message, total_degradation_distance, sender_corridor_type)
+                
+                # Apply receiver's corridor degradation (additional degradation for ungated corridors)
+                if receiver_corridor_type == "ungated":
+                    # Apply additional degradation equivalent to 10 extra systems for ungated corridors
+                    degraded_message = self._degrade_message(degraded_message, 10, "ungated")
+                
+                signal_strength = max(0, 100 - (total_degradation_distance * 10))
+                if receiver_corridor_type == "ungated":
+                    signal_strength = max(0, signal_strength - 50)  # Additional penalty for ungated
+                
+                if signal_strength > best_signal_strength:
+                    signal_received = True
+                    best_signal_strength = signal_strength
+                    best_relay_path = [f"Relay via: {origin_name} (Corridor Entry)"]
+                    best_message = degraded_message
+                    best_distance = total_degradation_distance
+            
+            # Check destination end
+            dest_distance = math.sqrt((dest_x - sender_x) ** 2 + (dest_y - sender_y) ** 2)
+            dest_system_distance = int(dest_distance / 10)
+            
+            if dest_system_distance <= 10:  # Within range
+                # Calculate degradation: sender's corridor type + receiver's corridor type + distance
+                total_degradation_distance = dest_system_distance
+                
+                # Apply sender's corridor degradation
+                degraded_message = self._degrade_message(message, total_degradation_distance, sender_corridor_type)
+                
+                # Apply receiver's corridor degradation
+                if receiver_corridor_type == "ungated":
+                    degraded_message = self._degrade_message(degraded_message, 10, "ungated")
+                
+                signal_strength = max(0, 100 - (total_degradation_distance * 10))
+                if receiver_corridor_type == "ungated":
+                    signal_strength = max(0, signal_strength - 50)
+                
+                if signal_strength > best_signal_strength:
+                    signal_received = True
+                    best_signal_strength = signal_strength
+                    best_relay_path = [f"Relay via: {dest_name} (Corridor Exit)"]
+                    best_message = degraded_message
+                    best_distance = total_degradation_distance
+            
+            # If signal can be received from either end, add to recipients
+            if signal_received:
                 recipients.append({
                     'user_id': user_id,
                     'char_name': char_name,
                     'callsign': callsign,
-                    'location_id': loc_id,
-                    'location': loc_name,
-                    'system': system,
-                    'distance': system_distance,
-                    'message': degraded_message,
-                    'signal_strength': max(0, 100 - (system_distance * 10)),
-                    'relay_path': []
+                    'location_id': f"transit_{corridor_id}",  # Special ID for transit
+                    'location': f"In Transit ({corridor_name})",
+                    'system': f"Corridor Transit",
+                    'distance': best_distance,
+                    'message': best_message,
+                    'signal_strength': best_signal_strength,
+                    'relay_path': best_relay_path,
+                    'in_transit': True,  # Flag to identify transit recipients
+                    'corridor_type': receiver_corridor_type
                 })
         
-        # Now check for repeaters and extended coverage (pass sender_corridor_type down)
-        recipients = await self._extend_via_repeaters(sender_x, sender_y, message, recipients, sender_corridor_type) # Passed sender_corridor_type
+        # Now check for repeaters and extended coverage
+        recipients = await self._extend_via_repeaters(sender_x, sender_y, message, recipients, sender_corridor_type)
 
         return recipients
-    
-    # Modify _extend_via_repeaters to accept corridor_type.
-    # Find the existing _extend_via_repeaters method and modify its signature and content.
-# Modify _extend_via_repeaters to accept corridor_type.
-    # Find the existing _extend_via_repeaters method and modify its signature and content.
     async def _extend_via_repeaters(self, sender_x: float, sender_y: float,
                                   original_message: str, direct_recipients: List[Dict],
                                   sender_corridor_type: str = "normal") -> List[Dict]: # Added sender_corridor_type
@@ -425,20 +521,29 @@ class RadioCog(commands.Cog):
         
         return ''.join(result)
 
-    # Keep the _broadcast_to_location_channels method as is.
     async def _broadcast_to_location_channels(self, guild: discord.Guild, 
                                             sender_name: str, sender_callsign: str, 
                                             sender_location: str, sender_system: str,
                                             original_message: str, recipients: List[Dict]):
         """Send radio messages to location channels where recipients are present"""
         
-        # Group recipients by location
+        # Group recipients by location (including transit channels)
         location_groups = {}
+        transit_groups = {}
+        
         for recipient in recipients:
-            location_id = recipient['location_id']
-            if location_id not in location_groups:
-                location_groups[location_id] = []
-            location_groups[location_id].append(recipient)
+            if recipient.get('in_transit', False):
+                # Handle transit recipients - group by corridor
+                corridor_id = recipient['location_id'].replace('transit_', '')
+                if corridor_id not in transit_groups:
+                    transit_groups[corridor_id] = []
+                transit_groups[corridor_id].append(recipient)
+            else:
+                # Handle regular location recipients
+                location_id = recipient['location_id']
+                if location_id not in location_groups:
+                    location_groups[location_id] = []
+                location_groups[location_id].append(recipient)
         
         # Send messages to each location channel
         for location_id, location_recipients in location_groups.items():
@@ -446,7 +551,126 @@ class RadioCog(commands.Cog):
                 guild, location_id, sender_name, sender_callsign, 
                 sender_location, sender_system, original_message, location_recipients
             )
-    
+        
+        # Send messages to transit channels
+        for corridor_id, transit_recipients in transit_groups.items():
+            await self._send_transit_radio_message(
+                guild, corridor_id, sender_name, sender_callsign,
+                sender_location, sender_system, original_message, transit_recipients
+            )
+    async def _send_transit_radio_message(self, guild: discord.Guild, corridor_id: str,
+                                         sender_name: str, sender_callsign: str,
+                                         sender_location: str, sender_system: str, 
+                                         original_message: str, recipients: List[Dict]):
+        """Send a radio message to a transit channel"""
+        
+        # Find the transit channel for any of the recipients
+        transit_channel = None
+        for recipient in recipients:
+            # Get the user's current travel session to find their transit channel
+            travel_session = self.db.execute_query(
+                "SELECT temp_channel_id FROM travel_sessions WHERE user_id = ? AND status = 'traveling'",
+                (recipient['user_id'],),
+                fetch='one'
+            )
+            
+            if travel_session and travel_session[0]:
+                transit_channel = guild.get_channel(travel_session[0])
+                if transit_channel:
+                    break
+        
+        if not transit_channel:
+            return  # No valid transit channel found
+        
+        # Get corridor name for display
+        corridor_name = recipients[0]['location'].replace('In Transit (', '').replace(')', '') if recipients else "Unknown Corridor"
+        
+        # Group recipients by signal quality
+        clear_receivers = []
+        degraded_receivers = []
+        
+        for recipient in recipients:
+            if recipient['signal_strength'] >= 70:
+                clear_receivers.append(recipient)
+            else:
+                degraded_receivers.append(recipient)
+        
+        # Create radio message embed for transit
+        embed = discord.Embed(
+            title="📻 Incoming Radio Transmission",
+            color=0x800080  # Purple for transit
+        )
+        
+        # Determine corridor type for visual styling
+        corridor_type = recipients[0].get('corridor_type', 'gated') if recipients else 'gated'
+        if corridor_type == "ungated":
+            embed.color = 0xff4444  # Red for dangerous ungated corridors
+            embed.title = "📻⚠️ Degraded Radio Transmission"
+        
+        # Add transmission header
+        embed.add_field(
+            name="📡 Signal Origin", 
+            value=f"[{sender_callsign}]\n📍 Broadcasting from {sender_location}, {sender_system}",
+            inline=False
+        )
+        
+        # Show who receives what quality in the corridor
+        if clear_receivers:
+            clear_names = [f"**{r['char_name']}** [{r['callsign']}]" for r in clear_receivers]
+            embed.add_field(
+                name="🟢 Clear Reception (In Corridor)",
+                value="\n".join(clear_names),
+                inline=True
+            )
+            
+            # Show clear message
+            embed.add_field(
+                name="📝 Transmission Content",
+                value=f'"{original_message}"',
+                inline=False
+            )
+        
+        if degraded_receivers:
+            degraded_names = []
+            for r in degraded_receivers:
+                signal_bars = "📶" if r['signal_strength'] >= 30 else "📵"
+                relay_info = f" (via {', '.join(r['relay_path'])})" if r['relay_path'] else ""
+                degraded_names.append(f"{signal_bars} **{r['char_name']}** [{r['callsign']}]{relay_info}")
+            
+            embed.add_field(
+                name="📡 Weak Reception", 
+                value="\n".join(degraded_names),
+                inline=True
+            )
+            
+            # Show degraded message if no clear message shown
+            if not clear_receivers:
+                worst_signal = min(degraded_receivers, key=lambda x: x['signal_strength'])
+                embed.add_field(
+                    name="📊 Received (Heavily Degraded)",
+                    value=f'"{worst_signal["message"]}"',
+                    inline=False
+                )
+        
+        # Add corridor-specific warnings
+        if corridor_type == "ungated":
+            embed.add_field(
+                name="⚠️ Corridor Interference",
+                value="Signal severely degraded due to ungated corridor instability",
+                inline=False
+            )
+        
+        # Add atmospheric footer
+        embed.set_footer(
+            text=f"• Received in {corridor_name} • Signal relayed through corridor endpoints",
+            icon_url="https://cdn.discordapp.com/emojis/📻.png"
+        )
+        embed.timestamp = discord.utils.utcnow()
+        
+        try:
+            await transit_channel.send(embed=embed)
+        except Exception as e:
+            print(f"❌ Failed to send radio message to transit channel {transit_channel.name}: {e}")
     # Keep the _send_location_radio_message method as is.
     async def _send_location_radio_message(self, guild: discord.Guild, location_id: int,
                                          sender_name: str, sender_callsign: str,

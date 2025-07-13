@@ -168,7 +168,7 @@ class EnhancedEventsCog(commands.Cog):
         
         # Different event pools based on location and situation
         space_phenomena = [
-            ("Solar Flare", "🌟 **Solar Flare Detected!**\nMassive solar activity is interfering with ship systems and communications.", 0xff4500, self._handle_travel_solar_flare),
+            ("Solar Flare", "🌟 **Solar Flare Detected!**\nMassive solar activity is interfering with ship systems and communications.", 0xff4500, self._handle_solar_flare),
             ("Quantum Storm", "⚡ **Static Fog Storm Approaching!**\nTechnological distortions detected. Navigation and sensor systems may be affected.", 0x9400d3, self._handle_travel_quantum_storm),
             ("Asteroid Field", "☄️ **Asteroid Field Detected!**\nMultiple objects on collision course. Evasive maneuvers required.", 0x8b4513, self._handle_debris_field),
             ("Gravitational Anomaly", "🌀 **Gravitational Anomaly!**\nSpace-time distortion detected. Ships may experience temporal displacement.", 0x4b0082, self._handle_gravity_anomaly),

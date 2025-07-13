@@ -79,7 +79,9 @@ SHIP_NAME_PARTS = {
         "Proxima", "Polar", "Equatorial", "Kepler", "Farpoint", "Radial", "Inclined", "Incline", "Ascend",
         "Nomad", "Ranger", "Patrol", "Beacon", "Grid", "Nodal", "Array", "Cascade", "Pulse", "Spectral",
         "Phase", "Vectorial", "Infra", "Ultra", "Gamma", "Delta", "Beta", "Alpha", "Coreline", "Skyline",
-        "Stratos", "Voidline", "Span", "Traverse", "Sector", "Module", "Unitary", "Chassis"
+        "Stratos", "Voidline", "Span", "Traverse", "Sector", "Module", "Unitary", "Chassis", "Empowered",
+        "Radiant", "Viscious", "Immediate", "Kindred", "Scalding", "Dripping", "Finnicky", "Rusting",
+        "Traded", "Forsaken", "Boundary", "Radical", "Zany", "Whimsical", "Flinstone", "Freaky"
     ],
 
     "nouns": [
@@ -92,7 +94,7 @@ SHIP_NAME_PARTS = {
         "Launch", "Array", "Sector", "Cell", "Unit", "Block", "Segment", "Strand", "Thread", "Cable",
         "Conveyor", "Lift", "Cargo", "Manifest", "Courier", "Manifest", "Manifestor", "Hauler", "Tram",
         "Transit", "Traverse", "Cradle", "Pod", "Capsule", "Gondola", "Bay", "Hold", "Spanner", "Rig",
-        "Tug", "Tow", "Tender"
+        "Tug", "Tow", "Tender", "Star Killer", "Deathbringer", "Freak", "Supplier"
     ]
 }
 

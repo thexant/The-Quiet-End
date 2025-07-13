@@ -99,7 +99,48 @@ class ChannelManager:
         # Need to create new channel
         channel = await self._create_location_channel(guild, location_info, user)
         return channel
-    
+    async def get_location_statistics(self, guild: discord.Guild) -> dict:
+        """
+        Get comprehensive statistics about location channel usage
+        """
+        # Load server config
+        await self._load_server_config(guild)
+        
+        # Get total locations
+        total_locations = self.db.execute_query(
+            "SELECT COUNT(*) FROM locations",
+            fetch='one'
+        )[0]
+        
+        # Get locations with active channels
+        active_channels = self.db.execute_query(
+            "SELECT COUNT(*) FROM locations WHERE channel_id IS NOT NULL",
+            fetch='one'
+        )[0]
+        
+        # Get recently active channels (last 24 hours)
+        recently_active = self.db.execute_query(
+            "SELECT COUNT(*) FROM locations WHERE channel_id IS NOT NULL AND channel_last_active > datetime('now', '-24 hours')",
+            fetch='one'
+        )[0]
+        
+        # Calculate capacity usage
+        channel_capacity = self.max_location_channels
+        capacity_usage = (active_channels / channel_capacity) * 100 if channel_capacity > 0 else 0
+        
+        return {
+            'total_locations': total_locations,
+            'active_channels': active_channels,
+            'recently_active': recently_active,
+            'channel_capacity': channel_capacity,
+            'capacity_usage': capacity_usage
+        }
+
+    async def cleanup_channels_task(self, guild: discord.Guild):
+        """
+        Manual cleanup task for channels - wrapper for the internal cleanup method
+        """
+        await self._cleanup_old_channels(guild, force=False)
     async def _create_location_channel(self, guild: discord.Guild, location_info: Tuple, requesting_user: discord.Member = None) -> Optional[discord.TextChannel]:
         """
         Create a new Discord channel for a location
@@ -249,9 +290,10 @@ class ChannelManager:
         """Send a welcome message to a newly created location channel with available routes"""
         loc_id, channel_id, name, loc_type, description, wealth = location_info
         
-        # Get services info
+        # Get services info including alignment flags
         services_info = self.db.execute_query(
-            '''SELECT has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population
+            '''SELECT has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population,
+                      has_federal_supplies, has_black_market
                FROM locations WHERE location_id = ?''',
             (loc_id,),
             fetch='one'
@@ -260,13 +302,42 @@ class ChannelManager:
         if not services_info:
             return
 
-        has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population = services_info
+        has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population, has_federal_supplies, has_black_market = services_info
         
-        # Create welcome embed WITHOUT activity info (since it becomes stale)
+        # Determine location status and enhance description
+        location_status = None
+        status_emoji = ""
+        enhanced_description = description
+        embed_color = 0x4169E1  # Default blue
+        
+        if has_federal_supplies:
+            location_status = "Loyal"
+            status_emoji = "🏛️"
+            embed_color = 0x0066cc  # Federal blue
+            # Add federal flair to description
+            if enhanced_description:
+                enhanced_description += "\n\n🏛️ **Federal Territory:** This location operates under direct federal oversight with enhanced security protocols and premium government-grade supplies."
+            else:
+                enhanced_description = "🏛️ **Federal Territory:** This location operates under direct federal oversight with enhanced security protocols and premium government-grade supplies."
+        elif has_black_market:
+            location_status = "Bandit"
+            status_emoji = "💀"
+            embed_color = 0x8b0000  # Dark red
+            # Add bandit flair to description
+            if enhanced_description:
+                enhanced_description += "\n\n💀 **Outlaw Haven:** This location operates outside federal jurisdiction. Discretion is advised, and contraband trade flourishes in the shadows."
+            else:
+                enhanced_description = "💀 **Outlaw Haven:** This location operates outside federal jurisdiction. Discretion is advised, and contraband trade flourishes in the shadows."
+        
+        # Create welcome embed with status-aware styling
+        title_with_status = f"📍 Welcome to {name}"
+        if location_status:
+            title_with_status = f"{status_emoji} Welcome to {name}"
+        
         embed = discord.Embed(
-            title=f"📍 Welcome to {name}",
-            description=description,
-            color=0x4169E1
+            title=title_with_status,
+            description=enhanced_description,
+            color=embed_color
         )
         
         # Location details
@@ -289,14 +360,35 @@ class ChannelManager:
             inline=True
         )
         
-        wealth_text = "⭐" * min(wealth // 2, 5) if wealth > 0 else "💸"
-        embed.add_field(
-            name="Wealth Level",
-            value=f"{wealth_text} {wealth}/10",
-            inline=True
-        )
+        # Add status field if location has special alignment
+        if location_status:
+            embed.add_field(
+                name="Status",
+                value=f"{status_emoji} **{location_status}**",
+                inline=True
+            )
+        else:
+            # Keep the wealth field in the same position for normal locations
+            wealth_text = "⭐" * min(wealth // 2, 5) if wealth > 0 else "💸"
+            embed.add_field(
+                name="Wealth Level",
+                value=f"{wealth_text} {wealth}/10",
+                inline=True
+            )
         
-        # Available services
+        # For aligned locations, show wealth in a separate row for better formatting
+        if location_status:
+            wealth_text = "⭐" * min(wealth // 2, 5) if wealth > 0 else "💸"
+            embed.add_field(
+                name="Wealth Level",
+                value=f"{wealth_text} {wealth}/10",
+                inline=True
+            )
+            # Add empty field for better formatting
+            embed.add_field(name="", value="", inline=True)
+            embed.add_field(name="", value="", inline=True)
+        
+        # Available services with status-aware enhancements
         services = []
         if has_jobs:   services.append("💼 Jobs")
         if has_shops:  services.append("🛒 Shopping")
@@ -304,6 +396,12 @@ class ChannelManager:
         if has_repairs:services.append("🔨 Repairs")
         if has_fuel:   services.append("⛽ Fuel")
         if has_upgrades:services.append("⬆️ Upgrades")
+        
+        # Add special services based on status
+        if has_federal_supplies:
+            services.append("🏛️ Federal Supplies")
+        if has_black_market:
+            services.append("💀 Black Market")
 
         if services:
             embed.add_field(
@@ -311,6 +409,7 @@ class ChannelManager:
                 value=" • ".join(services),
                 inline=False
             )
+        
         # STATIC NPCS
         npc_cog = self.bot.get_cog('NPCCog')
         if npc_cog:
@@ -320,11 +419,18 @@ class ChannelManager:
                 if len(static_npcs) > 5:
                     npc_list.append(f"...and {len(static_npcs) - 5} more")
                 
+                npc_field_name = "Notable NPCs"
+                if location_status == "Loyal":
+                    npc_field_name = "🏛️ Federal Personnel"
+                elif location_status == "Bandit":
+                    npc_field_name = "💀 Local Contacts"
+                
                 embed.add_field(
-                    name="Notable NPCs",
+                    name=npc_field_name,
                     value="\n".join(npc_list),
                     inline=False
                 )
+        
         # LOGBOOK PRESENCE
         log_count = self.db.execute_query(
             "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
@@ -337,8 +443,7 @@ class ChannelManager:
             inline=True
         )
 
-        
-        # NEW: Get available routes and display them
+        # Get available routes and display them
         routes = self.db.execute_query(
             '''SELECT c.name, l.name as dest_name, l.location_type as dest_type, c.travel_time, c.danger_level
                FROM corridors c
@@ -381,7 +486,7 @@ class ChannelManager:
                     time_text = f"{secs}s"
                 
                 danger_text = "⚠️" * danger if danger > 0 else ""
-                # IMPROVED: Clear departure → destination format
+                # Clear departure → destination format
                 route_lines.append(f"{route_emoji} **{name} → {dest_emoji} {dest_name}** · {time_text} {danger_text}")
             
             embed.add_field(
@@ -396,16 +501,32 @@ class ChannelManager:
                 inline=False
             )
         
-        # Usage instructions
+        # Status-aware usage instructions
+        getting_started_text = "• Use `/here` for interactive options\n• Use `/travel routes` to see detailed travel info\n• Use `/shop list` and `/job list` to see what's available\n• Use `/status` to see information about your character."
+        
+        if location_status == "Loyal":
+            getting_started_text += "\n• Access premium federal supplies and secure services"
+        elif location_status == "Bandit":
+            getting_started_text += "\n• Explore black market opportunities (discretion advised)"
+        
         embed.add_field(
             name="🎮 Getting Started",
-            value="• Use `/here` for interactive options\n• Use `/travel routes` to see detailed travel info\n• Use `/shop list` and `/job list` to see what's available\n• Use `/status` to see information about your character.",
+            value=getting_started_text,
             inline=False
         )
         
+        # Status-aware channel info
+        channel_info_text = "This channel was created automatically when someone arrived. It will be cleaned up if unused for extended periods."
+        
+        if location_status:
+            if location_status == "Loyal":
+                channel_info_text += " Federal monitoring protocols are in effect."
+            elif location_status == "Bandit":
+                channel_info_text += " Communications may be monitored by local authorities."
+        
         embed.add_field(
             name="ℹ️ Channel Info",
-            value="This channel was created automatically when someone arrived. It will be cleaned up if unused for extended periods.",
+            value=channel_info_text,
             inline=False
         )
         
@@ -414,28 +535,20 @@ class ChannelManager:
         except Exception as e:
             print(f"❌ Failed to send welcome message to {channel.name}: {e}")
 
-    async def send_location_status(self, channel: discord.TextChannel, user: discord.Member, location_id: int):
-        """Send current location status to a specific user (shows their current location)"""
+    async def send_location_arrival(self, channel: discord.TextChannel, user: discord.Member, location_id: int):
+        """Send arrival announcement when a player enters a location"""
         
-        # Check if this user is actually at this location
-        user_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+        # Get character name and reputation
+        char_data = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
             (user.id,),
             fetch='one'
         )
         
-        if not user_location or user_location[0] != location_id:
-            return  # Don't send active location message if they're not here
+        if not char_data:
+            return
         
-        # Remove any existing active location message for this user at this location
-        await self._remove_active_location_message(user.id, location_id, channel)
-        
-        # Get current player count and names at this location
-        players_at_location = self.db.execute_query(
-            "SELECT c.name, c.user_id FROM characters c WHERE c.current_location = ?",
-            (location_id,),
-            fetch='all'
-        )
+        char_name = char_data[0]
         
         # Get location name
         location_name = self.db.execute_query(
@@ -444,132 +557,99 @@ class ChannelManager:
             fetch='one'
         )[0]
         
-        # Create updated embed format
+        # Get reputation and determine emoji
+        reputation_emoji = await self._get_reputation_emoji(user.id, location_id)
+        
         embed = discord.Embed(
-            title="📍 Location Status",
+            title="🚀 Arrival",
+            description=f"{reputation_emoji}{char_name} has arrived at {location_name}",
             color=0x00ff00
         )
         
-        embed.add_field(
-            name="Location", 
-            value=location_name,
-            inline=True
-        )
-        
-        embed.add_field(
-            name="Current Activity",
-            value=f"{len(players_at_location)} Players Present",
-            inline=True
-        )
-        
-        # Add players list
-        if players_at_location:
-            player_names = [player[0] for player in players_at_location]
-            players_text = ", ".join(player_names)
-            # Truncate if too long
-            if len(players_text) > 1000:
-                players_text = players_text[:997] + "..."
-            embed.add_field(
-                name="Players here",
-                value=players_text,
-                inline=False
-            )
-        
-        embed.add_field(
-            name="Channel Status",
-            value="This channel will remain active while players are present.",
-            inline=False
-        )
-        
         try:
-            # Send the status message
-            status_message = await channel.send(embed=embed)
-            
-            # Store message for tracking and auto-updates
-            self.active_location_messages[f"{user.id}_{location_id}"] = {
-                'message': status_message,
-                'channel': channel,
-                'location_id': location_id,
-                'user_id': user.id
-            }
-            
-            # Start auto-refresh task
-            import asyncio
-            asyncio.create_task(self._auto_refresh_location_status(status_message, location_id, channel))
-            
+            await channel.send(embed=embed)
         except Exception as e:
-            print(f"❌ Failed to send location status to {channel.name}: {e}")
+            print(f"❌ Failed to send arrival message to {channel.name}: {e}")
 
-    async def _auto_refresh_location_status(self, message: discord.Message, location_id: int, channel: discord.TextChannel):
-        """Auto-refresh location status every minute"""
+    async def send_location_departure(self, channel: discord.TextChannel, user: discord.Member, location_id: int):
+        """Send departure announcement when a player leaves a location"""
+        
+        # Check if other players are present (excluding the departing player)
+        other_players = self.db.execute_query(
+            "SELECT COUNT(*) FROM characters WHERE current_location = ? AND user_id != ? AND is_logged_in = 1",
+            (location_id, user.id),
+            fetch='one'
+        )[0]
+        
+        # Skip departure message if no other players present
+        if other_players == 0:
+            return
+        
+        # Get character name
+        char_data = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            return
+        
+        char_name = char_data[0]
+        
+        # Get location name
+        location_name = self.db.execute_query(
+            "SELECT name FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )[0]
+        
+        # Get reputation and determine emoji
+        reputation_emoji = await self._get_reputation_emoji(user.id, location_id)
+        
+        embed = discord.Embed(
+            title="Departure 🚀",
+            description=f"{reputation_emoji}{char_name} has left {location_name}",
+            color=0xff6600
+        )
+        
         try:
-            for _ in range(60):  # Refresh for 1 hour max
-                await asyncio.sleep(60)  # Wait 1 minute
-                
-                # Check if message still exists
-                try:
-                    await message.fetch()
-                except:
-                    break  # Message was deleted, stop refreshing
-                
-                # Get updated player data
-                players_at_location = self.db.execute_query(
-                    "SELECT c.name, c.user_id FROM characters c WHERE c.current_location = ?",
-                    (location_id,),
-                    fetch='all'
-                )
-                
-                # Get location name
-                location_name = self.db.execute_query(
-                    "SELECT name FROM locations WHERE location_id = ?",
-                    (location_id,),
-                    fetch='one'
-                )[0]
-                
-                # Create updated embed
-                embed = discord.Embed(
-                    title="📍 Location Status",
-                    color=0x00ff00
-                )
-                
-                embed.add_field(
-                    name="Location", 
-                    value=location_name,
-                    inline=True
-                )
-                
-                embed.add_field(
-                    name="Current Activity",
-                    value=f"{len(players_at_location)} Players Present",
-                    inline=True
-                )
-                
-                # Add players list
-                if players_at_location:
-                    player_names = [player[0] for player in players_at_location]
-                    players_text = ", ".join(player_names)
-                    # Truncate if too long
-                    if len(players_text) > 1000:
-                        players_text = players_text[:997] + "..."
-                    embed.add_field(
-                        name="Players here",
-                        value=players_text,
-                        inline=False
-                    )
-                
-                embed.add_field(
-                    name="Channel Status",
-                    value="This channel will remain active while players are present.",
-                    inline=False
-                )
-                
-                try:
-                    await message.edit(embed=embed)
-                except:
-                    break  # Failed to edit, stop refreshing
-                    
+            await channel.send(embed=embed)
         except Exception as e:
-            print(f"❌ Error in auto-refresh for location {location_id}: {e}")
+            print(f"❌ Failed to send departure message to {channel.name}: {e}")
+
+    async def _get_reputation_emoji(self, user_id: int, location_id: int) -> str:
+        """Get reputation emoji for a user at a specific location"""
+        
+        # Check for active bounties first - this takes priority
+        bounty_cog = self.bot.get_cog('BountyCog')
+        if bounty_cog and bounty_cog.has_active_bounty(user_id):
+            return "🎯 "  # Bounty target emoji
+        
+        # Get user's reputation at this location
+        reputation_data = self.db.execute_query(
+            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            (user_id, location_id),
+            fetch='one'
+        )
+        
+        if not reputation_data:
+            return ""  # No reputation = neutral, no emoji
+        
+        reputation_score = reputation_data[0]
+        
+        # Determine emoji based on reputation tier
+        if reputation_score >= 80:
+            return "⭐ "  # Heroic
+        elif reputation_score >= 50:
+            return "😇 "  # Good
+        elif reputation_score <= -80:
+            return "💀 "  # Evil
+        elif reputation_score <= -50:
+            return "😈 "  # Bad
+        else:
+            return ""  # Neutral, no emoji
+
     def _track_active_location_message(self, user_id: int, location_id: int, message_id: int):
         """Track an active location message for later cleanup"""
         if user_id not in self._active_location_messages:
@@ -615,7 +695,7 @@ class ChannelManager:
             await self._update_channel_activity(location_id)
             
             # Send personalized location status to the user
-            await self.send_location_status(channel, user, location_id)
+            await self.send_location_arrival(channel, user, location_id)
             
             print(f"✅ Successfully gave {user.name} access to location {location_id}")
             return True
@@ -648,6 +728,7 @@ class ChannelManager:
             return True  # Channel doesn't exist
         
         try:
+            await self.send_location_departure(channel, user, location_id)
             # Remove their active location message first
             await self._remove_active_location_message(user.id, location_id, channel)
             
@@ -1109,7 +1190,7 @@ class ChannelManager:
             await self._update_channel_activity(location_id)
             
             # Send personalized location status
-            await self.send_location_status(channel, user, location_id)
+            await self.send_location_arrival(channel, user, location_id)
             
             print(f"✅ Login restoration: gave {user.name} access to location {location_id}")
             return True

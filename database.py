@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Tuple, Any
 
 class Database:
-    def __init__(self, db_path="thequietendALPHA.db"):  # EDIT THIS TO CHANGE DATABASE NAME OR SWITCH BETWEEN "SAVES"
+    def __init__(self, db_path="thequietendDEV.db"):  # EDIT THIS TO CHANGE DATABASE NAME OR SWITCH BETWEEN "SAVES"
         self.db_path = db_path
         self.lock = threading.Lock()
         self.init_database()
@@ -81,6 +81,22 @@ class Database:
                 current_ingame_time TIMESTAMP
             )''',
 
+            '''CREATE TABLE IF NOT EXISTS endgame_config (
+                config_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                start_time TEXT NOT NULL,
+                length_minutes INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                is_active BOOLEAN DEFAULT 1
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS endgame_evacuations (
+                evacuation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id INTEGER NOT NULL,
+                evacuation_deadline TEXT NOT NULL,
+                warned_at TEXT NOT NULL,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            '''ALTER TABLE locations ADD COLUMN faction TEXT DEFAULT 'Independent' ''',
             # Character birth and identity info
             '''CREATE TABLE IF NOT EXISTS character_identity (
                 user_id INTEGER PRIMARY KEY,
@@ -108,7 +124,33 @@ class Database:
                 FOREIGN KEY (location_id) REFERENCES locations (location_id),
                 UNIQUE(user_id, location_id)
             )''',
-            '''ALTER TABLE locations ADD COLUMN faction TEXT DEFAULT 'Independent' ''',
+            # Add federal supplies flag to locations  
+            '''ALTER TABLE locations ADD COLUMN has_federal_supplies BOOLEAN DEFAULT 0''',
+            # Combat states table - tracks active fights
+            '''CREATE TABLE IF NOT EXISTS combat_states (
+                combat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_id INTEGER NOT NULL,
+                target_npc_id INTEGER NOT NULL,
+                target_npc_type TEXT NOT NULL CHECK(target_npc_type IN ('static', 'dynamic')),
+                combat_type TEXT NOT NULL CHECK(combat_type IN ('ground', 'space')),
+                location_id INTEGER NOT NULL,
+                last_action_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                next_npc_action_time TIMESTAMP,
+                player_can_act_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (player_id) REFERENCES characters (user_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+
+            # NPC respawn tracking for static NPCs
+            '''CREATE TABLE IF NOT EXISTS npc_respawn_queue (
+                respawn_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                original_npc_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                scheduled_respawn_time TIMESTAMP NOT NULL,
+                npc_data TEXT NOT NULL,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
             # Sub-locations within main locations
             '''CREATE TABLE IF NOT EXISTS sub_locations (
                 sub_location_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -217,7 +259,14 @@ class Database:
                 original_location_id INTEGER,
                 relocated_to_id INTEGER,
                 channel_last_active TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                faction TEXT DEFAULT 'Independent',
+                has_federal_supplies BOOLEAN DEFAULT 0,
+                establishment_date TEXT,
+                established_date TEXT,
+                has_black_market BOOLEAN DEFAULT 0,
+                generated_income INTEGER DEFAULT 0,
+                has_shipyard BOOLEAN DEFAULT 0
             )''',
             
             '''CREATE TABLE IF NOT EXISTS corridors (
@@ -649,9 +698,24 @@ class Database:
                 personality TEXT,
                 trade_specialty TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                alignment TEXT DEFAULT 'neutral' CHECK(alignment IN ('loyal', 'neutral', 'bandit')),
+                hp INTEGER DEFAULT 100,
+                max_hp INTEGER DEFAULT 100,
+                combat_rating INTEGER DEFAULT 5,
+                is_alive BOOLEAN DEFAULT 1,
+                credits INTEGER DEFAULT 0,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
-
+            # Admin Game Panel
+            '''CREATE TABLE IF NOT EXISTS game_panels (
+                panel_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                created_by INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(guild_id, channel_id)
+            )''',
             # Dynamic NPCs that move around the galaxy
             '''CREATE TABLE IF NOT EXISTS dynamic_npcs (
                 npc_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -669,10 +733,16 @@ class Database:
                 credits INTEGER DEFAULT 0,
                 is_alive BOOLEAN DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                alignment TEXT DEFAULT 'neutral' CHECK(alignment IN ('loyal', 'neutral', 'bandit')),
+                hp INTEGER DEFAULT 100,
+                max_hp INTEGER DEFAULT 100,
+                combat_rating INTEGER DEFAULT 5,
+                ship_hull INTEGER DEFAULT 100,
+                max_ship_hull INTEGER DEFAULT 100,
                 FOREIGN KEY (current_location) REFERENCES locations (location_id),
                 FOREIGN KEY (destination_location) REFERENCES locations (location_id)
             )''',
-
+            '''ALTER TABLE server_config ADD COLUMN status_voice_channel_id INTEGER''',
             # NPC inventory for trading
             '''CREATE TABLE IF NOT EXISTS npc_inventory (
                 item_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -707,7 +777,17 @@ class Database:
                 expires_at TIMESTAMP,
                 FOREIGN KEY (npc_id) REFERENCES static_npcs (npc_id)
             )''',
-
+            '''CREATE TABLE IF NOT EXISTS galactic_history (
+                history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id INTEGER,
+                event_title TEXT NOT NULL,
+                event_description TEXT NOT NULL,
+                historical_figure TEXT,
+                event_date TEXT NOT NULL,
+                event_type TEXT DEFAULT 'general',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
             # NPC job completions tracking
             '''CREATE TABLE IF NOT EXISTS npc_job_completions (
                 completion_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -738,7 +818,7 @@ class Database:
             )''',
             # Add character image URL support
             '''ALTER TABLE characters ADD COLUMN image_url TEXT''',
-            
+            '''CREATE UNIQUE INDEX IF NOT EXISTS idx_galaxy_singleton ON galaxy_info (galaxy_id)''',
             '''CREATE TABLE IF NOT EXISTS active_beacons (
                 beacon_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 beacon_type TEXT NOT NULL,
@@ -767,3 +847,25 @@ class Database:
             except Exception as e:
                 # log any other unexpected errors but keep going
                 print(f"❌ Error running init query: {e}")
+        self._add_faction_column_safely()
+
+
+    def _add_faction_column_safely(self):
+        """Safely add faction column to locations table if it doesn't exist"""
+        try:
+            # Check if faction column exists
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(locations)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'faction' not in columns:
+                cursor.execute("ALTER TABLE locations ADD COLUMN faction TEXT DEFAULT 'Independent'")
+                conn.commit()
+                print("✅ Added faction column to locations table")
+            else:
+                print("✅ Faction column already exists in locations table")
+            
+            conn.close()
+        except Exception as e:
+            print(f"❌ Error adding faction column: {e}")

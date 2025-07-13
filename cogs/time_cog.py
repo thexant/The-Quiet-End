@@ -247,10 +247,11 @@ class TimeCog(commands.Cog, name="Time"):
             await interaction.response.send_message("❌ Time scale must be positive.", ephemeral=True)
             return
         
-        self.bot.db.execute_query(
-            "UPDATE galaxy_info SET time_scale_factor = ? WHERE galaxy_id = 1",
-            (speed,)
-        )
+        # Use the new method that properly rebases the calculation
+        success = self.time_system.set_time_scale(speed)
+        if not success:
+            await interaction.response.send_message("❌ Failed to set time scale.", ephemeral=True)
+            return
         
         # Calculate real time to game time ratio
         hours_real_per_game_day = 24 / speed
@@ -269,6 +270,11 @@ class TimeCog(commands.Cog, name="Time"):
             name="Real Time Ratio",
             value=f"{hours_real_per_game_day:.1f} hours real = 1 day in-game",
             inline=True
+        )
+        embed.add_field(
+            name="⚠️ Note",
+            value="Time calculation has been rebased to current moment to prevent time jumps.",
+            inline=False
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)

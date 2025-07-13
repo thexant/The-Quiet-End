@@ -9,10 +9,12 @@ matplotlib.use('Agg')  # Add this line
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
+import re
 import io
 import asyncio
 from typing import List, Tuple, Dict
 from datetime import datetime, timedelta
+from utils.history_generator import HistoryGenerator
 
 class GalaxyGeneratorCog(commands.Cog):
     def __init__(self, bot):
@@ -21,7 +23,7 @@ class GalaxyGeneratorCog(commands.Cog):
         self.auto_shift_task = None
         # Lore-appropriate name lists
         self.location_prefixes = [
-            "New", "Port", "Fort", "Station", "Haven", "Base", "Settlement", "Camp", "Depot", "Site", "Base", "Platform", "Node", "Sector", "Post", "Module", "Annex", "Hub", "Relay", "Point", "Grid", "Tower", "Gate", "Bay", "Field", "Range", "Line", "Span", "Strip", "Arc", "Ring", "Block", "Shaft", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Omega", "One", "Two", "Three", "Four", "Five", "Seven", "Nine", "Eleven", "Twelve", "Thirteen", "Seventeen", "Twenty-One", "Thirty-Two", "Forty-Six", "Seventy-Nine", "Ninety-Two", "Hundred", "New", "Old", "Greater", "Lower", "Eastern", "Western", "Northern", "Southern", "Central", "Neo", "Nova", "Terra", "Sol", "Olympus", "Atlas", "Edison", "Armstrong", "Mariner", "Galilei", "Tsiolkovsky", "Copernicus", "Daedalus", "Ares", "Apollo", "Hawking", "Kepler", "Curie", "Newton", "RX", "TX", "DV", "LN", "KX", "ZC", "MA", "TR", "GR", "PS", "UT", "EX", "CN", "DS", "ST", "SV", "CT", "MR", "RQ", "OB", "AO", "R-12", "X-9", "L-6", "V-8", "Z-21", "Dust", "Iron", "Dry", "Red", "Cold", "Ash", "Pale", "Deep", "High", "Low", "Broad", "Long", "Short", "Twin", "Silent", "Black", "White", "Golden", "Blue", "Crimson", "Silver", "Steel", "Hollow", "Quiet", "Radiant", "Clear", "Distant", "Unity", "Liberty", "Honor", "Glory", "Triumph", "Vanguard", "Endeavor", "Providence", "Resolve", "Bastion", "Shelter", "Sentinel", "Frontier", "Justice", "Paragon", "Haven", "Echo", "Pulse", "Vision", "Legacy", "Anchor"
+            "New", "Port", "Fort", "Station", "Haven", "Base", "Settlement", "Camp", "Depot", "Site", "Base", "Platform", "Node", "Sector", "Post", "Module", "Annex", "Hub", "Relay", "Point", "Grid", "Tower", "Gate", "Bay", "Field", "Range", "Line", "Span", "Strip", "Arc", "Ring", "Block", "Shaft", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Omega", "One", "Two", "Three", "Four", "Five", "Seven", "Nine", "Eleven", "Twelve", "Thirteen", "Seventeen", "Twenty-One", "Thirty-Two", "Forty-Six", "Seventy-Nine", "Ninety-Two", "Hundred", "New", "Old", "Greater", "Lower", "Eastern", "Western", "Northern", "Southern", "Central", "Neo", "Nova", "Terra", "Sol", "Olympus", "Atlas", "Edison", "Armstrong", "Mariner", "Galilei", "Tsiolkovsky", "Copernicus", "Daedalus", "Ares", "Apollo", "Hawking", "Kepler", "Curie", "Newton", "RX", "TX", "DV", "LN", "KX", "ZC", "MA", "TR", "GR", "PS", "UT", "EX", "CN", "DS", "ST", "SV", "CT", "MR", "RQ", "OB", "AO", "R-12", "X-9", "L-6", "V-8", "Z-21", "Dust", "Iron", "Dry", "Red", "Cold", "Ash", "Pale", "Deep", "High", "Low", "Broad", "Long", "Short", "Twin", "Silent", "Black", "White", "Golden", "Blue", "Crimson", "Silver", "Steel", "Hollow", "Quiet", "Radiant", "Clear", "Distant", "Unity", "Liberty", "Honor", "Glory", "Triumph", "Vanguard", "Endeavor", "Providence", "Resolve", "Bastion", "Shelter", "Sentinel", "Frontier", "Justice", "Paragon", "Haven", "Echo", "Pulse", "Vision", "Legacy", "Anchor", "Mighty", "Venan's", "Darwich", "Humanity's", "Elephant's", "Vetaso's", "Darwin's"
 
         ]
         
@@ -29,19 +31,19 @@ class GalaxyGeneratorCog(commands.Cog):
             "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Theta", "Sigma",
             "Meridian", "Horizon", "Pinnacle", "Terminus", "Nexus", "Beacon", "Anchor",
             "Magnus", "Prima", "Ultima", "Central", "Venan", "Core", "Edge", "Frontier",
-            "Hope", "Unity", "Liberty", "Victory", "Genesis", "Phoenix", "Titan",
+            "Hope", "Unity", "Liberty", "Victory", "Genesis", "Phoenix", "Titan", "Freedom", "Foothold", "Establisment", "Centra", "Rescour", "Search",
             "Aurora", "Vega", "Sirius", "Proxima", "Centauri", "Kepler", "Nova", "Horizon", "Summit", "Providence", "Concord", "Harmony", "Unity", "Endeavor", "Victory", "Legacy", "Liberty", "Triumph", "Vanguard", "Beacon", "Hope", "Solace", "Foundation", "Promise", "Shelter", "Keystone", "Resolve", "Radiance", "Dawn", "Ascent", "Haven", "Bastion", "Frontier", "Serenity", "Reliance", "Compass", "Steward", "Sector", "Junction", "Node", "Array", "Grid", "Module", "Span", "Stack", "Gate", "Point", "Line", "Cross", "Ring", "Core", "Bay", "Depot", "Yard", "Block", "Shaft", "Ramp", "Dock", "Platform", "Terminal", "Entry", "Outlet", "Access", "Conduit", "Loop", "Run", "Segment", "Strip", "Ridge", "Valley", "Crater", "Steppe", "Rise", "Plain", "Bluff", "Mesa", "Basin", "Reach", "Range", "Slope", "Crest", "Shoal", "Shelf", "Terrace", "Divide", "Edge", "Belt", "Pass", "Spur", "Field", "Channel", "Drop", "Gap", "Flat", "Pit", "Aurora", "Solstice", "Polaris", "Meridian", "Zenith", "Orbit", "Eclipse", "Nova", "Atlas", "Luna", "Borealis", "Titan", "Terra", "Zephyr", "Helios", "Aether", "Vesper", "Nebula", "Corona", "Drift", "Pulse", "Echo", "Forge", "Relay", "Station", "Works", "Hub", "Foundry", "Yard", "Engine", "Hangar", "Mill", "Plant", "Stack", "Lift", "Armature", "Buffer", "Crane", "Spindle", "Clamp", "Array", "Socket", "Link", "Dock", "Bay", "Splendor", "Ashen", "Axle", "Barren", "Bastille", "Beacon", "Bellow", "Blight", "Blink", "Bluff", "Brimstone", "Bristle", "Brood", "Burn", "Cairn", "Cauldron", "Cellar", "Ganymede", "Clamp", "Clay", "Cloak", "Coil", "Coldiron", "Crag", "Creep", "Crest", "Crucible", "Crypt", "Current", "Cut", "Dagger", "Damper", "Dark", "Decay", "Deep", "Ditch", "Dredge", "Dross", "Duct", "Ember", "Ender", "Fell", "Fissure", "Flak", "Flicker", "Flood", "Flume", "Fold", "Forage", "Forge", "Fragment", "Gash", "Ghost", "Glare", "Glint", "Glitch", "Gorge", "Graft", "Grind", "Gutter", "Hallow", "Hinge", "Hollow", "Husk", "Huskline", "Icefall", "Ironline", "Junction", "Knuckle", "Lantern", "Lastlight", "Latch", "Ledge", "Link", "Loom", "Lurk", "Magma", "Mantle", "Maul", "Mire", "Mold", "Murk", "Nest", "Niche", "Nimbus", "Nox", "Outset", "Pale", "Path", "Pith", "Pit", "Plinth", "Plume", "Quench", "Quill", "Rack", "Rasp", "Ravine", "Reclaim", "Redoubt", "Refuge", "Relay", "Remnant", "Ridge", "Rift", "Ring", "Roost", "Rot", "Scald", "Scar", "Scour", "Scrim", "Scrub", "Seep", "Shackle", "Shard", "Shatter", "Shear", "Shiver", "Shroud", "Shunt", "Signal", "Silt", "Sink", "Slag", "Sluice", "Smelt", "Solum", "Span", "Spindle", "Spire", "Spoil", "Stain", "Stake", "Static", "Stead", "Stem", "Stitch", "Strand", "Stray", "Strut", "Sump", "Tether", "Thresh", "Thrush", "Tint", "Tithe", "Trace", "Trough", "Truss", "Tusk", "Vault", "Verge", "Vessel", "Vise", "Wake", "Waste", "Watch", "Whisk", "Wick", "Wither", "Wrack"
 
         ]
         
         self.system_names = [
-            "Altair", "Vega", "Deneb", "Rigel", "Regalis", "Betelgeuse", "Antares", "Pollux", "Castor", "Spica", "Regulus", "Aldebaran", "Arcturus", "Capella", "Procyon", "Canopus", "Achernar", "Hadar", "Mimosa", "Acrux", "Shaula", "Elnath", "Miaplacidus", "Alnilam", "Alnair", "Alioth", "Dubhe", "Mirfak", "Wezen", "Sargas", "Kaus", "Avior",
-            "Merak", "Alkaid", "Alcor", "Venan", "Alpheratz", "Ankaa", "Rasalhague", "Fomalhaut", "Markab", "Zubenelgenubi", "Zubeneschamali", "Algol", "Diphda", "Menkar", "Caph", "Ruchbah", "Schedar", "Menkalinan", "Eltanin", "Rastaban", "Thuban", "Kochab", "MacGregor", "Polaris", "Saiph", "Mintaka", "Tegmine", "Kitalpha", "Nashira", "Nunki", "Ascella", "Alphard", "Corvus", "Almach", "Izar", "Sirius", "Altinak", "Kornephoros", "Algieba", "Porrima", "Spindle", "Yildun", "Enif", "Alrescha", "Hydor", "Furud", "Alphirk", "Navi", "Sadalmelik", "Sadalsuud", "Ancha", "Tarazed", "Denebola", "Kraz", "Adhafera", "Talitha", "Maia", "Celaeno", "Electra", "Taygeta", "Merope", "Alcyone", "Pleione", "Atlas", "Sterope", "Larawag", "Nihal", "Tureis", "Muliphein", "Aludra", "Suhail", "Azha", "Baten", "Tania", "Cursa", "Kaffaljidhma", "Azelfafage", "Alhena", "Rasalgethi", "Alrakis", "Zaurak", "Jabbah", "Okul", "Tabit", "Yed", "Unuk", "Gienah", "Sabik", "Peacock", "Biham", "Casper", "Zaurak", "Bunda", "Atria", "Becrux", "Marfik", "Nash", "Aljanah", "Homam", "Heze", "Rotanev", "Sadalbari", "Tejat", "Teegarden", "Wolf", "Luyten", "Barnard", "Gliese", "Lacaille", "Kapteyn", "Ross"
+            "Altair", "Vega", "Deneb", "Rigel", "Regalis", "Betelgeuse", "Antares", "Pollux", "Castor", "Spica", "Regulus", "Aldebaran", "Arcturus", "Capella", "Procyon", "Canopus", "Achernar", "Hadar", "Mimosa", "Acrux", "Shaula", "Elnath", "Miaplacidus", "Alnilam", "Alnair", "Alioth", "Dubhe", "Mirfak", "Wezen", "Sargas", "Kaus", "Avior", "A-14", "92-Alpha", "X-47", "Illuzhe", "Tullifer", 
+            "Merak", "Alkaid", "Alcor", "Venan", "Alpheratz", "Ankaa", "Rasalhague", "Fomalhaut", "Markab", "Zubenelgenubi", "Zubeneschamali", "Algol", "Diphda", "Menkar", "Caph", "Ruchbah", "Schedar", "Menkalinan", "Eltanin", "Rastaban", "Thuban", "Kochab", "MacGregor", "Polaris", "Saiph", "Mintaka", "Tegmine", "Kitalpha", "Nashira", "Nunki", "Ascella", "Alphard", "Corvus", "Almach", "Izar", "Sirius", "Altinak", "Kornephoros", "Algieba", "Porrima", "Spindle", "Yildun", "Enif", "Alrescha", "Hydor", "Furud", "Alphirk", "Navi", "Sadalmelik", "Sadalsuud", "Ancha", "Tarazed", "Denebola", "Kraz", "Adhafera", "Talitha", "Maia", "Celaeno", "Electra", "Taygeta", "Merope", "Alcyone", "Pleione", "Atlas", "Sterope", "Larawag", "Nihal", "Tureis", "Muliphein", "Aludra", "Suhail", "Azha", "Baten", "Tania", "Cursa", "Kaffaljidhma", "Azelfafage", "Alhena", "Rasalgethi", "Alrakis", "Zaurak", "Jabbah", "Okul", "Tabit", "Yed", "Unuk", "Gienah", "Sabik", "Peacock", "Biham", "Casper", "Zaurak", "Bunda", "Atria", "Becrux", "Marfik", "Nash", "Aljanah", "Homam", "Heze", "Rotanev", "Sadalbari", "Tejat", "Teegarden", "Wolf", "Luyten", "Barnard", "Gliese", "Lacaille", "Kapteyn", "Ross", "Felta", "Vetas", "Langvar", "Purin", "Thexantul"
 
         ]
         
         self.corridor_names = [
-            "Passage", "Route", "Lane", "Conduit", "Channel", "Gateway", "Bridge", "Link", "Path", "Throughway", "Junction", "Crossing", "Transit", "Drift",
+            "Passage", "Route", "Lane", "Conduit", "Channel", "Gateway", "Bridge", "Link", "Path", "Throughway", "Junction", "Crossing", "Transit", "Drift", "Streamway", "Threadway", "Sliptube", "Manor", "Avenue", "Freeway", "Highway", "Artery", "Nerve", "Pipe", "Cylinder", "Trunk",
             "Span", "Thread", "Splice", "Corridor", "Threadline", "Causeway", "Way", "Tract", "Strand", "Slip", "Breach", "Merge", "Traverse", "Trace", "Stretch", "Fork", "Outlet", "Run", "Cut", "Divide", "Chasm", "Seam", "Flow", "Bend", "Vein", "Strait", "Arc", "Slide", "Reach", "Pass", "Course", "Cradle", "Weave", "Threadway", "Fold", "Pull", "Ridge", "Flux", "Spur", "Joint", "Gap", "Threadpath", "Track", "Tether", "Lift", "Ramp", "Spindle", "Groove", "Trail", "Wane", "Push", "Skein", "Ribbon", "Circuit"
 
         ]
@@ -413,7 +415,7 @@ class GalaxyGeneratorCog(commands.Cog):
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
-        if num_locations < 10 or num_locations > 500:
+        if num_locations < 3 or num_locations > 9999:
             await interaction.response.send_message("Number of locations must be between 10 and 500.", ephemeral=True)
             return
         
@@ -422,14 +424,25 @@ class GalaxyGeneratorCog(commands.Cog):
         time_system = TimeSystem(self.bot)
         
         # Validate start date
-        start_date_obj = time_system.parse_date_string(start_date)
-        if not start_date_obj:
+        try:
+            # Parse the date to validate format
+            if re.match(r'^\d{4}$', start_date):
+                # Just a year provided (YYYY format)
+                start_date_obj = datetime(int(start_date), 1, 1)
+                start_date = f"01-01-{start_date}"  # Convert to DD-MM-YYYY for consistency
+            elif re.match(r'^\d{1,2}-\d{1,2}-\d{4}$', start_date):
+                # DD-MM-YYYY format
+                start_date_obj = datetime.strptime(start_date, "%d-%m-%Y")
+            else:
+                raise ValueError("Invalid date format")
+                
+        except ValueError:
             await interaction.response.send_message(
                 "Invalid start date format. Use DD-MM-YYYY (e.g., 15-03-2751) or YYYY (e.g., 2751) format.", 
                 ephemeral=True
             )
             return
-        
+
         # Validate year is in reasonable range
         if start_date_obj.year < 2700 or start_date_obj.year > 2799:
             await interaction.response.send_message("Start date year must be between 2700 and 2799.", ephemeral=True)
@@ -475,7 +488,8 @@ class GalaxyGeneratorCog(commands.Cog):
             # Step 5: Generate black markets (rare)
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n🕴️ Establishing black markets...")
             black_markets = await self._generate_black_markets(major_locations)
-            
+            await progress_msg.edit(content="🌌 **Galaxy Generation**\n🏛️ Establishing federal supply depots...")
+            federal_depots = await self._assign_federal_supplies(major_locations)
             # Step 6: Generate persistent sub-locations for all locations
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n🏢 Creating facility infrastructure...")
             all_infrastructure = major_locations + gates
@@ -488,7 +502,12 @@ class GalaxyGeneratorCog(commands.Cog):
             # Generate NPCs
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n🤖 Populating with inhabitants...")
             await self._create_npcs_for_galaxy()
-            
+            await progress_msg.edit(content="🌌 **Galaxy Generation**\n📚 Documenting galactic history...")
+            # Generate History
+            await progress_msg.edit(content="🌌 **Galaxy Generation**\n📚 Documenting galactic history...")
+            history_gen = HistoryGenerator(self.bot)
+            total_history_events = await history_gen.generate_galaxy_history(start_date_obj.year, start_date_obj.strftime('%Y-%m-%d'))
+            print(f"📚 Generated {total_history_events} historical events")
             # Generate initial jobs
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n💼 Creating employment opportunities...")
             events_cog = self.bot.get_cog('EventsCog')
@@ -538,8 +557,9 @@ class GalaxyGeneratorCog(commands.Cog):
             location_text += f"\n**Total Major Locations: {major_location_count}**"
             location_text += f"\nTransit Gates: {len(gates)} (additional infrastructure)"
             if black_markets > 0:
-                location_text += f"\nBlack Markets: {black_markets} (hidden)"
-
+                location_text += f"\nBlack Markets: {black_markets} (outlaw)"
+            if federal_depots > 0:
+                location_text += f"\nFederal Supply Depots: {federal_depots} (government)"
             embed.add_field(name="Infrastructure Generated", value=location_text, inline=True)
             # Count corridor types
             gated_corridors = len([c for c in corridors if c['has_gate']])
@@ -561,6 +581,9 @@ class GalaxyGeneratorCog(commands.Cog):
                 value=f"Galaxy Start Date: {start_date_obj.strftime('%d-%m-%Y')}\nIn-game time flows at 4x speed\nUse `/date` to check current galactic time",
                 inline=False
             )
+            
+            # Ensure galactic news channel is configured and send connection announcement
+            await self._ensure_galactic_news_setup(interaction.guild, galaxy_name)
             
             await interaction.followup.send(embed=embed, ephemeral=True)
             
@@ -650,9 +673,11 @@ class GalaxyGeneratorCog(commands.Cog):
             system = self._generate_unique_system(used_systems)
             used_systems.add(system)
 
-            # Generate establishment date (before start year)
+            # Generate establishment date (before start year) in DD-MM-YYYY format
             establishment_year = start_year - random.randint(1, 20)
-            establishment_date = f"{establishment_year}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}"
+            establishment_month = random.randint(1, 12)
+            establishment_day = random.randint(1, 28)
+            establishment_date = f"{establishment_day:02d}-{establishment_month:02d}-{establishment_year}"
 
             # Generate location properties based on type
             location = self._create_location_data(name, loc_type, system, establishment_date)
@@ -662,7 +687,22 @@ class GalaxyGeneratorCog(commands.Cog):
             location['id'] = location_id
 
             major_locations.append(location)
+            # Generate initial logbooks for locations
+            from cogs.location_logs import LocationLogsCog
+            temp_logs_cog = LocationLogsCog(self.bot)
 
+            logbooks_created = 0
+            for location in major_locations:
+                # Generate logbooks for 80% of colonies and stations, 60% of outposts
+                logbook_chance = 0.1 if location['type'] in ['colony', 'space_station'] else 0.02
+                
+                if random.random() < logbook_chance:
+                    await temp_logs_cog._generate_initial_log(
+                        location['id'], 
+                        location['name'], 
+                        location['type']
+                    )
+                    logbooks_created += 1
         return major_locations
     async def _create_npcs_for_galaxy(self):
         """Create NPCs for all locations after galaxy generation"""
@@ -672,14 +712,15 @@ class GalaxyGeneratorCog(commands.Cog):
             return
         
         # Create static NPCs for all locations (including gates)
+        # Get all the information needed for NPC creation
         locations = self.db.execute_query(
-            "SELECT location_id, population FROM locations",
+            "SELECT location_id, population, location_type, wealth_level FROM locations",
             fetch='all'
         )
         
         total_static_npcs = 0
-        for location_id, population in locations:
-            npcs_created = await npc_cog.create_static_npcs_for_location(location_id, population)
+        for location_id, population, location_type, wealth_level in locations:
+            npcs_created = await npc_cog.create_static_npcs_for_location(location_id, population, location_type, wealth_level)
             total_static_npcs += npcs_created
         
         # Spawn initial dynamic NPCs
@@ -1165,7 +1206,125 @@ class GalaxyGeneratorCog(commands.Cog):
             (location['name'],),
             fetch='one'
         )[0]
-    
+    async def _assign_federal_supplies(self, major_locations: List[Dict]) -> int:
+        """Assign federal supplies to high-wealth locations (inverse of black markets)"""
+        federal_depots_created = 0
+        
+        for location in major_locations:
+            # Federal supplies appear at wealthy locations - inverse of black markets
+            # Higher wealth = higher chance, opposite of black markets
+            if location['wealth_level'] >= 7:  # High wealth locations
+                federal_chance = 0.10  # 15% base chance
+                
+                # Very wealthy locations even more likely
+                if location['wealth_level'] >= 9:
+                    federal_chance += 0.05  # +15% for very wealthy
+                    
+                if random.random() < federal_chance:
+                    # Update location to have federal supplies
+                    self.db.execute_query(
+                        "UPDATE locations SET has_federal_supplies = 1 WHERE location_id = ?",
+                        (location['id'],)
+                    )
+                    
+                    # Update the location dict for immediate use
+                    location['has_federal_supplies'] = True
+                    
+                    # Ensure federal locations have good services
+                    if not location.get('has_upgrades', False):
+                        self.db.execute_query(
+                            "UPDATE locations SET has_upgrades = 1 WHERE location_id = ?",
+                            (location['id'],)
+                        )
+                        location['has_upgrades'] = True
+                    
+                    # Federal locations often have shipyards
+                    if not location.get('has_shipyard', False) and random.random() < 0.7:
+                        self.db.execute_query(
+                            "UPDATE locations SET has_shipyard = 1 WHERE location_id = ?",
+                            (location['id'],)
+                        )
+                        location['has_shipyard'] = True
+                    
+                    federal_depots_created += 1
+                    print(f"🏛️ Converted {location['name']} to Federal Supply Depot")
+        
+        return federal_depots_created
+        
+    def update_location_alignment_rules(self):
+        """Update locations to enforce alignment-based spawning rules"""
+        
+        # Mark high-wealth locations as federal/loyal zones
+        self.db.execute_query(
+            """UPDATE locations 
+               SET has_federal_supplies = 1 
+               WHERE wealth_level >= 8 AND has_black_market = 0""",
+        )
+        
+        # Mark low-wealth black market locations as bandit zones  
+        self.db.execute_query(
+            """UPDATE locations 
+               SET has_black_market = 1 
+               WHERE wealth_level <= 3 AND has_federal_supplies = 0 AND random() % 10 = 0""",
+        )
+        
+        print("✅ Updated location alignment rules")
+
+    def enforce_npc_alignment_at_location(self, location_id: int):
+        """Ensure NPCs at a location match its alignment requirements"""
+        
+        # Get location requirements
+        location_data = self.db.execute_query(
+            """SELECT has_black_market, has_federal_supplies, wealth_level 
+               FROM locations WHERE location_id = ?""",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_data:
+            return
+        
+        has_black_market, has_federal_supplies, wealth_level = location_data
+        
+        # Determine required alignment
+        required_alignment = None
+        if has_black_market:
+            required_alignment = "bandit"
+        elif has_federal_supplies or wealth_level >= 8:
+            required_alignment = "loyal"
+        
+        if required_alignment:
+            # Update static NPCs to match required alignment
+            wrong_npcs = self.db.execute_query(
+                """SELECT npc_id FROM static_npcs 
+                   WHERE location_id = ? AND alignment != ? AND is_alive = 1""",
+                (location_id, required_alignment),
+                fetch='all'
+            )
+            
+            for (npc_id,) in wrong_npcs:
+                # Kill wrong-aligned NPCs and schedule respawn with correct alignment
+                self.db.execute_query(
+                    "UPDATE static_npcs SET is_alive = 0 WHERE npc_id = ?",
+                    (npc_id,)
+                )
+                
+                # Schedule respawn with correct alignment
+                respawn_time = datetime.now() + timedelta(minutes=random.randint(30, 120))
+                self.db.execute_query(
+                    """INSERT INTO npc_respawn_queue 
+                       (original_npc_id, location_id, scheduled_respawn_time, npc_data)
+                       VALUES (?, ?, ?, ?)""",
+                    (npc_id, location_id, respawn_time.isoformat(), f"alignment:{required_alignment}")
+                )
+            
+            # Update dynamic NPCs that shouldn't be here
+            self.db.execute_query(
+                """UPDATE dynamic_npcs 
+                   SET current_location = NULL, destination_location = NULL
+                   WHERE current_location = ? AND alignment != ? AND is_alive = 1""",
+                (location_id, required_alignment)
+            )
     async def _plan_corridor_routes(self, major_locations: List[Dict]) -> List[Dict]:
         """Plan logical corridor routes with improved connectivity"""
         
@@ -2458,7 +2617,7 @@ class GalaxyGeneratorCog(commands.Cog):
         return name
     
     def _save_location_to_db(self, location: Dict) -> int:
-        """Save location to database and return the ID"""
+        """Save location to database and return the ID""" 
         
         self.db.execute_query(
             '''INSERT INTO locations 
@@ -3634,5 +3793,58 @@ class GalaxyGeneratorCog(commands.Cog):
                 print(f"📡 Created built-in repeater at {location['name']} (R{receive_range}/T{transmit_range})")
         
         return repeaters_created
+    async def _ensure_galactic_news_setup(self, guild: discord.Guild, galaxy_name: str):
+        """Ensure galactic news channel is configured and send connection announcement"""
+        
+        # Check if galactic updates channel is already configured
+        updates_channel_id = self.db.execute_query(
+            "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = ?",
+            (guild.id,),
+            fetch='one'
+        )
+        
+        news_channel = None
+        if updates_channel_id and updates_channel_id[0]:
+            news_channel = guild.get_channel(updates_channel_id[0])
+        
+        # If no configured channel, try to find the galactic news channel
+        if not news_channel:
+            news_channel_name = "📡-galactic-news"
+            for channel in guild.text_channels:
+                if channel.name == news_channel_name:
+                    news_channel = channel
+                    # Update database configuration
+                    existing_config = self.db.execute_query(
+                        "SELECT guild_id FROM server_config WHERE guild_id = ?",
+                        (guild.id,),
+                        fetch='one'
+                    )
+                    
+                    if existing_config:
+                        self.db.execute_query(
+                            "UPDATE server_config SET galactic_updates_channel_id = ? WHERE guild_id = ?",
+                            (news_channel.id, guild.id)
+                        )
+                    else:
+                        self.db.execute_query(
+                            "INSERT INTO server_config (guild_id, galactic_updates_channel_id) VALUES (?, ?)",
+                            (guild.id, news_channel.id)
+                        )
+                    
+                    print(f"📰 Configured existing galactic news channel: {news_channel.id}")
+                    break
+        
+        # Send connection announcement if we have a news channel
+        if news_channel:
+            news_cog = self.bot.get_cog('GalacticNewsCog')
+            if news_cog:
+                await news_cog.queue_news(
+                    guild.id,
+                    'admin_announcement',
+                    'Galactic News Network Relay Established',
+                    f'The Galactic News Network has successfully established a communication relay with {galaxy_name}. All major galactic events, infrastructure changes, and emergency broadcasts will now be transmitted to this sector with appropriate delays based on interstellar communication protocols. Welcome to the connected galaxy.',
+                    None  # No specific location for this administrative message
+                )
+                print(f"📰 Queued galactic news connection announcement for {galaxy_name}")    
 async def setup(bot):
     await bot.add_cog(GalaxyGeneratorCog(bot))
