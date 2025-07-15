@@ -41,11 +41,11 @@ class HelpCog(commands.Cog):
             name="👤 Character Management",
             value=(
                 "`/character create` - Create your character\n"
-                "`/character view` - View character status & stats\n"
+                "`/character delete` - Permanently delete your character\n"
                 "`/character login` - Log into the game world\n"
                 "`/character logout` - Safely log out\n"
-                "`/character location` - Open location interaction panel\n"
-                "`/character inventory` - View your items & equipment"
+                "`/here` - Open your location interaction panel\n"
+                "`/status` - View your character, stats, ship and inventory"
             ),
             inline=False
         )
@@ -55,8 +55,7 @@ class HelpCog(commands.Cog):
             name="🚀 Travel & Navigation",
             value=(
                 "`/travel go` - Travel between locations\n"
-                "`/galaxy visual_map` - View galaxy map\n"
-                "`/webmap_status` - View status of web-map\n"
+                "`/webmap_status` - View web-map and it's status\n"
                 "📍 Visit location channels to dock and access services"
             ),
             inline=False
@@ -81,7 +80,8 @@ class HelpCog(commands.Cog):
                 "`/group join <leader>` - Join someone's crew\n"
                 "`/group leave` - Leave your current crew\n"
                 "`/group travel_vote` - Vote on group travel\n"
-                "`/group job_vote` - Vote on group jobs"
+                "`/group job_vote` - Vote on group jobs\n"
+                "`/group vote <Yes/No>` - Cast your vote on group votes"
             ),
             inline=False
         )
@@ -92,7 +92,7 @@ class HelpCog(commands.Cog):
             value=(
                 "1️⃣ Create character with `/character create`\n"
                 "2️⃣ Login with `/character login`\n"
-                "3️⃣ Use `/character location` for local services\n"
+                "3️⃣ Use `/here` for local services\n"
                 "4️⃣ Travel with `/travel go` to explore\n"
                 "5️⃣ Use `/help` in location channels for specific options\n"
                 "5️⃣ Use `/logout` when you're done to ensure your character is safe!"
@@ -141,10 +141,8 @@ class HelpCog(commands.Cog):
         embed.add_field(
             name="🎮 Core Commands",
             value=(
-                "`/character location` - Open interactive location panel\n"
-                "`/travel go` - View departure options\n"
-                "`/character view` - Check your status\n"
-                "`/character inventory` - View your items"
+                "`/here` - Open interactive location panel\n"
+                "`/status` - Open interactive character panel\n"
             ),
             inline=False
         )
@@ -288,8 +286,8 @@ class HelpCog(commands.Cog):
         embed.add_field(
             name="🎮 Available Commands",
             value=(
-                "`/character view` - Check your status\n"
-                "`/character inventory` - View your items\n"
+                "`/status` - Open your interactive character panel\n"
+                "`/here` - Open your interactive location panel\n"
                 "`/radio send <message>` - Send radio transmission\n"
                 "`/galaxy visual_map` - View your route on the galaxy map"
             ),
@@ -346,11 +344,11 @@ class HelpCog(commands.Cog):
             name="👤 Character Commands",
             value=(
                 "`/character create` - Create new character\n"
-                "`/character view` - View character info\n"
+                "`/status` - Open your interactive character panel\n"
+                "`/here` - Open your interactive location panel\n"
                 "`/character login` - Login to game\n"
                 "`/character logout` - Logout safely\n"
-                "`/character location` - Location panel\n"
-                "`/character inventory` - View inventory"
+                "`/character delete` - Permanently delete your current character"
             ),
             inline=True
         )
@@ -360,7 +358,7 @@ class HelpCog(commands.Cog):
             name="🚀 Travel Commands",
             value=(
                 "`/travel go` - Travel between locations\n"
-                "`/galaxy visual_map` - View galaxy map\n"
+                "`/galaxy visual_map` - Generate a galaxy map\n"
                 "`/travel plotroute` - Plot a route to a destination\n"
                 "`/travel routes` - View Available travel routes\n"
                 "`/webmap status` - Get the webmap status"
@@ -387,12 +385,14 @@ class HelpCog(commands.Cog):
         embed.add_field(
             name="👥 Group Commands",
             value=(
-                "`/group create <size>` - Create crew\n"
+                "`/group create <name>` - Create crew\n"
                 "`/group join <leader>` - Join crew\n"
+                "`/group disband <group>` - Disband your group (leader only)\n"
                 "`/group leave` - Leave crew\n"
                 "`/group info` - View crew info\n"
                 "`/group travel_vote` - Vote on travel\n"
-                "`/group job_vote` - Vote on jobs"
+                "`/group job_vote` - Vote on jobs\n"
+                "`/group vote` - Cast your vote on group votes"
             ),
             inline=True
         )
@@ -405,15 +405,42 @@ class HelpCog(commands.Cog):
             ),
             inline=True
         )
-        
+        embed.add_field(
+            name="🎯 Reputation Bounty Commands",
+            value=(
+                "`/reputation` - View your regional reputation\n"
+                "`/capture` - Attempt to capture a player of an opposing alignment for a reward\n"
+                "`/bounty` - Attempt to capture a player with a bounty on their head\n"
+                "`/bounties` - View active bounties nearby\n"
+                "`/bounty_status` - Check your bounty capture status and active bounties\n"
+                "`/postbounty <player>` - Post a bounty on another player\n"
+                "`/removebounty <player>` - Remove your posted bounty from another player\n"
+                "`/paybounty` - Pay off your bounties\n"
+                "`/removeallbounties` - Remove *all* of your set bounties"
+            ),
+            inline=True
+        )
+        embed.add_field(
+            name="⚔️ Combat Commands",
+            value=(
+                "`/attack npc` - Initiate combat with an NPC\n"
+                "`/attack fight` - Make an attack while in combat\n"
+                "`/attack flee` - Attempt to escape from combat\n"
+                "`/rob` - Attempt to rob an NPC\n"
+                "PvP and Player Robberies coming soon..."
+            ),
+            inline=True
+        )
         # Admin Commands (if applicable)
         if interaction.user.guild_permissions.administrator:
             embed.add_field(
                 name="⚙️ Admin Commands",
                 value=(
                     "`/admin setup` - Initial server setup\n"
-                    "`/admin create_job` - Create jobs\n"
-                    "`/admin create_item` - Create shop items\n"
+                    "`/galaxy generate` - Generate a galaxy for the game\n"
+                    "`/web_map start` - Start the webmap service on port 8090\n"
+                    "`/web_map stop` - Stop the webmap service\n"
+                    "`/export` - Export the current galaxy state in a Wiki format, HTML or Markdown\n"
                     "`/admin teleport` - Teleport players\n"
                     "`/admin reset` - Reset galaxy\n"
                     "`/admin backup` - Backup data"

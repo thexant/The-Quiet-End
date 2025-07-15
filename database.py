@@ -1,51 +1,258 @@
-# In database.py, replace the init_database method with this corrected version:
+# database.py - Fixed version with proper shutdown handling and WAL mode
 import sqlite3
 import threading
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple, Any
+import atexit
+import time
 
 class Database:
-    def __init__(self, db_path="thequietendDEV.db"):  # EDIT THIS TO CHANGE DATABASE NAME OR SWITCH BETWEEN "SAVES"
+    def __init__(self, db_path="thequietend.db"):
         self.db_path = db_path
         self.lock = threading.Lock()
+        self._shutdown = False
+        self._active_connections = set()
+        self._connection_lock = threading.Lock()
+        
+        # Enable WAL mode and optimize settings
+        self._setup_database()
         self.init_database()
+        
+        # Register cleanup on exit
+        atexit.register(self.cleanup)
     
+    def _setup_database(self):
+        """Setup database with WAL mode and optimizations"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            # Enable WAL mode for better concurrent access
+            conn.execute("PRAGMA journal_mode=WAL")
+            # Increase cache size for better performance
+            conn.execute("PRAGMA cache_size=10000")
+            # Synchronous mode - NORMAL is safe with WAL
+            conn.execute("PRAGMA synchronous=NORMAL")
+            # Enable foreign keys
+            conn.execute("PRAGMA foreign_keys=ON")
+            # Increase timeout
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.commit()
+            print("✅ Database WAL mode enabled and optimized")
+        finally:
+            conn.close()
+    
+    def cleanup(self):
+        """Cleanup all connections on shutdown"""
+        print("🔄 Database cleanup starting...")
+        self._shutdown = True
+        
+        # Set a deadline for cleanup
+        import time
+        deadline = time.time() + 10  # 10 second maximum
+        
+        # Wait for active connections to finish
+        while self._active_connections and time.time() < deadline:
+            active_count = len(self._active_connections)
+            if active_count > 0:
+                print(f"⏳ Waiting for {active_count} database connection(s) to close...")
+            time.sleep(0.1)
+        
+        # Force close any remaining connections
+        with self._connection_lock:
+            for conn in list(self._active_connections):
+                try:
+                    # Try to rollback any pending transactions
+                    conn.rollback()
+                    conn.close()
+                except:
+                    pass
+            self._active_connections.clear()
+        
+        # Checkpoint the WAL file multiple times to ensure it's fully written
+        checkpoint_attempts = 3
+        for attempt in range(checkpoint_attempts):
+            try:
+                conn = sqlite3.connect(self.db_path, timeout=5.0)
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.close()
+                print(f"✅ Database WAL checkpoint {attempt + 1}/{checkpoint_attempts} completed")
+                time.sleep(0.2)  # Small delay between checkpoints
+            except Exception as e:
+                print(f"⚠️ WAL checkpoint attempt {attempt + 1} failed: {e}")
+        
+        # Final integrity check
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=5.0)
+            result = conn.execute("PRAGMA integrity_check").fetchone()
+            conn.close()
+            if result[0] == 'ok':
+                print("✅ Database integrity verified")
+            else:
+                print("⚠️ Database integrity check failed")
+        except Exception as e:
+            print(f"⚠️ Could not verify database integrity: {e}")
+        
+        print("✅ Database cleanup completed")
+    
+    def force_close_transactions(self):
+        """Force close all pending transactions - emergency use only"""
+        print("⚠️ Force closing all database transactions...")
+        with self._connection_lock:
+            for conn in list(self._active_connections):
+                try:
+                    # Set a very short timeout to force failure
+                    conn.execute("PRAGMA busy_timeout=100")
+                    conn.rollback()
+                    conn.close()
+                except:
+                    # Force close even if rollback fails
+                    try:
+                        conn.close()
+                    except:
+                        pass
+        self._active_connections.clear()
+        
     def get_connection(self):
-        return sqlite3.connect(self.db_path, timeout=30.0)
+        """Get a database connection with proper tracking"""
+        if self._shutdown:
+            raise RuntimeError("Database is shutting down")
+        
+        # Use a much longer timeout for better reliability
+        conn = sqlite3.connect(self.db_path, timeout=60.0, check_same_thread=False)
+        
+        # Track active connections
+        with self._connection_lock:
+            self._active_connections.add(conn)
+        
+        return conn
+    
+    def _close_connection(self, conn):
+        """Safely close a connection and remove from tracking"""
+        with self._connection_lock:
+            if conn in self._active_connections:
+                self._active_connections.remove(conn)
+        try:
+            conn.close()
+        except:
+            pass
     
     def execute_query(self, query, params=None, fetch=None):
-        with self.lock:
-            conn = self.get_connection()
+        """Execute a single query with automatic connection management"""
+        if self._shutdown:
+            raise RuntimeError("Database is shutting down")
+            
+        max_retries = 3
+        retry_delay = 0.1
+        
+        for attempt in range(max_retries):
             try:
-                cursor = conn.cursor()
-                if params:
-                    cursor.execute(query, params)
-                else:
-                    cursor.execute(query)
-                
-                if fetch == 'one':
-                    result = cursor.fetchone()
-                elif fetch == 'all':
-                    result = cursor.fetchall()
-                else:
-                    result = None
-                
-                conn.commit()
-                return result
-            except sqlite3.Error as e:
-                conn.rollback()
+                with self.lock:
+                    conn = self.get_connection()
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute(query, params or [])
+                        
+                        if fetch == 'one':
+                            result = cursor.fetchone()
+                        elif fetch == 'all':
+                            result = cursor.fetchall()
+                        else:
+                            result = None
+                        
+                        conn.commit()
+                        return result
+                    except sqlite3.Error as e:
+                        conn.rollback()
+                        if attempt < max_retries - 1 and "database is locked" in str(e):
+                            time.sleep(retry_delay * (attempt + 1))
+                            continue
+                        raise e
+                    finally:
+                        self._close_connection(conn)
+            except Exception as e:
+                if attempt < max_retries - 1 and "database is locked" in str(e):
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
                 print(f"❌ Database error: {e}")
                 print(f"Query: {query}")
                 print(f"Params: {params}")
                 raise e
-            except Exception as e:
-                conn.rollback()
-                print(f"❌ Unexpected error in database operation: {e}")
-                print(f"Query: {query}")
-                print(f"Params: {params}")
-                raise e
+
+    def begin_transaction(self):
+        """Begin a transaction with proper connection tracking"""
+        if self._shutdown:
+            raise RuntimeError("Database is shutting down")
+            
+        self.lock.acquire()
+        conn = self.get_connection()
+        # Set transaction mode
+        conn.execute("BEGIN IMMEDIATE")
+        return conn
+
+    def execute_in_transaction(self, conn, query, params=None, fetch=None):
+        """Execute a query within an existing transaction"""
+        try:
+            cursor = conn.cursor()
+            cursor.execute(query, params or [])
+
+            if fetch == 'one':
+                return cursor.fetchone()
+            elif fetch == 'all':
+                return cursor.fetchall()
+            elif fetch == 'lastrowid':
+                return cursor.lastrowid
+            return None
+        except sqlite3.Error as e:
+            print(f"❌ Database error during transaction: {e}\nQuery: {query}\nParams: {params}")
+            raise e
+
+    def executemany_in_transaction(self, conn, query, params_list):
+        """Execute a bulk query within an existing transaction"""
+        try:
+            cursor = conn.cursor()
+            cursor.executemany(query, params_list)
+        except sqlite3.Error as e:
+            print(f"❌ Database error during executemany: {e}\nQuery: {query}")
+            raise e
+
+    def commit_transaction(self, conn):
+        """Commit transaction and clean up"""
+        try:
+            conn.commit()
+        finally:
+            self._close_connection(conn)
+            if self.lock.locked():
+                self.lock.release()
+
+    def rollback_transaction(self, conn):
+        """Rollback transaction and clean up"""
+        try:
+            conn.rollback()
+        finally:
+            self._close_connection(conn)
+            if self.lock.locked():
+                self.lock.release()
+    
+    def check_integrity(self):
+        """Check database integrity"""
+        try:
+            result = self.execute_query("PRAGMA integrity_check", fetch='one')
+            return result[0] == 'ok' if result else False
+        except:
+            return False
+    
+    def vacuum_database(self):
+        """Vacuum the database to optimize storage"""
+        try:
+            # Cannot vacuum within a transaction
+            conn = self.get_connection()
+            try:
+                conn.execute("VACUUM")
+                print("✅ Database vacuumed successfully")
             finally:
-                conn.close()
+                self._close_connection(conn)
+        except Exception as e:
+            print(f"❌ Failed to vacuum database: {e}")
+                
     def init_database(self):
         """Initialize all database tables"""
         queries = [
@@ -68,6 +275,23 @@ class Database:
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''',
+            # Add current home tracking to characters table
+            '''ALTER TABLE characters ADD COLUMN current_home_id INTEGER''',
+
+            # Add home invitations table
+            '''CREATE TABLE IF NOT EXISTS home_invitations (
+                invitation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                home_id INTEGER NOT NULL,
+                inviter_id INTEGER NOT NULL,
+                invitee_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (home_id) REFERENCES location_homes (home_id),
+                FOREIGN KEY (inviter_id) REFERENCES characters (user_id),
+                FOREIGN KEY (invitee_id) REFERENCES characters (user_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
             '''CREATE TABLE IF NOT EXISTS galaxy_info (
                 galaxy_id INTEGER PRIMARY KEY DEFAULT 1,
@@ -141,7 +365,53 @@ class Database:
                 FOREIGN KEY (player_id) REFERENCES characters (user_id),
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
+            
+            '''CREATE TABLE IF NOT EXISTS location_homes (
+                home_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id INTEGER NOT NULL,
+                home_type TEXT NOT NULL,
+                home_name TEXT NOT NULL,
+                price INTEGER NOT NULL,
+                owner_id INTEGER,
+                purchase_date TIMESTAMP,
+                is_available BOOLEAN DEFAULT 1,
+                interior_description TEXT,
+                activities TEXT,
+                value_modifier REAL DEFAULT 1.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                FOREIGN KEY (owner_id) REFERENCES characters (user_id)
+            )''',
 
+            '''CREATE TABLE IF NOT EXISTS home_activities (
+                activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                home_id INTEGER NOT NULL,
+                activity_type TEXT NOT NULL,
+                activity_name TEXT NOT NULL,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (home_id) REFERENCES location_homes (home_id)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS home_interiors (
+                interior_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                home_id INTEGER NOT NULL,
+                channel_id INTEGER,
+                last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (home_id) REFERENCES location_homes (home_id)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS home_market_listings (
+                listing_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                home_id INTEGER NOT NULL,
+                seller_id INTEGER NOT NULL,
+                asking_price INTEGER NOT NULL,
+                original_price INTEGER NOT NULL,
+                listed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1,
+                FOREIGN KEY (home_id) REFERENCES location_homes (home_id),
+                FOREIGN KEY (seller_id) REFERENCES characters (user_id)
+            )''',
             # NPC respawn tracking for static NPCs
             '''CREATE TABLE IF NOT EXISTS npc_respawn_queue (
                 respawn_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -367,6 +637,8 @@ class Database:
                 outpost_category_id INTEGER,
                 gate_category_id INTEGER,
                 transit_category_id INTEGER,
+                ship_interiors_category_id INTEGER,
+                residences_category_id INTEGER,
                 max_location_channels INTEGER DEFAULT 50,
                 channel_timeout_hours INTEGER DEFAULT 48,
                 auto_cleanup_enabled BOOLEAN DEFAULT 1,
@@ -404,7 +676,75 @@ class Database:
                 affected_users TEXT,
                 responses TEXT
             )''',
+            # Add these to your database.py init_database() queries list:
+            
+            '''CREATE TABLE IF NOT EXISTS pvp_opt_outs (
+                user_id INTEGER PRIMARY KEY,
+                opted_out BOOLEAN DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )''',
 
+
+            '''CREATE TABLE IF NOT EXISTS pvp_combat_states (
+                combat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                attacker_id INTEGER NOT NULL,
+                defender_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                combat_type TEXT NOT NULL CHECK(combat_type IN ('ground', 'space')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_action_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                attacker_can_act_time TIMESTAMP,
+                defender_can_act_time TIMESTAMP,
+                current_turn TEXT DEFAULT 'attacker' CHECK(current_turn IN ('attacker', 'defender')),
+                FOREIGN KEY (attacker_id) REFERENCES characters (user_id),
+                FOREIGN KEY (defender_id) REFERENCES characters (user_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS pvp_cooldowns (
+                cooldown_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                player1_id INTEGER NOT NULL,
+                player2_id INTEGER NOT NULL,
+                cooldown_type TEXT NOT NULL CHECK(cooldown_type IN ('flee', 'robbery')),
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (player1_id) REFERENCES characters (user_id),
+                FOREIGN KEY (player2_id) REFERENCES characters (user_id),
+                UNIQUE(player1_id, player2_id, cooldown_type)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS pending_robberies (
+                robbery_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                robber_id INTEGER NOT NULL,
+                victim_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                message_id INTEGER,
+                channel_id INTEGER,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (robber_id) REFERENCES characters (user_id),
+                FOREIGN KEY (victim_id) REFERENCES characters (user_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS character_inventory (
+                inventory_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                item_name TEXT NOT NULL,
+                quantity INTEGER DEFAULT 1,
+                item_type TEXT DEFAULT 'misc',
+                acquired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                UNIQUE(user_id, item_name)
+            )''',
+
+            # Add alignment column to characters
+            '''ALTER TABLE characters ADD COLUMN alignment TEXT DEFAULT 'neutral' ''',
+
+            # Add alignment column to characters if it doesn't exist
+            '''ALTER TABLE characters ADD COLUMN alignment TEXT DEFAULT 'neutral' CHECK(alignment IN ('loyal', 'neutral', 'bandit'))''',
+            
             '''CREATE TABLE IF NOT EXISTS location_items (
                 item_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 location_id INTEGER NOT NULL,
@@ -419,6 +759,7 @@ class Database:
                 FOREIGN KEY (location_id) REFERENCES locations (location_id),
                 FOREIGN KEY (dropped_by) REFERENCES characters (user_id)
             )''',
+            
                 '''CREATE TABLE IF NOT EXISTS location_logs (
                 log_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 location_id INTEGER NOT NULL,
@@ -833,7 +1174,17 @@ class Database:
                 is_active BOOLEAN DEFAULT 1,
                 FOREIGN KEY (user_id) REFERENCES characters (user_id),
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
-            )'''
+            )''',
+            '''CREATE TABLE IF NOT EXISTS ship_activities (
+                activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ship_id INTEGER NOT NULL,
+                activity_type TEXT NOT NULL,
+                activity_name TEXT NOT NULL,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (ship_id) REFERENCES ships (ship_id)
+            )''',
+            '''ALTER TABLE characters ADD COLUMN auto_rename INTEGER DEFAULT 0 NOT NULL''',
         ]
         
         for q in queries:
@@ -843,7 +1194,10 @@ class Database:
                 self.execute_query(q)
             except sqlite3.OperationalError as e:
                 # skip errors like "duplicate column name" or syntax issues
-                print(f"⚠️ Skipping database init query (already exists?): {e}")
+                if "duplicate column name" in str(e) or "already exists" in str(e):
+                    pass
+                else:
+                    print(f"⚠️ Skipping database init query (already exists?): {e}")
             except Exception as e:
                 # log any other unexpected errors but keep going
                 print(f"❌ Error running init query: {e}")
@@ -863,9 +1217,7 @@ class Database:
                 cursor.execute("ALTER TABLE locations ADD COLUMN faction TEXT DEFAULT 'Independent'")
                 conn.commit()
                 print("✅ Added faction column to locations table")
-            else:
-                print("✅ Faction column already exists in locations table")
             
-            conn.close()
+            self._close_connection(conn)
         except Exception as e:
             print(f"❌ Error adding faction column: {e}")

@@ -184,23 +184,30 @@ class EnhancedEventsCog(commands.Cog):
         ]
         
         # Calculate event chances based on location characteristics
-        phenomena_chance = 0.3  # 30% base chance
+        phenomena_chance = 0.1  # 30% base chance
         hostile_chance = 0.1    # 10% base chance
+        reputation_chance = 0.1
         
         # Increase hostile chances in dangerous areas
         edge_distance = (x_coord**2 + y_coord**2)**0.5
         if edge_distance > 70:  # Far from center
             hostile_chance += 0.15
+            reputation_chance += 0.15
         if wealth <= 3:  # Poor areas
             hostile_chance += 0.1
-        
+        reputation_chance += 0.05
+        if edge_distance < 20:
+            reputation_chance -= 0.15
+            hostile_chance -= 0.20
         # Determine event type
         event_roll = random.random()
         
-        if event_roll < hostile_chance:
+        if event_roll < reputation_chance:
+            await self.generate_reputation_event(location_id, players_present)
+        elif event_roll < reputation_chance + hostile_chance:
             event_name, description, color, handler = random.choice(hostile_encounters)
             await handler(location_id, players_present, location_name, event_name, description, color)
-        elif event_roll < hostile_chance + phenomena_chance:
+        elif event_roll < reputation_chance + hostile_chance + phenomena_chance:
             event_name, description, color, handler = random.choice(space_phenomena)
             await handler(location_id, players_present, location_name, event_name, description, color)
 
@@ -1429,7 +1436,619 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(ignore_button)
         
         await channel.send(embed=embed, view=view)
+    # Add these methods to the EnhancedEventsCog class in enhanced_events.py
 
+    async def generate_reputation_event(self, location_id: int, players_present: list):
+        """Generate reputation-based alignment events"""
+        
+        if not players_present:
+            # No players present, handle ignored outcome
+            await self._handle_ignored_reputation_event(location_id)
+            return
+        
+        location_info = self.db.execute_query(
+            "SELECT name, location_type, wealth_level FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_info:
+            return
+        
+        location_name, location_type, wealth_level = location_info
+        
+        # Select event type based on location characteristics
+        event_categories = ['positive_only', 'negative_only', 'mixed']
+        weights = [0.4, 0.3, 0.3]  # 40% positive, 30% negative, 30% mixed
+        
+        # Wealthy locations have more positive events
+        if wealth_level >= 7:
+            weights = [0.6, 0.2, 0.2]
+        # Poor locations have more negative events  
+        elif wealth_level <= 3:
+            weights = [0.2, 0.5, 0.3]
+        
+        event_category = random.choices(event_categories, weights=weights)[0]
+        
+        # Get appropriate event pool
+        if event_category == 'positive_only':
+            events = self._get_positive_reputation_events(location_type, wealth_level)
+        elif event_category == 'negative_only':
+            events = self._get_negative_reputation_events(location_type, wealth_level)
+        else:  # mixed
+            events = self._get_mixed_reputation_events(location_type, wealth_level)
+        
+        if not events:
+            return
+        
+        selected_event = random.choice(events)
+        
+        # Execute the reputation event
+        channel = await self._get_location_channel(location_id)
+        if channel:
+            await self._execute_reputation_event(channel, selected_event, players_present, location_id, location_name)
+
+    def _get_positive_reputation_events(self, location_type: str, wealth_level: int):
+        """Events that can only increase reputation or do nothing"""
+        events = [
+            {
+                'title': 'Lost Child Emergency',
+                'description': '👶 **Missing Child Alert**\nA frantic parent reports their child has gone missing in the facility. Security is overwhelmed with other duties.',
+                'color': 0x87CEEB,
+                'handler': self._handle_lost_child_event,
+                'ignored_outcome': 'The child was eventually found hours later, hungry and scared, after wandering into a maintenance area. The parents filed a formal complaint about the lack of immediate response from bystanders.',
+                'responses': [
+                    ('help_search', 'Organize Search Party', 'Help organize a systematic search of the facility', +25, +15),
+                    ('offer_assistance', 'Assist Parents', 'Comfort the parents and help coordinate with security', +15, +10),
+                    ('ignore', 'Not Your Problem', 'Continue with your own business', 0, 0)
+                ]
+            },
+            {
+                'title': 'Medical Emergency',
+                'description': '🚑 **Medical Emergency**\nAn elderly civilian has collapsed in the common area. Medical teams are delayed due to another emergency.',
+                'color': 0xFF6B6B,
+                'handler': self._handle_medical_emergency_event,
+                'ignored_outcome': 'The elderly civilian remained unconscious for several more minutes before medical teams arrived. Bystanders later questioned why no one with medical knowledge stepped forward to help.',
+                'responses': [
+                    ('provide_medical_aid', 'Provide Medical Aid', 'Use your medical skills to stabilize the patient', +30, +20),
+                    ('call_for_help', 'Coordinate Assistance', 'Help coordinate emergency response and comfort bystanders', +15, +10),
+                    ('stand_back', 'Stay Out of the Way', 'Keep your distance to avoid interfering', 0, 0)
+                ]
+            },
+            {
+                'title': 'Environmental Cleanup',
+                'description': '🌱 **Environmental Incident**\nA small chemical leak has contaminated a section of the facility. Cleanup crews are stretched thin.',
+                'color': 0x90EE90,
+                'handler': self._handle_environmental_cleanup_event,
+                'ignored_outcome': 'The chemical leak continued to spread slowly, contaminating a larger area before professional cleanup crews could contain it. Environmental groups later criticized the lack of citizen response.',
+                'responses': [
+                    ('volunteer_cleanup', 'Lead Cleanup Effort', 'Organize volunteers and lead the cleanup operation', +20, +15),
+                    ('provide_supplies', 'Donate Supplies', 'Contribute cleanup materials from your inventory', +15, +10),
+                    ('minimal_help', 'Report to Authorities', 'Simply report the incident to proper authorities', +5, +5)
+                ]
+            },
+            {
+                'title': 'Refugee Assistance',
+                'description': '🏠 **Refugee Ship Arrives**\nA transport full of displaced families has arrived with minimal supplies. Official aid is delayed.',
+                'color': 0xDDA0DD,
+                'handler': self._handle_refugee_assistance_event,
+                'ignored_outcome': 'The refugee families waited for hours without assistance, forced to ration their meager supplies. Several children became ill from hunger before official aid finally arrived.',
+                'responses': [
+                    ('organize_aid', 'Organize Community Aid', 'Rally others to provide comprehensive assistance', +25, +20),
+                    ('donate_credits', 'Donate Credits', 'Contribute money for food and supplies', +15, +10),
+                    ('offer_comfort', 'Provide Comfort', 'Offer emotional support and basic guidance', +10, +5)
+                ]
+            }
+        ]
+        
+        # Filter by location type
+        if location_type == 'outpost':
+            # Outposts have fewer complex social situations
+            events = [e for e in events if e['title'] in ['Medical Emergency', 'Environmental Cleanup']]
+        
+        return events
+
+    def _get_negative_reputation_events(self, location_type: str, wealth_level: int):
+        """Events that can only decrease reputation or do nothing"""
+        events = [
+            {
+                'title': 'Corporate Bribery Offer',
+                'description': '💰 **Discreet Business Proposal**\nA corporate representative approaches you with a "consulting opportunity" that involves overlooking certain regulatory violations.',
+                'color': 0x8B4513,
+                'handler': self._handle_corporate_bribery_event,
+                'ignored_outcome': 'The corporate representative found someone else willing to accept their offer. The regulatory violations continued unchecked, eventually leading to safety incidents.',
+                'responses': [
+                    ('accept_major_bribe', 'Accept Full Package', 'Take the substantial payment and ongoing retainer', -30, -25),
+                    ('accept_small_bribe', 'Accept Basic Fee', 'Take a smaller one-time payment', -15, -10),
+                    ('decline', 'Decline Politely', 'Refuse the offer without reporting it', 0, 0)
+                ]
+            },
+            {
+                'title': 'Illegal Cargo Opportunity',
+                'description': '📦 **No-Questions Transport Job**\nA shady contact offers excellent pay for transporting unmarked cargo with strict instructions not to inspect the contents.',
+                'color': 0x696969,
+                'handler': self._handle_illegal_cargo_event,
+                'ignored_outcome': 'The suspicious cargo was eventually transported by a less scrupulous pilot. Customs later discovered it contained banned weapons that ended up in criminal hands.',
+                'responses': [
+                    ('accept_and_sell', 'Accept and Sell Info', 'Take the job but tip off customs for additional payment', -25, -20),
+                    ('accept_job', 'Accept the Job', 'Transport the cargo without questions', -20, -15),
+                    ('walk_away', 'Walk Away', 'Decline the suspicious offer', 0, 0)
+                ]
+            },
+            {
+                'title': 'Protection Racket',
+                'description': '👊 **"Security Services" Offer**\nLocal toughs suggest that your ship would be "safer" if you paid for their "protection services" while docked.',
+                'color': 0x8B0000,
+                'handler': self._handle_protection_racket_event,
+                'ignored_outcome': 'The protection racket continued operating, intimidating other ship owners who couldn\'t afford to pay. Several smaller vessels reported mysterious damage.',
+                'responses': [
+                    ('join_racket', 'Join Their Operation', 'Offer to help them "convince" other ship owners', -35, -30),
+                    ('pay_protection', 'Pay for Protection', 'Pay the fee to avoid trouble', -10, -5),
+                    ('refuse', 'Refuse to Pay', 'Tell them to leave you alone', 0, 0)
+                ]
+            },
+            {
+                'title': 'Witness Intimidation',
+                'description': '👁️ **Convenient Amnesia Request**\nSomeone approaches you about "forgetting" what you may have witnessed regarding a recent incident involving important people.',
+                'color': 0x4B0082,
+                'handler': self._handle_witness_intimidation_event,
+                'ignored_outcome': 'Without pressure to stay quiet, the witness later testified truthfully. Justice was served, though some powerful figures were displeased.',
+                'responses': [
+                    ('threaten_witness', 'Apply Pressure', 'Help convince the witness to stay quiet', -30, -25),
+                    ('accept_payment', 'Take Hush Money', 'Accept payment to look the other way', -15, -10),
+                    ('stay_neutral', 'Stay Out of It', 'Refuse to get involved either way', 0, 0)
+                ]
+            }
+        ]
+        
+        # Wealthy locations have fewer overt criminal opportunities
+        if wealth_level >= 7:
+            events = [e for e in events if e['title'] in ['Corporate Bribery Offer', 'Witness Intimidation']]
+        
+        return events
+
+    def _get_mixed_reputation_events(self, location_type: str, wealth_level: int):
+        """Events that can increase or decrease reputation but won't do nothing"""
+        events = [
+            {
+                'title': 'Corporate Whistleblower',
+                'description': '📢 **Dangerous Information**\nYou\'ve discovered evidence of corporate malfeasance that could harm civilians. A corporate agent offers a substantial bribe to destroy the evidence.',
+                'color': 0x4169E1,
+                'handler': self._handle_whistleblower_event,
+                'ignored_outcome': 'The evidence was eventually discovered by others through different means. The corporate scandal broke anyway, but the delayed revelation allowed more harm to occur.',
+                'responses': [
+                    ('expose_publicly', 'Expose the Corruption', 'Release the evidence to media and authorities', +30, +25),
+                    ('report_quietly', 'Report to Authorities', 'Submit evidence through official channels', +20, +15),
+                    ('take_bribe', 'Accept the Bribe', 'Destroy the evidence for payment', -25, -20)
+                ]
+            },
+            {
+                'title': 'Faction Dispute Mediation',
+                'description': '⚖️ **Faction Tensions**\nTwo groups are on the verge of conflict over resource rights. Both sides want you to support their claim.',
+                'color': 0xFF4500,
+                'handler': self._handle_faction_dispute_event,
+                'ignored_outcome': 'Without mediation, the dispute escalated into violence. Several people were injured in the fighting that could have been prevented.',
+                'responses': [
+                    ('mediate_fairly', 'Mediate Fairly', 'Try to find a compromise that benefits both sides', +25, +20),
+                    ('support_underdogs', 'Support the Disadvantaged', 'Back the weaker faction against unfair treatment', +15, +10),
+                    ('support_powerful', 'Support the Powerful', 'Back the stronger faction for personal gain', -15, -10)
+                ]
+            },
+            {
+                'title': 'Information Broker Deal',
+                'description': '💻 **Sensitive Information**\nYou\'ve come across valuable information about ship movements. A broker offers payment, but the data could be used for piracy.',
+                'color': 0x9932CC,
+                'handler': self._handle_information_broker_event,
+                'ignored_outcome': 'The information eventually became stale and worthless. However, pirates later attacked several ships that could have been warned.',
+                'responses': [
+                    ('warn_targets', 'Warn Potential Targets', 'Alert ships about possible danger', +20, +15),
+                    ('sell_to_security', 'Sell to Security', 'Provide information to law enforcement', +15, +10),
+                    ('sell_to_pirates', 'Sell to Pirates', 'Sell the information knowing it will be misused', -25, -20)
+                ]
+            },
+            {
+                'title': 'Resource Distribution Crisis',
+                'description': '📦 **Supply Shortage**\nCritical supplies have arrived but there isn\'t enough for everyone. You have influence over the distribution.',
+                'color': 0x20B2AA,
+                'handler': self._handle_resource_distribution_event,
+                'ignored_outcome': 'Without proper coordination, the distribution became chaotic. Supplies were wasted and the most vulnerable received nothing.',
+                'responses': [
+                    ('fair_distribution', 'Ensure Fair Distribution', 'Organize equitable distribution to those most in need', +25, +20),
+                    ('help_vulnerable', 'Prioritize Vulnerable', 'Focus on helping children and elderly first', +20, +15),
+                    ('personal_profit', 'Profit from Shortage', 'Divert supplies to sell at inflated prices', -20, -15)
+                ]
+            }
+        ]
+        
+        return events
+
+    async def _execute_reputation_event(self, channel, event_data, players_present, location_id, location_name):
+        """Execute a reputation event with player choices"""
+        embed = discord.Embed(
+            title=f"📍 {event_data['title']} at {location_name}",
+            description=event_data['description'],
+            color=event_data['color']
+        )
+        
+        embed.add_field(
+            name="⚖️ Alignment Event",
+            value="Your choices here will affect your reputation across the galaxy.",
+            inline=False
+        )
+        
+        # Create view with response options
+        view = ReputationEventView(self.bot, event_data, players_present, location_id)
+        
+        try:
+            message = await channel.send(embed=embed, view=view)
+            
+            # Schedule timeout handling
+            timeout_task = asyncio.create_task(self._handle_reputation_event_timeout(
+                channel, event_data, location_id, message, 300  # 5 minute timeout
+            ))
+            
+            # Store timeout task for potential cancellation
+            view.timeout_task = timeout_task
+            
+        except Exception as e:
+            print(f"❌ Failed to send reputation event: {e}")
+
+    async def _handle_reputation_event_timeout(self, channel, event_data, location_id, message, timeout_seconds):
+        """Handle timeout for reputation events"""
+        await asyncio.sleep(timeout_seconds)
+        
+        try:
+            # Disable the view
+            await message.edit(view=None)
+            
+            # Post ignored outcome
+            embed = discord.Embed(
+                title="⏰ Opportunity Missed",
+                description=event_data['ignored_outcome'],
+                color=0x808080
+            )
+            embed.add_field(
+                name="Consequence",
+                value="Sometimes inaction has consequences of its own.",
+                inline=False
+            )
+            
+            await channel.send(embed=embed)
+            
+        except Exception as e:
+            print(f"❌ Error handling reputation event timeout: {e}")
+
+    async def _handle_ignored_reputation_event(self, location_id):
+        """Handle reputation events when no players are present"""
+        # Get a random event for simulation
+        all_events = (self._get_positive_reputation_events("colony", 5) + 
+                      self._get_negative_reputation_events("colony", 5) + 
+                      self._get_mixed_reputation_events("colony", 5))
+        
+        if not all_events:
+            return
+        
+        event = random.choice(all_events)
+        
+        # Check if location has a channel
+        channel = await self._get_location_channel(location_id)
+        location_name = self.db.execute_query(
+            "SELECT name FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        location_name = location_name[0] if location_name else "Unknown Location"
+        
+        if channel:
+            # Post ignored outcome to channel
+            embed = discord.Embed(
+                title=f"📰 Incident at {location_name}",
+                description=event['ignored_outcome'],
+                color=0x696969
+            )
+            embed.add_field(
+                name="Local News",
+                value="Sometimes events unfold whether or not spacers are present to intervene.",
+                inline=False
+            )
+            
+            try:
+                await channel.send(embed=embed)
+            except Exception as e:
+                print(f"❌ Failed to post ignored event outcome: {e}")
+        else:
+            # Just log it
+            print(f"📰 Ignored reputation event at {location_name}: {event['title']} - {event['ignored_outcome'][:100]}...")
+
+    # Event-specific handlers for reputation events
+
+    async def _handle_lost_child_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle lost child event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'help_search':
+            await interaction.response.send_message(
+                f"🔍 **{char_name}** immediately organizes a systematic search, coordinating with security and gathering volunteers. The child is found quickly and safely!",
+                ephemeral=False
+            )
+        elif choice == 'offer_assistance':
+            await interaction.response.send_message(
+                f"🤝 **{char_name}** comforts the frantic parents and helps coordinate with facility security, providing crucial support during the crisis.",
+                ephemeral=False
+            )
+        else:  # ignore
+            await interaction.response.send_message(
+                f"⬅️ **{char_name}** decides it's not their responsibility and continues with their own business.",
+                ephemeral=False
+            )
+
+    async def _handle_medical_emergency_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle medical emergency event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'provide_medical_aid':
+            await interaction.response.send_message(
+                f"⚕️ **{char_name}** immediately provides medical assistance, stabilizing the patient until professional help arrives. Their quick action likely saved a life!",
+                ephemeral=False
+            )
+        elif choice == 'call_for_help':
+            await interaction.response.send_message(
+                f"📞 **{char_name}** takes charge of coordinating the emergency response and keeping bystanders calm and organized.",
+                ephemeral=False
+            )
+        else:  # stand_back
+            await interaction.response.send_message(
+                f"👥 **{char_name}** stays back to avoid interfering with any potential medical response.",
+                ephemeral=False
+            )
+
+    async def _handle_environmental_cleanup_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle environmental cleanup event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'volunteer_cleanup':
+            await interaction.response.send_message(
+                f"🌱 **{char_name}** immediately begins organizing volunteers and leading cleanup efforts, preventing the contamination from spreading!",
+                ephemeral=False
+            )
+        elif choice == 'provide_supplies':
+            await interaction.response.send_message(
+                f"📦 **{char_name}** contributes valuable cleanup supplies and materials to help contain the environmental hazard.",
+                ephemeral=False
+            )
+        else:  # minimal_help
+            await interaction.response.send_message(
+                f"📋 **{char_name}** reports the incident to the proper authorities and lets professionals handle it.",
+                ephemeral=False
+            )
+
+    async def _handle_refugee_assistance_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle refugee assistance event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'organize_aid':
+            await interaction.response.send_message(
+                f"🏠 **{char_name}** rallies the community to provide comprehensive aid, organizing food, shelter, and medical care for the refugee families!",
+                ephemeral=False
+            )
+        elif choice == 'donate_credits':
+            await interaction.response.send_message(
+                f"💰 **{char_name}** generously donates credits to help purchase essential supplies for the displaced families.",
+                ephemeral=False
+            )
+        else:  # offer_comfort
+            await interaction.response.send_message(
+                f"🤗 **{char_name}** provides emotional support and guidance to the refugees during their difficult time.",
+                ephemeral=False
+            )
+
+    async def _handle_corporate_bribery_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle corporate bribery event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'accept_major_bribe':
+            await interaction.response.send_message(
+                f"💰 **{char_name}** accepts the substantial corporate bribe, agreeing to ignore serious regulatory violations.",
+                ephemeral=False
+            )
+        elif choice == 'accept_small_bribe':
+            await interaction.response.send_message(
+                f"💸 **{char_name}** takes a smaller payment to look the other way on minor infractions.",
+                ephemeral=False
+            )
+        else:  # decline
+            await interaction.response.send_message(
+                f"✋ **{char_name}** politely declines the corporate offer without making a scene.",
+                ephemeral=False
+            )
+
+    async def _handle_illegal_cargo_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle illegal cargo event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'accept_and_sell':
+            await interaction.response.send_message(
+                f"🕵️ **{char_name}** accepts the job but secretly tips off customs, planning to profit from both sides.",
+                ephemeral=False
+            )
+        elif choice == 'accept_job':
+            await interaction.response.send_message(
+                f"📦 **{char_name}** accepts the suspicious cargo job, choosing not to ask questions about the contents.",
+                ephemeral=False
+            )
+        else:  # walk_away
+            await interaction.response.send_message(
+                f"🚶 **{char_name}** decides the job is too risky and walks away from the offer.",
+                ephemeral=False
+            )
+
+    async def _handle_protection_racket_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle protection racket event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'join_racket':
+            await interaction.response.send_message(
+                f"👊 **{char_name}** offers to help intimidate other ship owners, joining the protection racket operation.",
+                ephemeral=False
+            )
+        elif choice == 'pay_protection':
+            await interaction.response.send_message(
+                f"💳 **{char_name}** reluctantly pays the protection fee to avoid any trouble with their ship.",
+                ephemeral=False
+            )
+        else:  # refuse
+            await interaction.response.send_message(
+                f"🛡️ **{char_name}** firmly refuses to pay protection money and tells them to leave.",
+                ephemeral=False
+            )
+
+    async def _handle_witness_intimidation_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle witness intimidation event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'threaten_witness':
+            await interaction.response.send_message(
+                f"😠 **{char_name}** helps apply pressure to convince the witness to stay quiet about what they saw.",
+                ephemeral=False
+            )
+        elif choice == 'accept_payment':
+            await interaction.response.send_message(
+                f"💰 **{char_name}** accepts payment to look the other way and not encourage the witness to testify.",
+                ephemeral=False
+            )
+        else:  # stay_neutral
+            await interaction.response.send_message(
+                f"🤐 **{char_name}** refuses to get involved in either direction and stays neutral.",
+                ephemeral=False
+            )
+
+    async def _handle_whistleblower_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle whistleblower event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'expose_publicly':
+            await interaction.response.send_message(
+                f"📢 **{char_name}** courageously exposes the corporate corruption to the media and authorities, despite personal risk!",
+                ephemeral=False
+            )
+        elif choice == 'report_quietly':
+            await interaction.response.send_message(
+                f"📋 **{char_name}** submits the evidence through proper official channels, letting justice take its course.",
+                ephemeral=False
+            )
+        else:  # take_bribe
+            await interaction.response.send_message(
+                f"💰 **{char_name}** accepts the substantial bribe and destroys the incriminating evidence.",
+                ephemeral=False
+            )
+
+    async def _handle_faction_dispute_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle faction dispute event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'mediate_fairly':
+            await interaction.response.send_message(
+                f"⚖️ **{char_name}** skillfully mediates between the factions, finding a fair compromise that prevents violence!",
+                ephemeral=False
+            )
+        elif choice == 'support_underdogs':
+            await interaction.response.send_message(
+                f"🛡️ **{char_name}** stands with the disadvantaged faction against unfair treatment, defending justice.",
+                ephemeral=False
+            )
+        else:  # support_powerful
+            await interaction.response.send_message(
+                f"💪 **{char_name}** backs the stronger faction, prioritizing personal gain over fairness.",
+                ephemeral=False
+            )
+
+    async def _handle_information_broker_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle information broker event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'warn_targets':
+            await interaction.response.send_message(
+                f"⚠️ **{char_name}** uses the information to warn potential targets about possible pirate attacks, prioritizing safety!",
+                ephemeral=False
+            )
+        elif choice == 'sell_to_security':
+            await interaction.response.send_message(
+                f"🚔 **{char_name}** sells the information to security forces to help them prevent pirate attacks.",
+                ephemeral=False
+            )
+        else:  # sell_to_pirates
+            await interaction.response.send_message(
+                f"☠️ **{char_name}** sells the ship movement data to pirates, knowing it will be used for attacks.",
+                ephemeral=False
+            )
+
+    async def _handle_resource_distribution_event(self, interaction, choice, rep_major, rep_minor):
+        """Handle resource distribution event response"""
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        if choice == 'fair_distribution':
+            await interaction.response.send_message(
+                f"⚖️ **{char_name}** organizes fair and equitable distribution of the critical supplies to those most in need!",
+                ephemeral=False
+            )
+        elif choice == 'help_vulnerable':
+            await interaction.response.send_message(
+                f"❤️ **{char_name}** prioritizes helping the most vulnerable members of the community first.",
+                ephemeral=False
+            )
+        else:  # personal_profit
+            await interaction.response.send_message(
+                f"💰 **{char_name}** diverts supplies to sell at inflated prices, profiting from the shortage.",
+                ephemeral=False
+            )
 
 class PirateEncounterView(discord.ui.View):
     def __init__(self, bot, encounter_id, players, pirate_ships):
@@ -3518,5 +4137,107 @@ class AsteroidFieldView(discord.ui.View):
                 return
             
             char_name, nav_skill = char_data
+
+
+
+class ReputationEventView(discord.ui.View):
+    def __init__(self, bot, event_data, players_present, location_id):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.event_data = event_data
+        self.players_present = players_present
+        self.location_id = location_id
+        self.responses = {}  # Track who has responded
+        self.timeout_task = None
+        
+        # Create buttons for each response option
+        for i, (choice_id, label, description, rep_major, rep_minor) in enumerate(event_data['responses']):
+            button = discord.ui.Button(
+                label=label,
+                style=self._get_button_style(choice_id),
+                emoji=self._get_button_emoji(choice_id),
+                row=i // 3  # Up to 3 buttons per row
+            )
+            button.callback = self._create_callback(choice_id, rep_major, rep_minor)
+            self.add_item(button)
+    
+    def _get_button_style(self, choice_id):
+        """Get appropriate button style based on choice morality"""
+        if any(word in choice_id for word in ['help', 'assist', 'aid', 'fair', 'warn', 'expose', 'mediate']):
+            return discord.ButtonStyle.success
+        elif any(word in choice_id for word in ['bribe', 'illegal', 'threaten', 'racket', 'profit', 'pirates']):
+            return discord.ButtonStyle.danger
+        else:
+            return discord.ButtonStyle.secondary
+    
+    def _get_button_emoji(self, choice_id):
+        """Get appropriate emoji for choice"""
+        emoji_map = {
+            'help_search': '🔍', 'offer_assistance': '🤝', 'ignore': '⬅️',
+            'provide_medical_aid': '⚕️', 'call_for_help': '📞', 'stand_back': '👥',
+            'volunteer_cleanup': '🌱', 'provide_supplies': '📦', 'minimal_help': '📋',
+            'organize_aid': '🏠', 'donate_credits': '💰', 'offer_comfort': '🤗',
+            'accept_major_bribe': '💰', 'accept_small_bribe': '💸', 'decline': '✋',
+            'accept_and_sell': '🕵️', 'accept_job': '📦', 'walk_away': '🚶',
+            'join_racket': '👊', 'pay_protection': '💳', 'refuse': '🛡️',
+            'threaten_witness': '😠', 'accept_payment': '💰', 'stay_neutral': '🤐',
+            'expose_publicly': '📢', 'report_quietly': '📋', 'take_bribe': '💰',
+            'mediate_fairly': '⚖️', 'support_underdogs': '🛡️', 'support_powerful': '💪',
+            'warn_targets': '⚠️', 'sell_to_security': '🚔', 'sell_to_pirates': '☠️',
+            'fair_distribution': '⚖️', 'help_vulnerable': '❤️', 'personal_profit': '💰'
+        }
+        return emoji_map.get(choice_id, '❓')
+    
+    def _create_callback(self, choice_id, rep_major, rep_minor):
+        """Create callback function for button"""
+        async def callback(interaction):
+            if interaction.user.id not in self.players_present:
+                await interaction.response.send_message("You're not present at this location!", ephemeral=True)
+                return
+            
+            if interaction.user.id in self.responses:
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return
+            
+            # Record response
+            self.responses[interaction.user.id] = choice_id
+            
+            # Apply reputation changes
+            rep_cog = self.bot.get_cog('ReputationCog')
+            if rep_cog and (rep_major != 0 or rep_minor != 0):
+                # Apply major reputation change at this location
+                if rep_major != 0:
+                    await rep_cog.update_reputation(interaction.user.id, self.location_id, rep_major)
+                
+                # Apply minor reputation change to nearby locations
+                if rep_minor != 0:
+                    nearby_locations = self.bot.db.execute_query(
+                        "SELECT destination_location FROM corridors WHERE origin_location = ? AND is_active = 1",
+                        (self.location_id,),
+                        fetch='all'
+                    )
+                    for (nearby_id,) in nearby_locations[:3]:  # Limit to 3 nearby locations
+                        await rep_cog.update_reputation(interaction.user.id, nearby_id, rep_minor)
+            
+            # Call the event-specific handler
+            handler = self.event_data['handler']
+            await handler(interaction, choice_id, rep_major, rep_minor)
+            
+            # Check if all players have responded
+            if len(self.responses) >= len(self.players_present):
+                # Cancel timeout task
+                if self.timeout_task:
+                    self.timeout_task.cancel()
+                
+                # Disable buttons
+                for item in self.children:
+                    item.disabled = True
+                
+                try:
+                    await interaction.message.edit(view=self)
+                except:
+                    pass
+        
+        return callback
 async def setup(bot):
     await bot.add_cog(EnhancedEventsCog(bot))

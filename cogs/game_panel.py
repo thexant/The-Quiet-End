@@ -20,7 +20,7 @@ from discord import app_commands
 from datetime import datetime
 import asyncio
 import time
-
+import random
 
 class GamePanelView(discord.ui.View):
     def __init__(self, bot, include_map_button=False):
@@ -28,26 +28,28 @@ class GamePanelView(discord.ui.View):
         self.bot = bot
         self.db = bot.db
         
-        # Always add core buttons
-        self.add_item(CreateCharacterButton())
-        self.add_item(LoginButton())
-        self.add_item(LogoutButton())
+        # Always add core buttons with explicit row assignments
+        self.add_item(CreateCharacterButton(row=0))
+        self.add_item(CreateRandomCharacterButton(row=0))
+        self.add_item(LoginButton(row=1))
+        self.add_item(LogoutButton(row=1))
         
-        # Conditionally add map button
+        # Conditionally add map button on second row
         if include_map_button:
-            self.add_item(ViewMapButton())
-    
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Allow all users to use the panel"""
-        return True
+            self.add_item(ViewMapButton(row=1))
+        
+        async def interaction_check(self, interaction: discord.Interaction) -> bool:
+            """Allow all users to use the panel"""
+            return True
 
 class CreateCharacterButton(discord.ui.Button):
-    def __init__(self):
+    def __init__(self, row=None):
         super().__init__(
             label="Create Character",
             style=discord.ButtonStyle.primary,
             emoji="👤",
-            custom_id="game_panel:create_character"
+            custom_id="game_panel:create_character",
+            row=row
         )
     
     async def callback(self, interaction: discord.Interaction):
@@ -79,12 +81,13 @@ class CreateCharacterButton(discord.ui.Button):
             )
 
 class LoginButton(discord.ui.Button):
-    def __init__(self):
+    def __init__(self, row=None):
         super().__init__(
             label="Login",
             style=discord.ButtonStyle.success,
-            emoji="🔑",
-            custom_id="game_panel:login"
+            emoji="🔓",
+            custom_id="game_panel:login",
+            row=row
         )
     
     async def callback(self, interaction: discord.Interaction):
@@ -125,12 +128,13 @@ class LoginButton(discord.ui.Button):
             )
 
 class LogoutButton(discord.ui.Button):
-    def __init__(self):
+    def __init__(self, row=None):
         super().__init__(
             label="Logout",
             style=discord.ButtonStyle.danger,
-            emoji="👋",
-            custom_id="game_panel:logout"
+            emoji="🔒",
+            custom_id="game_panel:logout",
+            row=row
         )
     
     async def callback(self, interaction: discord.Interaction):
@@ -171,12 +175,13 @@ class LogoutButton(discord.ui.Button):
             )
 
 class ViewMapButton(discord.ui.Button):
-    def __init__(self):
+    def __init__(self, row=None):
         super().__init__(
             label="View Map",
             style=discord.ButtonStyle.secondary,
             emoji="🗺️",
-            custom_id=f"game_panel:view_map:{int(time.time())}"
+            custom_id=f"game_panel:view_map:{int(time.time())}",
+            row=row
         )
     
     async def callback(self, interaction: discord.Interaction):
@@ -221,7 +226,39 @@ class ViewMapButton(discord.ui.Button):
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
+class CreateRandomCharacterButton(discord.ui.Button):
+    def __init__(self, row=None):
+        super().__init__(
+            label="Create Random Character",
+            style=discord.ButtonStyle.secondary,
+            emoji="🎲",
+            custom_id="game_panel:create_random_character",
+            row=row
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        bot = interaction.client
+        db = bot.db
+        
+        # Check if user already has a character
+        existing_char = db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if existing_char:
+            await interaction.response.send_message(
+                f"You already have a character named **{existing_char[0]}**! Use the Login button instead.",
+                ephemeral=True
+            )
+            return
+        
+        # Import the random character creation function
+        from utils.views import create_random_character
+        
+        # Call the random character creation function
+        await create_random_character(bot, interaction)
 class GamePanelCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot

@@ -12,6 +12,8 @@ class CharacterCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
     
+    character_group = app_commands.Group(name="character", description="Character management commands")
+
     @app_commands.command(name="status", description="Quick access to character information and management")
     async def status_shorthand(self, interaction: discord.Interaction):
         # Check if user has a character
@@ -57,6 +59,49 @@ class CharacterCog(commands.Cog):
     async def here_shorthand(self, interaction: discord.Interaction):
         # Call the existing location info logic
         await self.location_info.callback(self, interaction)
+    
+    @character_group.command(name="name", description="Toggle automatic nickname changing based on your character name.")
+    @app_commands.describe(setting="Choose whether the bot should manage your nickname.")
+    @app_commands.choices(setting=[
+        app_commands.Choice(name="ON", value=1),
+        app_commands.Choice(name="OFF", value=0)
+    ])
+    async def character_name(self, interaction: discord.Interaction, setting: app_commands.Choice[int]):
+        """Toggles the automatic character nickname system."""
+        if not interaction.guild.me.guild_permissions.manage_nicknames:
+            await interaction.response.send_message(
+                "❌ The bot lacks the `Manage Nicknames` permission to perform this action.",
+                ephemeral=True
+            )
+            return
+
+        char_check = self.db.execute_query(
+            "SELECT 1 FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        if not char_check:
+            await interaction.response.send_message(
+                "You don't have a character yet! Use `/character create` first.",
+                ephemeral=True
+            )
+            return
+
+        # Update the database
+        self.db.execute_query(
+            "UPDATE characters SET auto_rename = ? WHERE user_id = ?",
+            (setting.value, interaction.user.id)
+        )
+
+        # Call the central nickname handler from the bot
+        await self.bot.update_nickname(interaction.user)
+
+        await interaction.response.send_message(
+            f"✅ Automatic character naming has been set to **{setting.name}**.",
+            ephemeral=True
+        )
+
+    
     @app_commands.command(
     name="act",
     description="Perform a roleplay action"
@@ -82,7 +127,6 @@ class CharacterCog(commands.Cog):
         # send publicly in the channel
         await interaction.response.send_message(f"{char_name} *{action}*")
         
-    character_group = app_commands.Group(name="character", description="Character management commands")
     
     @character_group.command(name="create", description="Create a new character")
     async def create_character(self, interaction: discord.Interaction):
@@ -134,14 +178,13 @@ class CharacterCog(commands.Cog):
             return
         
         current_location, location_status = char_data
-        if self.bot.get_cog('CombatCog') and self.bot.get_cog('CombatCog').check_combat_status(interaction.user.id):
+                # This is the only combat check needed.
+        combat_cog = self.bot.get_cog('CombatCog')
+        if combat_cog and combat_cog.check_any_combat_status(interaction.user.id):
             await interaction.response.send_message(
                 "❌ You cannot dock while in combat!",
                 ephemeral=True
             )
-            return
-        if not current_location:
-            await interaction.response.send_message("You're in deep space and cannot dock!", ephemeral=True)
             return
         
         if location_status == "docked":
@@ -185,12 +228,14 @@ class CharacterCog(commands.Cog):
         if not char_data:
             await interaction.response.send_message("Character not found!", ephemeral=True)
             return
-        if self.bot.get_cog('CombatCog') and self.bot.get_cog('CombatCog').check_combat_status(interaction.user.id):
+        # This is the only combat check needed.
+        combat_cog = self.bot.get_cog('CombatCog')
+        if combat_cog and combat_cog.check_any_combat_status(interaction.user.id):
             await interaction.response.send_message(
                 "❌ You cannot undock while in combat!",
                 ephemeral=True
             )
-            return    
+            return
         current_location, location_status = char_data
         
         # NEW: Check for active stationary jobs
@@ -925,13 +970,65 @@ class CharacterCog(commands.Cog):
             value="Click the button below to confirm permanent deletion.",
             inline=False
         )
-        
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
+    
+    async def cleanup_character_homes(self, user_id: int):
+        """Release all homes owned by a character when they die or are deleted"""
+        
+        # Get all owned homes
+        owned_homes = self.db.execute_query(
+            '''SELECT home_id, home_name, location_id FROM location_homes 
+               WHERE owner_id = ?''',
+            (user_id,),
+            fetch='all'
+        )
+        
+        if owned_homes:
+            # Make all homes available again
+            self.db.execute_query(
+                '''UPDATE location_homes 
+                   SET owner_id = NULL, is_available = 1, purchase_date = NULL
+                   WHERE owner_id = ?''',
+                (user_id,)
+            )
+            
+            # Remove any market listings
+            self.db.execute_query(
+                '''UPDATE home_market_listings 
+                   SET is_active = 0
+                   WHERE seller_id = ?''',
+                (user_id,)
+            )
+            
+            # Clean up home interior threads
+            for home_id, home_name, location_id in owned_homes:
+                interior_info = self.db.execute_query(
+                    "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+                    (home_id,),
+                    fetch='one'
+                )
+                
+                if interior_info and interior_info[0]:
+                    try:
+                        thread = self.bot.get_channel(interior_info[0])
+                        if thread and isinstance(thread, discord.Thread):
+                            await thread.edit(archived=True, reason="Owner character deleted")
+                    except:
+                        pass
+            
+            print(f"Released {len(owned_homes)} homes from character {user_id}")
 
     async def _execute_character_death(self, user_id: int, char_name: str, guild: discord.Guild, reason: str = "unknown"):
         """Execute automatic character death with enhanced descriptions."""
-
+        member = guild.get_member(user_id)
+        if member and guild.me.guild_permissions.manage_nicknames:
+            # We only clear the nickname if it matches the character who is dying.
+            # This avoids clearing a custom nickname the user may have set.
+            if member.nick == char_name:
+                try:
+                    await member.edit(nick=None, reason="Character has died.")
+                except Exception as e:
+                    print(f"Failed to clear nickname on death for {member}: {e}")
         # Get detailed character info for the obituary and death message
         char_data = self.db.execute_query(
             "SELECT c.current_location, c.current_ship_id, l.name as loc_name "
@@ -981,7 +1078,7 @@ class CharacterCog(commands.Cog):
             "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL WHERE taken_by = ?",
             (user_id,)
         )
-        
+        await self.cleanup_character_homes(user_id)
         from utils.channel_manager import ChannelManager
         channel_manager = ChannelManager(self.bot)
         
@@ -1201,6 +1298,8 @@ class CharacterCog(commands.Cog):
             inline=False
         )
         
+        await self.bot.update_nickname(interaction.user)
+        
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @character_group.command(name="logout", description="Log out of the game (saves your progress)")
@@ -1260,6 +1359,19 @@ class CharacterCog(commands.Cog):
 
     async def _execute_logout(self, user_id: int, char_name: str, interaction: discord.Interaction):
         """Execute the logout process"""
+        member = interaction.guild.get_member(user_id)
+        if member and interaction.guild.me.guild_permissions.manage_nicknames:
+            # We only clear the nickname if it matches the character name and auto-rename is on.
+            auto_rename_setting = self.db.execute_query(
+                "SELECT auto_rename FROM characters WHERE user_id = ?",
+                (user_id,),
+                fetch='one'
+            )
+            if auto_rename_setting and auto_rename_setting[0] == 1 and member.nick == char_name:
+                try:
+                    await member.edit(nick=None, reason="Character logged out.")
+                except Exception as e:
+                    print(f"Failed to clear nickname on logout for {member}: {e}")
         # Cancel any active jobs
         self.db.execute_query(
             "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE taken_by = ?",
@@ -1419,6 +1531,19 @@ class CharacterCog(commands.Cog):
             for guild in self.bot.guilds:
                 member = guild.get_member(user_id)
                 if member:
+                    # NEW: Clear nickname on auto-logout
+                    if guild.me.guild_permissions.manage_nicknames:
+                        auto_rename_setting = self.db.execute_query(
+                            "SELECT auto_rename FROM characters WHERE user_id = ?",
+                            (user_id,),
+                            fetch='one'
+                        )
+                        if auto_rename_setting and auto_rename_setting[0] == 1 and member.nick == char_name:
+                            try:
+                                await member.edit(nick=None, reason="Character auto-logged out.")
+                            except Exception as e:
+                                print(f"Failed to clear nickname on auto-logout for {member}: {e}")
+
                     from utils.channel_manager import ChannelManager
                     channel_manager = ChannelManager(self.bot)
                     
@@ -1458,6 +1583,8 @@ class CharacterCog(commands.Cog):
                 await user.send(embed=embed)
             except:
                 pass  # Failed to DM user
+        
+        print(f"🚪 Auto-logout: {char_name} (ID: {user_id}) - {reason}")
         
         print(f"🚪 Auto-logout: {char_name} (ID: {user_id}) - {reason}")
     @character_group.command(name="drop", description="Drop an item at your current location")
@@ -1711,28 +1838,43 @@ class CharacterCog(commands.Cog):
                 )
                 
                 # Notify user
+                # Notify user in their location channel
                 user = self.bot.get_user(user_id)
                 if user:
-                    embed = discord.Embed(
-                        title="🎉 LEVEL UP!",
-                        description=f"Congratulations! You've reached level {current_level}!",
-                        color=0xffd700
-                    )
-                    embed.add_field(
-                        name="Rewards",
-                        value=f"• +{skill_points_gained} skill points\n• +10 max HP",
-                        inline=False
-                    )
-                    embed.add_field(
-                        name="💡 Tip",
-                        value="Use `/character skills` to spend your skill points!",
-                        inline=False
-                    )
-                    
                     try:
-                        await user.send(embed=embed)
-                    except:
-                        pass  # Failed to DM user
+                        # Get user's current location
+                        user_location = self.db.execute_query(
+                            "SELECT current_location FROM characters WHERE user_id = ?",
+                            (user_id,),
+                            fetch='one'
+                        )
+                        
+                        if user_location and user_location[0]:
+                            location_channel_id = self.db.execute_query(
+                                "SELECT channel_id FROM locations WHERE location_id = ?",
+                                (user_location[0],),
+                                fetch='one'
+                            )
+                            
+                            if location_channel_id and location_channel_id[0]:
+                                location_channel = None
+                                for guild in self.bot.guilds:
+                                    location_channel = guild.get_channel(location_channel_id[0])
+                                    if location_channel:
+                                        break
+                                
+                                if location_channel:
+                                    embed = discord.Embed(
+                                        title="🎉 LEVEL UP!",
+                                        description=f"Congratulations! You've reached level {current_level}!",
+                                        color=0xffd700
+                                    )
+                                    embed.add_field(name="Rewards", value=f"• +{skill_points_gained} skill points\n• +10 max HP", inline=False)
+                                    embed.add_field(name="💡 Tip", value="Use `/character skills` to spend your skill points!", inline=False)
+                                    
+                                    await location_channel.send(f"{user.mention}", embed=embed)
+                    except Exception as e:
+                        print(f"Failed to send level up notification to location channel: {e}")
                 
                 # Increase max HP
                 self.db.execute_query(

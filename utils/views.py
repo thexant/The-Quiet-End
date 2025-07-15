@@ -7,7 +7,264 @@ from typing import List, Tuple, Dict
 import uuid
 
 from utils.ship_data import get_random_starter_ship
+    
+# Replace the entire create_random_character function at the end of utils/views.py
 
+async def create_random_character(bot, interaction: discord.Interaction):
+    """Create a random character for the user"""
+    
+    # Check if character already exists
+    existing_char = bot.db.execute_query(
+        "SELECT user_id FROM characters WHERE user_id = ?",
+        (interaction.user.id,),
+        fetch='one'
+    )
+
+    existing_identity = bot.db.execute_query(
+        "SELECT user_id FROM character_identity WHERE user_id = ?",
+        (interaction.user.id,),
+        fetch='one'
+    )
+
+    if existing_char:
+        await interaction.response.send_message(
+            "You already have a character! Use the Login button instead.",
+            ephemeral=True
+        )
+        return
+
+    # Clean up orphaned identity records (from incomplete deletions)
+    if existing_identity and not existing_char:
+        bot.db.execute_query(
+            "DELETE FROM character_identity WHERE user_id = ?",
+            (interaction.user.id,)
+        )
+        print(f"🧹 Cleaned up orphaned identity record for user {interaction.user.id}")
+    
+    # Generate random name using the NPC naming system
+    from utils.npc_data import generate_npc_name
+    first_name, last_name = generate_npc_name()
+    random_name = f"{first_name} {last_name}"
+    
+    # Generate random age
+    age = random.randint(18, 80)
+    
+    # Generate random birth date
+    birth_month = random.randint(1, 12)
+    birth_day = random.randint(1, 28)  # Safe day that works for all months
+    
+    # Get galaxy start date
+    galaxy_info = bot.db.execute_query(
+        "SELECT start_date FROM galaxy_info WHERE galaxy_id = 1",
+        fetch='one'
+    )
+
+    if galaxy_info and galaxy_info[0]:
+        raw_date = galaxy_info[0]
+        parts = raw_date.split('-')
+        if len(parts) == 3:
+            try:
+                start_year = int(parts[0]) if len(parts[0]) == 4 else int(parts[2])
+            except ValueError:
+                start_year = 2751
+        else:
+            start_year = 2751
+    else:
+        start_year = 2751  # Default
+    
+    # Calculate birth year
+    birth_year = start_year - age
+    
+    # Generate unique callsign
+    import string
+    
+    def generate_callsign():
+        letters = ''.join(random.choices(string.ascii_uppercase, k=4))
+        numbers = ''.join(random.choices(string.digits, k=4))
+        return f"{letters}-{numbers}"
+    
+    callsign = generate_callsign()
+    while bot.db.execute_query("SELECT user_id FROM characters WHERE callsign = ?", (callsign,), fetch='one'):
+        callsign = generate_callsign()
+    
+    # Generate balanced starting stats (total of 50 points)
+    stats = [10, 10, 10, 10]  # Base stats
+    bonus_points = 10
+
+    # Randomly distribute bonus points
+    for _ in range(bonus_points):
+        stat_idx = random.randint(0, 3)
+        stats[stat_idx] += 1
+
+    engineering, navigation, combat, medical = stats
+
+    # Generate random starting ship
+    ship_type, ship_name, exterior_desc, interior_desc = get_random_starter_ship()
+
+    # Create basic ship
+    bot.db.execute_query(
+        "INSERT INTO ships (owner_id, name, ship_type, exterior_description, interior_description) VALUES (?, ?, ?, ?, ?)",
+        (interaction.user.id, ship_name, ship_type, exterior_desc, interior_desc)
+    )
+
+    ship_id = bot.db.execute_query(
+        "SELECT ship_id FROM ships WHERE owner_id = ? ORDER BY ship_id DESC LIMIT 1",
+        (interaction.user.id,),
+        fetch='one'
+    )[0]
+
+    # Add the ship to player_ships table and set as active
+    bot.db.execute_query(
+        '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (?, ?, 1)''',
+        (interaction.user.id, ship_id)
+    )
+    # Generate ship activities
+    from utils.ship_activities import ShipActivityManager
+    activity_manager = ShipActivityManager(bot)
+    activity_manager.generate_ship_activities(ship_id, ship_type)
+    # Get random colony for spawning
+    rows = bot.db.execute_query(
+        "SELECT location_id FROM locations WHERE location_type = 'colony'",
+        fetch='all'
+    )
+
+    if not rows:
+        await interaction.response.send_message(
+            "No colonies available! Contact an administrator to generate locations first.",
+            ephemeral=True
+        )
+        return
+
+    # First, try to find colonies that have at least one active corridor
+    valid = []
+    for row in rows:
+        loc_id = row[0]
+        has_route = bot.db.execute_query(
+            "SELECT 1 FROM corridors WHERE origin_location = ? AND is_active = 1 LIMIT 1",
+            (loc_id,),
+            fetch='one'
+        )
+        if has_route:
+            valid.append(loc_id)
+
+    # If no colonies with active routes are found, fall back to any colony
+    if not valid:
+        valid = [row[0] for row in rows]
+
+    spawn_location = random.choice(valid)
+    
+    # Create character with active_ship_id set (no appearance or biography)
+    bot.db.execute_query(
+        '''INSERT INTO characters 
+           (user_id, name, callsign, appearance, current_location, ship_id, active_ship_id,
+            engineering, navigation, combat, medical) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        (interaction.user.id, random_name, callsign, "", 
+         spawn_location, ship_id, ship_id, engineering, navigation, combat, medical)
+    )
+    
+    # Create character identity record (no biography)
+    bot.db.execute_query(
+        '''INSERT OR REPLACE INTO character_identity 
+           (user_id, birth_month, birth_day, birth_year, age, birthplace_id)
+           VALUES (?, ?, ?, ?, ?, ?)''',
+        (interaction.user.id, birth_month, birth_day, birth_year, age, spawn_location)
+    )
+    
+    # Give starting inventory with proper metadata
+    from utils.item_config import ItemConfig
+
+    starting_items = [
+        "Emergency Rations",
+        "Basic Tools", 
+        "Basic Med Kit"
+    ]
+
+    for item_name in starting_items:
+        item_def = ItemConfig.get_item_definition(item_name)
+        if item_def:
+            metadata = ItemConfig.create_item_metadata(item_name)
+            quantity = 5 if item_name == "Emergency Rations" else 1
+            
+            bot.db.execute_query(
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, item_name, item_def["type"], quantity, 
+                 item_def["description"], item_def["base_value"], metadata)
+            )
+    
+    # Get location info for response
+    location_info = bot.db.execute_query(
+        "SELECT name FROM locations WHERE location_id = ?",
+        (spawn_location,),
+        fetch='one'
+    )
+    
+    # Auto-login the character
+    bot.db.execute_query(
+        "UPDATE characters SET is_logged_in = 1, login_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE user_id = ?",
+        (interaction.user.id,)
+    )
+
+    # Update activity tracker
+    if hasattr(bot, 'activity_tracker'):
+        bot.activity_tracker.update_activity(interaction.user.id)
+    
+    # Give location access
+    from utils.channel_manager import ChannelManager
+    channel_manager = ChannelManager(bot)
+    
+    # Change user's display name to character name
+    try:
+        display_name = random_name[:32]  # Discord limit is 32 characters
+        await interaction.user.edit(nick=display_name, reason="Random character name sync")
+        print(f"🏷️ Changed {interaction.user.name}'s nickname to '{display_name}'")
+    except discord.Forbidden:
+        print(f"❌ No permission to change nickname for {interaction.user.name}")
+    except discord.HTTPException as e:
+        print(f"❌ Failed to change nickname for {interaction.user.name}: {e}")
+    except Exception as e:
+        print(f"❌ Unexpected error changing nickname for {interaction.user.name}: {e}")
+    
+    success = await channel_manager.give_user_location_access(interaction.user, spawn_location)
+    location_name = location_info[0] if location_info else "Unknown Colony"
+    
+    embed = discord.Embed(
+        title="🎲 Random Character Created!",
+        description=f"Welcome to the galaxy, **{random_name}**!",
+        color=0x00ff00
+    )
+    
+    embed.add_field(name="Generated Name", value=random_name, inline=True)
+    embed.add_field(name="Age", value=f"{age} years old", inline=True)
+    embed.add_field(name="Radio Callsign", value=callsign, inline=True)
+    embed.add_field(name="Birthplace", value=location_name, inline=True)
+    embed.add_field(name="Born", value=f"{birth_month:02d}/{birth_day:02d}/{birth_year}", inline=True)
+    embed.add_field(name="Starting Ship", value=f"{ship_name} ({ship_type})", inline=True)
+    embed.add_field(name="Starting Credits", value="500", inline=True)
+    embed.add_field(name="Stats", value=f"ENG: {engineering}, NAV: {navigation}, CMB: {combat}, MED: {medical}", inline=True)
+    
+    embed.add_field(
+        name="🎲 Random Generation", 
+        value="This character was randomly generated. You can customize your name, DoB, age, appearance and biography later at an Administration location.",
+        inline=False
+    )
+    
+    if success:
+        embed.add_field(
+            name="📍 Location Access", 
+            value=f"A channel has been created for {location_name}. Check your channel list!",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="⚠️ Location Access", 
+            value=f"Character created but couldn't create channel for {location_name}. Contact an admin.",
+            inline=False
+        )
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    
 class CharacterCreationView(discord.ui.View):
     def __init__(self, bot):
         super().__init__(timeout=300)
@@ -66,6 +323,9 @@ class CharacterCreationModal(discord.ui.Modal):
         self.add_item(self.appearance_input)
         self.add_item(self.biography_input)
         # Removed image_url_input to stay within Discord's 5-component limit
+    # Updated function in views.py - replace the previous version
+
+
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
@@ -182,7 +442,10 @@ class CharacterCreationModal(discord.ui.Modal):
             '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (?, ?, 1)''',
             (interaction.user.id, ship_id)
         )
-
+        # Generate ship activities
+        from utils.ship_activities import ShipActivityManager
+        activity_manager = ShipActivityManager(self.bot)
+        activity_manager.generate_ship_activities(ship_id, ship_type)
         # Get random colony for spawning
         rows = self.bot.db.execute_query(
             "SELECT location_id FROM locations WHERE location_type = 'colony'",

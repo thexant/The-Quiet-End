@@ -6,10 +6,10 @@ Modify these values to customize your server experience
 
 # Bot Configuration
 BOT_CONFIG = {
-    'token': 'YOUR BOT TOKEN HERE',  # REPLACE WITH YOUR ACTUAL TOKEN OR USE ENVIRONMENT VARIABLE
+    'token': 'YOUR_TOKEN_HERE',  # REPLACE WITH YOUR ACTUAL TOKEN OR USE ENVIRONMENT VARIABLE
     'command_prefix': '!',           # Prefix for text commands (slash commands don't use this)
     'description': 'A 27th century space RPG bot',
-    'activity_name': 'in the void of space',  # Bot status message
+    'activity_name': 'The Stars',  # Bot status message
 }
 
 # Galaxy Generation Settings
@@ -32,6 +32,13 @@ GALAXY_CONFIG = {
             'outpost': 0.4
         }
     }
+}
+
+WEBMAP_CONFIG = {
+    'auto_start': False,              # Set to True to auto-start web map on bot startup
+    'auto_start_port': 8090,          # Port to use when auto-starting
+    'auto_start_host': '0.0.0.0',     # Host to bind to when auto-starting
+    'auto_start_time': 30,         # Seconds to wait after bot startup before starting web map
 }
 
 # Game Balance Settings
@@ -153,7 +160,7 @@ ADMIN_CONFIG = {
 EVENT_CONFIG = {
     'base_event_frequency': 0.25,     # Base chance per 15-minute check
     'travel_event_frequency': 0.15,   # Base chance for travel events
-    'galaxy_event_frequency': 0.05,   # Base chance for galaxy-wide events
+    'galaxy_event_frequency': 0.10,   # Base chance for galaxy-wide events
     'min_event_spacing_minutes': 30,  # Minimum time between events at same location
     'event_timeout_seconds': 300,     # How long interactive events stay active
     'max_concurrent_events': 3,       # Maximum events per location

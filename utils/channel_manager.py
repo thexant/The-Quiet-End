@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
 import re
+from utils.ship_activities import ShipActivityManager, ShipActivityView
 
 class ChannelManager:
     """
@@ -99,6 +100,247 @@ class ChannelManager:
         # Need to create new channel
         channel = await self._create_location_channel(guild, location_info, user)
         return channel
+    
+    async def get_or_create_home_channel(self, guild: discord.Guild, home_info: tuple, user: discord.Member = None) -> Optional[discord.TextChannel]:
+        """
+        Get existing channel for home or create one if needed
+        """
+        home_id, home_name, location_id, interior_desc, channel_id = home_info
+        
+        # Check if channel already exists
+        if channel_id:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                return channel
+            else:
+                # Channel was deleted, clear the reference
+                self.db.execute_query(
+                    "UPDATE home_interiors SET channel_id = NULL WHERE home_id = ?",
+                    (home_id,)
+                )
+        
+        # Create new home channel
+        channel = await self._create_home_channel(guild, home_info, user)
+        return channel
+
+    async def _create_home_channel(self, guild: discord.Guild, home_info: tuple, requesting_user: discord.Member = None) -> Optional[discord.TextChannel]:
+        """
+        Create a new Discord channel for a home interior
+        """
+        home_id, home_name, location_id, interior_desc, channel_id = home_info
+        
+        try:
+            # Generate safe channel name
+            channel_name = self._generate_home_channel_name(home_name)
+            
+            # Create channel topic
+            topic = f"Home Interior: {home_name}"
+            if interior_desc:
+                topic += f" | {interior_desc[:100]}"
+            
+            # Set up permissions - start with no access for @everyone
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False)
+            }
+            
+            # Give access to requesting user if provided
+            if requesting_user:
+                overwrites[requesting_user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            
+            # Find or create category for home channels
+            category = await self._get_or_create_home_category(guild)
+            
+            # Create the channel
+            channel = await guild.create_text_channel(
+                channel_name,
+                category=category,
+                topic=topic,
+                overwrites=overwrites,
+                reason=f"Home interior channel for: {home_name}"
+            )
+            
+            # Update database with channel info
+            self.db.execute_query(
+                "INSERT OR REPLACE INTO home_interiors (home_id, channel_id) VALUES (?, ?)",
+                (home_id, channel.id)
+            )
+            
+            # Send welcome message to channel
+            await self._send_home_welcome(channel, home_info)
+            
+            print(f"🏠 Created home channel #{channel_name} for {home_name}")
+            return channel
+            
+        except Exception as e:
+            print(f"❌ Failed to create home channel for {home_name}: {e}")
+            return None
+
+    def _generate_home_channel_name(self, home_name: str) -> str:
+        """Generate a Discord-safe channel name for homes"""
+        import re
+        safe_name = re.sub(r'[^\w\s-]', '', home_name.lower())
+        safe_name = re.sub(r'\s+', '-', safe_name)
+        safe_name = safe_name.strip('-')
+        
+        # Add home prefix
+        home_prefix = "home"
+        
+        # Ensure name isn't too long
+        max_name_length = 85 - len(home_prefix)
+        if len(safe_name) > max_name_length:
+            safe_name = safe_name[:max_name_length].rstrip('-')
+        
+        return f"{home_prefix}-{safe_name}"
+
+    async def _get_or_create_home_category(self, guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+        """
+        Get the residences category from the server config.
+        """
+        category_id = self.db.execute_query(
+            "SELECT residences_category_id FROM server_config WHERE guild_id = ?",
+            (guild.id,),
+            fetch='one'
+        )
+        
+        if category_id and category_id[0]:
+            category = guild.get_channel(category_id[0])
+            if isinstance(category, discord.CategoryChannel):
+                return category
+        
+        # Fallback for safety
+        for cat in guild.categories:
+            if cat.name == '🏠 RESIDENCES':
+                return cat
+        
+        return None
+
+    async def _send_home_welcome(self, channel: discord.TextChannel, home_info: tuple):
+        """Send a welcome message to a newly created home channel"""
+        home_id, home_name, location_id, interior_desc, channel_id = home_info
+        
+        # Get owner info
+        owner_id = self.db.execute_query(
+            "SELECT owner_id FROM location_homes WHERE home_id = ?",
+            (home_id,),
+            fetch='one'
+        )[0]
+        
+        owner_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (owner_id,),
+            fetch='one'
+        )[0]
+        
+        embed = discord.Embed(
+            title=f"🏠 Welcome to {home_name}",
+            description=interior_desc or "You are now inside your home.",
+            color=0x8B4513
+        )
+        
+        # Get home activities
+        from utils.home_activities import HomeActivityManager
+        activity_manager = HomeActivityManager(self.bot)
+        activities = activity_manager.get_home_activities(home_id)
+        
+        if activities:
+            activity_list = []
+            for activity in activities[:8]:
+                activity_list.append(f"{activity['icon']} {activity['name']}")
+            
+            embed.add_field(
+                name="🎮 Home Facilities",
+                value="\n".join(activity_list),
+                inline=False
+            )
+        
+        embed.add_field(
+            name="🎮 Available Actions",
+            value="• Use the activity buttons below to interact with your home\n• `/home interior leave` - Exit your home\n• `/home interior invite` - Invite someone to your home\n• `/character inventory` - Check your items",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="ℹ️ Home Interior",
+            value="This is your private home. Other players can only enter if you invite them.",
+            inline=False
+        )
+        
+        try:
+            await channel.send(embed=embed)
+            
+            # Send activity buttons
+            if activities:
+                from utils.home_activities import HomeActivityView
+                activity_view = HomeActivityView(self.bot, home_id, home_name, owner_name)
+                activity_embed = discord.Embed(
+                    title="🎯 Home Activities",
+                    description="Choose an activity:",
+                    color=0x00ff88
+                )
+                await channel.send(embed=activity_embed, view=activity_view)
+                
+        except Exception as e:
+            print(f"❌ Failed to send home welcome message: {e}")
+
+    async def give_user_home_access(self, user: discord.Member, home_id: int) -> bool:
+        """Give a user access to a home's channel"""
+        home_channel = self.db.execute_query(
+            "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+            (home_id,),
+            fetch='one'
+        )
+        
+        if not home_channel or not home_channel[0]:
+            return False
+        
+        channel = user.guild.get_channel(home_channel[0])
+        if not channel:
+            return False
+        
+        try:
+            await channel.set_permissions(user, read_messages=True, send_messages=True)
+            return True
+        except Exception as e:
+            print(f"❌ Failed to give {user.name} home access: {e}")
+            return False
+
+    async def remove_user_home_access(self, user: discord.Member, home_id: int) -> bool:
+        """Remove a user's access to a home channel"""
+        home_channel = self.db.execute_query(
+            "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+            (home_id,),
+            fetch='one'
+        )
+        
+        if not home_channel or not home_channel[0]:
+            return True
+        
+        channel = user.guild.get_channel(home_channel[0])
+        if not channel:
+            return True
+        
+        try:
+            await channel.set_permissions(user, overwrite=None)
+            return True
+        except Exception as e:
+            print(f"❌ Failed to remove {user.name} home access: {e}")
+            return False
+
+    async def cleanup_home_channel(self, channel_id: int):
+        """Delete a home channel immediately"""
+        channel = self.bot.get_channel(channel_id)
+        if channel:
+            try:
+                await channel.delete(reason="Home interior cleanup")
+                print(f"🏠 Cleaned up home channel #{channel.name}")
+            except Exception as e:
+                print(f"❌ Failed to delete home channel: {e}")
+        
+        # Clear from database
+        self.db.execute_query(
+            "UPDATE home_interiors SET channel_id = NULL WHERE channel_id = ?",
+            (channel_id,)
+        )
     async def get_location_statistics(self, guild: discord.Guild) -> dict:
         """
         Get comprehensive statistics about location channel usage
@@ -301,9 +543,28 @@ class ChannelManager:
         
         if not services_info:
             return
+        # Get available homes info
+        homes_info = self.db.execute_query(
+            '''SELECT COUNT(*), MIN(price), MAX(price), home_type
+               FROM location_homes 
+               WHERE location_id = ? AND is_available = 1
+               GROUP BY home_type''',
+            (loc_id,),
+            fetch='all'
+        )
 
         has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population, has_federal_supplies, has_black_market = services_info
-        
+        # Get available homes info
+        homes_info = self.db.execute_query(
+            '''SELECT COUNT(*), MIN(price), MAX(price), home_type
+               FROM location_homes 
+               WHERE location_id = ? AND is_available = 1
+               GROUP BY home_type''',
+            (loc_id,),
+            fetch='all'
+        )
+
+
         # Determine location status and enhance description
         location_status = None
         status_emoji = ""
@@ -409,7 +670,20 @@ class ChannelManager:
                 value=" • ".join(services),
                 inline=False
             )
-        
+                # Add to the embed after the services section:
+        if homes_info:
+            homes_text = []
+            for count, min_price, max_price, home_type in homes_info:
+                if count == 1:
+                    homes_text.append(f"• **{count} {home_type}** - {min_price:,} credits")
+                else:
+                    homes_text.append(f"• **{count} {home_type}s** - {min_price:,}-{max_price:,} credits")
+            
+            embed.add_field(
+                name="🏠 Available Homes",
+                value="\n".join(homes_text),
+                inline=True
+            )
         # STATIC NPCS
         npc_cog = self.bot.get_cog('NPCCog')
         if npc_cog:
@@ -1077,9 +1351,29 @@ class ChannelManager:
             return None
     
     async def _send_transit_welcome(self, channel: discord.TextChannel, corridor_name: str, destination: str, travel_type: str):
-        """
-        Send welcome message to transit channel - IMPROVED with travel type
-        """
+        """Send welcome message to transit channel - IMPROVED with travel type and ship info"""
+        # Get travelers in this channel
+        travelers = []
+        member_ships = {}
+        
+        # Extract user IDs from channel permissions
+        for target, overwrite in channel.overwrites.items():
+            if isinstance(target, discord.Member) and overwrite.read_messages:
+                travelers.append(target)
+                
+                # Get their ship info
+                ship_info = self.db.execute_query(
+                    '''SELECT s.ship_id, s.name, s.ship_type, s.interior_description
+                       FROM characters c
+                       JOIN ships s ON c.active_ship_id = s.ship_id
+                       WHERE c.user_id = ?''',
+                    (target.id,),
+                    fetch='one'
+                )
+                
+                if ship_info:
+                    member_ships[target.id] = ship_info
+        
         # Determine title and description based on travel type
         if travel_type == "local space":
             title = f"🌌 Local Space Transit to {destination}"
@@ -1100,6 +1394,42 @@ class ChannelManager:
             color=0x800080 if travel_type == "gated corridor" else 0xff6600 if travel_type == "local space" else 0xff0000
         )
         
+        # If single traveler, show their ship info
+        if len(travelers) == 1 and travelers[0].id in member_ships:
+            ship_id, ship_name, ship_type, interior_desc = member_ships[travelers[0].id]
+            
+            embed.add_field(
+                name="🚀 Your Ship",
+                value=f"**{ship_name}** ({ship_type})",
+                inline=False
+            )
+            
+            if interior_desc:
+                embed.add_field(
+                    name="📐 Ship Interior",
+                    value=interior_desc[:300] + "..." if len(interior_desc) > 300 else interior_desc,
+                    inline=False
+                )
+        elif len(travelers) > 1:
+            # Show all ships in group travel
+            ship_list = []
+            for traveler in travelers[:5]:  # Limit display
+                if traveler.id in member_ships:
+                    _, ship_name, ship_type, _ = member_ships[traveler.id]
+                    char_name = self.db.execute_query(
+                        "SELECT name FROM characters WHERE user_id = ?",
+                        (traveler.id,),
+                        fetch='one'
+                    )[0]
+                    ship_list.append(f"• **{char_name}** - {ship_name} ({ship_type})")
+            
+            if ship_list:
+                embed.add_field(
+                    name="🚀 Group Fleet",
+                    value="\n".join(ship_list),
+                    inline=False
+                )
+        
         embed.add_field(
             name="⚠️ Transit Hazards",
             value=hazard_text,
@@ -1108,7 +1438,7 @@ class ChannelManager:
         
         embed.add_field(
             name="🛠️ Available Actions",
-            value="• `/character ship` - Check ship status\n• `/character inventory` - Use items\n• `/travel status` - Check progress\n• `/travel emergency_exit` - Emergency exit (dangerous!)",
+            value="• Use ship activities below to pass the time\n• `/character ship` - Check ship status\n• `/character inventory` - Use items\n• `/travel status` - Check progress\n• `/travel emergency_exit` - Emergency exit (dangerous!)",
             inline=False
         )
         
@@ -1127,6 +1457,28 @@ class ChannelManager:
         
         try:
             await channel.send(embed=embed)
+            
+            # Send ship activity buttons for single traveler
+            if len(travelers) == 1 and travelers[0].id in member_ships:
+                ship_id, ship_name, _, _ = member_ships[travelers[0].id]
+                char_name = self.db.execute_query(
+                    "SELECT name FROM characters WHERE user_id = ?",
+                    (travelers[0].id,),
+                    fetch='one'
+                )[0]
+                
+                activity_manager = ShipActivityManager(self.bot)
+                activities = activity_manager.get_ship_activities(ship_id)
+                
+                if activities:
+                    activity_view = ShipActivityView(self.bot, ship_id, ship_name, char_name, destination)
+                    activity_embed = discord.Embed(
+                        title="🎯 Ship Activities",
+                        description="Pass the time during transit with your ship's facilities:",
+                        color=0x00ff88
+                    )
+                    await channel.send(embed=activity_embed, view=activity_view)
+                    
         except Exception as e:
             print(f"❌ Failed to send transit welcome: {e}")
     async def immediate_logout_cleanup(self, guild: discord.Guild, location_id: int, ship_id: int = None):
@@ -1361,6 +1713,19 @@ class ChannelManager:
         """Send a welcome message to a newly created ship channel"""
         ship_id, ship_name, ship_type, interior_desc, channel_id = ship_info
         
+        # Get owner info
+        owner_id = self.db.execute_query(
+            "SELECT owner_id FROM ships WHERE ship_id = ?",
+            (ship_id,),
+            fetch='one'
+        )[0]
+        
+        owner_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (owner_id,),
+            fetch='one'
+        )[0]
+        
         embed = discord.Embed(
             title=f"🚀 Welcome Aboard {ship_name}",
             description=interior_desc or "You are now inside your ship.",
@@ -1373,9 +1738,24 @@ class ChannelManager:
             inline=True
         )
         
+        # Get ship activities
+        activity_manager = ShipActivityManager(self.bot)
+        activities = activity_manager.get_ship_activities(ship_id)
+        
+        if activities:
+            activity_list = []
+            for activity in activities[:8]:  # Limit display
+                activity_list.append(f"{activity['icon']} {activity['name']}")
+            
+            embed.add_field(
+                name="🎮 Ship Facilities",
+                value="\n".join(activity_list),
+                inline=False
+            )
+        
         embed.add_field(
             name="🎮 Available Actions",
-            value="• `/ship interior leave` - Exit the ship\n• `/character inventory` - Check your items\n• `/character ship` - Check ship status",
+            value="• Use the activity buttons below to interact with your ship\n• `/ship interior leave` - Exit the ship\n• `/character inventory` - Check your items\n• `/character ship` - Check ship status",
             inline=False
         )
         
@@ -1387,6 +1767,17 @@ class ChannelManager:
         
         try:
             await channel.send(embed=embed)
+            
+            # Send activity buttons
+            if activities:
+                activity_view = ShipActivityView(self.bot, ship_id, ship_name, owner_name)
+                activity_embed = discord.Embed(
+                    title="🎯 Ship Activities",
+                    description="Choose an activity to interact with your ship:",
+                    color=0x00ff88
+                )
+                await channel.send(embed=activity_embed, view=activity_view)
+                
         except Exception as e:
             print(f"❌ Failed to send ship welcome message: {e}")
 
@@ -1507,7 +1898,7 @@ class CharacterDeleteConfirmView(discord.ui.View):
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-        
+        await self.cleanup_character_homes(user_id)
         print(f"💀 Character deletion (manual): {self.char_name} (ID: {self.user_id})")
     
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")

@@ -1,4 +1,3 @@
-# cogs/web_map.py
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -9,11 +8,13 @@ from typing import Optional, Dict, List
 from datetime import datetime
 import threading
 
-# FastAPI imports
+
+# FastAPI imports - clean and simple
 try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
     from fastapi.responses import HTMLResponse, FileResponse
     from fastapi.staticfiles import StaticFiles
+    from fastapi.templating import Jinja2Templates
     import uvicorn
     FASTAPI_AVAILABLE = True
 except ImportError:
@@ -33,9 +34,104 @@ class WebMapCog(commands.Cog, name="WebMap"):
         self.external_ip_override = None
         # Create web directories if they don't exist
         self._ensure_web_directories()
-        self.update_player_data_task.start()
         # Create HTML and static files
         self._create_web_files()
+        # Note: Don't start the task here - start it in cog_load
+    async def cog_load(self):
+        """Called when the cog is loaded"""
+        self.update_player_data_task.start()
+        print("✅ WebMap tasks started")
+        
+        # Check for auto-start configuration
+        from config import WEBMAP_CONFIG
+        if WEBMAP_CONFIG.get('auto_start', False):
+            # Schedule auto-start after a delay to ensure bot is fully loaded
+            delay = WEBMAP_CONFIG.get('auto_start_delay', 10)
+            self.bot.loop.create_task(self._auto_start_webmap(delay))
+    
+    async def _auto_start_webmap(self, delay: int):
+        """Auto-start the web map after a delay"""
+        try:
+            print(f"⏳ Web map auto-start scheduled in {delay} seconds...")
+            await asyncio.sleep(delay)
+            
+            # Get config settings
+            from config import WEBMAP_CONFIG
+            port = WEBMAP_CONFIG.get('auto_start_port', 8090)
+            host = WEBMAP_CONFIG.get('auto_start_host', '0.0.0.0')
+            
+            # Check if already running (in case manually started)
+            if self.is_running:
+                print("✅ Web map already running, skipping auto-start")
+                return
+            
+            print(f"🚀 Auto-starting web map on {host}:{port}...")
+            
+            # Check if port is available
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            check_host = 'localhost' if host == '0.0.0.0' else host
+            result = sock.connect_ex((check_host, port))
+            sock.close()
+            
+            if result == 0:
+                print(f"❌ Cannot auto-start web map: Port {port} is already in use!")
+                return
+            
+            # Setup and start the server
+            self.host = host
+            self.port = port
+            self.app = self._setup_fastapi()
+            
+            if not self.app:
+                print("❌ Failed to setup FastAPI application for auto-start")
+                return
+            
+            # Start server in separate thread
+            self.server_thread = threading.Thread(target=self._run_server, daemon=True)
+            self.server_thread.start()
+            
+            # Give the server a moment to start
+            await asyncio.sleep(3)
+            
+            # Verify server is running
+            try:
+                import aiohttp
+                verify_url = f"http://localhost:{port}/"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(verify_url, timeout=10) as resp:
+                        if resp.status != 200:
+                            raise Exception(f"Server returned status {resp.status}")
+            except Exception as e:
+                print(f"❌ Web map auto-start verification failed: {e}")
+                self.is_running = False
+                return
+            
+            # Set running state
+            self.is_running = True
+            
+            # Update game panels
+            await self._update_game_panels_for_map_status()
+            
+            # Try to detect external IP for logging
+            external_ip = None
+            try:
+                external_ip = await self._get_external_ip()
+            except:
+                pass
+            
+            if external_ip:
+                print(f"✅ Web map auto-started successfully!")
+                print(f"   Local URL: http://localhost:{port}")
+                print(f"   External URL: http://{external_ip}:{port}")
+            else:
+                print(f"✅ Web map auto-started successfully at http://localhost:{port}")
+                print(f"   (Could not detect external IP)")
+            
+        except Exception as e:
+            print(f"❌ Error during web map auto-start: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _ensure_web_directories(self):
         """Create necessary directories for web files"""
@@ -74,6 +170,8 @@ class WebMapCog(commands.Cog, name="WebMap"):
     async def cog_unload(self):
         """Clean up when cog is unloaded"""
         self.update_player_data_task.cancel()
+        if hasattr(self, 'update_wiki_data_task'):
+            self.update_wiki_data_task.cancel()
     def _get_display_url(self) -> tuple[str, str]:
         """Get the display URL and note for users"""
         # If there's an override, use it
@@ -125,7 +223,9 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 <h1>NAVIGATION TERMINAL</h1>
                 <div class="subtitle">◦ TRANSIT NETWORK OVERVIEW: ACTIVE ROUTES AND KNOWN LOCATIONS ◦</div>
             </div>
-            
+            <div class="header-nav">
+                <a href="/wiki" class="nav-button wiki-button">WIKI</a>
+            </div>
             <button id="mobile-toggle" class="mobile-toggle">☰</button>
             
             <div id="controls-section" class="controls-section">
@@ -307,6 +407,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
             --text-secondary: #cc88dd;
             --border-color: #220033;
         }
+        
         /* Alignment-specific location colors */
         .location-loyalist {
             filter: drop-shadow(0 0 8px #4169E1) !important;
@@ -1407,7 +1508,46 @@ class WebMapCog(commands.Cog, name="WebMap"):
             transition: opacity 0.3s ease !important;
             z-index: -1 !important; /* Ensure hidden routes go behind everything */
         }
+        /* Header Navigation */
+        .header-nav {
+            position: absolute;
+            top: 1rem;
+            right: 4rem;
+            z-index: 100;
+        }
 
+        .nav-button {
+            background: linear-gradient(145deg, var(--primary-color), var(--secondary-color));
+            color: var(--primary-bg);
+            border: 2px solid var(--primary-color);
+            border-radius: 4px;
+            padding: 0.5rem 1rem;
+            font-size: 0.75rem;
+            font-family: 'Share Tech Mono', monospace;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 400;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            box-shadow: 0 0 15px var(--glow-primary);
+            text-shadow: none;
+        }
+
+        .nav-button:hover {
+            box-shadow: 0 0 25px var(--glow-primary);
+            transform: translateY(-1px);
+            text-decoration: none;
+            color: var(--primary-bg);
+        }
+
+        .wiki-button {
+            background: linear-gradient(145deg, var(--accent-color), var(--secondary-color));
+            border-color: var(--accent-color);
+        }
         /* Mobile Responsiveness */
         @media (max-width: 768px) {
             .header-toggle {
@@ -1418,7 +1558,18 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 height: 36px;
                 font-size: 0.7rem;
             }
+            .header-nav {
+                position: relative;
+                top: auto;
+                right: auto;
+                margin-top: 0.5rem;
+                text-align: center;
+            }
             
+            .nav-button {
+                font-size: 0.7rem;
+                padding: 0.4rem 0.8rem;
+            }
             .mobile-toggle {
                 display: block;
                 position: absolute;
@@ -1789,9 +1940,16 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         this.init();
                     }
                     
-                    initializeColorScheme() {
-                        const themes = ['blue', 'amber', 'green', 'red', 'purple'];
-                        const selectedTheme = themes[Math.floor(Math.random() * themes.length)];
+                    initializeColorScheme(theme = null) {
+                        let selectedTheme;
+                        
+                        if (theme) {
+                            selectedTheme = theme;
+                        } else {
+                            // Fallback to random if no theme provided
+                            const themes = ['blue', 'amber', 'green', 'red', 'purple'];
+                            selectedTheme = themes[Math.floor(Math.random() * themes.length)];
+                        }
                         
                         document.body.className = `theme-${selectedTheme}`;
                         
@@ -1803,6 +1961,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         this.setupMap();
                         console.log('🎛️ Setting up event listeners...');
                         this.setupEventListeners();
+                        this.setupSearchFunctionality();
                         console.log('🔌 Connecting WebSocket...');
                         this.connectWebSocket();
                         console.log('👁️ Hiding loading overlay...');
@@ -1930,7 +2089,6 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         });
                         
                         // View controls
-                        // View controls
                         const fitBoundsBtn = document.getElementById('fit-bounds-btn');
                         const toggleLabelsBtn = document.getElementById('toggle-labels-btn');
                         const toggleRoutesBtn = document.getElementById('toggle-routes-btn');
@@ -1977,6 +2135,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                                 this.hideLocationPanel();
                             }
                         });
+                        
                         // Keyboard shortcuts
                         document.addEventListener('keydown', (e) => {
                             if (e.target.tagName.toLowerCase() === 'input' || e.target.tagName.toLowerCase() === 'select') return;
@@ -2006,7 +2165,92 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             }
                         });
                     }
-                    
+                    setupSearchFunctionality() {
+                        const searchInput = document.getElementById('universal-search');
+                        const searchBtn = document.getElementById('search-btn');
+                        const resultsContainer = document.getElementById('search-results');
+
+                        if (!searchInput || !searchBtn || !resultsContainer) return;
+
+                        const performSearch = () => {
+                            const query = searchInput.value.trim();
+                            if (!query) {
+                                resultsContainer.innerHTML = '<p>Please enter a search term.</p>';
+                                return;
+                            }
+
+                            this.performUniversalSearch(query);
+                        };
+
+                        searchBtn.addEventListener('click', performSearch);
+                        searchInput.addEventListener('keypress', (e) => {
+                            if (e.key === 'Enter') {
+                                performSearch();
+                            }
+                        });
+                    }
+
+                    performUniversalSearch(query) {
+                        const resultsContainer = document.getElementById('search-results');
+                        if (!resultsContainer) return;
+
+                        const queryLower = query.toLowerCase();
+                        const results = {
+                            locations: [],
+                            npcs: [],
+                            logs: [],
+                            news: []
+                        };
+
+                        // Search locations
+                        if (this.data && this.data.locations) {
+                            this.data.locations.forEach(location => {
+                                if (location.name.toLowerCase().includes(queryLower) ||
+                                    location.description.toLowerCase().includes(queryLower) ||
+                                    location.type.toLowerCase().includes(queryLower)) {
+                                    results.locations.push(location);
+                                }
+                            });
+                        }
+
+                        this.displaySearchResults(results, query);
+                    }
+
+                    displaySearchResults(results, query) {
+                        const resultsContainer = document.getElementById('search-results');
+                        const totalResults = results.locations.length;
+
+                        if (totalResults === 0) {
+                            resultsContainer.innerHTML = `
+                                <div class="no-results">
+                                    <p>No results found for "${query}"</p>
+                                    <p>Try searching for location names or types.</p>
+                                </div>
+                            `;
+                            return;
+                        }
+
+                        let html = `<div class="search-results-summary">
+                                        <h3>Search Results for "${query}" (${totalResults} found)</h3>
+                                    </div>`;
+
+                        // Display locations
+                        if (results.locations.length > 0) {
+                            html += `<div class="search-section">
+                                        <h4>📍 Locations (${results.locations.length})</h4>`;
+                            results.locations.forEach(location => {
+                                html += `<div class="search-result location-result">
+                                            <h5>${location.name}</h5>
+                                            <p>Type: ${location.location_type}</p>
+                                            <p>${location.description || 'No description available.'}</p>
+                                         </div>`;
+                            });
+                            html += '</div>';
+                        }
+
+                        resultsContainer.innerHTML = html;
+                    }
+
                     connectWebSocket() {
                         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                         const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -2063,6 +2307,9 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         switch(data.type) {
                             case 'galaxy_data':
                                 this.updateGalaxyData(data.data);
+                                if (data.data.selected_theme) {
+                                    this.initializeColorScheme(data.data.selected_theme);
+                                }
                                 break;
                             case 'player_update':
                                 this.updatePlayers(data.data);
@@ -2078,7 +2325,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                                 break;
                             case 'npc_transit_update':
                                 this.updateNPCsInTransit(data.data);
-                                break;    
+                                break;
                             default:
                                 console.warn('Unknown WebSocket message type:', data.type);
                         }
@@ -3311,34 +3558,147 @@ class WebMapCog(commands.Cog, name="WebMap"):
         with open("web/static/js/map.js", "w", encoding='utf-8') as f:
             f.write(js_content)
         
+
     def _setup_fastapi(self):
-        """Setup FastAPI application"""
+        """Setup FastAPI application with live wiki functionality"""
         if not FASTAPI_AVAILABLE:
+            print("❌ FastAPI not available. Install with: pip install fastapi uvicorn[standard] jinja2")
             return None
             
-        app = FastAPI(title="Galaxy Map", description="Interactive galaxy map for The Quiet End")
+        app = FastAPI(title="Galaxy Map & Wiki", description="Interactive galaxy map and wiki for The Quiet End")
+        
+        # Setup templates
+        try:
+            self._setup_wiki_templates()
+            templates = Jinja2Templates(directory="web/templates")
+            print("✅ Wiki templates initialized successfully")
+        except Exception as e:
+            print(f"⚠️ Template setup error: {e}")
+            templates = None
         
         # Mount static files
-        app.mount("/static", StaticFiles(directory="web/static"), name="static")
+        try:
+            app.mount("/static", StaticFiles(directory="web/static"), name="static")
+        except Exception as e:
+            print(f"⚠️ Static files mount error: {e}")
         
         @app.get("/", response_class=HTMLResponse)
         async def read_root():
-            with open("web/templates/index.html", "r", encoding='utf-8') as f:
-                return HTMLResponse(content=f.read())
+            """Serve the interactive map"""
+            try:
+                with open("web/templates/index.html", "r", encoding='utf-8') as f:
+                    return HTMLResponse(content=f.read())
+            except FileNotFoundError:
+                return HTMLResponse(
+                    content="<h1>Map Loading...</h1><p>Map template not found. Server starting up...</p>",
+                    status_code=404
+                )
+            except Exception as e:
+                return HTMLResponse(
+                    content=f"<h1>Map Error</h1><p>Error loading map: {str(e)}</p>",
+                    status_code=500
+                )
         
+        @app.get("/wiki", response_class=HTMLResponse)
+        async def wiki_page(request: Request):
+            """Serve the wiki page with live data and debugging"""
+            try:
+                # Get wiki data
+                wiki_data = await self._get_comprehensive_wiki_data()
+                
+                # Ensure logs and history are present
+                if 'logs' not in wiki_data or not wiki_data['logs']:
+                    wiki_data['logs'] = await self._fetch_logs()
+                if 'history' not in wiki_data or not wiki_data['history']:
+                    wiki_data['history'] = await self._fetch_detailed_history()
+                
+                # Debug: Print what we're sending to the frontend
+                print("🌐 Sending to frontend:")
+                print(f"   - Logs: {len(wiki_data.get('logs', []))}")
+                print(f"   - History: {len(wiki_data.get('history', []))}")
+                
+                if templates:
+                    # Use Jinja2 template
+                    return templates.TemplateResponse("wiki.html", {
+                        "request": request,
+                        "galaxy_data": wiki_data,
+                        "galaxy_data_json": json.dumps(wiki_data, default=str)
+                    })
+                else:
+                    # Fallback to direct HTML generation
+                    return await self._generate_wiki_html_fallback(wiki_data)
+                    
+            except Exception as e:
+                print(f"❌ Wiki page error: {e}")
+                import traceback
+                traceback.print_exc()
+                import traceback
+                traceback.print_exc()
+                
+                error_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Wiki Loading...</title>
+                    <style>
+                        body {{ font-family: 'Courier New', monospace; background: #000814; color: #00ffff; padding: 2rem; }}
+                        .error {{ border: 1px solid #00ffff; padding: 1rem; margin: 1rem 0; background: rgba(0,255,255,0.1); }}
+                        a {{ color: #00ffff; }}
+                    </style>
+                </head>
+                <body>
+                    <h1>🌌 Galaxy Wiki</h1>
+                    <div class="error">
+                        <strong>Loading Error:</strong> {str(e)}<br><br>
+                        <strong>This usually means:</strong>
+                        <ul>
+                            <li>Galaxy data is still being generated</li>
+                            <li>Database is initializing</li>
+                            <li>Templates are being created</li>
+                        </ul>
+                        <br>
+                        <strong>Try:</strong> Refresh in a few seconds or check console for details.
+                    </div>
+                    <p><a href="/">🗺️ Return to Live Map</a></p>
+                </body>
+                </html>
+                """
+                return HTMLResponse(content=error_html, status_code=500)
+
         @app.get("/api/galaxy")
         async def get_galaxy_data():
             """Get galaxy data for the map"""
             return await self._get_galaxy_data()
         
+        @app.get("/api/wiki/data")
+        async def get_wiki_data():
+            """Get comprehensive wiki data"""
+            return await self._get_comprehensive_wiki_data()
+        
         @app.get("/api/location/{location_id}/sub-locations")
         async def get_location_sub_locations(location_id: int):
             """Get sub-locations for a specific location"""
             try:
-                from utils.sub_locations import SubLocationManager
-                sub_manager = SubLocationManager(self.bot)
-                sub_locations = await sub_manager.get_available_sub_locations(location_id)
-                return sub_locations
+                sub_locations = self.db.execute_query("""
+                    SELECT sub_location_id, name, description, sub_type, is_active
+                    FROM sub_locations 
+                    WHERE parent_location_id = ?
+                """, (location_id,), fetch='all')
+                
+                if not sub_locations:
+                    return []
+                    
+                return [
+                    {
+                        "id": sub[0],
+                        "name": sub[1],
+                        "description": sub[2],
+                        "type": sub[3],
+                        "is_active": bool(sub[4]),
+                        "icon": "📍"
+                    }
+                    for sub in sub_locations
+                ]
             except Exception as e:
                 print(f"Error getting sub-locations: {e}")
                 return []
@@ -3352,58 +3712,48 @@ class WebMapCog(commands.Cog, name="WebMap"):
             except Exception as e:
                 print(f"Error calculating route: {e}")
                 return {"error": "Route calculation failed"}
-        @app.get("/api/npc/{npc_id}")
-        async def get_npc_details(npc_id: int):
-            """Get details for a specific NPC"""
-            try:
-                npc_data = self.db.execute_query(
-                    """SELECT name, callsign, age, ship_name, ship_type, current_location, credits
-                       FROM dynamic_npcs WHERE npc_id = ? AND is_alive = 1""",
-                    (npc_id,),
-                    fetch='one'
-                )
                 
-                if npc_data:
-                    return {
-                        "name": npc_data[0],
-                        "callsign": npc_data[1],
-                        "age": npc_data[2],
-                        "ship_name": npc_data[3],
-                        "ship_type": npc_data[4],
-                        "current_location": npc_data[5],
-                        "credits": npc_data[6]
-                    }
-                else:
-                    return {"error": "NPC not found"}
-            except Exception as e:
-                return {"error": str(e)}
         @app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
             self.websocket_clients.add(websocket)
             
             try:
-                # Send initial data
+                # Send initial data with enhanced debugging
                 try:
+                    print("🔗 New WebSocket client connected, sending initial data...")
+                    
                     galaxy_data = await self._get_galaxy_data()
                     await websocket.send_text(json.dumps({
                         "type": "galaxy_data",
                         "data": galaxy_data
-                    }))
+                    }, default=str))
                     
-                    # Send transit data
+                    # Send comprehensive wiki data
+                    wiki_data = await self._get_comprehensive_wiki_data()
+                    
+                    # Debug what we're sending
+                    logs_count = len(wiki_data.get('logs', []))
+                    history_count = len(wiki_data.get('history', []))
+                    print(f"📊 Sending to new client: {logs_count} logs, {history_count} history events")
+                    
                     await websocket.send_text(json.dumps({
-                        "type": "transit_update",
-                        "data": galaxy_data.get("players_in_transit", [])
-                    }))
-                    print(f"✅ WebSocket client connected and sent initial data")
+                        "type": "wiki_data", 
+                        "data": wiki_data
+                    }, default=str))
+                    
+                    print(f"✅ WebSocket client connected and sent initial data (logs: {logs_count}, history: {history_count})")
+                    
                 except Exception as e:
-                    print(f"❌ Error sending initial galaxy data: {e}")
-                    # Send minimal data to prevent frontend from hanging
+                    print(f"❌ Error sending initial data to WebSocket client: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    
+                    # Send minimal fallback data
                     await websocket.send_text(json.dumps({
                         "type": "galaxy_data",
                         "data": {
-                            "galaxy_name": "Unknown Galaxy",
+                            "galaxy_name": "Loading...",
                             "current_time": "Unknown",
                             "locations": [],
                             "corridors": [],
@@ -3413,19 +3763,2728 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         }
                     }))
                 
-                # Keep connection alive and handle messages
+                # Keep connection alive
                 while True:
-                    data = await websocket.receive_text()
-                    # Handle any client messages if needed
-                    
+                    try:
+                        data = await websocket.receive_text()
+                        # Handle any client messages if needed
+                        print(f"📨 Received WebSocket message: {data[:100]}{'...' if len(data) > 100 else ''}")
+                    except Exception as e:
+                        print(f"⚠️ WebSocket receive error: {e}")
+                        break
+                        
             except WebSocketDisconnect:
-                self.websocket_clients.discard(websocket)
-                print(f"📱 WebSocket client disconnected")
+                print(f"📱 WebSocket client disconnected normally")
             except Exception as e:
                 print(f"❌ WebSocket error: {e}")
+            finally:
                 self.websocket_clients.discard(websocket)
+                print(f"🔌 WebSocket client removed, {len(self.websocket_clients)} clients remaining")
 
         return app
+    def _setup_wiki_templates(self):
+        """Setup Jinja2 templates using the existing export HTML structure"""
+        # Create templates directory
+        os.makedirs("web/templates", exist_ok=True)
+        
+        # Create the live wiki template
+        self._create_live_wiki_template()
+        
+        # Create the CSS and JavaScript files
+        self._create_wiki_assets()
+
+    def _create_live_wiki_template(self):
+        """Create the live wiki template based on the export command's HTML"""
+        
+        # Create the main wiki HTML template
+        wiki_html = '''<!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{{ galaxy_data.galaxy.name }} - Galactic Encyclopedia</title>
+        <link rel="stylesheet" href="/static/css/wiki.css">
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono:wght@400&family=Tektur:wght@400;500;700;900&display=swap" rel="stylesheet">
+    </head>
+    <body>
+        <div class="scanlines"></div>
+        <div class="static-overlay"></div>
+        
+        <header id="main-header">
+            <div class="header-content">
+                <div class="terminal-indicator">
+                    <div class="power-light"></div>
+                    <span class="terminal-id">WIKI-7742</span>
+                </div>
+                <h1>{{ galaxy_data.galaxy.name }}</h1>
+                <div class="subtitle">GALACTIC ENCYCLOPEDIA</div>
+            </div>
+            <nav class="main-nav">
+                <button class="nav-btn active" data-section="overview">Overview</button>
+                <button class="nav-btn" data-section="locations">Locations</button>
+                <button class="nav-btn" data-section="corridors">Corridors</button>
+                <button class="nav-btn" data-section="inhabitants">Inhabitants</button>
+                <button class="nav-btn" data-section="logs">Logs & History</button>
+                <button class="nav-btn" data-section="news">News Archive</button>
+                <button class="nav-btn" data-section="search">Search</button>
+                <a href="/" class="nav-btn map-link">🗺️ Live Map</a>
+            </nav>
+        </header>
+
+        <main id="content-area">
+            <section id="overview" class="content-section active">
+                <h2>Galaxy Overview</h2>
+                <div class="info-grid">
+                    <div class="info-card">
+                        <h3>Basic Information</h3>
+                        <div class="info-item">
+                            <span class="label">Galaxy Name:</span>
+                            <span class="value">{{ galaxy_data.galaxy.name }}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Genesis Date:</span>
+                            <span class="value">{{ galaxy_data.galaxy.start_date or 'Unknown' }}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Current Time:</span>
+                            <span class="value">{{ galaxy_data.galaxy.current_time }}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Time Scale:</span>
+                            <span class="value">{{ galaxy_data.galaxy.time_scale }}x</span>
+                        </div>
+                    </div>
+                    
+                    <div class="info-card">
+                        <h3>Statistics</h3>
+                        <div class="info-item">
+                            <span class="label">Total Locations:</span>
+                            <span class="value">{{ galaxy_data.statistics.locations.total }}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Active Corridors:</span>
+                            <span class="value">{{ galaxy_data.statistics.corridors.active }}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Total Population:</span>
+                            <span class="value">{{ "{:,}".format(galaxy_data.statistics.locations.total_population) }}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Total NPCs:</span>
+                            <span class="value">{{ galaxy_data.statistics.npcs.total }}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="map-container">
+                    <h3>Live Galaxy Map</h3>
+                    <div class="embedded-map-frame">
+                        <iframe src="/" frameborder="0" class="live-map-embed"></iframe>
+                        <div class="map-overlay">
+                            <a href="/" target="_blank" class="fullscreen-btn">🔍 Open Full Map</a>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="locations" class="content-section">
+                <h2>Locations</h2>
+                <div class="filter-bar">
+                    <select id="location-type-filter" class="filter-select">
+                        <option value="all">All Types</option>
+                        <option value="space_station">Space Stations</option>
+                        <option value="colony">Colonies</option>
+                        <option value="outpost">Outposts</option>
+                        <option value="gate">Gates</option>
+                    </select>
+                    <select id="wealth-filter" class="filter-select">
+                        <option value="all">All Wealth Levels</option>
+                        <option value="1">Poor (1)</option>
+                        <option value="2">Modest (2)</option>
+                        <option value="3">Average (3)</option>
+                        <option value="4">Wealthy (4)</option>
+                        <option value="5">Rich (5)</option>
+                    </select>
+                    <input type="text" id="location-search" class="search-input" placeholder="Search locations...">
+                </div>
+                <div id="locations-grid" class="locations-grid">
+                    <!-- Locations will be populated by JavaScript -->
+                </div>
+            </section>
+
+            <section id="corridors" class="content-section">
+                <h2>Travel Corridors</h2>
+                <div class="filter-bar">
+                    <select id="corridor-status-filter" class="filter-select">
+                        <option value="all">All Corridors</option>
+                        <option value="active">Active Only</option>
+                        <option value="dormant">Dormant Only</option>
+                        <option value="gated">Gated Only</option>
+                    </select>
+                    <input type="text" id="corridor-search" class="search-input" placeholder="Search corridors...">
+                </div>
+                <div id="corridors-list" class="corridors-list">
+                    <!-- Corridors will be populated by JavaScript -->
+                </div>
+            </section>
+
+            <section id="inhabitants" class="content-section">
+                <h2>Known Inhabitants</h2>
+                <div class="tab-bar">
+                    <button class="tab-btn active" data-tab="static">Static NPCs</button>
+                    <button class="tab-btn" data-tab="dynamic">Dynamic NPCs</button>
+                </div>
+                <div id="npcs-container">
+                    <div id="static-npcs" class="npc-grid active">
+                        <!-- Static NPCs will be populated by JavaScript -->
+                    </div>
+                    <div id="dynamic-npcs" class="npc-grid">
+                        <!-- Dynamic NPCs will be populated by JavaScript -->
+                    </div>
+                </div>
+            </section>
+
+            <section id="logs" class="content-section">
+                <h2>Location Logs & Guestbooks</h2>
+                <div id="logs-container" class="logs-container">
+                    <!-- Logs will be populated by JavaScript -->
+                </div>
+            </section>
+
+            <section id="news" class="content-section">
+                <h2>Galactic News Archive</h2>
+                <div id="news-container" class="news-container">
+                    <!-- News will be populated by JavaScript -->
+                </div>
+            </section>
+
+            <section id="search" class="content-section">
+                <h2>Universal Search</h2>
+                <div class="search-container">
+                    <input type="text" id="universal-search" class="search-input large" placeholder="Search everything...">
+                    <button id="search-btn" class="search-button">Search</button>
+                </div>
+                <div id="search-results" class="search-results">
+                    <!-- Search results will be populated by JavaScript -->
+                </div>
+            </section>
+        </main>
+
+        <div id="detail-modal" class="modal">
+            <div class="modal-content">
+                <span class="close-modal">&times;</span>
+                <div id="modal-body">
+                    <!-- Modal content will be populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+        
+        <!-- Live update indicator -->
+        <div id="live-update-indicator" class="live-update-indicator">
+            <!-- Will show update notifications -->
+        </div>
+
+        <script src="/static/js/wiki-live.js"></script>
+        <script>
+            // Initialize with data and WebSocket connection
+            try {
+                window.galaxyData = {{ galaxy_data_json | safe }};
+                window.isLiveWiki = true;
+                console.log('✅ Galaxy data loaded:', window.galaxyData);
+                console.log('📊 Data summary:', {
+                    locations: window.galaxyData?.locations?.length || 0,
+                    corridors: window.galaxyData?.corridors?.length || 0,
+                    staticNPCs: window.galaxyData?.npcs?.static?.length || 0,
+                    dynamicNPCs: window.galaxyData?.npcs?.dynamic?.length || 0
+                });
+            } catch (error) {
+                console.error('❌ Error loading galaxy data:', error);
+                window.galaxyData = null;
+            }
+        </script>
+    </body>
+    </html>'''
+
+        # Save the template
+        with open("web/templates/wiki.html", "w", encoding='utf-8') as f:
+            f.write(wiki_html)
+
+    def _create_wiki_assets(self):
+        """Create CSS and JavaScript files for the wiki"""
+        
+        # Generate CSS that combines export styling with live themes
+        css_content = self._generate_wiki_css()
+        with open("web/static/css/wiki.css", "w", encoding='utf-8') as f:
+            f.write(css_content)
+        
+        # Generate JavaScript that handles live updates
+        js_content = self._generate_wiki_javascript()
+        with open("web/static/js/wiki-live.js", "w", encoding='utf-8') as f:
+            f.write(js_content)
+
+    def _generate_wiki_css(self):
+        """Generate CSS for the wiki that matches the export styling with live themes"""
+        
+        # Get base CSS from export cog if available
+        base_css = ""
+        export_cog = self.bot.get_cog('ExportCog')
+        if export_cog:
+            try:
+                base_css = export_cog._generate_css()
+            except Exception as e:
+                print(f"Could not get export CSS: {e}")
+        
+        # Theme integration CSS (same as web map) plus navigation fixes
+        theme_css = '''
+    /* Theme Integration for Live Wiki */
+    :root {
+        /* Default blue scheme - will be overridden by JS */
+        --primary-color: #00ffff;
+        --secondary-color: #00cccc;
+        --accent-color: #0088cc;
+        --warning-color: #ff8800;
+        --success-color: #00ff88;
+        --error-color: #ff3333;
+        
+        /* Base colors */
+        --primary-bg: #000408;
+        --secondary-bg: #0a0f1a;
+        --accent-bg: #1a2332;
+        --text-primary: #e0ffff;
+        --text-secondary: #88ccdd;
+        --text-muted: #556677;
+        --border-color: #003344;
+        --shadow-dark: rgba(0, 0, 0, 0.9);
+        
+        /* Dynamic colors based on scheme */
+        --glow-primary: rgba(0, 255, 255, 0.6);
+        --glow-secondary: rgba(0, 204, 204, 0.4);
+        --gradient-holo: linear-gradient(135deg, rgba(0, 255, 255, 0.1), rgba(0, 204, 204, 0.2));
+        --gradient-panel: linear-gradient(145deg, rgba(10, 15, 26, 0.95), rgba(26, 35, 50, 0.95));
+    }
+
+    /* Color Schemes - same as web_map */
+    .theme-blue {
+        --primary-color: #00ffff;
+        --secondary-color: #00cccc;
+        --accent-color: #0088cc;
+        --glow-primary: rgba(0, 255, 255, 0.6);
+        --glow-secondary: rgba(0, 204, 204, 0.4);
+    }
+
+    .theme-amber {
+        --primary-color: #ffaa00;
+        --secondary-color: #cc8800;
+        --accent-color: #ff6600;
+        --glow-primary: rgba(255, 170, 0, 0.6);
+        --glow-secondary: rgba(204, 136, 0, 0.4);
+        --text-primary: #fff0e0;
+        --text-secondary: #ddcc88;
+        --border-color: #443300;
+    }
+
+    .theme-green {
+        --primary-color: #00ff88;
+        --secondary-color: #00cc66;
+        --accent-color: #00aa44;
+        --glow-primary: rgba(0, 255, 136, 0.6);
+        --glow-secondary: rgba(0, 204, 102, 0.4);
+        --text-primary: #e0ffe8;
+        --text-secondary: #88dd99;
+        --border-color: #003322;
+    }
+
+    .theme-red {
+        --primary-color: #ff4444;
+        --secondary-color: #cc2222;
+        --accent-color: #aa0000;
+        --glow-primary: rgba(255, 68, 68, 0.6);
+        --glow-secondary: rgba(204, 34, 34, 0.4);
+        --text-primary: #ffe0e0;
+        --text-secondary: #dd8888;
+        --border-color: #330000;
+    }
+
+    .theme-purple {
+        --primary-color: #aa44ff;
+        --secondary-color: #8822cc;
+        --accent-color: #6600aa;
+        --glow-primary: rgba(170, 68, 255, 0.6);
+        --glow-secondary: rgba(136, 34, 204, 0.4);
+        --text-primary: #f0e0ff;
+        --text-secondary: #cc88dd;
+        --border-color: #220033;
+    }
+
+    /* Content Section Navigation Fixes */
+    .content-section {
+        display: none;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        padding: 2rem;
+        min-height: 500px;
+    }
+
+    .content-section.active {
+        display: block;
+        opacity: 1;
+    }
+
+    .main-nav {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .nav-btn {
+        background: linear-gradient(145deg, rgba(var(--glow-secondary), 0.3), rgba(var(--accent-bg), 0.8));
+        color: var(--text-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        padding: 0.5rem 1rem;
+        font-size: 0.75rem;
+        font-family: 'Share Tech Mono', monospace;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .nav-btn:hover {
+        background: linear-gradient(145deg, rgba(var(--glow-secondary), 0.5), rgba(var(--accent-bg), 0.9));
+        color: var(--primary-color);
+        border-color: var(--primary-color);
+        box-shadow: 0 0 15px var(--glow-primary);
+        text-shadow: 0 0 8px var(--glow-primary);
+        text-decoration: none;
+    }
+
+    .nav-btn.active {
+        background: linear-gradient(145deg, var(--primary-color), var(--secondary-color));
+        color: var(--primary-bg);
+        border-color: var(--primary-color);
+        box-shadow: 0 0 15px var(--glow-primary);
+        text-shadow: none;
+    }
+
+    .nav-btn.active:hover {
+        box-shadow: 0 0 25px var(--glow-primary);
+    }
+
+    /* Tab navigation within sections */
+    .tab-bar {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        border-bottom: 1px solid var(--border-color);
+        padding-bottom: 0.5rem;
+    }
+
+    .tab-btn {
+        background: transparent;
+        color: var(--text-muted);
+        border: none;
+        border-bottom: 2px solid transparent;
+        padding: 0.5rem 1rem;
+        font-size: 0.8rem;
+        font-family: 'Share Tech Mono', monospace;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-transform: uppercase;
+    }
+
+    .tab-btn:hover {
+        color: var(--text-secondary);
+        border-bottom-color: var(--text-secondary);
+    }
+
+    .tab-btn.active {
+        color: var(--primary-color);
+        border-bottom-color: var(--primary-color);
+        text-shadow: 0 0 5px var(--glow-primary);
+    }
+
+    .npc-grid {
+        display: none;
+    }
+
+    .npc-grid.active {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 1rem;
+    }
+
+    /* Filter and search bars */
+    .filter-bar {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .filter-select,
+    .search-input {
+        background: linear-gradient(145deg, rgba(0, 0, 0, 0.8), rgba(var(--glow-secondary), 0.1));
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        color: var(--text-primary);
+        padding: 0.5rem 0.75rem;
+        font-size: 0.8rem;
+        font-family: 'Share Tech Mono', monospace;
+        min-width: 120px;
+        transition: all 0.3s ease;
+        text-transform: uppercase;
+    }
+
+    .search-input.large {
+        min-width: 300px;
+        font-size: 1rem;
+        padding: 0.75rem 1rem;
+    }
+
+    .filter-select:focus,
+    .search-input:focus {
+        outline: none;
+        border-color: var(--primary-color);
+        box-shadow: 0 0 15px var(--glow-primary);
+        background: linear-gradient(145deg, rgba(var(--glow-secondary), 0.2), rgba(var(--glow-primary), 0.1));
+    }
+
+    .search-button {
+        background: linear-gradient(145deg, var(--primary-color), var(--secondary-color));
+        color: var(--primary-bg);
+        border: 1px solid var(--primary-color);
+        border-radius: 4px;
+        padding: 0.5rem 1rem;
+        font-size: 0.8rem;
+        font-family: 'Share Tech Mono', monospace;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-transform: uppercase;
+        box-shadow: 0 0 15px var(--glow-primary);
+    }
+
+    .search-button:hover {
+        box-shadow: 0 0 25px var(--glow-primary);
+    }
+
+    /* Content cards and grids */
+    .locations-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 1rem;
+    }
+
+    .location-card,
+    .npc-card {
+        background: rgba(var(--glow-primary), 0.1);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        transition: all 0.3s ease;
+    }
+
+    .location-card:hover,
+    .npc-card:hover {
+        border-color: var(--primary-color);
+        box-shadow: 0 0 15px var(--glow-primary);
+        transform: translateY(-2px);
+    }
+
+    .location-card h3,
+    .npc-card h3 {
+        margin: 0 0 0.5rem 0;
+        color: var(--primary-color);
+        text-shadow: 0 0 5px var(--glow-primary);
+    }
+
+    .corridors-list {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .corridor-item {
+        background: rgba(var(--glow-primary), 0.1);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        transition: all 0.3s ease;
+    }
+
+    .corridor-item:hover {
+        border-color: var(--primary-color);
+        box-shadow: 0 0 15px var(--glow-primary);
+    }
+
+    .corridor-item h3 {
+        margin: 0 0 0.5rem 0;
+        color: var(--primary-color);
+        text-shadow: 0 0 5px var(--glow-primary);
+    }
+
+    /* Refresh buttons */
+    .refresh-btn {
+        background: linear-gradient(145deg, rgba(var(--glow-secondary), 0.3), rgba(var(--accent-bg), 0.8));
+        color: var(--text-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        padding: 0.3rem 0.6rem;
+        font-size: 0.7rem;
+        font-family: 'Share Tech Mono', monospace;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-transform: uppercase;
+    }
+
+    .refresh-btn:hover {
+        background: linear-gradient(145deg, rgba(var(--glow-secondary), 0.5), rgba(var(--accent-bg), 0.9));
+        color: var(--primary-color);
+        border-color: var(--primary-color);
+        box-shadow: 0 0 10px var(--glow-primary);
+    }
+
+    /* Live Wiki Specific Styles */
+    .map-link {
+        background: linear-gradient(145deg, var(--warning-color), #cc6600) !important;
+        color: var(--primary-bg) !important;
+        border-color: var(--warning-color) !important;
+        text-decoration: none !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 0.5rem !important;
+    }
+
+    .map-link:hover {
+        box-shadow: 0 0 25px rgba(255, 136, 0, 0.8) !important;
+    }
+
+    .embedded-map-frame {
+        position: relative;
+        height: 500px;
+        border: 2px solid var(--primary-color);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--primary-bg);
+        box-shadow: 0 0 30px var(--glow-primary);
+    }
+
+    .live-map-embed {
+        width: 100%;
+        height: 100%;
+        border: none;
+    }
+
+    .map-overlay {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 10;
+    }
+
+    .fullscreen-btn {
+        background: linear-gradient(145deg, var(--primary-color), var(--secondary-color));
+        color: var(--primary-bg);
+        padding: 0.5rem 1rem;
+        border-radius: 4px;
+        text-decoration: none;
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        box-shadow: 0 0 15px var(--glow-primary);
+        transition: all 0.3s ease;
+    }
+
+    .fullscreen-btn:hover {
+        box-shadow: 0 0 25px var(--glow-primary);
+        transform: translateY(-2px);
+    }
+
+    /* Live update indicators */
+    .live-update-indicator {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: var(--success-color);
+        color: var(--primary-bg);
+        padding: 0.5rem 1rem;
+        border-radius: 4px;
+        font-size: 0.8rem;
+        font-family: 'Share Tech Mono', monospace;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        z-index: 2000;
+        text-transform: uppercase;
+        font-weight: bold;
+    }
+
+    .live-update-indicator.show {
+        opacity: 1;
+    }
+
+    .logs-container {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+
+    .logs-filter {
+        margin-bottom: 1rem;
+    }
+
+    .location-logs {
+        margin-bottom: 2rem;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        background: rgba(var(--glow-primary), 0.1);
+    }
+
+    .location-logs h3 {
+        margin-top: 0;
+        color: var(--primary-color);
+        border-bottom: 1px solid var(--border-color);
+        padding-bottom: 0.5rem;
+    }
+
+    .log-entry {
+        margin-bottom: 1rem;
+        padding: 0.75rem;
+        border-radius: 4px;
+        border-left: 3px solid var(--primary-color);
+    }
+
+    .log-entry.generated-entry {
+        background: rgba(var(--glow-secondary), 0.1);
+        border-left-color: var(--text-muted);
+    }
+
+    .log-entry.player-entry {
+        background: rgba(var(--glow-primary), 0.1);
+        border-left-color: var(--primary-color);
+    }
+
+    .log-header {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 0.5rem;
+        font-size: 0.9rem;
+    }
+
+    .log-author {
+        font-weight: bold;
+        color: var(--primary-color);
+    }
+
+    .log-date {
+        color: var(--text-muted);
+    }
+
+    .log-message {
+        font-style: italic;
+        line-height: 1.4;
+    }
+
+    .generated-entry .log-message {
+        color: var(--text-muted);
+    }
+
+    .search-results {
+        max-width: 1200px;
+        margin: 1rem auto;
+    }
+
+    .search-results-summary h3 {
+        color: var(--primary-color);
+        border-bottom: 1px solid var(--border-color);
+        padding-bottom: 0.5rem;
+    }
+
+    .search-section {
+        margin-bottom: 2rem;
+    }
+
+    .search-section h4 {
+        color: var(--secondary-color);
+        margin-bottom: 1rem;
+    }
+
+    .search-result {
+        background: rgba(var(--glow-primary), 0.1);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .search-result h5 {
+        margin: 0 0 0.5rem 0;
+        color: var(--primary-color);
+    }
+
+    .search-result p {
+        margin: 0.25rem 0;
+        line-height: 1.4;
+    }
+
+    .no-results {
+        text-align: center;
+        padding: 2rem;
+        color: var(--text-muted);
+    }
+    /* Logs and History Tab System */
+    .logs-and-history-container {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+
+    .logs-history-tabs {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        border-bottom: 1px solid var(--border-color);
+        padding-bottom: 0.5rem;
+    }
+
+    .logs-history-tab-btn {
+        background: transparent;
+        color: var(--text-muted);
+        border: none;
+        border-bottom: 2px solid transparent;
+        padding: 0.5rem 1rem;
+        font-size: 0.9rem;
+        font-family: 'Share Tech Mono', monospace;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .logs-history-tab-btn:hover {
+        color: var(--text-secondary);
+        border-bottom-color: var(--text-secondary);
+    }
+
+    .logs-history-tab-btn.active {
+        color: var(--primary-color);
+        border-bottom-color: var(--primary-color);
+        text-shadow: 0 0 5px var(--glow-primary);
+    }
+
+    .logs-history-tab-content {
+        display: none;
+        animation: fadeIn 0.3s ease;
+    }
+
+    .logs-history-tab-content.active {
+        display: block;
+    }
+
+    /* History-specific styles */
+    .history-section {
+        margin-bottom: 2rem;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        background: rgba(var(--glow-primary), 0.1);
+    }
+
+    .history-section h3 {
+        margin-top: 0;
+        color: var(--primary-color);
+        border-bottom: 1px solid var(--border-color);
+        padding-bottom: 0.5rem;
+        text-shadow: 0 0 8px var(--glow-primary);
+    }
+
+    .history-entry {
+        margin-bottom: 1.5rem;
+        padding: 1rem;
+        border-radius: 6px;
+        border-left: 3px solid var(--secondary-color);
+        background: rgba(var(--glow-secondary), 0.1);
+        transition: all 0.3s ease;
+    }
+
+    .history-entry:hover {
+        border-left-color: var(--primary-color);
+        background: rgba(var(--glow-primary), 0.15);
+        box-shadow: 0 2px 8px rgba(var(--glow-primary), 0.2);
+    }
+
+    .history-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 0.75rem;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .history-title {
+        font-weight: bold;
+        color: var(--primary-color);
+        font-size: 1rem;
+        text-shadow: 0 0 5px var(--glow-primary);
+        flex-grow: 1;
+    }
+
+    .history-date {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        font-style: italic;
+        white-space: nowrap;
+    }
+
+    .history-description {
+        line-height: 1.5;
+        margin-bottom: 0.5rem;
+        color: var(--text-primary);
+    }
+
+    .history-figure {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+        font-style: italic;
+        margin-bottom: 0.5rem;
+    }
+
+    .history-type {
+        font-size: 0.8rem;
+        color: var(--accent-color);
+        font-weight: bold;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    /* Enhanced log styles for consistency */
+    .location-logs {
+        margin-bottom: 2rem;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        background: rgba(var(--glow-primary), 0.1);
+    }
+
+    .location-logs h3 {
+        margin-top: 0;
+        color: var(--primary-color);
+        border-bottom: 1px solid var(--border-color);
+        padding-bottom: 0.5rem;
+        text-shadow: 0 0 8px var(--glow-primary);
+    }
+
+    .log-entry {
+        margin-bottom: 1rem;
+        padding: 0.75rem;
+        border-radius: 4px;
+        border-left: 3px solid var(--primary-color);
+        transition: all 0.3s ease;
+    }
+
+    .log-entry:hover {
+        background: rgba(var(--glow-primary), 0.15);
+        box-shadow: 0 2px 8px rgba(var(--glow-primary), 0.2);
+    }
+
+    .log-entry.generated-entry {
+        background: rgba(var(--glow-secondary), 0.1);
+        border-left-color: var(--text-muted);
+    }
+
+    .log-entry.player-entry {
+        background: rgba(var(--glow-primary), 0.1);
+        border-left-color: var(--primary-color);
+    }
+
+    /* Responsive design */
+    @media (max-width: 768px) {
+        .history-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .history-title {
+            margin-bottom: 0.25rem;
+        }
+        
+        .logs-history-tabs {
+            flex-wrap: wrap;
+        }
+        
+        .logs-history-tab-btn {
+            font-size: 0.8rem;
+            padding: 0.4rem 0.8rem;
+        }
+    }
+    .transit-status {
+    color: var(--warning-color);
+    font-style: italic;
+    margin-top: 0.25rem;
+    animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 0.6; }
+        50% { opacity: 1; }
+    }
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    @media (max-width: 768px) {
+        .embedded-map-frame {
+            height: 300px;
+        }
+        
+        .main-nav {
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        
+        .nav-btn, .map-link {
+            font-size: 0.8rem;
+            padding: 0.4rem 0.8rem;
+        }
+        
+        .live-update-indicator {
+            top: 10px;
+            right: 10px;
+            font-size: 0.7rem;
+            padding: 0.4rem 0.8rem;
+        }
+    }
+        .news-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .news-item {
+            background: rgba(var(--glow-primary), 0.1);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .news-item:hover {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 15px var(--glow-primary);
+        }
+
+        .news-item h3 {
+            margin: 0 0 0.5rem 0;
+            color: var(--primary-color);
+            text-shadow: 0 0 5px var(--glow-primary);
+        }
+
+        .news-meta {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+            font-style: italic;
+        }
+
+        .no-content {
+            text-align: center;
+            padding: 2rem;
+            background: rgba(var(--glow-secondary), 0.1);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-muted);
+            font-style: italic;
+        }
+
+        .services {
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border-color);
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+        '''    
+        return base_css + theme_css
+
+# Replace the live_js variable in the _generate_wiki_javascript method of web_map.py with this:
+
+    def _generate_wiki_javascript(self):
+        """Generate JavaScript for live wiki with WebSocket integration"""
+        
+        # Get base JavaScript from export cog if available
+        base_js = ""
+        export_cog = self.bot.get_cog('ExportCog')
+        if export_cog:
+            try:
+                # Get the base JavaScript but modify it for live use
+                base_js = export_cog._generate_javascript({})
+                # Replace the class name to avoid conflicts
+                base_js = base_js.replace('class GalaxyWiki', 'class BaseGalaxyWiki')
+            except Exception as e:
+                print(f"Could not get export JavaScript: {e}")
+        
+        # If base_js is empty, provide a complete BaseGalaxyWiki class
+        if not base_js.strip():
+            base_js = '''
+            // Complete BaseGalaxyWiki class for fallback
+            class BaseGalaxyWiki {
+                constructor(data) {
+                    this.data = data;
+                    this.currentSection = 'overview';
+                    console.log('BaseGalaxyWiki initialized with data:', this.data);
+                }
+                
+                init() {
+                    console.log('🔍 BaseGalaxyWiki init() called');
+                    console.log('📊 Data structure check:');
+                    if (this.data) {
+                        console.log('   - Data keys:', Object.keys(this.data));
+                        console.log('   - Locations:', this.data.locations?.length || 0);
+                        console.log('   - Corridors:', this.data.corridors?.length || 0);
+                        console.log('   - NPCs static:', this.data.npcs?.static?.length || 0);
+                        console.log('   - NPCs dynamic:', this.data.npcs?.dynamic?.length || 0);
+                        console.log('   - Logs:', this.data.logs?.length || 0);
+                        console.log('   - History:', this.data.history?.length || 0);
+                        
+                        // Enhanced data path resolution
+                        // Check for logs in multiple possible locations
+                        if (!this.data.logs || this.data.logs.length === 0) {
+                            console.log('🔍 Searching for logs in alternate paths...');
+                            // Check common alternate paths
+                            const logPaths = ['location_logs', 'locationLogs', 'Logs', 'log_entries'];
+                            for (const path of logPaths) {
+                                if (this.data[path] && Array.isArray(this.data[path]) && this.data[path].length > 0) {
+                                    console.log(`   - Found logs at data.${path}:`, this.data[path].length);
+                                    this.data.logs = this.data[path];
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // Check for history in multiple possible locations
+                        if (!this.data.history || this.data.history.length === 0) {
+                            console.log('🔍 Searching for history in alternate paths...');
+                            const historyPaths = ['galactic_history', 'galacticHistory', 'History', 'history_events'];
+                            for (const path of historyPaths) {
+                                if (this.data[path] && Array.isArray(this.data[path]) && this.data[path].length > 0) {
+                                    console.log(`   - Found history at data.${path}:`, this.data[path].length);
+                                    this.data.history = this.data[path];
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // Final validation
+                        console.log('📊 Final data counts:');
+                        console.log('   - Logs:', this.data.logs?.length || 0);
+                        console.log('   - History:', this.data.history?.length || 0);
+                    } else {
+                        console.error('❌ No data available for wiki initialization');
+                    }
+                    
+                    this.setupNavigation();
+                    this.setupSearchFunctionality();
+                    // Populate all sections immediately on init
+                    this.populateAllSections();
+                    console.log('✅ BaseGalaxyWiki initialization complete');
+                }
+                
+                populateAllSections() {
+                    console.log('Populating all sections with data...');
+                    try {
+                        this.populateLocations();
+                        this.populateCorridors(); 
+                        this.populateNPCs();
+                        this.populateLogs();
+                        this.populateNews();
+                        console.log('All sections populated successfully');
+                    } catch (error) {
+                        console.error('Error populating sections:', error);
+                    }
+                }
+                
+                setupNavigation() {
+                    const navButtons = document.querySelectorAll('.main-nav .nav-btn');
+                    const contentSections = document.querySelectorAll('.content-section');
+                    
+                    console.log('Setting up navigation...', navButtons.length, 'buttons found');
+                    
+                    navButtons.forEach(button => {
+                        if (button.hasAttribute('data-section')) {
+                            const sectionId = button.dataset.section;
+                            console.log('Setting up button for section:', sectionId);
+                            
+                            button.addEventListener('click', (e) => {
+                                e.preventDefault();
+                                console.log('Navigation button clicked:', sectionId);
+                                
+                                if (!sectionId || sectionId === this.currentSection) return;
+
+                                // Update button states
+                                navButtons.forEach(btn => btn.classList.remove('active'));
+                                button.classList.add('active');
+
+                                // Update section visibility
+                                contentSections.forEach(section => {
+                                    section.classList.remove('active');
+                                    if (section.id === sectionId) {
+                                        section.classList.add('active');
+                                        console.log('Showing section:', sectionId);
+                                    }
+                                });
+
+                                this.currentSection = sectionId;
+                                this.refreshCurrentSection();
+                            });
+                        }
+                    });
+                    
+                    // Also setup tab functionality within sections
+                    this.setupTabNavigation();
+                }
+                
+                setupTabNavigation() {
+                    // Setup tabs within the inhabitants section
+                    const tabBtns = document.querySelectorAll('.tab-btn');
+                    const tabContents = document.querySelectorAll('#npcs-container .npc-grid');
+                    
+                    tabBtns.forEach(btn => {
+                        btn.addEventListener('click', () => {
+                            const tabId = btn.dataset.tab;
+                            
+                            // Update tab button states
+                            tabBtns.forEach(b => b.classList.remove('active'));
+                            btn.classList.add('active');
+                            
+                            // Update tab content visibility
+                            tabContents.forEach(content => {
+                                content.classList.remove('active');
+                                if (content.id === `${tabId}-npcs`) {
+                                    content.classList.add('active');
+                                }
+                            });
+                        });
+                    });
+                }
+                
+                populateLocations() {
+                    console.log('populateLocations() called');
+                    const container = document.getElementById('locations-grid');
+                    if (!container) {
+                        console.warn('locations-grid container not found');
+                        return;
+                    }
+                    
+                    if (!this.data || !this.data.locations) {
+                        console.warn('No location data available:', this.data);
+                        container.innerHTML = '<div class="no-content"><p>No location data available.</p></div>';
+                        return;
+                    }
+                    
+                    console.log('Populating locations:', this.data.locations.length, 'locations found');
+                    
+                    container.innerHTML = this.data.locations.map(location => `
+                        <div class="location-card">
+                            <h3>${location.name || 'Unknown Location'}</h3>
+                            <p><strong>Type:</strong> ${location.type || location.location_type || 'Unknown'}</p>
+                            <p><strong>Population:</strong> ${location.population ? location.population.toLocaleString() : 'Unknown'}</p>
+                            <p><strong>Wealth:</strong> Level ${location.wealth_level || 'Unknown'}</p>
+                            <p><strong>Coordinates:</strong> (${location.coordinates?.x || location.x_coord || '?'}, ${location.coordinates?.y || location.y_coord || '?'})</p>
+                            <p>${location.description || 'No description available.'}</p>
+                            ${location.services ? `
+                                <div class="services">
+                                    <strong>Services:</strong>
+                                    ${Object.entries(location.services).filter(([k,v]) => v).map(([k,v]) => k).join(', ') || 'None'}
+                                </div>
+                            ` : ''}
+                        </div>
+                    `).join('');
+                    
+                    console.log('Locations populated successfully');
+                }
+                
+                populateCorridors() {
+                    console.log('populateCorridors() called');
+                    const container = document.getElementById('corridors-list');
+                    if (!container) {
+                        console.warn('corridors-list container not found');
+                        return;
+                    }
+                    
+                    if (!this.data || !this.data.corridors) {
+                        console.warn('No corridor data available:', this.data);
+                        container.innerHTML = '<div class="no-content"><p>No corridor data available.</p></div>';
+                        return;
+                    }
+                    
+                    console.log('Populating corridors:', this.data.corridors.length, 'corridors found');
+                    
+                    container.innerHTML = this.data.corridors.map(corridor => `
+                        <div class="corridor-item">
+                            <h3>${corridor.name || 'Unknown Corridor'}</h3>
+                            <p><strong>Route:</strong> ${corridor.origin?.name || 'Unknown'} → ${corridor.destination?.name || 'Unknown'}</p>
+                            <p><strong>Travel Time:</strong> ${corridor.travel_time || 'Unknown'} minutes</p>
+                            <p><strong>Fuel Cost:</strong> ${corridor.fuel_cost || 'Unknown'} units</p>
+                            <p><strong>Danger Level:</strong> ${corridor.danger_level || 'Unknown'}/5</p>
+                            <p><strong>Status:</strong> ${corridor.is_active ? 'Active' : 'Inactive'}</p>
+                            ${corridor.has_gate ? '<p><strong>Gate:</strong> Yes</p>' : ''}
+                        </div>
+                    `).join('');
+                    
+                    console.log('Corridors populated successfully');
+                }
+                
+                populateNPCs() {
+                    console.log('populateNPCs() called');
+                    const staticContainer = document.getElementById('static-npcs');
+                    const dynamicContainer = document.getElementById('dynamic-npcs');
+                    
+                    console.log('NPC containers found - Static:', !!staticContainer, 'Dynamic:', !!dynamicContainer);
+                    console.log('NPC data available:', this.data?.npcs);
+                    
+                    if (staticContainer) {
+                        if (this.data?.npcs?.static && this.data.npcs.static.length > 0) {
+                            console.log('Populating static NPCs:', this.data.npcs.static.length, 'found');
+                            staticContainer.innerHTML = this.data.npcs.static.map(npc => `
+                                <div class="npc-card">
+                                    <h3>${npc.name || 'Unknown NPC'} ${npc.callsign ? `• ${npc.callsign}` : ''}</h3>
+                                    <p><strong>Location:</strong> ${npc.location?.name || 'Unknown'}</p>
+                                    <p><strong>Age:</strong> ${npc.age || 'Unknown'}</p>
+                                    <p><strong>Occupation:</strong> ${npc.occupation || 'Unknown'}</p>
+                                    <p><strong>Personality:</strong> ${npc.personality || 'Unknown'}</p>
+                                    ${npc.trade_specialty ? `<p><strong>Trade:</strong> ${npc.trade_specialty}</p>` : ''}
+                                    ${npc.backstory && npc.backstory !== 'No data available.' ? `<p><em>${npc.backstory}</em></p>` : ''}
+                                </div>
+                            `).join('');
+                        } else {
+                            staticContainer.innerHTML = '<div class="no-content"><p>No static NPCs available.</p></div>';
+                        }
+                    }
+                    
+                    if (dynamicContainer) {
+                        if (this.data?.npcs?.dynamic && this.data.npcs.dynamic.length > 0) {
+                            console.log('Populating dynamic NPCs:', this.data.npcs.dynamic.length, 'found');
+                            dynamicContainer.innerHTML = this.data.npcs.dynamic.map(npc => `
+                                <div class="npc-card">
+                                    <h3>${npc.name || 'Unknown NPC'} ${npc.callsign ? `(${npc.callsign})` : ''}</h3>
+                                    <p><strong>Ship:</strong> ${npc.ship?.name || npc.ship_name || 'Unknown'} (${npc.ship?.type || npc.ship_type || 'Unknown Class'})</p>
+                                    <p><strong>Location:</strong> ${npc.current_location?.name || 'Unknown'}</p>
+                                    ${npc.is_traveling ? '<p class="transit-status">🚀 Currently traveling</p>' : ''}
+                                    <p><strong>Faction:</strong> ${npc.faction || npc.alignment || 'Independent'}</p>
+                                    ${npc.age ? `<p><strong>Age:</strong> ${npc.age}</p>` : ''}
+                                    ${npc.personality && npc.personality !== 'No data available.' ? `<p><strong>Personality:</strong> ${npc.personality}</p>` : ''}
+                                    ${npc.wanted_level ? `<p><strong>Wanted Level:</strong> ${npc.wanted_level}</p>` : ''}
+                                </div>
+                            `).join('');
+                        } else {
+                            dynamicContainer.innerHTML = '<div class="no-content"><p>No dynamic NPCs available.</p></div>';
+                        }
+                    }
+                    
+                    console.log('NPCs populated successfully');
+                }
+                
+                // Enhanced populateLogs method with debugging
+                populateLogs() {
+                    console.log('🔍 populateLogs() called');
+                    const container = document.getElementById('logs-container');
+                    if (!container) {
+                        console.warn('❌ logs-container not found');
+                        return;
+                    }
+                    
+                    // Ensure data exists
+                    if (!this.data) {
+                        console.warn('❌ No data object available');
+                        container.innerHTML = '<div class="no-content"><p>No data available.</p></div>';
+                        return;
+                    }
+                    
+                    // Normalize logs and history data
+                    let logs = this.data.logs || [];
+                    let history = this.data.history || [];
+                    
+                    // Handle case where logs might be nested
+                    if (logs.length === 0 && this.data.data && this.data.data.logs) {
+                        logs = this.data.data.logs;
+                    }
+                    if (history.length === 0 && this.data.data && this.data.data.history) {
+                        history = this.data.data.history;
+                    }
+                    
+                    console.log('📊 Data availability:');
+                    console.log('   - Logs found:', logs.length);
+                    console.log('   - History found:', history.length);
+                    
+                    const hasLogs = logs.length > 0;
+                    const hasHistory = history.length > 0;
+                    
+                    // Update the data references
+                    this.data.logs = logs;
+                    this.data.history = history;
+                    
+                    if (!hasLogs && !hasHistory) {
+                        console.warn('⚠️ No logs or history data available');
+                        container.innerHTML = `
+                            <div class="no-content">
+                                <p>No logs or history available.</p>
+                                <p><small>Debug: logs=${this.data?.logs?.length || 0}, history=${this.data?.history?.length || 0}</small></p>
+                            </div>
+                        `;
+                        return;
+                    }
+                    
+                    console.log('✅ Populating logs and history:', 
+                        hasLogs ? this.data.logs.length : 0, 'logs,', 
+                        hasHistory ? this.data.history.length : 0, 'history events found');
+                    
+                    let html = '<div class="logs-and-history-container">';
+                    
+                    // Add tabs for logs and history
+                    html += `
+                        <div class="logs-history-tabs">
+                            <button class="logs-history-tab-btn active" data-tab="logs">📜 Location Logs</button>
+                            <button class="logs-history-tab-btn" data-tab="history">📚 Galactic History</button>
+                        </div>
+                    `;
+                    
+                    // Logs section
+                    html += '<div id="logs-tab-content" class="logs-history-tab-content active">';
+                    if (hasLogs) {
+                        console.log('🔄 Processing logs...');
+                        
+                        // Group logs by location
+                        const logsByLocation = {};
+                        this.data.logs.forEach(log => {
+                            const locationId = log.location?.id || log.location_id || 'unknown';
+                            const locationName = log.location?.name || log.location_name || 'Unknown Location';
+                            
+                            if (!logsByLocation[locationId]) {
+                                logsByLocation[locationId] = { name: locationName, logs: [] };
+                            }
+                            logsByLocation[locationId].logs.push(log);
+                        });
+                        
+                        console.log('📊 Logs grouped by location:', Object.keys(logsByLocation).length, 'locations');
+                        
+                        // Sort logs within each location by date (newest first)
+                        Object.values(logsByLocation).forEach(locationData => {
+                            locationData.logs.sort((a, b) => {
+                                const dateA = new Date(a.posted_at || a.date || 0);
+                                const dateB = new Date(b.posted_at || b.date || 0);
+                                return dateB - dateA;
+                            });
+                        });
+                        
+                        Object.entries(logsByLocation).forEach(([locationId, locationData]) => {
+                            html += `
+                                <div class="location-logs">
+                                    <h3>📜 ${locationData.name} Logs</h3>
+                                    ${locationData.logs.map(log => `
+                                        <div class="log-entry ${log.is_generated ? 'generated-entry' : 'player-entry'}">
+                                            <div class="log-header">
+                                                <span class="log-author">${log.author || log.author_name || 'Unknown'}</span>
+                                                <span class="log-date">${this.formatDate(log.posted_at || log.date)}</span>
+                                            </div>
+                                            <div class="log-message">${log.message || log.description || 'No message'}</div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            `;
+                        });
+                    } else {
+                        console.warn('⚠️ No logs to display');
+                        html += '<div class="no-content"><p>No location logs available.</p></div>';
+                    }
+                    html += '</div>';
+                    
+                    // History section
+                    html += '<div id="history-tab-content" class="logs-history-tab-content">';
+                    if (hasHistory) {
+                        console.log('🔄 Processing history...');
+                        
+                        // Sort history by date (newest first)
+                        const sortedHistory = [...this.data.history].sort((a, b) => {
+                            const dateA = new Date(a.date || a.event_date || 0);
+                            const dateB = new Date(b.date || b.event_date || 0);
+                            return dateB - dateA;
+                        });
+                        
+                        console.log('📊 History sorted:', sortedHistory.length, 'events');
+                        
+                        // Group by location (general events have no location)
+                        const historyByLocation = { general: [] };
+                        sortedHistory.forEach(event => {
+                            if (event.location && (event.location.id || event.location.name)) {
+                                const locationName = event.location.name || `Location ${event.location.id}`;
+                                if (!historyByLocation[locationName]) {
+                                    historyByLocation[locationName] = [];
+                                }
+                                historyByLocation[locationName].push(event);
+                            } else {
+                                historyByLocation.general.push(event);
+                            }
+                        });
+                        
+                        console.log('📊 History grouped by location:', Object.keys(historyByLocation).length, 'categories');
+                        
+                        // Display general history first
+                        if (historyByLocation.general.length > 0) {
+                            html += `
+                                <div class="history-section">
+                                    <h3>🌌 Galactic Events</h3>
+                                    ${historyByLocation.general.map(event => `
+                                        <div class="history-entry">
+                                            <div class="history-header">
+                                                <span class="history-title">${event.title || event.event_title || 'Untitled Event'}</span>
+                                                <span class="history-date">${this.formatDate(event.date || event.event_date)}</span>
+                                            </div>
+                                            <div class="history-description">${event.description || event.event_description || 'No description available'}</div>
+                                            ${(event.figure || event.historical_figure) ? `<div class="history-figure">Notable Figure: ${event.figure || event.historical_figure}</div>` : ''}
+                                            <div class="history-type">${this.formatEventType(event.type || event.event_type)}</div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            `;
+                        }
+                        
+                        // Display location-specific history
+                        Object.entries(historyByLocation).forEach(([locationName, events]) => {
+                            if (locationName !== 'general' && events.length > 0) {
+                                html += `
+                                    <div class="history-section">
+                                        <h3>🏛️ ${locationName} History</h3>
+                                        ${events.map(event => `
+                                            <div class="history-entry">
+                                                <div class="history-header">
+                                                    <span class="history-title">${event.title || event.event_title || 'Untitled Event'}</span>
+                                                    <span class="history-date">${this.formatDate(event.date || event.event_date)}</span>
+                                                </div>
+                                                <div class="history-description">${event.description || event.event_description || 'No description available'}</div>
+                                                ${(event.figure || event.historical_figure) ? `<div class="history-figure">Notable Figure: ${event.figure || event.historical_figure}</div>` : ''}
+                                                <div class="history-type">${this.formatEventType(event.type || event.event_type)}</div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                `;
+                            }
+                        });
+                    } else {
+                        console.warn('⚠️ No history to display');
+                        html += '<div class="no-content"><p>No galactic history available.</p></div>';
+                    }
+                    html += '</div>';
+                    
+                    html += '</div>'; // Close container
+                    
+                    container.innerHTML = html;
+                    
+                    // Setup tab functionality
+                    this.setupLogsHistoryTabs();
+                    
+                    console.log('✅ Logs and history populated successfully');
+                }
+
+                setupLogsHistoryTabs() {
+                    const tabBtns = document.querySelectorAll('.logs-history-tab-btn');
+                    const tabContents = document.querySelectorAll('.logs-history-tab-content');
+                    
+                    tabBtns.forEach(btn => {
+                        btn.addEventListener('click', () => {
+                            const tabId = btn.dataset.tab;
+                            
+                            // Update tab button states
+                            tabBtns.forEach(b => b.classList.remove('active'));
+                            btn.classList.add('active');
+                            
+                            // Update tab content visibility
+                            tabContents.forEach(content => {
+                                content.classList.remove('active');
+                                if (content.id === `${tabId}-tab-content`) {
+                                    content.classList.add('active');
+                                }
+                            });
+                        });
+                    });
+                }
+
+                formatDate(dateString) {
+                    try {
+                        if (!dateString) return 'Unknown Date';
+                        
+                        const date = new Date(dateString);
+                        
+                        // Check if date is valid
+                        if (isNaN(date.getTime())) {
+                            console.warn('Invalid date:', dateString);
+                            return dateString || 'Unknown Date';
+                        }
+                        
+                        return date.toLocaleDateString('en-US', { 
+                            year: 'numeric', 
+                            month: 'short', 
+                            day: 'numeric' 
+                        });
+                    } catch (e) {
+                        console.warn('Error formatting date:', dateString, e);
+                        return dateString || 'Unknown Date';
+                    }
+                }
+
+                formatEventType(eventType) {
+                    if (!eventType || eventType === 'null' || eventType === 'undefined') return '';
+                    
+                    const typeMap = {
+                        'founding': '🏗️ Founding',
+                        'discovery': '🔍 Discovery', 
+                        'conflict': '⚔️ Conflict',
+                        'diplomacy': '🤝 Diplomacy',
+                        'disaster': '⚠️ Disaster',
+                        'innovation': '💡 Innovation',
+                        'trade': '💰 Trade',
+                        'exploration': '🚀 Exploration',
+                        'heroism': '🏆 Heroism',
+                        'tragedy': '😔 Tragedy',
+                        'general': '🌌 General'
+                    };
+                    
+                    return typeMap[eventType.toLowerCase()] || `📖 ${eventType}`;
+                }
+                
+                populateNews() {
+                    console.log('populateNews() called');
+                    const container = document.getElementById('news-container');
+                    if (!container) {
+                        console.warn('news-container not found');
+                        return;
+                    }
+                    
+                    if (!this.data || !this.data.news || this.data.news.length === 0) {
+                        console.warn('No news data available:', this.data?.news);
+                        container.innerHTML = '<div class="no-content"><p>No news available.</p></div>';
+                        return;
+                    }
+                    
+                    console.log('Populating news:', this.data.news.length, 'news items found');
+                    
+                    container.innerHTML = this.data.news.map(news => `
+                        <div class="news-item">
+                            <h3>${news.title || 'Untitled News'}</h3>
+                            <p class="news-meta">${news.type || 'General'} - ${new Date(news.delivered_at || news.scheduled_delivery).toLocaleDateString()}</p>
+                            <p>${news.description || 'No description available.'}</p>
+                            ${news.location_id ? `<p><small>Related to location ID: ${news.location_id}</small></p>` : ''}
+                        </div>
+                    `).join('');
+                    
+                    console.log('News populated successfully');
+                }
+                
+                setupSearchFunctionality() {
+                    const searchInput = document.getElementById('universal-search');
+                    const searchBtn = document.getElementById('search-btn');
+                    const resultsContainer = document.getElementById('search-results');
+
+                    if (!searchInput || !searchBtn || !resultsContainer) return;
+
+                    const performSearch = () => {
+                        const query = searchInput.value.trim();
+                        if (!query) {
+                            resultsContainer.innerHTML = '<p>Please enter a search term.</p>';
+                            return;
+                        }
+
+                        this.performUniversalSearch(query);
+                    };
+
+                    searchBtn.addEventListener('click', performSearch);
+                    searchInput.addEventListener('keypress', (e) => {
+                        if (e.key === 'Enter') {
+                            performSearch();
+                        }
+                    });
+                }
+                
+                performUniversalSearch(query) {
+                    const resultsContainer = document.getElementById('search-results');
+                    if (!resultsContainer) return;
+
+                    const queryLower = query.toLowerCase();
+                    const results = {
+                        locations: [],
+                        npcs: [],
+                        logs: [],
+                        news: []
+                    };
+
+                    // Search locations
+                    if (this.data && this.data.locations) {
+                        this.data.locations.forEach(location => {
+                            if (location.name.toLowerCase().includes(queryLower) ||
+                                (location.description && location.description.toLowerCase().includes(queryLower)) ||
+                                (location.type || location.location_type || '').toLowerCase().includes(queryLower)) {
+                                results.locations.push(location);
+                            }
+                        });
+                    }
+
+                    this.displaySearchResults(results, query);
+                }
+                
+                displaySearchResults(results, query) {
+                    const resultsContainer = document.getElementById('search-results');
+                    const totalResults = results.locations.length;
+
+                    if (totalResults === 0) {
+                        resultsContainer.innerHTML = `
+                            <div class="no-results">
+                                <p>No results found for "${query}"</p>
+                                <p>Try searching for location names or types.</p>
+                            </div>
+                        `;
+                        return;
+                    }
+
+                    let html = `<div class="search-results-summary">
+                                    <h3>Search Results for "${query}" (${totalResults} found)</h3>
+                                </div>`;
+
+                    // Display locations
+                    if (results.locations.length > 0) {
+                        html += `<div class="search-section">
+                                    <h4>📍 Locations (${results.locations.length})</h4>`;
+                        results.locations.forEach(location => {
+                            html += `<div class="search-result location-result">
+                                        <h5>${location.name}</h5>
+                                        <p>Type: ${location.type || location.location_type}</p>
+                                        <p>${location.description || 'No description available.'}</p>
+                                     </div>`;
+                        });
+                        html += '</div>';
+                    }
+
+                    resultsContainer.innerHTML = html;
+                }
+                
+                refreshCurrentSection() {
+                    console.log('🔄 Refreshing current section:', this.currentSection);
+                    // Refresh the current section based on what's active
+                    switch(this.currentSection) {
+                        case 'locations': this.populateLocations(); break;
+                        case 'corridors': this.populateCorridors(); break;
+                        case 'inhabitants': this.populateNPCs(); break;
+                        case 'logs': this.populateLogs(); break;
+                        case 'news': this.populateNews(); break;
+                        default: console.log('No specific refresh needed for section:', this.currentSection);
+                    }
+                }
+            }
+            '''
+        
+        # Live wiki JavaScript (with all fixes included)
+        live_js = '''
+    // Live Galaxy Wiki JavaScript - Extends Export functionality with WebSocket updates
+    class LiveGalaxyWiki extends BaseGalaxyWiki {
+        constructor(data) {
+            super(data);
+            this.websocket = null;
+            this.reconnectAttempts = 0;
+            this.maxReconnectAttempts = 10;
+            this.initializeColorScheme();
+            this.connectWebSocket();
+            this.showLiveUpdateIndicator('Wiki Connected', 'success');
+        }
+
+        initializeColorScheme(theme = null) {
+            let selectedTheme;
+            
+            if (theme) {
+                selectedTheme = theme;
+            } else if (window.galaxyData && window.galaxyData.selected_theme) {
+                selectedTheme = window.galaxyData.selected_theme;
+            } else {
+                const themes = ['blue', 'amber', 'green', 'red', 'purple'];
+                selectedTheme = themes[Math.floor(Math.random() * themes.length)];
+            }
+            
+            document.body.className = `theme-${selectedTheme}`;
+            console.log(`🎨 Live Wiki initialized with ${selectedTheme.toUpperCase()} color scheme`);
+        }
+        
+        connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            if (this.websocket) this.websocket.close();
+            this.websocket = new WebSocket(wsUrl);
+            
+            this.websocket.onopen = () => {
+                console.log('🔗 Wiki WebSocket connected');
+                this.reconnectAttempts = 0;
+                this.showLiveUpdateIndicator('Live Data Connected', 'success');
+            };
+            
+            this.websocket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    this.handleLiveUpdate(data);
+                } catch (error) {
+                    console.error('Failed to parse WebSocket message:', error);
+                }
+            };
+            
+            this.websocket.onclose = () => {
+                console.log('🔌 Wiki WebSocket disconnected');
+                this.scheduleReconnect();
+            };
+
+            this.websocket.onerror = (error) => console.error('❌ Wiki WebSocket error:', error);
+        }
+
+        scheduleReconnect() {
+            if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                this.reconnectAttempts++;
+                const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000);
+                this.showLiveUpdateIndicator(`Reconnecting... (${this.reconnectAttempts})`, 'warning');
+                setTimeout(() => this.connectWebSocket(), delay);
+            } else {
+                this.showLiveUpdateIndicator('Connection Lost', 'error');
+            }
+        }
+
+        handleLiveUpdate(data) {
+            console.log('📡 Received WebSocket message:', data.type);
+            
+            switch(data.type) {
+                case 'wiki_data': 
+                    this.updateWikiData(data.data); 
+                    break;
+                case 'galaxy_data':
+                    this.updateGalaxyData(data.data);
+                    if (data.data.selected_theme) this.initializeColorScheme(data.data.selected_theme);
+                    break;
+                case 'player_update': 
+                    this.updatePlayers(data.data); 
+                    break;
+                case 'npc_update': 
+                    this.updateNPCs(data.data); 
+                    break;
+                case 'location_update': 
+                    this.updateLocation(data.data); 
+                    break;
+                case 'logs_history_update':
+                    this.updateLogsHistory(data.data);
+                    break;
+                default: 
+                    console.log('Unknown WebSocket message type:', data.type);
+            }
+        }
+
+        updateWikiData(newData) {
+            console.log('📚 Updating wiki data...', {
+                logs: newData.logs?.length || 0,
+                history: newData.history?.length || 0
+            });
+            
+            this.data = newData;
+            this.refreshCurrentSection();
+            this.showLiveUpdateIndicator('Wiki Data Updated', 'success');
+        }
+
+        updateGalaxyData(newData) {
+            console.log('🌌 Updating galaxy data...');
+            
+            if (this.data) {
+                if (newData.locations) this.data.locations = newData.locations;
+                if (newData.galaxy_name && this.data.galaxy) this.data.galaxy.name = newData.galaxy_name;
+                if (newData.current_time && this.data.galaxy) this.data.galaxy.current_time = newData.current_time;
+            }
+            this.refreshCurrentSection();
+            this.showLiveUpdateIndicator('Galaxy Data Updated', 'info');
+        }
+
+        updatePlayers(playerData) {
+            console.log('👥 Updating player data...');
+            
+            if (this.data && this.data.players) {
+                this.data.players = playerData;
+                if (this.selectedLocation) this.updateLocationPanel(this.selectedLocation);
+            }
+            this.showLiveUpdateIndicator('Player Data Updated', 'info');
+        }
+
+        updateNPCs(npcData) {
+            console.log('🤖 Updating NPC data...');
+            
+            if (this.data && this.data.npcs) {
+                if (!this.data.npcs.dynamic) this.data.npcs.dynamic = [];
+                this.data.npcs.dynamic = npcData;
+                if (this.currentSection === 'inhabitants') this.populateNPCs();
+            }
+            this.showLiveUpdateIndicator('NPC Data Updated', 'info');
+        }
+
+        updateLogsHistory(updateData) {
+            console.log('📜 Updating logs and history data...', {
+                logs: updateData.logs?.length || 0,
+                history: updateData.history?.length || 0
+            });
+            
+            if (this.data) {
+                if (updateData.logs) this.data.logs = updateData.logs;
+                if (updateData.history) this.data.history = updateData.history;
+                
+                if (this.currentSection === 'logs') {
+                    this.populateLogs();
+                }
+            }
+            this.showLiveUpdateIndicator('Logs & History Updated', 'info');
+        }
+
+        showLiveUpdateIndicator(message, type = 'info') {
+            let indicator = document.getElementById('live-update-indicator');
+            if (!indicator) {
+                indicator = document.createElement('div');
+                indicator.id = 'live-update-indicator';
+                indicator.className = 'live-update-indicator';
+                document.body.appendChild(indicator);
+            }
+            const colors = { 
+                success: '#00ff88', 
+                warning: '#ff8800', 
+                error: '#ff3333', 
+                info: '#00ffff' 
+            };
+            indicator.textContent = message;
+            indicator.style.background = colors[type] || colors.info;
+            indicator.classList.add('show');
+            setTimeout(() => indicator.classList.remove('show'), 3000);
+        }
+
+        setupLiveFeatures() {
+            this.addRefreshButtons();
+            setInterval(() => this.refreshTimeDisplay(), 60000);
+        }
+
+        addRefreshButtons() {
+            const sections = ['locations', 'corridors', 'inhabitants', 'logs', 'news'];
+            sections.forEach(sectionId => {
+                const section = document.getElementById(sectionId);
+                if (section) {
+                    const header = section.querySelector('h2');
+                    if (header && !header.querySelector('.refresh-btn')) {
+                        const refreshBtn = document.createElement('button');
+                        refreshBtn.className = 'btn-secondary refresh-btn';
+                        refreshBtn.innerHTML = '🔄 REFRESH';
+                        refreshBtn.style.marginLeft = '1rem';
+                        refreshBtn.addEventListener('click', () => this.refreshSection(sectionId));
+                        header.appendChild(refreshBtn);
+                    }
+                }
+            });
+        }
+
+        refreshSection(sectionId) {
+            this.showLiveUpdateIndicator('Refreshing...', 'info');
+            fetch('/api/wiki/data')
+                .then(response => response.json())
+                .then(data => {
+                    this.data = data;
+                    this.refreshCurrentSection();
+                    this.showLiveUpdateIndicator('Section Refreshed', 'success');
+                })
+                .catch(error => {
+                    console.error('Error refreshing section:', error);
+                    this.showLiveUpdateIndicator('Refresh Failed', 'error');
+                });
+        }
+        
+        refreshTimeDisplay() { 
+            const timeElements = document.querySelectorAll('.current-time');
+            if (this.data && this.data.galaxy && this.data.galaxy.current_time) {
+                timeElements.forEach(el => {
+                    el.textContent = this.data.galaxy.current_time;
+                });
+            }
+        }
+
+        init() {
+            super.init();
+            this.setupLiveFeatures();
+            console.log('✅ LiveGalaxyWiki initialization complete');
+        }
+    }
+
+    // Initialize when DOM is loaded
+    document.addEventListener('DOMContentLoaded', () => {
+        console.log('DOM loaded, initializing wiki...');
+        console.log('Galaxy data available:', !!window.galaxyData);
+        console.log('Is live wiki:', !!window.isLiveWiki);
+        
+        if (window.galaxyData && window.isLiveWiki) {
+            console.log('Initializing LiveGalaxyWiki...');
+            try {
+                window.liveWiki = new LiveGalaxyWiki(window.galaxyData);
+                window.liveWiki.init();
+                console.log('✅ LiveGalaxyWiki initialized successfully');
+            } catch (error) {
+                console.error('❌ Error initializing LiveGalaxyWiki:', error);
+                console.log('🔄 Falling back to BaseGalaxyWiki...');
+                window.galaxyWiki = new BaseGalaxyWiki(window.galaxyData);
+                window.galaxyWiki.init();
+            }
+        } else if (window.galaxyData) {
+            console.log('Initializing BaseGalaxyWiki...');
+            try {
+                window.galaxyWiki = new BaseGalaxyWiki(window.galaxyData);
+                window.galaxyWiki.init();
+                console.log('✅ BaseGalaxyWiki initialized successfully');
+            } catch (error) {
+                console.error('❌ Error initializing BaseGalaxyWiki:', error);
+            }
+        } else {
+            console.error('❌ No galaxy data available for wiki initialization');
+            
+            const contentArea = document.getElementById('content-area');
+            if (contentArea) {
+                contentArea.innerHTML = `
+                    <div style="text-align: center; padding: 2rem; color: var(--error-color);">
+                        <h2>⚠️ Data Loading Error</h2>
+                        <p>Galaxy data is not available. This usually means:</p>
+                        <ul style="text-align: left; max-width: 500px; margin: 0 auto;">
+                            <li>The server is still starting up</li>
+                            <li>Database is initializing</li>
+                            <li>Galaxy data is being generated</li>
+                        </ul>
+                        <p>Please refresh the page in a few moments.</p>
+                        <button onclick="window.location.reload()" style="margin-top: 1rem; padding: 0.5rem 1rem;">
+                            🔄 Refresh Page
+                        </button>
+                    </div>
+                `;
+            }
+        }
+    });
+        '''
+        
+        return base_js + '\n\n' + live_js
+    async def _get_comprehensive_wiki_data(self):
+        """Get comprehensive wiki data with enhanced debugging for logs and history"""
+        try:
+            print("🔍 Attempting to gather comprehensive wiki data...")
+            await self.ensure_logs_exist()
+            # Try to use the export cog's data gathering method
+            export_cog = self.bot.get_cog('ExportCog')
+            if export_cog:
+                try:
+                    print("📊 Using ExportCog to gather data...")
+                    data = await export_cog._gather_all_data(include_logs=True, include_news=True)
+                    
+                    # Verify logs and history are included
+                    logs_count = len(data.get('logs', []))
+                    history_count = len(data.get('history', []))
+                    print(f"📊 ExportCog returned - Logs: {logs_count}, History: {history_count}")
+                    
+                    # If export cog doesn't provide logs/history, supplement them
+                    if logs_count == 0 or history_count == 0:
+                        print("⚠️ ExportCog missing logs or history, supplementing...")
+                        if logs_count == 0:
+                            data['logs'] = await self._fetch_logs()
+                            print(f"✅ Added {len(data['logs'])} logs from fallback method")
+                        if history_count == 0:
+                            data['history'] = await self._fetch_detailed_history()
+                            print(f"✅ Added {len(data['history'])} history events from fallback method")
+                    
+                    print(f"✅ ExportCog final data:")
+                    print(f"   - Locations: {len(data.get('locations', []))}")
+                    print(f"   - Corridors: {len(data.get('corridors', []))}")
+                    print(f"   - Static NPCs: {len(data.get('npcs', {}).get('static', []))}")
+                    print(f"   - Dynamic NPCs: {len(data.get('npcs', {}).get('dynamic', []))}")
+                    print(f"   - Logs: {len(data.get('logs', []))}")
+                    print(f"   - History: {len(data.get('history', []))}")
+                    print(f"   - News: {len(data.get('news', []))}")
+                    
+                    return data
+                    
+                except Exception as e:
+                    print(f"❌ Error using export cog data: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # Fallback: gather data ourselves
+            print("🔄 Using fallback data gathering...")
+            data = await self._gather_comprehensive_wiki_data_fallback()
+            
+            print(f"✅ Fallback returned data:")
+            print(f"   - Locations: {len(data.get('locations', []))}")
+            print(f"   - Corridors: {len(data.get('corridors', []))}")
+            print(f"   - Static NPCs: {len(data.get('npcs', {}).get('static', []))}")
+            print(f"   - Dynamic NPCs: {len(data.get('npcs', {}).get('dynamic', []))}")
+            print(f"   - Logs: {len(data.get('logs', []))}")
+            print(f"   - History: {len(data.get('history', []))}")
+            print(f"   - News: {len(data.get('news', []))}")
+            
+            return data
+            
+        except Exception as e:
+            print(f"❌ Error gathering comprehensive wiki data: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Return minimal safe data structure to prevent crashes
+            print("⚠️ Returning minimal wiki data as fallback")
+            return self._get_minimal_wiki_data()
+
+    async def _gather_comprehensive_wiki_data_fallback(self):
+        """Comprehensive fallback data gathering that matches export format with enhanced logging"""
+        print("🔄 Starting comprehensive data gathering...")
+        
+        from utils.time_system import TimeSystem
+        time_system = TimeSystem(self.bot)
+
+        # Get galaxy info
+        try:
+            galaxy_info_tuple = self.db.execute_query(
+                "SELECT name, start_date, time_scale_factor, is_time_paused FROM galaxy_info WHERE galaxy_id = 1", 
+                fetch='one'
+            )
+            
+            if galaxy_info_tuple:
+                galaxy_name, start_date, time_scale, is_paused = galaxy_info_tuple
+                print(f"✅ Galaxy info found: {galaxy_name}")
+            else:
+                galaxy_name, start_date, time_scale, is_paused = "Unknown Galaxy", "2751-01-01", 4.0, False
+                print("⚠️ No galaxy info found, using defaults")
+                
+            current_time = time_system.format_ingame_datetime(time_system.calculate_current_ingame_time())
+            print(f"✅ Current time: {current_time}")
+        except Exception as e:
+            print(f"❌ Error getting galaxy info: {e}")
+            galaxy_name, start_date, time_scale, is_paused = "Unknown Galaxy", "2751-01-01", 4.0, False
+            current_time = "Unknown"
+
+        # Get locations with all details
+        print("📍 Fetching locations...")
+        locations = await self._fetch_detailed_locations()
+        
+        # Get corridors with all details  
+        print("🛤️ Fetching corridors...")
+        corridors = await self._fetch_detailed_corridors()
+        
+        # Get NPCs
+        print("🤖 Fetching NPCs...")
+        npcs = await self._fetch_detailed_npcs()
+        
+        # Get logs with enhanced debugging
+        print("📜 Fetching logs...")
+        logs = await self._fetch_logs()
+        print(f"📜 Logs fetch result: {len(logs)} logs retrieved")
+        if logs and len(logs) > 0:
+            print(f"📜 Sample log structure: {logs[0]}")
+        
+        # Get news
+        print("📰 Fetching news...")
+        news = await self._fetch_detailed_news()
+        
+        # Get history with enhanced debugging
+        print("📚 Fetching history...")
+        history = await self._fetch_detailed_history()
+        print(f"📚 History fetch result: {len(history)} events retrieved")
+        if history and len(history) > 0:
+            print(f"📚 Sample history structure: {history[0]}")
+        
+        # Calculate statistics
+        print("📊 Calculating statistics...")
+        statistics = self._calculate_detailed_statistics(locations, corridors, npcs)
+
+        final_data = {
+            "galaxy": {
+                "name": galaxy_name,
+                "start_date": start_date,
+                "current_time": current_time,
+                "time_scale": time_scale,
+                "is_paused": bool(is_paused)
+            },
+            "locations": locations,
+            "corridors": corridors,
+            "npcs": npcs,
+            "logs": logs,
+            "news": news,
+            "history": history,
+            "statistics": statistics,
+            "export_date": datetime.now().isoformat()
+        }
+        
+        print(f"✅ Data gathering complete. Final summary:")
+        print(f"   - Locations: {len(locations)}")
+        print(f"   - Corridors: {len(corridors)}")
+        print(f"   - Static NPCs: {len(npcs.get('static', []))}")
+        print(f"   - Dynamic NPCs: {len(npcs.get('dynamic', []))}")
+        print(f"   - Logs: {len(logs)}")
+        print(f"   - History: {len(history)}")
+        print(f"   - News: {len(news)}")
+        
+        # Additional validation
+        if len(logs) == 0:
+            print("⚠️ WARNING: No logs were retrieved! This might indicate:")
+            print("   1. The location_logs table is empty")
+            print("   2. There's an issue with the database query")
+            print("   3. No logs have been generated yet")
+            print("   Use /webmap_debug_logs check to investigate further")
+        
+        if len(history) == 0:
+            print("⚠️ WARNING: No history was retrieved! This might indicate:")
+            print("   1. The galactic_history table is empty")
+            print("   2. There's an issue with the database query") 
+            print("   3. History hasn't been generated yet")
+            print("   Use /webmap_debug_logs check to investigate further")
+        
+        return final_data
+    async def trigger_logs_history_update(self):
+        """Trigger a wiki update specifically for logs and history changes"""
+        if not self.is_running or not self.websocket_clients:
+            return
+        
+        try:
+            print("📜 Triggering logs and history update...")
+            
+            # Get just the logs and history data
+            logs = await self._fetch_logs()
+            history = await self._fetch_detailed_history()
+            
+            # Create a focused update message
+            update_data = {
+                "logs": logs,
+                "history": history,
+                "update_type": "logs_history",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            await self._broadcast_update("logs_history_update", update_data)
+            print(f"📜 Sent logs/history update: {len(logs)} logs, {len(history)} history events")
+            
+        except Exception as e:
+            print(f"❌ Error triggering logs/history update: {e}")
+            
+    async def _fetch_detailed_history(self):
+        """Fetch galactic history matching export format with enhanced debugging"""
+        try:
+            print("🔍 Fetching detailed history...")
+            
+            # Get history without JOIN first to ensure we get all events
+            history_data = self.db.execute_query("""
+                SELECT event_title, event_description, historical_figure, 
+                       event_date, event_type, location_id
+                FROM galactic_history
+                ORDER BY event_date DESC
+                LIMIT 1000
+            """, fetch='all')
+
+            if not history_data:
+                print("⚠️ No history found in galactic_history table")
+                return []
+
+            print(f"📊 Found {len(history_data)} history events")
+            
+            # Get location names in bulk
+            location_ids = list(set(h[5] for h in history_data if h[5]))
+            location_names = {}
+            
+            if location_ids:
+                locations = self.db.execute_query(
+                    f"SELECT location_id, name FROM locations WHERE location_id IN ({','.join('?' * len(location_ids))})",
+                    location_ids,
+                    fetch='all'
+                )
+                location_names = {loc[0]: loc[1] for loc in locations if locations}
+            
+            # Build history with proper structure
+            history_result = []
+            for h in history_data:
+                location_data = None
+                if h[5] and h[5] in location_names:
+                    location_data = {"id": h[5], "name": location_names[h[5]]}
+                
+                history_result.append({
+                    "title": h[0] or "Untitled Event",
+                    "event_title": h[0] or "Untitled Event",  # Add alternate field
+                    "description": h[1] or "No description available",
+                    "event_description": h[1] or "No description available",  # Add alternate field
+                    "figure": h[2],
+                    "historical_figure": h[2],  # Add alternate field
+                    "date": h[3],
+                    "event_date": h[3],  # Add alternate field
+                    "type": h[4] or "general",
+                    "event_type": h[4] or "general",  # Add alternate field
+                    "location": location_data
+                })
+            
+            print(f"✅ Successfully processed {len(history_result)} history events")
+            return history_result
+            
+        except Exception as e:
+            print(f"❌ Error fetching detailed history: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+        
+    async def _fetch_detailed_locations(self):
+        """Fetch locations with full detail matching export format"""
+        try:
+            locations_data = self.db.execute_query("""
+                SELECT location_id, name, location_type, description, wealth_level,
+                       population, x_coord, y_coord, system_name, established_date,
+                       has_jobs, has_shops, has_medical, has_repairs, has_fuel,
+                       has_upgrades, has_black_market, is_derelict, gate_status, faction
+                FROM locations
+                ORDER BY location_type, name
+            """, fetch='all')
+            
+            if not locations_data:
+                print("No locations found in database")
+                return []
+            
+            print(f"Found {len(locations_data)} locations in database")
+            
+            locations = []
+            for loc in locations_data:
+                # Get sub-locations for this location
+                sub_locs = self.db.execute_query("""
+                    SELECT name, sub_type, description, is_active
+                    FROM sub_locations
+                    WHERE parent_location_id = ?
+                """, (loc[0],), fetch='all')
+                
+                location_dict = {
+                    "id": loc[0],
+                    "name": loc[1],
+                    "type": loc[2],  # This is what the JavaScript expects
+                    "location_type": loc[2],  # Also provide alternative name
+                    "description": loc[3] or "No description available.",
+                    "wealth_level": loc[4] or 1,
+                    "population": loc[5] or 0,
+                    "coordinates": {"x": loc[6], "y": loc[7]},
+                    "x_coord": loc[6],  # Also provide flat coordinates
+                    "y_coord": loc[7],
+                    "system": loc[8] or "Unknown System",
+                    "established": loc[9],
+                    "services": {
+                        "jobs": bool(loc[10]) if loc[10] is not None else True,
+                        "shops": bool(loc[11]) if loc[11] is not None else True,
+                        "medical": bool(loc[12]) if loc[12] is not None else True,
+                        "repairs": bool(loc[13]) if loc[13] is not None else True,
+                        "fuel": bool(loc[14]) if loc[14] is not None else True,
+                        "upgrades": bool(loc[15]) if loc[15] is not None else False,
+                        "black_market": bool(loc[16]) if loc[16] is not None else False
+                    },
+                    "is_derelict": bool(loc[17]) if loc[17] is not None else False,
+                    "gate_status": loc[18] or "unknown",
+                    "faction": loc[19] or "neutral",
+                    "danger_level": 0,  # Default value
+                    "sub_locations": [
+                        {
+                            "name": sl[0],
+                            "type": sl[1],
+                            "description": sl[2],
+                            "is_active": bool(sl[3])
+                        }
+                        for sl in (sub_locs or [])
+                    ]
+                }
+                
+                locations.append(location_dict)
+            
+            print(f"Successfully processed {len(locations)} locations")
+            return locations
+            
+        except Exception as e:
+            print(f"Error fetching detailed locations: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    @app_commands.command(name="webmap_debug_logs", description="Debug logs and history data for the wiki")
+    @app_commands.describe(action="What to debug")
+    @app_commands.choices(action=[
+        app_commands.Choice(name="Check database counts", value="check"),
+        app_commands.Choice(name="Sample logs data", value="logs"),
+        app_commands.Choice(name="Sample history data", value="history"),
+        app_commands.Choice(name="Force refresh", value="refresh")
+    ])
+    async def debug_logs_history(self, interaction: discord.Interaction, action: str):
+        """Debug logs and history data"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            if action == "check":
+                # Check database counts
+                log_count = self.db.execute_query("SELECT COUNT(*) FROM location_logs", fetch='one')[0]
+                history_count = self.db.execute_query("SELECT COUNT(*) FROM galactic_history", fetch='one')[0]
+                
+                embed = discord.Embed(
+                    title="📊 Logs & History Database Status",
+                    color=0x00ff00
+                )
+                embed.add_field(name="Location Logs", value=f"{log_count} entries", inline=True)
+                embed.add_field(name="Galactic History", value=f"{history_count} events", inline=True)
+                
+                await interaction.followup.send(embed=embed)
+                
+            elif action == "logs":
+                # Sample logs
+                logs = await self._fetch_logs()
+                sample = logs[:3] if logs else []
+                
+                embed = discord.Embed(
+                    title="📜 Sample Logs Data",
+                    description=f"Showing {len(sample)} of {len(logs)} total logs",
+                    color=0x00ffff
+                )
+                
+                for log in sample:
+                    embed.add_field(
+                        name=f"Log {log['id']}",
+                        value=f"**Location:** {log['location']['name']}\n"
+                              f"**Author:** {log['author']}\n"
+                              f"**Message:** {log['message'][:50]}...",
+                        inline=False
+                    )
+                
+                await interaction.followup.send(embed=embed)
+                
+            elif action == "history":
+                # Sample history
+                history = await self._fetch_detailed_history()
+                sample = history[:3] if history else []
+                
+                embed = discord.Embed(
+                    title="📚 Sample History Data",
+                    description=f"Showing {len(sample)} of {len(history)} total events",
+                    color=0x00ffff
+                )
+                
+                for event in sample:
+                    embed.add_field(
+                        name=event['title'],
+                        value=f"**Date:** {event['date']}\n"
+                              f"**Type:** {event['type']}\n"
+                              f"**Description:** {event['description'][:50]}...",
+                        inline=False
+                    )
+                
+                await interaction.followup.send(embed=embed)
+                
+            elif action == "refresh":
+                # Force refresh wiki data
+                if self.is_running:
+                    await self.trigger_logs_history_update()
+                    await interaction.followup.send("✅ Forced refresh of logs and history data")
+                else:
+                    await interaction.followup.send("❌ Web map is not running")
+                    
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error: {str(e)}")        
+    async def trigger_logs_history_update(self):
+        """Trigger a wiki update specifically for logs and history changes"""
+        if not self.is_running or not self.websocket_clients:
+            return
+        
+        try:
+            print("📜 Triggering logs and history update...")
+            
+            # Get just the logs and history data
+            logs = await self._fetch_logs()
+            history = await self._fetch_detailed_history()
+            
+            # Create a focused update message
+            update_data = {
+                "logs": logs,
+                "history": history,
+                "update_type": "logs_history",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            await self._broadcast_update("logs_history_update", update_data)
+            print(f"📜 Sent logs/history update: {len(logs)} logs, {len(history)} history events")
+            
+        except Exception as e:
+            print(f"❌ Error triggering logs/history update: {e}")
+            
+    async def _fetch_detailed_corridors(self):
+        """Fetch corridors with full detail matching export format"""
+        try:
+            corridors_data = self.db.execute_query("""
+                SELECT c.corridor_id, c.name, c.origin_location, c.destination_location,
+                       c.travel_time, c.fuel_cost, c.danger_level, c.is_active,
+                       l1.name as origin_name, l2.name as destination_name
+                FROM corridors c
+                JOIN locations l1 ON c.origin_location = l1.location_id
+                JOIN locations l2 ON c.destination_location = l2.location_id
+                ORDER BY c.name
+            """, fetch='all')
+            
+            if not corridors_data:
+                print("No corridors found in database")
+                return []
+            
+            print(f"Found {len(corridors_data)} corridors in database")
+            
+            corridors = [
+                {
+                    "id": c[0],
+                    "name": c[1],
+                    "origin": {"id": c[2], "name": c[8]},
+                    "destination": {"id": c[3], "name": c[9]},
+                    "travel_time": c[4],
+                    "fuel_cost": c[5],
+                    "danger_level": c[6],
+                    "is_active": bool(c[7]),
+                    "has_gate": c[1].lower().find('gate') != -1 if c[1] else False,  # Try to detect from name
+                    "min_ship_class": None  # Default value
+                }
+                for c in corridors_data
+            ]
+            
+            print(f"Successfully processed {len(corridors)} corridors")
+            return corridors
+            
+        except Exception as e:
+            print(f"Error fetching detailed corridors: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    async def _fetch_detailed_npcs(self):
+        """Fetch NPCs with full detail matching export format"""
+        try:
+            # Static NPCs
+            static_npcs_data = self.db.execute_query("""
+                SELECT s.npc_id, s.location_id, s.name, s.age, s.occupation,
+                       s.personality, s.trade_specialty,
+                       l.name as location_name
+                FROM static_npcs s
+                JOIN locations l ON s.location_id = l.location_id
+                ORDER BY l.name, s.name
+            """, fetch='all')
+            
+            if static_npcs_data:
+                print(f"Found {len(static_npcs_data)} static NPCs in database")
+            else:
+                print("No static NPCs found in database")
+
+            # Dynamic NPCs
+            dynamic_npcs_data = self.db.execute_query("""
+                SELECT d.npc_id, d.name, d.callsign, d.age, d.ship_name, d.ship_type,
+                       d.current_location, d.alignment,
+                       l.name as location_name
+                FROM dynamic_npcs d
+                LEFT JOIN locations l ON d.current_location = l.location_id
+                WHERE d.is_alive = 1
+                ORDER BY d.callsign
+            """, fetch='all')
+            
+            if dynamic_npcs_data:
+                print(f"Found {len(dynamic_npcs_data)} dynamic NPCs in database")
+            else:
+                print("No dynamic NPCs found in database")
+
+            npcs = {
+                "static": [
+                    {
+                        "id": s[0],
+                        "location": {"id": s[1], "name": s[7]},
+                        "name": s[2],
+                        "age": s[3],
+                        "occupation": s[4],
+                        "personality": s[5] or "No data available.",
+                        "backstory": "No data available.",
+                        "trade_specialty": s[6],
+                        "dialogue_style": "normal"
+                    }
+                    for s in (static_npcs_data or [])
+                ],
+                "dynamic": [
+                    {
+                        "id": d[0],
+                        "name": d[1],
+                        "callsign": d[2],
+                        "age": d[3],
+                        "ship": {"name": d[4], "type": d[5]},
+                        "ship_name": d[4],  # Also provide flat name
+                        "ship_type": d[5],  # Also provide flat type
+                        "current_location": {"id": d[6], "name": d[8]} if d[6] else None,
+                        "personality": "No data available.",
+                        "trading_preference": "any",
+                        "faction": d[7] or "independent",
+                        "alignment": d[7] or "independent",  # Also provide as alignment
+                        "wanted_level": 0
+                    }
+                    for d in (dynamic_npcs_data or [])
+                ]
+            }
+            
+            print(f"Successfully processed {len(npcs['static'])} static and {len(npcs['dynamic'])} dynamic NPCs")
+            return npcs
+            
+        except Exception as e:
+            print(f"Error fetching detailed NPCs: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"static": [], "dynamic": []}
+
+    async def _fetch_logs(self) -> List[Dict]:
+        """Fetch location logs"""
+        try:
+            logs = self.db.execute_query("""
+                SELECT
+                    l.log_id, l.location_id, l.author_name, l.message,
+                    l.posted_at, l.is_generated,
+                    loc.name as location_name
+                FROM location_logs l
+                JOIN locations loc ON l.location_id = loc.location_id
+                ORDER BY l.posted_at DESC
+                LIMIT 500
+            """, fetch='all')
+            
+            if not logs:
+                print("⚠️ No logs found in location_logs table")
+                return []
+            
+            return [
+                {
+                    "id": l[0],
+                    "location": {"id": l[1], "name": l[6]},
+                    "location_name": l[6],  # Add this for compatibility
+                    "author": l[2],
+                    "author_name": l[2],  # Add this for compatibility
+                    "message": l[3],
+                    "posted_at": l[4],
+                    "date": l[4],  # Add this for compatibility
+                    "is_generated": bool(l[5])
+                }
+                for l in logs
+            ]
+        except Exception as e:
+            print(f"❌ Error fetching logs: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+
+    async def _fetch_detailed_news(self):
+        """Fetch news matching export format"""
+        try:
+            news_data = self.db.execute_query("""
+                SELECT news_id, news_type, title, description, location_id,
+                       scheduled_delivery, delay_hours, event_data
+                FROM news_queue
+                WHERE is_delivered = 1
+                ORDER BY scheduled_delivery DESC
+                LIMIT 100
+            """, fetch='all')
+
+            if not news_data:
+                return []
+
+            news_list = []
+            for n in news_data:
+                news_dict = {
+                    "id": n[0],
+                    "type": n[1],
+                    "title": n[2],
+                    "description": n[3],
+                    "location_id": n[4],
+                    "delivered_at": n[5],
+                    "delay_hours": n[6]
+                }
+
+                if n[7]:
+                    try:
+                        news_dict["event_data"] = json.loads(n[7])
+                    except:
+                        news_dict["event_data"] = None
+
+                news_list.append(news_dict)
+
+            return news_list
+            
+        except Exception as e:
+            print(f"Error fetching detailed news: {e}")
+            return []
+
+    def _calculate_detailed_statistics(self, locations, corridors, npcs):
+        """Calculate statistics matching export format"""
+        location_types = {}
+        total_population = 0
+        wealth_distribution = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+
+        for loc in locations:
+            loc_type = loc["type"]
+            location_types[loc_type] = location_types.get(loc_type, 0) + 1
+            if loc["population"]:
+                total_population += loc["population"]
+            wealth = loc["wealth_level"]
+            if wealth in wealth_distribution:
+                wealth_distribution[wealth] += 1
+
+        active_corridors = sum(1 for c in corridors if c["is_active"])
+        gated_corridors = sum(1 for c in corridors if c.get("has_gate", False))
+        total_static_npcs = len(npcs["static"])
+        total_dynamic_npcs = len(npcs["dynamic"])
+
+        return {
+            "locations": {
+                "total": len(locations),
+                "by_type": location_types,
+                "total_population": total_population,
+                "wealth_distribution": wealth_distribution
+            },
+            "corridors": {
+                "total": len(corridors),
+                "active": active_corridors,
+                "dormant": len(corridors) - active_corridors,
+                "gated": gated_corridors
+            },
+            "npcs": {
+                "static": total_static_npcs,
+                "dynamic": total_dynamic_npcs,
+                "total": total_static_npcs + total_dynamic_npcs
+            }
+        }
+
+    def _get_minimal_wiki_data(self):
+        """Return minimal safe data structure to prevent crashes"""
+        return {
+            "galaxy": {
+                "name": "Unknown Galaxy", 
+                "start_date": "Unknown",
+                "current_time": "Unknown",
+                "time_scale": 1.0,
+                "is_paused": False
+            },
+            "locations": [],
+            "corridors": [],
+            "npcs": {"static": [], "dynamic": []},
+            "logs": [],  # Ensure this is always present
+            "news": [],
+            "history": [],  # Ensure this is always present
+            "statistics": {
+                "locations": {"total": 0, "by_type": {}, "total_population": 0, "wealth_distribution": {}},
+                "corridors": {"total": 0, "active": 0, "dormant": 0, "gated": 0},
+                "npcs": {"static": 0, "dynamic": 0, "total": 0}
+            },
+            "export_date": datetime.now().isoformat()
+        }
     
     async def _get_galaxy_data(self):
         """Get current galaxy data with transit information"""
@@ -3438,7 +6497,12 @@ class WebMapCog(commands.Cog, name="WebMap"):
         
         current_time = time_system.calculate_current_ingame_time()
         formatted_time = time_system.format_ingame_datetime(current_time) if current_time else "Unknown"
-        
+        # Add theme synchronization - use a deterministic seed
+        import hashlib
+        theme_seed = hashlib.md5(f"{galaxy_name}{formatted_time[:10]}".encode()).hexdigest()
+        theme_index = int(theme_seed[:8], 16) % 5
+        themes = ['blue', 'amber', 'green', 'red', 'purple']
+        selected_theme = themes[theme_index]
         # Define alignment function properly
         def determine_location_alignment(has_black_market, has_federal_supplies, wealth_level):
             """Determine location alignment based on properties"""
@@ -3611,6 +6675,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         return {
             "galaxy_name": galaxy_name,
             "current_time": formatted_time,
+            "selected_theme": selected_theme,
             "locations": processed_locations,
             "corridors": [
                 {
@@ -3673,30 +6738,54 @@ class WebMapCog(commands.Cog, name="WebMap"):
             # Add total player count including transit
             "total_player_count": len(players or []) + len(players_in_transit or [])
         }
+    async def trigger_wiki_update(self, update_type="general"):
+        """Trigger a wiki update when game events occur"""
+        if self.is_running and self.websocket_clients:
+            await self.broadcast_wiki_update()
+            print(f"📚 Triggered wiki update: {update_type}")
+            
     async def _broadcast_update(self, update_type: str, data: dict):
-        """Broadcast update to all connected WebSocket clients"""
+        """Broadcast update to all connected WebSocket clients with enhanced error handling"""
         if not self.websocket_clients:
             return
             
+        # Debug logging for logs and history updates
+        if update_type == "wiki_data":
+            logs_count = len(data.get('logs', []))
+            history_count = len(data.get('history', []))
+            print(f"🔄 Preparing to broadcast {update_type} with {logs_count} logs and {history_count} history events")
+        
         message = json.dumps({
             "type": update_type,
             "data": data
-        })
+        }, default=str)  # Add default=str to handle datetime serialization
         
         # Remove disconnected clients
         disconnected = set()
+        successful_sends = 0
+        
         for client in self.websocket_clients.copy():
             try:
                 await client.send_text(message)
-            except:
+                successful_sends += 1
+            except Exception as e:
+                print(f"⚠️ Failed to send to WebSocket client: {e}")
                 disconnected.add(client)
         
+        # Clean up disconnected clients
         self.websocket_clients -= disconnected
+        
+        if disconnected:
+            print(f"🧹 Removed {len(disconnected)} disconnected WebSocket clients")
+        
+        print(f"📡 Successfully sent {update_type} to {successful_sends} clients")
+   
     @tasks.loop(seconds=10)  # Update every 10 seconds instead of waiting for events
     async def update_player_data_task(self):
         """Regularly update player data for real-time map"""
         if self.is_running and self.websocket_clients:
             await self._broadcast_player_updates()
+            
     async def _broadcast_player_updates(self):
         """Optimized player and NPC updates with caching"""
         try:
@@ -3758,10 +6847,10 @@ class WebMapCog(commands.Cog, name="WebMap"):
             npcs_data = []
             try:
                 npcs_data = self.db.execute_query(
-                    """SELECT n.name, n.callsign, n.current_location, n.ship_name, n.ship_type
+                    """SELECT n.name, n.callsign, n.current_location, n.ship_name, n.ship_type,
+                              n.travel_start_time, n.destination_location
                        FROM dynamic_npcs n
-                       WHERE n.is_alive = 1 AND n.current_location IS NOT NULL 
-                       AND n.travel_start_time IS NULL""",
+                       WHERE n.is_alive = 1""",
                     fetch='all'
                 )
                 if npcs_data is None:
@@ -3770,16 +6859,61 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 print(f"Warning: Could not fetch NPC data: {e}")
                 npcs_data = []
             
-            current_npcs = [
-                {
+            # Get current dynamic NPC data with location names
+            location_ids = []
+            for npc in (npcs_data or []):
+                if npc[2]: location_ids.append(npc[2])  # current location
+                if npc[6]: location_ids.append(npc[6])  # destination location
+
+            location_names = {}
+            if location_ids:
+                location_ids = list(set(location_ids))  # Remove duplicates
+                placeholders = ','.join('?' * len(location_ids))
+                locations = self.db.execute_query(
+                    f"SELECT location_id, name FROM locations WHERE location_id IN ({placeholders})",
+                    location_ids,
+                    fetch='all'
+                )
+                location_names = {loc[0]: loc[1] for loc in (locations or [])}
+
+             # Build NPC data
+            current_npcs = []
+            for npc in (npcs_data or []):
+                is_traveling = npc[5] is not None  # travel_start_time
+                
+                # Always include location_id for map display
+                location_id = npc[2] if not is_traveling else None
+                
+                if is_traveling and npc[6]:  # Has destination
+                    # NPC is in transit
+                    origin_name = location_names.get(npc[2], "Unknown")
+                    dest_name = location_names.get(npc[6], "Unknown")
+                    location_info = {
+                        "id": None, 
+                        "name": f"In Transit: {origin_name} → {dest_name}"
+                    }
+                elif npc[2]:  # At a location
+                    location_info = {
+                        "id": npc[2], 
+                        "name": location_names.get(npc[2], "Unknown Location")
+                    }
+                else:
+                    location_info = None
+                
+                current_npcs.append({
                     "name": npc[0],
                     "callsign": npc[1],
-                    "location_id": npc[2],
+                    "location_id": location_id,  # Add this for map compatibility
+                    "current_location": location_info,  # Keep this for detailed info
+                    "ship": {"name": npc[3], "type": npc[4]},
                     "ship_name": npc[3],
-                    "ship_type": npc[4]
-                }
-                for npc in npcs_data
-            ]
+                    "ship_type": npc[4],
+                    "faction": "independent",
+                    "alignment": "independent",
+                    "personality": "No data available.",
+                    "wanted_level": 0,
+                    "is_traveling": is_traveling
+                })
             
             # Broadcast both updates
             await self._broadcast_update("player_update", current_players)
@@ -4360,8 +7494,73 @@ class WebMapCog(commands.Cog, name="WebMap"):
             print(f"❌ Error in _update_game_panels_for_map_status: {e}")
             import traceback
             traceback.print_exc()
-    # cogs/web_map.py
 
+    async def broadcast_wiki_update(self):
+        """Broadcast wiki data updates to connected clients with enhanced debugging"""
+        if not self.websocket_clients:
+            print("📚 No WebSocket clients connected for wiki update")
+            return
+            
+        try:
+            print("📚 Broadcasting wiki update...")
+            
+            # Get fresh comprehensive wiki data
+            wiki_data = await self._get_comprehensive_wiki_data()
+            
+            # Ensure logs and history are included
+            if 'logs' not in wiki_data:
+                wiki_data['logs'] = await self._fetch_logs()
+            if 'history' not in wiki_data:
+                wiki_data['history'] = await self._fetch_detailed_history()
+            
+            # Debug the data being sent
+            logs_count = len(wiki_data.get('logs', []))
+            history_count = len(wiki_data.get('history', []))
+            
+            print(f"📊 Broadcasting wiki data:")
+            print(f"   - Logs: {logs_count}")
+            print(f"   - History: {history_count}")
+            
+            # Broadcast to all connected clients
+            await self._broadcast_update("wiki_data", wiki_data)
+            
+            print(f"📚 Successfully broadcasted wiki update to {len(self.websocket_clients)} clients")
+            
+        except Exception as e:
+            print(f"❌ Error broadcasting wiki update: {e}")
+            import traceback
+            traceback.print_exc()
+                
+        @tasks.loop(seconds=30)  # Update every 30 seconds for wiki data
+        async def update_wiki_data_task(self):
+            """Regularly update wiki data for real-time updates"""
+            if self.is_running and self.websocket_clients:
+                await self.broadcast_wiki_update()
+                
+    async def ensure_logs_exist(self):
+        """Ensure there are some logs in the database"""
+        try:
+            log_count = self.db.execute_query(
+                "SELECT COUNT(*) FROM location_logs",
+                fetch='one'
+            )[0]
+            
+            if log_count == 0:
+                print("⚠️ No logs found, generating sample logs...")
+                # Get location_logs cog and generate some logs
+                logs_cog = self.bot.get_cog('LocationLogsCog')
+                if logs_cog:
+                    # Get a few locations and generate logs for them
+                    locations = self.db.execute_query(
+                        "SELECT location_id, name, location_type FROM locations LIMIT 5",
+                        fetch='all'
+                    )
+                    for loc_id, loc_name, loc_type in locations:
+                        await logs_cog._generate_initial_log(loc_id, loc_name, loc_type)
+                print("✅ Sample logs generated")
+        except Exception as e:
+            print(f"❌ Error ensuring logs exist: {e}")
+            
     async def get_final_map_url(self) -> tuple[str, str]:
         """
         Get the final, user-facing map URL.

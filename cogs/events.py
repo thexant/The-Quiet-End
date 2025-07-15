@@ -190,7 +190,7 @@ class EventsCog(commands.Cog):
             
             for location_id, location_name, wealth_level, location_type in locations:
                 # 5% chance for economic change per location
-                if random.random() < 0.05:
+                if random.random() < 0.01:
                     change_type = await self._generate_economic_change(location_id, location_name, wealth_level, location_type)
                     if change_type:
                         changes_made += 1
@@ -608,16 +608,16 @@ class EventsCog(commands.Cog):
                 
                 # Increased job limits based on wealth and type
                 if location_type == 'space_station':
-                    max_jobs = max(6, wealth)  # 6-10 jobs for stations
+                    max_jobs = max(4, wealth + 1)  # Increased from max(6, wealth)
                 elif location_type == 'colony':
-                    max_jobs = max(4, wealth // 2 + 3)  # 4-8 jobs for colonies
+                    max_jobs = max(6, wealth + 3)  # Increased from max(4, wealth)
                 elif location_type == 'outpost':
-                    max_jobs = max(2, wealth // 3 + 1)  # 2-4 jobs for outposts
+                    max_jobs = max(3, wealth // 2 + 2)  # Increased from max(2, wealth // 3 + 1)
                 else:  # gates
-                    max_jobs = max(3, wealth // 2 + 1)  # 3-6 jobs for gates
-                
+                    max_jobs = 3  # Increased from 1-2
+
                 # Generate multiple jobs if under limit
-                jobs_to_generate = min(max_jobs - current_jobs, 3)  # Generate up to 3 at once
+                jobs_to_generate = min(max_jobs - current_jobs, 5)  # Increased from 3
                 
                 if jobs_to_generate > 0 and random.random() < 0.8:  # 80% chance
                     for _ in range(jobs_to_generate):
@@ -1213,16 +1213,22 @@ class EventsCog(commands.Cog):
         job_generated = False
 
         # Check for Desperation Job possibility
-        if wealth <= 3 and random.random() < 0.25: # 40% chance for a desperation job in poor locations
+        if wealth <= 3 and random.random() < 0.25: # 25% chance for a desperation job in poor locations
             desperation_jobs = [
                 ("Smuggle 'Medical Supplies'", "Transport a discreet package of 'medical supplies' to a nearby system. No questions asked. High risk, high reward.", random.randint(300, 700), -15, 4),
                 ("Silence a Witness", "A local contact needs a problem to 'disappear'. Handle it quietly.", random.randint(500, 800), -25, 5),
                 ("Plant a 'Device'", "A local concealing his face has offered you a reward to plant a suspicious looking electronic device on government infrastructure, no questions asked.", random.randint(650, 1000), -30, 5),
-                ("Staged Robbery", "Commit an armed robbery at a rival shopfront to drive customers away due to 'danger'.", random.randint(200, 400), -10, 5)
+                ("Staged Robbery", "Commit an armed robbery at a rival shopfront to drive customers away due to 'danger'.", random.randint(200, 400), -10, 5),
+                ("Fuel Siphon", "Tap fuel lines from docked ships for a reward from a man with an 'offer'.", random.randint(150, 250), -5, 1),
+                ("Cut Line", "Sabotage localized life support systems to drive out stubborn tenants.", random.randint(250, 300), -8, 2),
+                ("Emergency Supply Theft", "Steal medical supplies from a charity clinic.", random.randint(300, 500), -10, 3),
+                ("Broken Arm Deal", "Convince a stubborn contractor to accept new terms.", random.randint(200, 400), -5, 2),
+                ("Water Ration Tamper", "Poison or tamper with a rival’s water supply to cause panic.", random.randint(250, 350), -10, 3),
+                ("Space Terrorism", "Take a bomb to an occupied area. Plant it. Get paid.", random.randint(700, 1200), -40, 5)
             ]
             title, desc, reward, karma, danger = random.choice(desperation_jobs)
             
-            duration = random.randint(30, 90)
+            duration = random.randint(5, 15)
             expire_time = datetime.now() + timedelta(hours=random.randint(2, 6))
             expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1236,18 +1242,20 @@ class EventsCog(commands.Cog):
             job_generated = True
 
         # Check for Good Deeds Job possibility
-        elif wealth <= 5 and random.random() < 0.25:  # 30% chance for good deeds in wealthy locations
+        elif wealth <= 7 and random.random() < 0.25:  # 30% chance for good deeds in wealthy locations
             good_deeds_jobs = [
-                ("Volunteer Medical Aid", "Provide free medical assistance to refugees and displaced persons. Dangerous but morally rewarding work.", random.randint(50, 150), +20, 4),
-                ("Rescue Stranded Civilians", "Search and rescue mission for civilians stranded in dangerous territory. Low pay, high risk, high honor.", random.randint(75, 200), +25, 5),
-                ("Humanitarian Supply Drop", "Deliver essential supplies to disaster-stricken areas despite hostile conditions.", random.randint(100, 250), +15, 4),
-                ("Evacuate Endangered Settlement", "Help evacuate civilians from areas under threat. Minimal compensation but saves lives.", random.randint(80, 180), +30, 5),
-                ("Protect Relief Workers", "Escort and protect humanitarian workers in dangerous zones. Payment covers expenses only.", random.randint(60, 140), +20, 4),
-                ("Orphanage Supply Run", "Deliver food and medical supplies to remote orphanages in pirate-controlled space.", random.randint(40, 120), +25, 5)
+                ("Volunteer Medical Aid", "Provide free medical assistance to refugees and displaced persons. Dangerous but morally rewarding work.", random.randint(50, 150), +20, 1),
+                ("Rescue Stranded Civilians", "Search and rescue mission for civilians stranded in dangerous territory. Low pay, high risk, high honor.", random.randint(75, 200), +25, 3),
+                ("Humanitarian Supply Drop", "Deliver essential supplies to disaster-stricken areas despite hostile conditions.", random.randint(100, 250), +15, 2),
+                ("Evacuate Endangered Settlement", "Help evacuate civilians from areas under threat. Minimal compensation but saves lives.", random.randint(80, 180), +30, 3),
+                ("Protect Relief Workers", "Escort and protect humanitarian workers in dangerous zones. Payment covers expenses only.", random.randint(60, 140), +20, 2),
+                ("Orphanage Supply Run", "Deliver food and medical supplies to remote orphanages in pirate-controlled space.", random.randint(40, 120), +25, 2),
+                ("Emergency Evacuation", "Shuttle wounded civvies off a station after an industrial accident.", random.randint(100, 200), +10, 1),
+                ("Missing Person Search", "Track down lost workers who vanished on shift.", random.randint(75, 150), +5, 1)
             ]
             title, desc, reward, karma, danger = random.choice(good_deeds_jobs)
             
-            duration = random.randint(45, 120)
+            duration = random.randint(6, 15)
             expire_time = datetime.now() + timedelta(hours=random.randint(3, 8))
             expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1393,6 +1401,13 @@ class EventsCog(commands.Cog):
             ("Emergency Relief to {dest_name}", "Rush emergency supplies to {dest_name}. {route_desc}."),
             ("Trade Goods to {dest_name}", "Transport valuable trade goods to {dest_name}. {route_desc}."),
             ("Scientific Samples to {dest_name}", "Carefully transport research materials to {dest_name}. {route_desc}."),
+            ("Waste Containers to {dest_name}", "Haul sealed industrial waste to disposal facilities at {dest_name}. {route_desc}."),
+            ("Emergency Generators to {dest_name}", "Deliver backup power units to {dest_name}. {route_desc}."),
+            ("Construction Crews to {dest_name}", "Transport contracted workers and gear to build sites at {dest_name}. {route_desc}."),
+            ("Frozen Bodies to {dest_name}", "Transport cryo-coffin pods to the creamtor services at {dest_name}. {route_desc}."),
+            ("Atmospheric Filters to {dest_name}", "Haul clean air filtration units to domes at {dest_name}. {route_desc}."),
+            ("Demolition Charges to {dest_name}", "Deliver controlled charges for mining or deconstruction at {dest_name}. {route_desc}."),
+            ("Strange Fellow to {dest_name}", "A strange man asks you to bring him to {dest_name}. He refuses to answer any other questions. {route_desc}.")
         ]
         
         title_template, desc_template = random.choice(job_types)
@@ -1489,7 +1504,7 @@ class EventsCog(commands.Cog):
         wealth_modifier = 0.8 + (wealth * 0.04)
         reward = int(base_reward * wealth_modifier) + random.randint(-15, 25)
         
-        duration = random.randint(15, 45)
+        duration = random.randint(3, 15)
         danger = random.randint(0, 2)  # Low danger for stationary work
         
         expire_time = datetime.now() + timedelta(hours=random.randint(4, 12))

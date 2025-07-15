@@ -7,10 +7,16 @@ STARTER_SHIP_CLASSES = {
             "This workhorse freighter sports a battered nose cone and mismatched panels scavenged from sister ships.",
             "A utilitarian bulk carrier with visible patch welds running along its cargo bay doors. One engine nacelle rattles slightly on idle.",
             "A tired old hauler bristling with external tie-down points and half-faded registry markings. A maintenance drone is parked on its dorsal spine.",
-            "A blocky freight mover with a huge belly clamp rig for oversized loads. Layers of old company logos peel off around the airlock hatch."
+            "A blocky freight mover with a huge belly clamp rig for oversized loads. Layers of old company logos peel off around the airlock hatch.",
+            "A rust-streaked hauler with side struts and an improvised antenna array bolted where a gun turret used to be.",
+            "A lopsided freight barge with asymmetrical cargo pods, some clearly salvaged from ships twice its age.",
+            "Its hull sports a mishmash of repair plates and stenciled warnings in three different languages, none quite legible anymore."
         ],
         "interior": [
             "Steel deck plating creaks underfoot. A battered cargo loader sits idle near the bay door, surrounded by coiled tie-down straps.",
+            "The main cargo deck is cluttered with old pallets, cracked crates, and a single dented forklift that looks older than the ship.",
+            "A bundle of exposed cabling snakes across the corridor ceiling, humming softly whenever the bulkhead doors cycle.",
+            "A battered maintenance locker stands half-open, stuffed with oil-streaked rags, loose bolts, and a single cracked welding mask.",
             "The crew corridor smells faintly of machine oil. A single faded sticker reading 'KEEP CLOSED' peels off the main access hatch.",
             "Half the cargo hold is partitioned with netting and old shipping crates doubling as tables and benches.",
             "The galley consists of a dented hotplate and a magnetic mug rack screwed to the bulkhead. The hum of the power core is constant.",
@@ -22,11 +28,15 @@ STARTER_SHIP_CLASSES = {
             "A slim, angular scout with an extended sensor boom and an asymmetrical dorsal fin housing extra comms gear.",
             "A lightly armored recon ship, hull pitted from micro impacts. A faded mission tally is stenciled under the cockpit.",
             "A compact long-range scout with engine vents bristling with extra shielding. A painted logo of a howling wolf is visible near the nose.",
+            "A battered pathfinder with a long-range antenna boom jutting forward like a spear, patched in places with scavenged panels.",
+            "A spindly survey craft with sensor blisters studding its hull like barnacles, and a single high-gain dish aimed starward.",
             "A vintage survey vessel upgraded with bolt-on thruster pods and a small external drone cradle under the keel.",
             "A recon skiff with a stubby nose cone and a retractable sensor mast folded tight along its spine."
         ],
         "interior": [
             "The cockpit doubles as living quarters, cluttered with star charts, thermal blankets, and half-finished protein bars.",
+            "The pilot’s couch is surrounded by jury-rigged nav displays and a tangle of power cables zip-tied to the overhead struts.",
+            "Near the airlock, a battered survival kit sits wedged between tool crates and an emergency beacon with fresh patch welds.",
             "A bank of modular displays flickers softly. A single pilot’s couch faces a broad viewport scratched by years of debris hits.",
             "Stacks of data cartridges and sample canisters are bungee-corded to the bulkhead for quick access.",
             "The narrow passage to the sleeping berth is lined with spools of cabling and spare fuses taped to the wall.",

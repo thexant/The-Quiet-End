@@ -92,7 +92,10 @@ class NPCInteractionsCog(commands.Cog):
             # Get possible destinations (at least 2 jumps away)
             galaxy_cog = self.bot.get_cog('GalaxyGeneratorCog')
             if galaxy_cog:
-                routes = await galaxy_cog._find_route_to_destination(location_id, max_jumps=4)
+                events_cog = self.bot.get_cog('EventsCog')
+                if not events_cog:
+                    return []
+                routes = await events_cog._find_route_to_destination(location_id, max_jumps=4)
                 # Filter for routes with 2 or 3 jumps
                 valid_destinations = [r for r in routes if r[2] in [2, 3]]
                 
@@ -162,10 +165,10 @@ class NPCInteractionsCog(commands.Cog):
             
             # Add some randomization
             reward = base_reward + random.randint(-20, 50)
-            duration = duration + random.randint(-5, 10)  # Reduced from (-15, 30)
+            duration = duration + random.randint(-3, 3)  # Reduced from (-15, 30)
             
             # Ensure reasonable duration limits for stationary jobs
-            duration = max(5, min(45, duration))  # Keep between 5-45 minutes
+            duration = max(5, min(15, duration))  # Keep between 5-45 minutes
             
             # Set expiration time (2-8 hours from now)
             expire_hours = random.randint(2, 8)
@@ -1005,7 +1008,12 @@ class NPCActionView(discord.ui.View):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your interaction!", ephemeral=True)
             return
-        
+        if random.random() > 0.25:  # 75% chance of no jobs
+            await interaction.response.send_message(
+                "This NPC doesn't have any work available right now. Try checking with other NPCs or look for location-based jobs.",
+                ephemeral=True
+            )
+            return
         # Get available jobs from this NPC
         jobs = self.bot.db.execute_query(
             '''SELECT npc_job_id, job_title, job_description, reward_money, reward_items,
@@ -1068,7 +1076,7 @@ class NPCActionView(discord.ui.View):
         view = NPCJobSelectView(self.bot, self.user_id, self.npc_id, self.npc_type, jobs)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
-    @discord.ui.button(label="Trade", style=discord.ButtonStyle.success, emoji="🛒")
+    @discord.ui.button(label="Buy Items", style=discord.ButtonStyle.success, emoji="🛒")
     async def view_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your interaction!", ephemeral=True)
@@ -1299,66 +1307,90 @@ class NPCJobSelectView(discord.ui.View):
             fetch='one'
         )[0]
 
-        # Accept the job (create a regular job entry)
-        expire_time = datetime.now() + timedelta(hours=6)
-        
-        self.bot.db.execute_query(
-            '''INSERT INTO jobs 
-               (location_id, title, description, reward_money, required_skill, min_skill_level,
-                danger_level, duration_minutes, expires_at, is_taken, taken_by, taken_at, job_status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), 'active')''',
-            (char_location_id, title, desc, reward_money, required_skill, min_skill_level, danger_level, 
-             duration_minutes, expire_time.isoformat(), interaction.user.id)
-        )
-        if 'escort' in title.lower():
-            # Extract destination from NPC job data if available
-            # This ensures transport logic works correctly
-            pass
-        # Get the new job_id
-        new_job_id = self.bot.db.execute_query(
-            "SELECT last_insert_rowid()",
-            fetch='one'
-        )[0]
-
-        # Determine if this is a stationary job that needs tracking
+        # Determine if this is a transport job BEFORE inserting
         title_lower = title.lower()
         desc_lower = desc.lower()
         is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
                           any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
 
-        # Add to job_tracking only for stationary jobs
-        if not is_transport_job:
-            self.bot.db.execute_query(
+        # Generate a unique timestamp to help identify our job
+        unique_timestamp = datetime.now().isoformat()
+        expire_time = datetime.now() + timedelta(hours=6)
+        
+        # Start a transaction to ensure atomicity
+        conn = self.bot.db.begin_transaction()
+        try:
+            # Insert the job
+            self.bot.db.execute_in_transaction(
+                conn,
+                '''INSERT INTO jobs 
+                   (location_id, title, description, reward_money, required_skill, min_skill_level,
+                    danger_level, duration_minutes, expires_at, is_taken, taken_by, taken_at, job_status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'active')''',
+                (char_location_id, title, desc, reward_money, required_skill, min_skill_level, danger_level, 
+                 duration_minutes, expire_time.isoformat(), interaction.user.id, unique_timestamp)
+            )
+            
+            # Get the job_id we just inserted using our unique identifiers
+            new_job_id = self.bot.db.execute_in_transaction(
+                conn,
+                '''SELECT job_id FROM jobs 
+                   WHERE taken_by = ? AND taken_at = ? AND title = ?
+                   ORDER BY job_id DESC LIMIT 1''',
+                (interaction.user.id, unique_timestamp, title),
+                fetch='one'
+            )[0]
+
+            # Create tracking record for all jobs (with 0 duration for transport jobs)
+            tracking_duration = 0 if is_transport_job else duration_minutes
+            
+            self.bot.db.execute_in_transaction(
+                conn,
                 '''INSERT INTO job_tracking (job_id, user_id, start_location, required_duration, time_at_location, last_location_check)
                    VALUES (?, ?, ?, ?, 0.0, datetime('now'))''',
-                (new_job_id, interaction.user.id, char_location_id, duration_minutes)
+                (new_job_id, interaction.user.id, char_location_id, tracking_duration)
             )
 
-        # Record completion for tracking
-        self.bot.db.execute_query(
-            "INSERT INTO npc_job_completions (npc_job_id, user_id) VALUES (?, ?)",
-            (npc_job_id, interaction.user.id)
-        )
-        
-        # Update completion count
-        self.bot.db.execute_query(
-            "UPDATE npc_jobs SET current_completions = current_completions + 1 WHERE npc_job_id = ?",
-            (npc_job_id,)
-        )
-        
-        # Check if job should be disabled (max completions reached)
-        job_status = self.bot.db.execute_query(
-            "SELECT max_completions, current_completions FROM npc_jobs WHERE npc_job_id = ?",
-            (npc_job_id,),
-            fetch='one'
-        )
-        
-        if job_status and job_status[0] > 0 and job_status[1] >= job_status[0]:
-            self.bot.db.execute_query(
-                "UPDATE npc_jobs SET is_available = 0 WHERE npc_job_id = ?",
+            # Record completion for tracking
+            self.bot.db.execute_in_transaction(
+                conn,
+                "INSERT INTO npc_job_completions (npc_job_id, user_id) VALUES (?, ?)",
+                (npc_job_id, interaction.user.id)
+            )
+            
+            # Update completion count
+            self.bot.db.execute_in_transaction(
+                conn,
+                "UPDATE npc_jobs SET current_completions = current_completions + 1 WHERE npc_job_id = ?",
                 (npc_job_id,)
             )
+            
+            # Check if job should be disabled (max completions reached)
+            job_status = self.bot.db.execute_in_transaction(
+                conn,
+                "SELECT max_completions, current_completions FROM npc_jobs WHERE npc_job_id = ?",
+                (npc_job_id,),
+                fetch='one'
+            )
+            
+            if job_status and job_status[0] > 0 and job_status[1] >= job_status[0]:
+                self.bot.db.execute_in_transaction(
+                    conn,
+                    "UPDATE npc_jobs SET is_available = 0 WHERE npc_job_id = ?",
+                    (npc_job_id,)
+                )
+            
+            # Commit the transaction
+            self.bot.db.commit_transaction(conn)
+            
+        except Exception as e:
+            # Rollback on any error
+            self.bot.db.rollback_transaction(conn)
+            print(f"❌ Error accepting NPC job: {e}")
+            await interaction.response.send_message("Failed to accept job. Please try again.", ephemeral=True)
+            return
         
+        # Send success message
         embed = discord.Embed(
             title="✅ Job Accepted",
             description=f"You have accepted: **{title}**",
@@ -1373,6 +1405,25 @@ class NPCJobSelectView(discord.ui.View):
         embed.add_field(name="Reward", value=reward_text, inline=True)
         embed.add_field(name="Duration", value=f"{duration_minutes} minutes", inline=True)
         embed.add_field(name="Danger", value="⚠️" * danger_level if danger_level > 0 else "Safe", inline=True)
+        
+        if not is_transport_job:
+            embed.add_field(
+                name="📍 Job Type", 
+                value="Location-based work - stay at this location to make progress", 
+                inline=False
+            )
+        
+        # Debug: Verify tracking was created
+        tracking_check = self.bot.db.execute_query(
+            "SELECT tracking_id FROM job_tracking WHERE job_id = ? AND user_id = ?",
+            (new_job_id, interaction.user.id),
+            fetch='one'
+        )
+        
+        if tracking_check:
+            print(f"✅ Job tracking created successfully for job {new_job_id}")
+        else:
+            print(f"❌ WARNING: Job tracking NOT created for job {new_job_id}")
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 class NPCTradeSelectView(discord.ui.View):

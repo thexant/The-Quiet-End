@@ -84,55 +84,183 @@ class HistoryGenerator:
         ]
 
     async def generate_galaxy_history(self, start_year: int, current_date: str) -> int:
-        """Generate comprehensive galactic history for all major locations"""
+        """Generate comprehensive galactic history for all major locations using transactions"""
         print("📚 Generating galactic history...")
         
-        # Clear existing history
-        self.db.execute_query("DELETE FROM galactic_history")
-        
-        # Get all locations
+        # Use transaction for bulk history generation
+        conn = self.db.begin_transaction()
         try:
-            locations = self.db.execute_query(
-                "SELECT location_id, name, location_type, establishment_date FROM locations WHERE is_generated = 1",
-                fetch='all'
-            )
-        except Exception as e:
-            if "no such column: establishment_date" in str(e):
-                print("⚠️ establishment_date column missing, adding it now...")
-                
-                # Set default dates for existing locations
-                self.db.execute_query("""
-                    UPDATE locations 
-                    SET establishment_date = '01-01-2750'
-                    WHERE establishment_date IS NULL AND is_generated = 1
-                """)
-                print("✅ Added establishment_date column and set default dates")
-                
-                # Retry the query
-                locations = self.db.execute_query(
+            # Clear existing history
+            self.db.execute_in_transaction(conn, "DELETE FROM galactic_history")
+            
+            # Get all locations
+            try:
+                locations = self.db.execute_in_transaction(conn,
                     "SELECT location_id, name, location_type, establishment_date FROM locations WHERE is_generated = 1",
                     fetch='all'
                 )
+            except Exception as e:
+                if "no such column: establishment_date" in str(e):
+                    print("⚠️ establishment_date column missing, adding it now...")
+                    
+                    # Set default dates for existing locations
+                    self.db.execute_in_transaction(conn, """
+                        UPDATE locations 
+                        SET establishment_date = '01-01-2750'
+                        WHERE establishment_date IS NULL AND is_generated = 1
+                    """)
+                    print("✅ Added establishment_date column and set default dates")
+                    
+                    # Retry the query
+                    locations = self.db.execute_in_transaction(conn,
+                        "SELECT location_id, name, location_type, establishment_date FROM locations WHERE is_generated = 1",
+                        fetch='all'
+                    )
+                else:
+                    raise e
+            
+            total_events = 0
+            current_date_obj = datetime.strptime(current_date, '%Y-%m-%d')
+            
+            # Collect all history events to insert in bulk
+            all_history_events = []
+            
+            # Generate events for each location
+            for location_id, name, location_type, establishment_date in locations:
+                location_events = await self._prepare_location_history_data(
+                    conn, location_id, name, location_type, establishment_date, start_year, current_date_obj
+                )
+                all_history_events.extend(location_events)
+                total_events += len(location_events)
+            
+            # Generate general galactic events
+            general_events = await self._prepare_general_history_data(start_year, current_date_obj)
+            all_history_events.extend(general_events)
+            total_events += len(general_events)
+            
+            # Bulk insert all history events
+            if all_history_events:
+                query = '''INSERT INTO galactic_history 
+                           (location_id, event_title, event_description, historical_figure, event_date, event_type)
+                           VALUES (?, ?, ?, ?, ?, ?)'''
+                self.db.executemany_in_transaction(conn, query, all_history_events)
+            
+            # Commit the transaction
+            self.db.commit_transaction(conn)
+            
+            print(f"📚 Generated {total_events} historical events")
+            return total_events
+            
+        except Exception as e:
+            print(f"❌ Error generating galactic history: {e}")
+            self.db.rollback_transaction(conn)
+            raise e
+    async def _prepare_location_history_data(self, conn, location_id: int, location_name: str, 
+                                           location_type: str, establishment_date: str, 
+                                           start_year: int, current_date: datetime) -> List[Tuple]:
+        """Prepare location history data for bulk insert (returns list of tuples)"""
+        history_events = []
+        
+        # Get NPCs from this location for historical figures using the transaction connection
+        npcs = self.db.execute_in_transaction(conn,
+            "SELECT name FROM static_npcs WHERE location_id = ? LIMIT 5",
+            (location_id,),
+            fetch='all'
+        )
+        
+        # Create a pool of historical figures (existing NPCs + generated names)
+        historical_figures = [npc[0] for npc in npcs] if npcs else []
+        
+        # Generate additional historical figures if needed
+        while len(historical_figures) < 10:
+            first_name, last_name = generate_npc_name()
+            historical_figures.append(f"{first_name} {last_name}")
+        
+        # Parse establishment date with flexible format handling
+        try:
+            if establishment_date and establishment_date.strip():
+                # Handle DD-MM-YYYY format (from galaxy generation)
+                if '-' in establishment_date:
+                    parts = establishment_date.split('-')
+                    if len(parts) == 3:
+                        # Could be DD-MM-YYYY or YYYY-MM-DD
+                        if len(parts[0]) == 4:  # YYYY-MM-DD
+                            est_date = datetime.strptime(establishment_date, '%Y-%m-%d')
+                        else:  # DD-MM-YYYY
+                            est_date = datetime.strptime(establishment_date, '%d-%m-%Y')
+                    else:
+                        raise ValueError("Invalid date format")
+                else:
+                    raise ValueError("No separator found")
             else:
-                raise e
+                # No valid establishment date
+                est_date = datetime(start_year - random.randint(1, 10), 
+                                   random.randint(1, 12), 
+                                   random.randint(1, 28))
+        except (ValueError, TypeError, AttributeError):
+            # Any parsing failure gets a fallback date
+            est_date = datetime(start_year - random.randint(1, 10), 
+                               random.randint(1, 12), 
+                               random.randint(1, 28))
         
-        total_events = 0
-        current_date_obj = datetime.strptime(current_date, '%Y-%m-%d')
+        # Generate 10 events between establishment and current date
+        for _ in range(10):
+            # Random date between establishment and current date
+            time_span = current_date - est_date
+            random_days = random.randint(0, time_span.days)
+            event_date = est_date + timedelta(days=random_days)
+            
+            # Choose event template and figure
+            templates = self.event_templates.get(location_type, self.event_templates['outpost'])
+            event_template = random.choice(templates)
+            figure = random.choice(historical_figures)
+            
+            # Format the event
+            event_description = event_template.format(figure=figure, location=location_name)
+            event_title = self._generate_event_title(event_description)
+            event_type = random.choice(self.event_types)
+            
+            # Add to bulk insert list
+            history_events.append((
+                location_id, event_title, event_description, figure, 
+                event_date.strftime('%Y-%m-%d'), event_type
+            ))
         
-        # Generate 10 events per major location
-        for location_id, name, location_type, establishment_date in locations:
-            location_events = await self._generate_location_history(
-                location_id, name, location_type, establishment_date, start_year, current_date_obj
-            )
-            total_events += location_events
-        
-        # Generate general galactic events
-        general_events = await self._generate_general_history(start_year, current_date_obj)
-        total_events += general_events
-        
-        print(f"📚 Generated {total_events} historical events")
-        return total_events
+        return history_events
 
+    async def _prepare_general_history_data(self, start_year: int, current_date: datetime) -> List[Tuple]:
+        """Prepare general galactic history data for bulk insert (returns list of tuples)"""
+        history_events = []
+        start_date = datetime(start_year - 350, 1, 1)  # Start 20 years before galaxy start
+        
+        # Generate 15 general galactic events
+        for _ in range(25):
+            # Random date between early history and current date
+            time_span = current_date - start_date
+            random_days = random.randint(0, time_span.days)
+            event_date = start_date + timedelta(days=random_days)
+            
+            # Choose general event
+            event_description = random.choice(self.general_events)
+            event_title = self._generate_event_title(event_description)
+            
+            # Generate a historical figure for some events
+            figure = None
+            if random.random() < 0.6:  # 60% chance of having a notable figure
+                first_name, last_name = generate_npc_name()
+                figure = f"{first_name} {last_name}"
+                
+                # Add figure to some descriptions
+                if "began" in event_description or "established" in event_description:
+                    event_description = f"{figure} initiated what became known as: {event_description}"
+            
+            # Add to bulk insert list
+            history_events.append((
+                None, event_title, event_description, figure, 
+                event_date.strftime('%Y-%m-%d'), 'general'
+            ))
+        
+        return history_events
     async def _generate_location_history(self, location_id: int, location_name: str, 
                                        location_type: str, establishment_date: str, 
                                        start_year: int, current_date: datetime) -> int:
@@ -214,7 +342,7 @@ class HistoryGenerator:
     async def _generate_general_history(self, start_year: int, current_date: datetime) -> int:
         """Generate general galactic events not tied to specific locations"""
         events_created = 0
-        start_date = datetime(start_year - 20, 1, 1)  # Start 20 years before galaxy start
+        start_date = datetime(start_year - 350, 1, 1)  # Start 20 years before galaxy start
         
         # Generate 15 general galactic events
         for _ in range(15):

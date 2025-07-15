@@ -143,6 +143,7 @@ LOCATION_ACTIONS = {
         "{name} enjoys a drink at the station bar, sharing travel stories.",
         "{name} conducts routine maintenance checks on the {ship}.",
         "{name} updates navigation charts at the station's data terminal.",
+        "{name} relaxes at a bench in the public area.",
         "{name} negotiates docking fees with station administration.",
         "{name} attends a trader's meeting in the station's conference room.",
         "{name} gets a medical checkup at the station's clinic."
@@ -152,6 +153,7 @@ LOCATION_ACTIONS = {
         "{name} transmits a status report to distant corporate headquarters.",
         "{name} performs essential repairs using outpost facilities.",
         "{name} shares news from other systems with outpost personnel.",
+        "{name} stares out the window watching the stars pass.",
         "{name} reviews star charts with the outpost navigator.",
         "{name} restocks provisions for the next leg of the journey.",
         "{name} uploads system telemetry data to the outpost computers.",
@@ -160,6 +162,7 @@ LOCATION_ACTIONS = {
     'gate': [
         "{name} submits corridor transit applications to gate control.",
         "{name} pays transit fees and updates travel documentation.",
+        "{name} studies a series of hand-drawn maps.",
         "{name} waits in the transit queue, monitoring gate status.",
         "{name} performs pre-transit safety checks on the {ship}.",
         "{name} reviews destination information at the gate's data kiosk.",
@@ -171,7 +174,7 @@ LOCATION_ACTIONS = {
 # Static NPC occupations based on location type and wealth
 OCCUPATIONS = {
     'colony': {
-        'low_wealth': ["Farmer", "Laborer", "Maintenance Worker", "Security Guard", "Shop Clerk"],
+        'low_wealth': ["Farmer", "Laborer", "Maintenance Worker", "Security Guard", "Shop Clerk", "Miner"],
         'mid_wealth': ["Engineer", "Teacher", "Medic", "Administrator", "Merchant", "Technician"],
         'high_wealth': ["Research Director", "Corporate Executive", "Master Engineer", "Colony Administrator", "Trade Coordinator"]
     },

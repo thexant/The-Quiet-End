@@ -4,6 +4,8 @@ from discord.ext import commands
 from discord import app_commands
 from utils.sub_locations import SubLocationManager
 import random
+import asyncio
+
 class SubLocationCog(commands.Cog):
     """Commands for sub-location interactions"""
     
@@ -97,7 +99,114 @@ class SubLocationCog(commands.Cog):
             )
         else:
             await interaction.followup.send("Failed to access that area. Try again later.", ephemeral=True)
-    
+            
+    @sub_group.command(name="leave", description="Leave the current sub-location area")
+    async def leave_area(self, interaction: discord.Interaction):
+        """Leave a sub-location area"""
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        # Check if user has a character
+        char_info = self.db.execute_query(
+            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.followup.send("You need a character to leave areas!", ephemeral=True)
+            return
+        
+        current_location, char_name = char_info
+        
+        # Check if we're in a thread (sub-location)
+        if not isinstance(interaction.channel, discord.Thread):
+            await interaction.followup.send("You can only use this command inside a sub-location area!", ephemeral=True)
+            return
+        
+        thread = interaction.channel
+        
+        # Look up this thread in the sub_locations table
+        sub_location_info = self.db.execute_query(
+            "SELECT parent_location_id, name, sub_type FROM sub_locations WHERE thread_id = ? AND is_active = 1",
+            (thread.id,),
+            fetch='one'
+        )
+        
+        if not sub_location_info:
+            await interaction.followup.send("This doesn't appear to be a valid sub-location area!", ephemeral=True)
+            return
+        
+        parent_location_id, sub_location_name, sub_type = sub_location_info
+        
+        # Verify user is at the correct location
+        if current_location != parent_location_id:
+            await interaction.followup.send("You can only leave sub-locations at your current location!", ephemeral=True)
+            return
+        
+        # Get the main location channel for announcements
+        location_info = self.db.execute_query(
+            "SELECT channel_id, name FROM locations WHERE location_id = ?",
+            (parent_location_id,),
+            fetch='one'
+        )
+        
+        if not location_info or not location_info[0]:
+            await interaction.followup.send("Main location channel not found!", ephemeral=True)
+            return
+        
+        channel_id, location_name = location_info
+        location_channel = interaction.guild.get_channel(channel_id)
+        
+        if not location_channel:
+            await interaction.followup.send("Main location channel is not accessible!", ephemeral=True)
+            return
+        
+        try:
+            # Remove user from the thread
+            await thread.remove_user(interaction.user)
+            
+            # Send confirmation to user
+            await interaction.followup.send(f"✅ You have left {sub_location_name}.", ephemeral=True)
+            
+            # Send public announcement in main location channel
+            announce_embed = discord.Embed(
+                title="🚪 Area Movement",
+                description=f"**{char_name}** has exited the **{sub_location_name}**.",
+                color=0xFF6600  # Orange color for exit
+            )
+            await location_channel.send(embed=announce_embed)
+            
+            # Check if thread is now empty and clean it up if so
+            await asyncio.sleep(1)  # Brief delay to ensure user removal is processed
+            
+            # Count remaining members (excluding bots)
+            remaining_members = sum(1 for member in thread.members if not member.bot)
+            
+            if remaining_members == 0:
+                # Thread is empty, clean it up
+                try:
+                    await thread.delete(reason="Sub-location empty - automatic cleanup")
+                    
+                    # Clear thread_id from database
+                    self.db.execute_query(
+                        "UPDATE sub_locations SET thread_id = NULL WHERE thread_id = ?",
+                        (thread.id,)
+                    )
+                    
+                    print(f"🧹 Auto-cleaned empty sub-location thread: {sub_location_name}")
+                    
+                except Exception as e:
+                    print(f"❌ Failed to clean up empty sub-location thread: {e}")
+            
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Permission error: Cannot remove you from this area.", ephemeral=True)
+        except discord.NotFound:
+            await interaction.followup.send("❌ Thread or user not found.", ephemeral=True)
+        except Exception as e:
+            print(f"❌ Error in area leave: {e}")
+            await interaction.followup.send("❌ An error occurred while leaving the area.", ephemeral=True)
+            
     @sub_group.command(name="list", description="List available areas at your current location")
     async def list_areas(self, interaction: discord.Interaction):
         """List available sub-location areas"""

@@ -49,9 +49,9 @@ class BoardingRequestView(View):
             )
             await channel_manager.remove_user_location_access(self.requester, owner_char[0])
 
-            await interaction.response.edit_message(content=f"You have granted {self.requester.display_name} access to your ship.", view=None)
+            await interaction.response.edit_message(content=f"✅ You have granted {self.requester.display_name} access to your ship.", view=None)
             try:
-                await self.requester.send(f"{self.target_owner.display_name} has accepted your boarding request. You may now enter their ship's channel.")
+                await interaction.followup.send(f"🚀 {self.requester.mention} - {self.target_owner.display_name} has accepted your boarding request! You may now enter their ship's channel.")
             except discord.Forbidden:
                 pass
         else:
@@ -66,9 +66,9 @@ class BoardingRequestView(View):
             await interaction.response.send_message("This is not your decision to make.", ephemeral=True)
             return
 
-        await interaction.response.edit_message(content=f"You have denied {self.requester.display_name}'s boarding request.", view=None)
+        await interaction.response.edit_message(content=f"❌ You have denied {self.requester.display_name}'s boarding request.", view=None)
         try:
-            await self.requester.send(f"{self.target_owner.display_name} has denied your boarding request.")
+            await interaction.followup.send(f"🚫 {self.requester.mention} - {self.target_owner.display_name} has denied your boarding request.")
         except discord.Forbidden:
             pass
 
@@ -574,16 +574,34 @@ class ShipSystemsCog(commands.Cog):
             return
         target_ship_id = target_ship_id[0]
 
-        # Send request to target via DM
-        view = BoardingRequestView(self.bot, interaction.user, target_ship_id, target)
+        # Send boarding request to location channel instead of DM
         try:
-            await target.send(
-                f"**Boarding Request:** {interaction.user.display_name} (character: {requester_char[2]}) is requesting to board your ship.",
-                view=view
+            location_channel_id = self.db.execute_query(
+                "SELECT channel_id FROM locations WHERE location_id = ?",
+                (requester_char[0],),  # current_location
+                fetch='one'
             )
-            await interaction.followup.send(f"Boarding request sent to {target.display_name}. They have 5 minutes to respond.", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.followup.send(f"Could not send a request to {target.display_name}. They may have DMs disabled.", ephemeral=True)
+            
+            if location_channel_id and location_channel_id[0]:
+                location_channel = interaction.guild.get_channel(location_channel_id[0])
+                if location_channel:
+                    view = BoardingRequestView(self.bot, interaction.user, target_ship_id, target)
+                    embed = discord.Embed(
+                        title="🚀 Boarding Request",
+                        description=f"**{interaction.user.display_name}** (character: {requester_char[2]}) is requesting to board {target.mention}'s ship.",
+                        color=0x4169e1
+                    )
+                    embed.add_field(name="⏰ Time Limit", value="5 minutes to respond", inline=False)
+                    
+                    await location_channel.send(f"{target.mention}", embed=embed, view=view)
+                    await interaction.followup.send(f"Boarding request sent to the location channel for {target.display_name}.", ephemeral=True)
+                else:
+                    await interaction.followup.send("Could not send boarding request - location channel not found.", ephemeral=True)
+            else:
+                await interaction.followup.send("Could not send boarding request - this location doesn't have a channel.", ephemeral=True)
+                
+        except Exception as e:
+            await interaction.followup.send(f"Error sending boarding request: {e}", ephemeral=True)
             
     @ship_group.command(name="shipyard", description="Access shipyard services")
     async def shipyard(self, interaction: discord.Interaction):
@@ -1194,7 +1212,10 @@ class ShipyardView(discord.ui.View):
                VALUES (?, ?, 0, ?)''',
             (interaction.user.id, new_ship_id, current_location)
         )
-        
+        # Generate ship activities
+        from utils.ship_activities import ShipActivityManager
+        activity_manager = ShipActivityManager(self.bot)
+        activity_manager.generate_ship_activities(new_ship_id, ship_type)
         # Deduct credits
         self.bot.db.execute_query(
             "UPDATE characters SET money = money - ? WHERE user_id = ?",

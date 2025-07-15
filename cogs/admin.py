@@ -7,6 +7,7 @@ import io
 import zipfile
 import re
 from datetime import datetime
+import asyncio
 
 class AdminCog(commands.Cog):
     def __init__(self, bot):
@@ -98,26 +99,21 @@ class AdminCog(commands.Cog):
                 try:
                     news_channel = await main_galaxy_category.create_text_channel(
                         news_channel_name,
-                        topic="Galactic News Network - Stay informed about events across the galaxy",
-                        reason="RPG Bot setup - galactic news channel"
+                        topic="INFORMATION SYSTEM UPLINK",
+                        reason="CONNECTING TO GNN DATA SERVERS..."
                     )
                     created_categories.append(f"🆕 Created news channel: {news_channel_name}")
                     print(f"Created new news channel: {news_channel.id}")
                     
                     # Send welcome message to newly created channel
                     welcome_embed = discord.Embed(
-                        title="🌌 Galactic News Network Online",
-                        description="Welcome to the Galactic News Network relay station. This channel will provide updates on major events across known space.",
+                        title="📡 Data Uplink Started...",
+                        description="Establishing Connection..",
                         color=0x4169E1
                     )
                     welcome_embed.add_field(
-                        name="📡 News Coverage",
-                        value="• Corridor shifts and infrastructure changes\n• Major galactic events and discoveries\n• Character obituaries and memorials\n• Economic and trade updates\n• Emergency broadcasts",
-                        inline=False
-                    )
-                    welcome_embed.add_field(
                         name="⏰ Transmission Delays",
-                        value="News reports experience realistic transmission delays based on distance from galactic communication hubs, simulating the time required for information to travel across space.",
+                        value="Delays in information transmissions may be experienced.",
                         inline=False
                     )
                     welcome_embed.set_footer(text="Stay informed, stay alive. - Galactic News Network")
@@ -129,8 +125,9 @@ class AdminCog(commands.Cog):
                         
                 except Exception as e:
                     created_categories.append(f"❌ Failed to create news channel: {e}")
+            
             status_voice_channel = None
-            status_channel_name = "⏰ Initializing... | 🟢 0 | 🟠 0"
+            status_channel_name = f"🌐 INITIALIZING..."
 
             # First check database for existing configured channel
             existing_status_config = self.db.execute_query(
@@ -148,7 +145,7 @@ class AdminCog(commands.Cog):
             # If no configured channel found, look for one in the main category
             if not status_voice_channel:
                 for channel in main_galaxy_category.voice_channels:
-                    if channel.name.startswith("⏰"):
+                    if channel.name.startswith("🌐 "):
                         status_voice_channel = channel
                         created_categories.append(f"✅ Found existing status channel")
                         print(f"Found existing status voice channel in category: {status_voice_channel.id}")
@@ -201,7 +198,8 @@ class AdminCog(commands.Cog):
                 'outpost': '🛤️ OUTPOSTS',
                 'gate': '🚪 GATES',
                 'transit': '🚀 IN TRANSIT',
-                'ship_interiors': '🚀 SHIP INTERIORS'
+                'ship_interiors': '🚀 SHIP INTERIORS',
+                'residences': '🏠 RESIDENCES'
             }
             
             for cat_type, cat_name in category_names.items():
@@ -236,17 +234,24 @@ class AdminCog(commands.Cog):
                         created_categories.append(f"❌ Failed to create {cat_name}: {e}")
                         categories[cat_type] = None
             
-            # Save configuration to database - UPDATE OR REPLACE to handle existing basic config
             self.db.execute_query(
                 '''INSERT OR REPLACE INTO server_config 
                    (guild_id, colony_category_id, station_category_id, outpost_category_id, 
-                    gate_category_id, transit_category_id, ship_interiors_category_id, galactic_updates_channel_id, 
+                    gate_category_id, transit_category_id, ship_interiors_category_id, residences_category_id, galactic_updates_channel_id, 
                     status_voice_channel_id, setup_completed)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)''',
-                (interaction.guild.id, categories.get('colony'), categories.get('station'),
-                 categories.get('outpost'), categories.get('gate'), categories.get('transit'),
-                 categories.get('ship_interiors'), news_channel.id if news_channel else None,
-                 status_voice_channel.id if status_voice_channel else None)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)''',
+                (
+                    interaction.guild.id, 
+                    categories.get('colony'), 
+                    categories.get('station'),
+                    categories.get('outpost'), 
+                    categories.get('gate'), 
+                    categories.get('transit'),
+                    categories.get('ship_interiors'), 
+                    categories.get('residences'), 
+                    news_channel.id if news_channel else None,
+                    status_voice_channel.id if status_voice_channel else None
+                )
             )
             
             # Create setup complete embed
@@ -314,7 +319,43 @@ class AdminCog(commands.Cog):
                     color=0xff0000
                 )
                 await interaction.edit_original_response(content=None, embed=error_embed)
-    
+    @admin_group.command(name="server_reset", description="Complete server reset - removes ALL bot channels and data")
+    async def server_reset(self, interaction: discord.Interaction):
+        """Complete server reset including all channels and database"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        # Show warning with confirmation view
+        view = ServerResetConfirmView(self.bot, interaction.user.id)
+        
+        embed = discord.Embed(
+            title="🚨 COMPLETE SERVER RESET",
+            description="This will **PERMANENTLY DELETE**:\n\n"
+                        "• ALL bot-created channels and categories\n"
+                        "• ALL player characters and ships\n"
+                        "• ALL locations and corridors\n"
+                        "• ALL jobs, inventory, and groups\n"
+                        "• ALL server configuration\n"
+                        "• The entire galaxy and its history\n\n"
+                        "**The server will be returned to a fresh install state!**",
+            color=0xff0000
+        )
+        
+        embed.add_field(
+            name="⚠️ THIS CANNOT BE UNDONE",
+            value="All game progress will be lost forever.",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🔒 Confirmation Required",
+            value="Click the button below to confirm this complete server reset.",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     async def _show_current_config(self, interaction: discord.Interaction):
         """Show current server configuration"""
         config = self.db.execute_query(
@@ -502,62 +543,6 @@ class AdminCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
         
         print(f"📰 Admin news broadcast: {interaction.user.name} sent '{title}' to {queued_count} servers")
-    
-    @admin_group.command(name="create_game_panel", description="Create a game panel in the current channel")
-    async def create_game_panel(self, interaction: discord.Interaction):
-        """Create a game panel in the current channel"""
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
-            return
-        
-        # Check if a panel already exists in this channel
-        existing_panel = self.db.execute_query(
-            "SELECT message_id FROM game_panels WHERE guild_id = ? AND channel_id = ?",
-            (interaction.guild.id, interaction.channel.id),
-            fetch='one'
-        )
-        
-        if existing_panel:
-            await interaction.response.send_message(
-                "A game panel already exists in this channel!",
-                ephemeral=True
-            )
-            return
-        
-        await interaction.response.defer()
-        
-        try:
-            # Get game panel cog and create panel
-            panel_cog = self.bot.get_cog('GamePanelCog')
-            if panel_cog:
-                embed = await panel_cog._create_panel_embed(interaction.guild)
-                view = await panel_cog._create_panel_view()
-                
-                # Send the panel message
-                message = await interaction.followup.send(embed=embed, view=view)
-                
-                # Store panel in database
-                self.db.execute_query(
-                    """INSERT INTO game_panels (guild_id, channel_id, message_id, created_by)
-                       VALUES (?, ?, ?, ?)""",
-                    (interaction.guild.id, interaction.channel.id, message.id, interaction.user.id)
-                )
-                
-                await interaction.followup.send(
-                    "✅ Game panel created successfully!",
-                    ephemeral=True
-                )
-            else:
-                await interaction.followup.send(
-                    "❌ Game panel system not available.",
-                    ephemeral=True
-                )
-            
-        except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to create game panel: {str(e)}",
-                ephemeral=True
-            )
 
     @admin_group.command(name="create_item", description="Create a new item and add to location shop or player inventory")
     @app_commands.describe(
@@ -2160,6 +2145,7 @@ class AdminCog(commands.Cog):
             self.db.execute_query("DELETE FROM characters")
             self.db.execute_query("DELETE FROM ships")
             self.db.execute_query("DELETE FROM inventory")
+
         # ————— Galaxy data + Location channel cleanup —————
         if reset_type in ["full", "galaxy"]:
             # Count rows before deletion
@@ -2176,11 +2162,9 @@ class AdminCog(commands.Cog):
                 fetch='all'
             )
 
-            # 2) Wipe the tables
-            self.db.execute_query("DELETE FROM sub_locations") 
-            self.db.execute_query("DELETE FROM locations")
-            self.db.execute_query("DELETE FROM corridors")
-            self.db.execute_query("DELETE FROM game_panels WHERE guild_id = ?", (guild.id,))
+            # 2) Use comprehensive galaxy data clearing (same as galaxy generator)
+            await self._clear_comprehensive_galaxy_data()
+
             # 3) Delete the actual Discord channels
             channels_deleted = 0
             for (channel_id,) in location_channels:
@@ -2246,32 +2230,92 @@ class AdminCog(commands.Cog):
             )[0]
             self.db.execute_query("DELETE FROM groups")
             if reset_type != "full":
-                # If characters weren’t wiped, clear their group_id
+                # If characters weren't wiped, clear their group_id
                 self.db.execute_query("UPDATE characters SET group_id = NULL")
 
         return reset_counts
+
+    async def _clear_comprehensive_galaxy_data(self):
+        """Use the same comprehensive clearing logic as the galaxy generator"""
+        print("🗑️ Performing comprehensive galaxy data clearing...")
+        
+        try:
+            # Clear in reverse dependency order to avoid foreign key issues
+            # This is the same order used in galaxy_generator.py _clear_existing_galaxy_data
+            
+            # First, clear tables that depend on locations
+            tables_to_clear = [
+                "home_activities", "home_interiors", "home_market_listings", 
+                "home_invitations", "location_homes", "character_reputation",
+                "location_items", "location_logs", "shop_items", "jobs", 
+                "job_tracking", "location_storage", "location_income_log",
+                "location_access_control", "location_upgrades", "location_ownership",
+                "location_economy", "economic_events",
+                
+                # NPC related tables
+                "npc_respawn_queue", "npc_inventory", "npc_trade_inventory",
+                "npc_jobs", "npc_job_completions", "static_npcs", "dynamic_npcs",
+                
+                # Black market tables
+                "black_market_items", "black_markets",
+                
+                # Sub-locations and repeaters
+                "sub_locations", "repeaters",
+                
+                # Travel sessions that reference corridors/locations
+                "travel_sessions", "corridor_events",
+                
+                # Finally clear corridors and locations
+                "corridors", "locations",
+                
+                # Clear history and news
+                "galactic_history", "news_queue",
+                
+                # Clear endgame config if exists
+                "endgame_config", "endgame_evacuations"
+            ]
+            
+            for table in tables_to_clear:
+                try:
+                    self.db.execute_query(f"DELETE FROM {table}")
+                except Exception as e:
+                    # Some tables might not exist, which is fine
+                    print(f"Note: Could not clear table {table}: {e}")
+            
+            # Clear game panels for this guild
+            self.db.execute_query("DELETE FROM game_panels")
+            
+            print("✅ Comprehensive galaxy data clearing complete")
+            
+        except Exception as e:
+            print(f"❌ Error during comprehensive galaxy clearing: {e}")
+            raise
     @app_commands.command(name="create_game_panel", description="Create a game panel in the current channel")
-    async def create_game_panel(self, interaction: discord.Interaction):
-        """Create a game panel in the current channel"""
+    @app_commands.describe(channel="Channel to create the game panel in (optional - uses current channel if not specified)")
+    async def create_game_panel(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
+        """Create a game panel in the current or specified channel"""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
-        # Check if a panel already exists in this channel
+        # Use specified channel or default to current channel
+        target_channel = channel if channel else interaction.channel
+        
+        # Check if a panel already exists in the target channel
         existing_panel = self.db.execute_query(
             "SELECT message_id FROM game_panels WHERE guild_id = ? AND channel_id = ?",
-            (interaction.guild.id, interaction.channel.id),
+            (interaction.guild.id, target_channel.id),
             fetch='one'
         )
         
         if existing_panel:
             await interaction.response.send_message(
-                "A game panel already exists in this channel!",
+                f"A game panel already exists in {target_channel.mention}!",
                 ephemeral=True
             )
             return
         
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         
         try:
             # Get game panel cog and create panel
@@ -2280,20 +2324,19 @@ class AdminCog(commands.Cog):
                 embed = await panel_cog.create_panel_embed(interaction.guild)
                 view = await panel_cog.create_panel_view()
                 
-                # Send the panel message
-                message = await interaction.followup.send(embed=embed, view=view)
+                # Send the panel message to the target channel
+                message = await target_channel.send(embed=embed, view=view)
                 
                 # Store panel in database
                 self.db.execute_query(
                     """INSERT INTO game_panels (guild_id, channel_id, message_id, created_by)
                        VALUES (?, ?, ?, ?)""",
-                    (interaction.guild.id, interaction.channel.id, message.id, interaction.user.id)
+                    (interaction.guild.id, target_channel.id, message.id, interaction.user.id)
                 )
                 
-                await interaction.followup.send(
-                    "✅ Game panel created successfully!",
-                    ephemeral=True
-                )
+                # Respond with success message
+                success_message = f"✅ Game panel created successfully in {target_channel.mention}!"
+                await interaction.followup.send(success_message, ephemeral=True)
             else:
                 await interaction.followup.send(
                     "❌ Game panel system not available.",
@@ -2422,6 +2465,189 @@ class EmergencyResetView(discord.ui.View):
             return
         
         await interaction.response.send_message("Emergency reset cancelled.", ephemeral=True)
-
+class ServerResetConfirmView(discord.ui.View):
+    def __init__(self, bot, admin_user_id: int):
+        super().__init__(timeout=30)
+        self.bot = bot
+        self.admin_user_id = admin_user_id
+    
+    @discord.ui.button(label="COMPLETE SERVER RESET - DELETE EVERYTHING", 
+                      style=discord.ButtonStyle.danger, 
+                      emoji="☠️")
+    async def server_reset_confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.admin_user_id:
+            await interaction.response.send_message("Only the admin who initiated this can confirm.", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            admin_cog = self.bot.get_cog('AdminCog')
+            
+            # Stop background tasks first
+            await interaction.edit_original_response(
+                content="🔄 **Server Reset in Progress**\n⏸️ Stopping background tasks...",
+                embed=None, view=None
+            )
+            self.bot.stop_background_tasks()
+            
+            # Get server config before we delete it
+            config = admin_cog.db.execute_query(
+                """SELECT colony_category_id, station_category_id, outpost_category_id,
+                          gate_category_id, transit_category_id, ship_interiors_category_id,
+                          galactic_updates_channel_id, residences_category_id, status_voice_channel_id
+                   FROM server_config WHERE guild_id = ?""",
+                (interaction.guild.id,),
+                fetch='one'
+            )
+            
+            categories_to_delete = []
+            channels_to_delete = []
+            
+            if config:
+                # Collect category IDs
+                category_ids = [config[0], config[1], config[2], config[3], config[4], config[5]]
+                for cat_id in category_ids:
+                    if cat_id:
+                        category = interaction.guild.get_channel(cat_id)
+                        if category and isinstance(category, discord.CategoryChannel):
+                            categories_to_delete.append(category)
+                
+                # Collect special channels
+                if config[6]:  # galactic_updates_channel_id
+                    channel = interaction.guild.get_channel(config[6])
+                    if channel:
+                        channels_to_delete.append(channel)
+                
+                if config[7]:  # status_voice_channel_id
+                    channel = interaction.guild.get_channel(config[7])
+                    if channel:
+                        channels_to_delete.append(channel)
+            
+            # Find the main galaxy category
+            main_category_name = " ==== 🌌 GALAXY 🌌 ==== "
+            for category in interaction.guild.categories:
+                if category.name.strip() == main_category_name.strip() and category not in categories_to_delete:
+                    categories_to_delete.append(category)
+            
+            # Update status
+            await interaction.edit_original_response(
+                content="🔄 **Server Reset in Progress**\n🗑️ Deleting channels and categories..."
+            )
+            
+            # Delete all channels in categories first
+            channels_deleted = 0
+            for category in categories_to_delete:
+                for channel in category.channels:
+                    try:
+                        await channel.delete(reason="Server reset - removing all bot channels")
+                        channels_deleted += 1
+                    except:
+                        pass
+            
+            # Delete standalone channels
+            for channel in channels_to_delete:
+                try:
+                    await channel.delete(reason="Server reset - removing bot channels")
+                    channels_deleted += 1
+                except:
+                    pass
+            
+            # Delete categories
+            categories_deleted = 0
+            for category in categories_to_delete:
+                try:
+                    await category.delete(reason="Server reset - removing bot categories")
+                    categories_deleted += 1
+                except:
+                    pass
+            
+            # Update status
+            await interaction.edit_original_response(
+                content=f"🔄 **Server Reset in Progress**\n"
+                        f"✅ Deleted {channels_deleted} channels and {categories_deleted} categories\n"
+                        f"💾 Resetting database..."
+            )
+            
+            # Perform complete database reset
+            reset_results = await admin_cog._perform_reset(interaction.guild, "full")
+            
+            # Also clear server config completely
+            admin_cog.db.execute_query(
+                "DELETE FROM server_config WHERE guild_id = ?",
+                (interaction.guild.id,)
+            )
+            
+            # Clear galaxy settings
+            admin_cog.db.execute_query("DELETE FROM galaxy_settings")
+            admin_cog.db.execute_query("DELETE FROM galaxy_info")
+            
+            # Clear any remaining tables that might not be in _perform_reset
+            additional_tables = [
+                "game_panels", "news_queue", "galactic_history", 
+                "endgame_config", "endgame_evacuations"
+            ]
+            for table in additional_tables:
+                try:
+                    admin_cog.db.execute_query(f"DELETE FROM {table}")
+                except:
+                    pass
+            
+            # Final status update
+            total_deleted = sum(reset_results.values())
+            
+            embed = discord.Embed(
+                title="☠️ COMPLETE SERVER RESET SUCCESSFUL",
+                description="The server has been returned to a fresh install state.",
+                color=0x000000
+            )
+            
+            embed.add_field(
+                name="🗑️ Channels & Categories Deleted",
+                value=f"• {channels_deleted} channels removed\n• {categories_deleted} categories removed",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="💾 Database Items Cleared",
+                value=f"• {total_deleted} total database entries\n• All configurations reset",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="✅ Server Status",
+                value="• Setup flag: Not configured\n• Galaxy: None\n• All data: Wiped",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="🔄 Next Steps",
+                value="1. Run `/admin setup` to configure the server\n"
+                      "2. Run `/galaxy generate` to create a new galaxy\n"
+                      "3. Players can use `/character create` to start fresh",
+                inline=False
+            )
+            
+            await interaction.edit_original_response(content=None, embed=embed)
+            
+            # Resume background tasks
+            await asyncio.sleep(1)
+            self.bot.start_background_tasks()
+            
+            print(f"☠️ COMPLETE SERVER RESET: {interaction.user.name} reset {interaction.guild.name}")
+            
+        except Exception as e:
+            await interaction.followup.send(f"❌ Server reset failed: {str(e)}", ephemeral=True)
+            # Make sure to restart background tasks even on error
+            self.bot.start_background_tasks()
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.admin_user_id:
+            await interaction.response.send_message("Only the admin who initiated this can cancel.", ephemeral=True)
+            return
+        
+        await interaction.response.send_message("Server reset cancelled. No changes were made.", ephemeral=True)
+        
 async def setup(bot):
     await bot.add_cog(AdminCog(bot))

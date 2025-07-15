@@ -633,7 +633,92 @@ class NPCCog(commands.Cog):
             created_count += 1
         
         return created_count
-
+    def generate_static_npc_batch_data(self, location_id: int, population: int = None, location_type: str = None, wealth_level: int = None, has_black_market: bool = None) -> List[tuple]:
+        """
+        Generate static NPC data for a location and return it as a list of tuples for batch insertion.
+        This method does NOT insert NPCs into the database - it just returns the data.
+        Updated to work without database calls during transaction.
+        """
+        # Use provided data - no database calls needed during galaxy generation
+        if population is None or location_type is None or wealth_level is None:
+            # This should only happen outside of galaxy generation
+            location_data = self.db.execute_query(
+                "SELECT location_type, wealth_level, has_black_market FROM locations WHERE location_id = ?",
+                (location_id,),
+                fetch='one'
+            )
+            if location_data:
+                location_type = location_type or location_data[0]
+                wealth_level = wealth_level or location_data[1]
+                has_black_market = has_black_market if has_black_market is not None else location_data[2]
+            else:
+                # Fallback defaults
+                location_type = location_type or 'colony'
+                wealth_level = wealth_level or 5
+                has_black_market = has_black_market or False
+        
+        # Calculate number of NPCs (1-15 based on population)
+        if location_type == 'gate':
+            npc_count = random.randint(1, 3)  # Gates always have 2-4 maintenance staff
+        elif population < 50:
+            npc_count = random.randint(1, 5)
+        elif population < 200:
+            npc_count = random.randint(2, 6)
+        elif population < 1000:
+            npc_count = random.randint(4, 10)
+        elif population < 2000:
+            npc_count = random.randint(6, 12)
+        else:
+            npc_count = random.randint(8, 15)
+        
+        npc_data_list = []
+        
+        for _ in range(npc_count):
+            # Generate basic NPC data (same logic as create_static_npcs_for_location)
+            name_tuple = generate_npc_name()
+            name = f"{name_tuple[0]} {name_tuple[1]}" if isinstance(name_tuple, tuple) else str(name_tuple)
+            age = random.randint(25, 65)
+            occupation = get_occupation(location_type, wealth_level)
+            personality = random.choice(PERSONALITIES)
+            
+            # Generate alignment based on location data (no database call)
+            alignment = self.generate_npc_alignment_from_data(location_type, wealth_level, has_black_market)
+            
+            # Generate combat stats
+            combat_rating, max_hp, credits = self.generate_npc_combat_stats(alignment)
+            
+            # Create tuple matching the INSERT statement in galaxy_generatorOPTIMIZED.py
+            npc_data = (
+                location_id, name, age, occupation, personality, 
+                alignment, max_hp, max_hp, combat_rating, credits
+            )
+            npc_data_list.append(npc_data)
+        
+        return npc_data_list
+    def generate_npc_alignment_from_data(self, location_type: str, wealth_level: int, has_black_market: bool = False) -> str:
+        """
+        Generate NPC alignment based on location data without database queries.
+        Used during galaxy generation to avoid transaction conflicts.
+        """
+        # Black market locations = only bandits
+        if has_black_market:
+            return "bandit"
+        
+        # High wealth federal locations = only loyalists
+        if wealth_level >= 8:
+            return "loyal"
+        
+        # For new locations during galaxy generation, use wealth-based logic
+        # since there's no reputation data yet
+        if wealth_level <= 3:
+            # Poor locations tend toward bandit
+            return random.choices(["bandit", "neutral"], weights=[0.7, 0.3])[0]
+        elif wealth_level >= 7:
+            # Rich locations tend toward loyal
+            return random.choices(["loyal", "neutral"], weights=[0.7, 0.3])[0]
+        else:
+            # Middle wealth locations are more mixed
+            return random.choices(["loyal", "neutral", "bandit"], weights=[0.3, 0.4, 0.3])[0]
     async def spawn_dynamic_npc(self, start_location: int, destination_location: int = None, start_traveling: bool = True) -> Optional[int]:
         """Spawn a single dynamic NPC with combat stats"""
         

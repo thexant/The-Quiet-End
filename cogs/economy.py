@@ -391,8 +391,8 @@ class EconomyCog(commands.Cog):
                 )
         
         embed.add_field(
-            name="💡 How to Buy",
-            value="Use `/shop buy <item_name> [quantity]` to purchase items",
+            name="💡 How to Use the Shop",
+            value="• **To Buy:** `/shop buy <item_name> [quantity]`\n• **To Sell:** `/shop sell <item_name> [quantity]`",
             inline=False
         )
         
@@ -575,7 +575,7 @@ class EconomyCog(commands.Cog):
         )
                 # ─── Put sold items into the shop at a 20% markup ───
         # Calculate the shop purchase price (e.g. 120% of the sell price, at least +1)
-        markup_price = max(sell_price + 1, int(sell_price * 1.2))
+        markup_price = max(final_sell_price + 1, int(final_sell_price * 1.2))
 
         # Check if this item already exists in the local shop
         existing = self.db.execute_query(
@@ -607,7 +607,7 @@ class EconomyCog(commands.Cog):
             description=f"Sold {quantity}x **{actual_name}** for {total_earnings:,} credits",
             color=0x00ff00
         )
-        embed.add_field(name="Price per Item", value=f"{sell_price:,} credits", inline=True)
+        embed.add_field(name="Price per Item", value=f"{final_sell_price:,} credits", inline=True)
         embed.add_field(name="New Balance", value=f"{current_money + total_earnings:,} credits", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -618,12 +618,12 @@ class EconomyCog(commands.Cog):
         
         shift_name, shift_period = time_system.get_current_shift()
         
-        # Job generation multipliers by shift
+        # Job generation multipliers by shift (slightly increased)
         shift_multipliers = {
-            "morning": 0.8,   # 80% normal job generation
-            "day": 1.5,       # 150% - busiest period
-            "evening": 0.9,   # 90% normal job generation  
-            "night": 0.4      # 40% - slowest period
+            "morning": 1.2,   # Increased from 0.8
+            "day": 1.6,       # Increased from 1.5
+            "evening": 1.1,   # Increased from 0.9
+            "night": 0.6      # Increased from 0.4
         }
         
         return shift_multipliers.get(shift_period, 1.0)
@@ -773,9 +773,27 @@ class EconomyCog(commands.Cog):
                 await self._finalize_transport_job(interaction, job_id, title, reward)
                 return
             
-            # Check if player is at the job's destination (the location where job was posted)
-            # Check if player is at the job's destination
-            if not destination_location_id or current_location != destination_location_id:
+            # For NPC jobs without destination, allow completion at any location after elapsed time
+            if not destination_location_id:
+                # Check elapsed time for NPC transport jobs
+                taken_time = datetime.fromisoformat(taken_at)
+                now = datetime.now()
+                elapsed_minutes = (now - taken_time).total_seconds() / 60
+                
+                if elapsed_minutes >= duration_minutes:
+                    # Start unloading phase
+                    await self._start_transport_unloading(interaction, job_id, title, reward)
+                    return
+                else:
+                    remaining = duration_minutes - elapsed_minutes
+                    await interaction.response.send_message(
+                        f"⏳ **Transport Job In Progress**\n\nYou need to wait **{remaining:.1f} more minutes** before completing this delivery.",
+                        ephemeral=True
+                    )
+                    return
+            
+            # Check if player is at the job's destination (for jobs with destination set)
+            if current_location != destination_location_id:
                 # Get correct destination location name
                 correct_dest_name = "an unknown location"
                 if destination_location_id:
@@ -812,7 +830,7 @@ class EconomyCog(commands.Cog):
             now = datetime.now()
             elapsed_minutes = (now - taken_time).total_seconds() / 60
 
-            # Check location-based tracking for stationary jobs
+            # Check location-based tracking for stationary jobs only
             tracking = self.db.execute_query(
                 "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
                 (job_id, interaction.user.id),
@@ -825,7 +843,7 @@ class EconomyCog(commands.Cog):
                     ephemeral=True
                 )
                 return
-
+            
             time_at_location, required_duration = tracking
             if time_at_location < required_duration:
                 remaining = required_duration - time_at_location
@@ -896,6 +914,7 @@ class EconomyCog(commands.Cog):
                     await self._complete_job_immediately(interaction, job_id, title, reward, roll, success_chance, "stationary")
                 else:
                     await self._complete_job_failed(interaction, job_id, title, reward, roll, success_chance)
+                    
     def get_economic_modifiers(self, location_id: int, item_name: str, item_type: str) -> tuple:
         """Get supply/demand modifiers for an item at a location"""
         # Check for specific item demand/surplus
@@ -1395,8 +1414,8 @@ class EconomyCog(commands.Cog):
         expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
 
         # 4) Generate travel jobs with shift-aware counts
-        base_travel_jobs = random.randint(4, 8)
-        num_travel_jobs = max(1, int(base_travel_jobs * shift_multiplier))  # Apply shift multiplier
+        base_travel_jobs = random.randint(6, 12)
+        num_travel_jobs = max(2, int(base_travel_jobs * shift_multiplier))  # Apply shift multiplier
         
         print(f"🕐 Generating {num_travel_jobs} travel jobs (shift multiplier: {shift_multiplier:.1f})")
         
@@ -1443,8 +1462,8 @@ class EconomyCog(commands.Cog):
             )
 
         # 5) Add fewer stationary jobs with shift multiplier
-        base_stationary = random.randint(1, 2)
-        num_stationary = max(0, int(base_stationary * shift_multiplier))  # Can be 0 during night shift
+        base_stationary = random.randint(2, 4)
+        num_stationary = max(1, int(base_stationary * shift_multiplier))   # Can be 0 during night shift
         
         if num_stationary > 0:
             stationary_jobs = [
@@ -1661,21 +1680,22 @@ class EconomyCog(commands.Cog):
         is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
                           any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
         
-        # Create job tracking record for stationary jobs
-        if not is_transport_job:
-            current_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
-                (interaction.user.id,),
-                fetch='one'
-            )[0]
-            
-            self.db.execute_query(
-                '''INSERT INTO job_tracking
-                   (job_id, user_id, start_location, required_duration, time_at_location, last_location_check)
-                   VALUES (?, ?, ?, ?, 0.0, datetime('now'))''',
-                (job_id, interaction.user.id, current_location, duration)
-            )
+        # Create job tracking record - all jobs get one for consistency
+        current_location = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
 
+        # For transport jobs, use 0 duration so they don't need location tracking
+        tracking_duration = 0 if is_transport_job else duration
+
+        self.db.execute_query(
+            '''INSERT INTO job_tracking
+               (job_id, user_id, start_location, required_duration, time_at_location, last_location_check)
+               VALUES (?, ?, ?, ?, 0.0, datetime('now'))''',
+            (job_id, interaction.user.id, current_location, tracking_duration)
+        )
         embed = discord.Embed(
             title="✅ Job Accepted",
             description=f"You have taken: **{title}** (ID: {job_id})",

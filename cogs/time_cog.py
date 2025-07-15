@@ -61,13 +61,13 @@ class TimeCog(commands.Cog, name="Time"):
         
         # Add current time period description
         hour = current_datetime.hour
-        if 6 <= hour < 12:
+        if 5 <= hour < 11:
             period = "🌅 Morning Shift"
             description = "Colony work shifts are beginning across human space."
-        elif 12 <= hour < 18:
+        elif 11 <= hour < 17:
             period = "☀️ Day Shift"
             description = "Peak operational hours - maximum traffic on all corridors."
-        elif 18 <= hour < 24:
+        elif 17 <= hour < 23:
             period = "🌆 Evening Shift"
             description = "Systems transitioning to night operations."
         else:

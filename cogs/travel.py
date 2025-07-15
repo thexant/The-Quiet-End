@@ -8,6 +8,8 @@ import random
 from utils.channel_manager import ChannelManager
 from cogs.corridor_events import CorridorEventsCog
 import sqlite3
+from typing import Optional
+
 class DockingFeeView(discord.ui.View):
     def __init__(self, bot, user_id, location_id, fee, origin_location_id):
         super().__init__(timeout=300) # 5 minute timeout
@@ -63,6 +65,17 @@ class TravelCog(commands.Cog):
         self.active_status_messages = {}  # Track active status messages for auto-refresh
         
     travel_group = app_commands.Group(name="travel", description="Travel and corridor navigation")
+    
+    async def check_travel_restrictions(self, user_id: int) -> Optional[str]:
+        """Check if user has travel restrictions from bounty captures"""
+        # This method is now correctly placed in the class scope.
+        bounty_cog = self.bot.get_cog('BountyCog')
+        if bounty_cog:
+            # Assuming BountyCog has a check_travel_ban method.
+            # If it doesn't, this will need to be implemented in that cog.
+            # For now, this resolves the AttributeError.
+            return await bounty_cog.check_travel_ban(user_id)
+        return None
     
     async def _trigger_corridor_events(self, transit_channel, user_id, corridor_id, travel_time):
         """Trigger corridor events during travel based on danger level"""
@@ -122,7 +135,185 @@ class TravelCog(commands.Cog):
         events_cog = self.bot.get_cog('CorridorEventsCog')
         if events_cog:
             await events_cog.trigger_corridor_event(transit_channel, travelers, danger_level)
+    
+    @travel_group.command(name="status", description="Check your current travel status")
+    async def travel_status(self, interaction: discord.Interaction):
+        # Get active travel session
+        session = self.db.execute_query(
+            '''SELECT ts.*, c.name as corridor_name, l.name as dest_name
+               FROM travel_sessions ts
+               JOIN corridors c ON ts.corridor_id = c.corridor_id
+               JOIN locations l ON ts.destination_location = l.location_id
+               WHERE ts.user_id = ? AND ts.status = 'traveling' ''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not session:
+            await interaction.response.send_message("You are not currently traveling.", ephemeral=True)
+            return
+        
+        # Extract session data
+        session_id, group_id, user_id, origin_loc, dest_loc, corridor_id, temp_channel_id, start_time, end_time, status = session[:10]
+        corridor_name = session[10]
+        dest_name = session[11]
+        
+        # Parse timestamps and make them timezone-aware
+        start_dt = datetime.fromisoformat(start_time)
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=timezone.utc)
+        
+        end_dt = datetime.fromisoformat(end_time)
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=timezone.utc)
+        
+        now = datetime.now(timezone.utc)
+        
+        # Calculate progress
+        total_seconds = (end_dt - start_dt).total_seconds()
+        elapsed_seconds = (now - start_dt).total_seconds()
+        progress_percent = min(100, (elapsed_seconds / total_seconds * 100) if total_seconds > 0 else 100)
+        
+        # Create status embed
+        embed = self._create_progress_embed(
+            progress_percent,
+            int(total_seconds),
+            start_dt,
+            end_dt,
+            dest_name
+        )
+        
+        # Add corridor info
+        embed.add_field(
+            name="🛤️ Route",
+            value=f"Traveling via **{corridor_name}**",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+    async def _handle_corridor_selection(self, interaction: discord.Interaction, corridors: list, origin_id: int, current_location_name: str):
+        """Handle corridor selection and initiate travel"""
+        # grab the choice they just made
+        choice = int(interaction.data['values'][0])
+        cid, cname, dest_name, travel_time, cost, _ = next(
+            c for c in corridors if c[0] == choice
+        )
+        # Get ship efficiency and modify travel time
+        ship_efficiency = self.db.execute_query(
+            "SELECT fuel_efficiency FROM ships WHERE owner_id = ?",
+            (interaction.user.id,), fetch='one'
+        )[0]
 
+        # Apply ship efficiency to travel time
+        # fuel_efficiency ranges 3-10, where 10 = fastest
+        # Create multiplier: efficiency 3 = 1.4x time, efficiency 10 = 0.8x time
+        efficiency_modifier = 1.6 - (ship_efficiency * 0.08)  # 1.36 to 0.8 range
+        actual_travel_time = max(int(travel_time * efficiency_modifier), 60)  # Minimum 1 minute
+
+        # Update the variables for the rest of the function
+        travel_time = actual_travel_time
+        # Check fuel
+        char_fuel = self.db.execute_query(
+            "SELECT s.current_fuel FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = ?",
+            (interaction.user.id,), fetch='one'
+        )
+        
+        if not char_fuel or char_fuel[0] < cost:
+            await interaction.response.send_message(
+                f"Insufficient fuel! Need {cost}, have {char_fuel[0] if char_fuel else 0}.", 
+                ephemeral=True
+            )
+            return
+
+        # Deduct fuel
+        self.db.execute_query(
+            "UPDATE ships SET current_fuel = current_fuel - ? WHERE owner_id = ?",
+            (cost, interaction.user.id)
+        )
+
+        # Create transit channel
+        transit_chan = await self.channel_mgr.create_transit_channel(
+            interaction.guild,
+            interaction.user,
+            cname,
+            dest_name
+        )
+
+        # Record the session (storing transit_chan.id safely)
+        start = datetime.utcnow()
+        end = start + timedelta(seconds=travel_time)  # travel_time is already in seconds from DB
+        self.db.execute_query(
+            """
+            INSERT INTO travel_sessions
+              (user_id, corridor_id, origin_location, destination_location,
+               start_time, end_time, temp_channel_id, status)
+            VALUES (?, ?, ?, 
+                    (SELECT destination_location FROM corridors WHERE corridor_id = ?),
+                    ?, ?, ?, 'traveling')
+            """,
+            (
+                interaction.user.id,
+                cid,
+                origin_id,
+                cid,
+                start.isoformat(),
+                end.isoformat(),
+                transit_chan.id if transit_chan else None
+            )
+        )
+
+        # Confirm departure back to the user
+        mins, secs = divmod(travel_time, 60)  # Use travel_time variable
+        hours = mins // 60
+        mins = mins % 60
+        
+        if hours > 0:
+            time_display = f"{hours}h {mins}m {secs}s"
+        else:
+            time_display = f"{mins}m {secs}s"
+        
+        await interaction.response.edit_message(
+            content=f"🚀 Departure confirmed. ETA: {time_display}",
+            view=None
+        )
+
+        # Remove user from origin location immediately
+        old_location = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,), fetch='one'
+        )
+        old_location_id = old_location[0] if old_location else None
+        
+        # Set character location to None (in transit)
+        self.db.execute_query(
+            "UPDATE characters SET current_location = NULL WHERE user_id = ?",
+            (interaction.user.id,)
+        )
+        
+        # Remove access from old location
+        if old_location_id:
+            await self.channel_mgr.update_channel_on_player_movement(
+                interaction.guild, interaction.user.id, old_location_id, None
+            )
+
+        # Start auto-refreshing progress tracking if transit channel exists
+        if transit_chan:
+            asyncio.create_task(self._start_travel_progress_tracking(
+                transit_chan, interaction.user.id, cid, travel_time, start, end, dest_name
+            ))
+
+        # Start corridor events system
+        if transit_chan:
+            asyncio.create_task(self._trigger_corridor_events(
+                transit_chan, interaction.user.id, cid, travel_time
+            ))
+
+        # Schedule the actual travel completion
+        asyncio.create_task(self._complete_travel_after_delay(
+            interaction.user.id, cid, travel_time, dest_name, transit_chan, interaction.guild
+        ))
+            
     @travel_group.command(
         name="go",
         description="Depart along a chosen corridor"
@@ -136,12 +327,14 @@ class TravelCog(commands.Cog):
         )
         if not row:
             return await interaction.response.send_message("🚫 Character not found.", ephemeral=True)
-        if self.bot.get_cog('CombatCog') and self.bot.get_cog('CombatCog').check_combat_status(interaction.user.id):
-            await interaction.response.send_message(
-                "❌ You cannot travel while in combat!",
-                ephemeral=True
-            )
-            return
+        if self.bot.get_cog('CombatCog'):
+            combat_cog = self.bot.get_cog('CombatCog')
+            if combat_cog.check_any_combat_status(interaction.user.id):
+                await interaction.response.send_message(
+                    "❌ You cannot travel while in combat!",
+                    ephemeral=True
+                )
+                return
         origin_id, status = row
         # block if docked
         if status == "docked":
@@ -165,6 +358,7 @@ class TravelCog(commands.Cog):
                 ephemeral=True
             )
             return
+        
         # Check if user is logged in
         login_status = self.db.execute_query(
             "SELECT is_logged_in FROM characters WHERE user_id = ?",
@@ -183,7 +377,20 @@ class TravelCog(commands.Cog):
                 f"❌ {travel_restriction}",
                 ephemeral=True
             )
-            return 
+            return
+        # Check if user is in a home
+        current_home = self.db.execute_query(
+            "SELECT current_home_id FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+
+        if current_home and current_home[0]:
+            await interaction.response.send_message(
+                "❌ You cannot travel while inside a home! Use `/home interior leave` first.",
+                ephemeral=True
+            )
+            return
         # Check if character has an active ship    
         active_ship = self.db.execute_query(
             "SELECT active_ship_id FROM characters WHERE user_id = ?",
@@ -223,42 +430,73 @@ class TravelCog(commands.Cog):
             fetch='one'
         )[0]
 
-        # Build the dropdown
-        options = []
-        for cid, cname, dest_name, ttime, cost, dest_type in corridors:
-            label = f"{current_location_name} → {dest_name}"
-            hours   = ttime // 3600
-            minutes = (ttime % 3600) // 60
-            if hours:
-                time_text = f"{hours}h {minutes}m"
-            else:
-                time_text = f"{minutes}m"
+        # Check if we need pagination
+        if len(corridors) > 25:
+            # Use paginated view for many corridors
+            view = PaginatedCorridorSelectView(
+                self.bot, 
+                interaction.user.id, 
+                corridors, 
+                current_location_name,
+                origin_id
+            )
+            
+            embed = discord.Embed(
+                title="🚀 Select Travel Route",
+                description=f"From **{current_location_name}** - Page 1/{view.max_page}",
+                color=0x4169e1
+            )
+            embed.add_field(
+                name="Available Routes",
+                value=f"{len(corridors)} corridors available. Use the navigation buttons to browse.",
+                inline=False
+            )
+            embed.set_footer(text="Select a route from the dropdown menu")
+            
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        else:
+            # Use regular single-page view for 25 or fewer corridors
+            # Build the dropdown
+            options = []
+            for cid, cname, dest_name, ttime, cost, dest_type in corridors:
+                label = f"{current_location_name} → {dest_name}"
+                hours   = ttime // 3600
+                minutes = (ttime % 3600) // 60
+                if hours:
+                    time_text = f"{hours}h {minutes}m"
+                else:
+                    time_text = f"{minutes}m"
 
-            # Determine travel type
-            if "Approach" in cname:
-                travel_type = "🌌 LOCAL"
-            elif dest_type == "gate":
-                travel_type = "🔵 GATED"
-            elif "Ungated" in cname:
-                travel_type = "⭕ UNGATED"
-            else:
-                travel_type = "🔵 GATED"
+                # Determine travel type
+                if "Approach" in cname:
+                    travel_type = "🌌 LOCAL"
+                elif dest_type == "gate":
+                    travel_type = "🔵 GATED"
+                elif "Ungated" in cname:
+                    travel_type = "⭕ UNGATED"
+                else:
+                    travel_type = "🔵 GATED"
 
-            desc = f"via {cname} · {time_text} · {cost}⚡ fuel · {travel_type}"
-            options.append(discord.SelectOption(
-                label=label,
-                description=desc[:100],
-                value=str(cid)
-            ))
+                desc = f"via {cname} · {time_text} · {cost}⚡ fuel · {travel_type}"
+                options.append(discord.SelectOption(
+                    label=label,
+                    description=desc[:100],
+                    value=str(cid)
+                ))
 
-        select = ui.Select(placeholder="Choose your corridor", options=options, min_values=1, max_values=1)
-        
-        async def check_travel_restrictions(self, user_id: int) -> Optional[str]:
-            """Check if user has travel restrictions from bounty captures"""
-            bounty_cog = self.bot.get_cog('BountyCog')
-            if bounty_cog:
-                return await bounty_cog.check_travel_ban(user_id)
-            return None
+            select = ui.Select(placeholder="Choose your corridor", options=options, min_values=1, max_values=1)
+
+            async def on_select(inter: discord.Interaction):
+                if inter.user.id != interaction.user.id:
+                    return await inter.response.send_message("This isn't your travel menu!", ephemeral=True)
+
+                await self._handle_corridor_selection(inter, corridors, origin_id, current_location_name)
+
+            select.callback = on_select
+            view = ui.View(timeout=60)
+            view.add_item(select)
+            await interaction.response.send_message("Select your route to depart:", view=view, ephemeral=True)
+    
 
         async def on_select(inter: discord.Interaction):
             if inter.user.id != interaction.user.id:
@@ -370,7 +608,7 @@ class TravelCog(commands.Cog):
             # Start auto-refreshing progress tracking if transit channel exists
             if transit_chan:
                 asyncio.create_task(self._start_travel_progress_tracking(
-                    transit_chan, inter.user.id, cid, travel_time, start, end, dest_name  # Pass 'end' not 'end_time'
+                    transit_chan, inter.user.id, cid, travel_time, start, end, dest_name
                 ))
 
             # Start corridor events system
@@ -442,6 +680,12 @@ class TravelCog(commands.Cog):
     async def _start_travel_progress_tracking(self, transit_channel, user_or_group_id, corridor_id, travel_time, start_time, end_time, dest_name, is_group=False):
         """Start auto-refreshing progress tracking in transit channel for solo or group travel"""
         try:
+            # Ensure timestamps are timezone-aware
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+            if end_time.tzinfo is None:
+                end_time = end_time.replace(tzinfo=timezone.utc)
+                
             # Send initial progress embed
             embed = self._create_progress_embed(0, travel_time, start_time, end_time, dest_name)
             progress_message = await transit_channel.send(embed=embed)
@@ -483,8 +727,9 @@ class TravelCog(commands.Cog):
     async def _auto_refresh_progress(self, session_key):
         """Auto-refresh progress embed every 30 seconds"""
         try:
+            refresh_interval = 20  # Changed from 30 to 20 seconds as requested
             while session_key in self.active_status_messages:
-                await asyncio.sleep(30)  # Update every 30 seconds
+                await asyncio.sleep(refresh_interval)
                 
                 if session_key not in self.active_status_messages:
                     break
@@ -512,9 +757,17 @@ class TravelCog(commands.Cog):
                     break
                 
                 # Calculate current progress
-                now = datetime.utcnow()
-                elapsed = (now - session_data['start_time']).total_seconds()
-                progress_percent = min(100, (elapsed / session_data['travel_time']) * 100) if session_data['travel_time'] > 0 else 100
+                now = datetime.now(timezone.utc)
+
+                # Ensure start_time is timezone-aware
+                start_time = session_data['start_time']
+                if hasattr(start_time, 'tzinfo') and start_time.tzinfo is None:
+                    start_time = start_time.replace(tzinfo=timezone.utc)
+                    session_data['start_time'] = start_time  # Update stored value
+
+                elapsed = (now - start_time).total_seconds()
+                total_time = session_data['travel_time']
+                progress_percent = min(100, (elapsed / total_time * 100) if total_time > 0 else 100)
                 
                 # Update embed
                 embed = self._create_progress_embed(
@@ -527,59 +780,15 @@ class TravelCog(commands.Cog):
                 
                 try:
                     await session_data['message'].edit(embed=embed)
-                except:
-                    # Message deleted or channel gone, stop refreshing
+                except discord.NotFound:
+                    # Message deleted, stop refreshing
                     if session_key in self.active_status_messages:
                         del self.active_status_messages[session_key]
                     break
-                    
-        except Exception as e:
-            print(f"❌ Error in auto-refresh: {e}")
-            if session_key in self.active_status_messages:
-                del self.active_status_messages[session_key]
-
-    async def _auto_refresh_progress(self, session_key):
-        """Auto-refresh progress embed every 30 seconds"""
-        try:
-            while session_key in self.active_status_messages:
-                await asyncio.sleep(30)  # Update every 30 seconds
-                
-                if session_key not in self.active_status_messages:
-                    break
-                
-                session_data = self.active_status_messages[session_key]
-                
-                # Check if travel is still active
-                active_session = self.db.execute_query(
-                    "SELECT status FROM travel_sessions WHERE user_id = ? AND corridor_id = ? AND status = 'traveling'",
-                    (session_data['user_id'], session_data['corridor_id']),
-                    fetch='one'
-                )
-                
-                if not active_session:
-                    # Travel completed or cancelled, stop refreshing
-                    del self.active_status_messages[session_key]
-                    break
-                
-                # Calculate current progress
-                now = datetime.utcnow()
-                elapsed = (now - session_data['start_time']).total_seconds()
-                progress_percent = min(100, (elapsed / session_data['travel_time']) * 100)
-                
-                # Update embed
-                embed = self._create_progress_embed(
-                    progress_percent, 
-                    session_data['travel_time'],
-                    session_data['start_time'],
-                    session_data['end_time'],
-                    session_data['dest_name']
-                )
-                
-                try:
-                    await session_data['message'].edit(embed=embed)
-                except:
-                    # Message deleted or channel gone, stop refreshing
-                    del self.active_status_messages[session_key]
+                except Exception as e:
+                    print(f"❌ Failed to update progress message: {e}")
+                    if session_key in self.active_status_messages:
+                        del self.active_status_messages[session_key]
                     break
                     
         except Exception as e:
@@ -661,7 +870,7 @@ class TravelCog(commands.Cog):
         
         # Add timestamp
         embed.timestamp = now
-        embed.set_footer(text="Auto-updating every 30 seconds")
+        embed.set_footer(text="Auto-updating every 20 seconds")
         
         return embed
 # In cogs/travel.py, replace the _complete_travel_after_delay method
@@ -717,68 +926,64 @@ class TravelCog(commands.Cog):
             else:
                 raise e
 
-            rep_cog = self.bot.get_cog('ReputationCog')
-            if not rep_cog:
-                print("ReputationCog not found, granting standard access.")
-                await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
+        # FIXED: This code should NOT be inside the except block!
+        rep_cog = self.bot.get_cog('ReputationCog')
+        if not rep_cog:
+            print("ReputationCog not found, granting standard access.")
+            await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
+            return
+
+        rep_entry = self.db.execute_query("SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?", (user_id, dest_location_id), fetch='one')
+        reputation = rep_entry[0] if rep_entry else 0
+        rep_tier = rep_cog.get_reputation_tier(reputation)
+
+        access_granted = False
+        message = ""
+        view = None
+
+        # Faction Logic
+        if faction == 'government':
+            if rep_tier in ['Heroic', 'Good']:
+                access_granted = True
+                message = f"Welcome to the secure government area of {dest_name}, your reputation precedes you."
+            elif rep_tier == 'Neutral':
+                fee = (50 - reputation) * 10
+                message = f"{dest_name} is a secure government area. Due to your neutral reputation, a docking fee of **{fee:,} credits** is required."
+                view = DockingFeeView(self.bot, user_id, dest_location_id, fee, origin_location_id)
+            else: # Bad or Evil
+                message = f"🚨 **HOSTILE DETECTED!** 🚨\nYour criminal reputation is known here. {dest_name} security forces engage on sight! You are forced to retreat."
+                await self._force_retreat(user_id, origin_location_id, guild, transit_chan, message)
                 return
 
-            rep_entry = self.db.execute_query("SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?", (user_id, dest_location_id), fetch='one')
-            reputation = rep_entry[0] if rep_entry else 0
-            rep_tier = rep_cog.get_reputation_tier(reputation)
-
-            access_granted = False
-            message = ""
-            view = None
-
-            # Faction Logic
-            if faction == 'government':
-                if rep_tier in ['Heroic', 'Good']:
-                    access_granted = True
-                    message = f"Welcome to the secure government area of {dest_name}, your reputation precedes you."
-                elif rep_tier == 'Neutral':
-                    fee = (50 - reputation) * 10
-                    message = f"{dest_name} is a secure government area. Due to your neutral reputation, a docking fee of **{fee:,} credits** is required."
-                    view = DockingFeeView(self.bot, user_id, dest_location_id, fee, origin_location_id)
-                else: # Bad or Evil
-                    message = f"🚨 **HOSTILE DETECTED!** 🚨\nYour criminal reputation is known here. {dest_name} security forces engage on sight! You are forced to retreat."
-                    await self._force_retreat(user_id, origin_location_id, guild, transit_chan, message)
-                    return
-
-            elif faction == 'bandit':
-                if rep_tier in ['Evil', 'Bad']:
-                    access_granted = True
-                    message = f"Welcome to {dest_name}, friend. We don't ask questions here."
-                elif rep_tier == 'Neutral':
-                    fee = (50 + reputation) * 10
-                    message = f"{dest_name} is a haven for those outside the law. To prove you're not a spy, a 'contribution' of **{fee:,} credits** is required to dock."
-                    view = DockingFeeView(self.bot, user_id, dest_location_id, fee, origin_location_id)
-                else: # Good or Heroic
-                    message = f"⚔️ **LAWMAN DETECTED!** ⚔️\nYour kind isn't welcome at {dest_name}. The locals open fire, forcing you to retreat!"
-                    await self._force_retreat(user_id, origin_location_id, guild, transit_chan, message)
-                    return
-
-            else: # Neutral faction
+        elif faction == 'bandit':
+            if rep_tier in ['Evil', 'Bad']:
                 access_granted = True
-                message = f"You have arrived at {dest_name}."
+                message = f"Welcome to {dest_name}, friend. We don't ask questions here."
+            elif rep_tier == 'Neutral':
+                fee = (50 + reputation) * 10
+                message = f"{dest_name} is a haven for those outside the law. To prove you're not a spy, a 'contribution' of **{fee:,} credits** is required to dock."
+                view = DockingFeeView(self.bot, user_id, dest_location_id, fee, origin_location_id)
+            else: # Good or Heroic
+                message = f"⚔️ **LAWMAN DETECTED!** ⚔️\nYour kind isn't welcome at {dest_name}. The locals open fire, forcing you to retreat!"
+                await self._force_retreat(user_id, origin_location_id, guild, transit_chan, message)
+                return
 
-            # Process access
-            if access_granted:
-                await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, message)
-            elif view:
-                # Send message and wait for fee payment
-                if transit_chan: 
-                    await transit_chan.send(message, view=view)
-                decision = await view.wait_for_decision()
-                if decision == 'pay':
-                    await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, f"Docking fees paid. You are cleared to land at {dest_name}.")
-                else: # Leave
-                    await self._force_retreat(user_id, origin_location_id, guild, transit_chan, f"You refused to pay the fee and have returned to your previous location.")
+        else: # Neutral faction
+            access_granted = True
+            message = f"You have arrived at {dest_name}."
 
-        except Exception as e:
-            print(f"❌ Error in arrival access handling: {e}")
-            # Fallback to granting access without showing an error message to the user
-            await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
+        # Process access
+        if access_granted:
+            await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, message)
+        elif view:
+            # Send message and wait for fee payment
+            if transit_chan: 
+                await transit_chan.send(message, view=view)
+            decision = await view.wait_for_decision()
+            if decision == 'pay':
+                await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, f"Docking fees paid. You are cleared to land at {dest_name}.")
+            else: # Leave
+                await self._force_retreat(user_id, origin_location_id, guild, transit_chan, f"You refused to pay the fee and have returned to your previous location.")
 
     async def _grant_final_access(self, user_id: int, dest_location_id: int, guild: discord.Guild, transit_chan: discord.TextChannel, arrival_message: str = ""):
         """Finalizes arrival, updates DB and channels, and cleans up."""
@@ -794,42 +999,85 @@ class TravelCog(commands.Cog):
             if ship_id_result and ship_id_result[0]:
                 self.db.execute_query("UPDATE ships SET docked_at_location=? WHERE ship_id=?", (dest_location_id, ship_id_result[0]))
 
-            # Get member object
-            member = guild.get_member(user_id)
-            if not member:
+            # Get member object - use fetch_member to ensure we get the member even if not in cache
+            try:
+                member = await guild.fetch_member(user_id)
+            except discord.NotFound:
                 print(f"❌ Could not find member {user_id} in guild during travel completion")
                 return
+            except Exception as e:
+                print(f"❌ Error fetching member {user_id}: {e}")
+                # Try get_member as fallback
+                member = guild.get_member(user_id)
+                if not member:
+                    return
 
-            # Give channel access with proper error handling
-            success = await self.channel_mgr.give_user_location_access(member, dest_location_id)
+            # Get or create the destination channel and give user access
+            print(f"📍 Creating/accessing destination channel for {member.name} at location {dest_location_id}")
+            location_channel = await self.channel_mgr.get_or_create_location_channel(guild, dest_location_id, member)
             
-            if not success:
-                # If normal access fails, try to create the location channel manually
-                print(f"⚠️ Standard access failed for user {user_id}, attempting manual channel creation")
-                location_channel = await self.channel_mgr.get_or_create_location_channel(guild, dest_location_id, member)
-                if location_channel:
-                    try:
-                        await location_channel.set_permissions(member, read_messages=True, send_messages=True)
-                        print(f"✅ Manual access granted for user {user_id} to location {dest_location_id}")
-                    except Exception as perm_error:
-                        print(f"❌ Failed to grant manual permissions: {perm_error}")
-                else:
-                    print(f"❌ Failed to create location channel for location {dest_location_id}")
-
-            # Send arrival message regardless of channel access success
-            if transit_chan:
+            if not location_channel:
+                print(f"❌ Failed to create/get location channel for destination {dest_location_id}")
+                # Try using the channel manager's movement update as fallback
+                await self.channel_mgr.update_channel_on_player_movement(
+                    guild, user_id, old_location_id=None, new_location_id=dest_location_id
+                )
+                # Try to get the channel again
+                channel_id = self.db.execute_query(
+                    "SELECT channel_id FROM locations WHERE location_id = ?",
+                    (dest_location_id,),
+                    fetch='one'
+                )
+                if channel_id and channel_id[0]:
+                    location_channel = guild.get_channel(channel_id[0])
+            
+            if location_channel:
+                # Ensure user has permissions (sometimes get_or_create doesn't set them properly)
                 try:
-                    if not arrival_message:
-                        location_name = self.db.execute_query(
-                            "SELECT name FROM locations WHERE location_id = ?",
-                            (dest_location_id,),
-                            fetch='one'
+                    await location_channel.set_permissions(member, read_messages=True, send_messages=True)
+                except Exception as perm_error:
+                    print(f"❌ Failed to set permissions for {member.name} in {location_channel.name}: {perm_error}")
+                
+                # Send arrival announcement in destination channel
+                embed = discord.Embed(
+                    title="🚀 Arrival",
+                    description=f"{member.mention} has arrived from their journey!",
+                    color=0x00ff00
+                )
+                try:
+                    await location_channel.send(embed=embed)
+                except Exception as e:
+                    print(f"❌ Failed to send arrival embed: {e}")
+                
+                # Notify user in transit channel with link to destination
+                if transit_chan:
+                    try:
+                        if not arrival_message:
+                            location_name = self.db.execute_query(
+                                "SELECT name FROM locations WHERE location_id = ?",
+                                (dest_location_id,),
+                                fetch='one'
+                            )
+                            arrival_message = f"✅ Arrived at **{location_name[0] if location_name else 'Unknown Location'}**!"
+                        
+                        await transit_chan.send(
+                            f"{arrival_message}\n📍 You can now access {location_channel.mention}"
                         )
-                        arrival_message = f"✅ Arrived at **{location_name[0] if location_name else 'Unknown Location'}**!"
-                    
-                    await transit_chan.send(arrival_message)
-                except Exception as msg_error:
-                    print(f"❌ Failed to send arrival message: {msg_error}")
+                    except Exception as msg_error:
+                        print(f"❌ Failed to send arrival message: {msg_error}")
+            else:
+                print(f"❌ Could not create or access destination channel for location {dest_location_id}")
+                # Still notify in transit channel
+                if transit_chan:
+                    location_name = self.db.execute_query(
+                        "SELECT name FROM locations WHERE location_id = ?",
+                        (dest_location_id,),
+                        fetch='one'
+                    )
+                    await transit_chan.send(
+                        f"✅ Arrived at **{location_name[0] if location_name else 'Unknown Location'}**!\n"
+                        f"⚠️ There was an issue creating the location channel. Please contact an admin."
+                    )
                         
             # Cleanup progress tracking
             for key in list(self.active_status_messages.keys()):
@@ -839,6 +1087,8 @@ class TravelCog(commands.Cog):
                     
         except Exception as e:
             print(f"❌ Error in _grant_final_access: {e}")
+            import traceback
+            traceback.print_exc()
             # Even if there's an error, try to ensure the character location is updated
             try:
                 self.db.execute_query(
@@ -851,7 +1101,8 @@ class TravelCog(commands.Cog):
 
     async def _force_retreat(self, user_id: int, origin_location_id: int, guild: discord.Guild, transit_chan: discord.TextChannel, reason: str):
         """Forces a player to retreat back to their origin location."""
-        if transit_chan: await transit_chan.send(reason)
+        if transit_chan: 
+            await transit_chan.send(reason)
         
         # Move character back to origin
         self.db.execute_query(
@@ -859,127 +1110,175 @@ class TravelCog(commands.Cog):
             (origin_location_id, user_id)
         )
 
-        # Give channel access back to origin
-        await self.channel_mgr.give_user_location_access(guild.get_member(user_id), origin_location_id)
+        # Get member properly
+        try:
+            member = await guild.fetch_member(user_id)
+        except:
+            member = guild.get_member(user_id)
+        
+        if member:
+            # Give channel access back to origin
+            await self.channel_mgr.give_user_location_access(member, origin_location_id)
+        else:
+            print(f"❌ Could not find member {user_id} to give location access during retreat")
 
 
     @travel_group.command(name="routes", description="View available travel routes from current location")
     async def view_routes(self, interaction: discord.Interaction):
-        char_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not char_location:
-            await interaction.response.send_message("Character not found!", ephemeral=True)
-            return
+        try:
+            char_location = self.db.execute_query(
+                "SELECT current_location FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
             
-        if not char_location[0]:
-            await interaction.response.send_message("You are currently in transit. Use `/travel status` to check your journey progress.", ephemeral=True)
-            return
-        
-        current_location_id = char_location[0]
-        
-        # Get current location name
-        current_location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
-            (current_location_id,),
-            fetch='one'
-        )[0]
-        
-        routes = self.db.execute_query(
-            '''SELECT c.name, l.name, l.location_type, c.travel_time, c.danger_level, c.corridor_id
-               FROM corridors c
-               JOIN locations l ON c.destination_location = l.location_id
-               WHERE c.origin_location = ? AND c.is_active = 1
-               ORDER BY c.travel_time''',
-            (current_location_id,),
-            fetch='all'
-        )
-        
-        embed = discord.Embed(
+            if not char_location:
+                await interaction.response.send_message("Character not found!", ephemeral=True)
+                return
+                
+            if not char_location[0]:
+                await interaction.response.send_message("You are currently in transit. Use `/travel status` to check your journey progress.", ephemeral=True)
+                return
+            
+            current_location_id = char_location[0]
+            
+            # Get current location name with error checking
+            location_name_result = self.db.execute_query(
+                "SELECT name FROM locations WHERE location_id = ?",
+                (current_location_id,),
+                fetch='one'
+            )
+            
+            if not location_name_result:
+                await interaction.response.send_message("Current location not found!", ephemeral=True)
+                return
+                
+            current_location_name = location_name_result[0]
+            
+            # Use the same query pattern as travel_go (which works)
+            routes = self.db.execute_query(
+                '''SELECT c.corridor_id,
+                          c.name,
+                          l.name AS dest_name,
+                          c.travel_time,
+                          c.fuel_cost,
+                          l.location_type
+                   FROM corridors c
+                   JOIN locations l ON c.destination_location = l.location_id
+                   WHERE c.origin_location = ? AND c.is_active = 1
+                   ORDER BY c.travel_time''',
+                (current_location_id,),
+                fetch='all'
+            )
+            
+            embed = discord.Embed(
                 title="🗺️ Available Travel Routes",
                 description=f"Routes departing from **{current_location_name}**",
                 color=0x4169E1
             )
-            
-        if routes:
-            route_lines = []
-            
-            # Get ship efficiency for time estimates
-            ship_efficiency = self.db.execute_query(
-                "SELECT fuel_efficiency FROM ships WHERE owner_id = ?",
-                (interaction.user.id,), fetch='one'
-            )
-            ship_eff = ship_efficiency[0] if ship_efficiency else 5
-            efficiency_modifier = 1.6 - (ship_eff * 0.08)
-            
-            for corridor_name, dest_name, dest_type, travel_time, danger, corridor_id in routes:
-                # Apply ship efficiency to displayed time
-                actual_time = max(int(travel_time * efficiency_modifier), 60)
                 
-                # Determine route type and emoji
-                if "Approach" in corridor_name:
-                    route_emoji = "🌌"  # Local space
-                elif "Ungated" in corridor_name:
-                    route_emoji = "⭕"  # Dangerous ungated
+            if routes:
+                # Get ship efficiency for time estimates
+                ship_efficiency = self.db.execute_query(
+                    "SELECT fuel_efficiency FROM ships WHERE owner_id = ?",
+                    (interaction.user.id,), fetch='one'
+                )
+                ship_eff = ship_efficiency[0] if ship_efficiency else 5
+                efficiency_modifier = 1.6 - (ship_eff * 0.08)
+                
+                # Limit routes to prevent embed overflow and use compact format
+                max_routes_per_field = 10
+                total_routes = len(routes)
+                
+                # Process routes in chunks to fit multiple embed fields
+                route_chunks = [routes[i:i + max_routes_per_field] for i in range(0, len(routes), max_routes_per_field)]
+                
+                for chunk_idx, route_chunk in enumerate(route_chunks[:3]):  # Max 3 fields to stay under embed limits
+                    route_lines = []
+                    
+                    for corridor_id, corridor_name, dest_name, travel_time, fuel_cost, dest_type in route_chunk:
+                        # Apply ship efficiency to displayed time
+                        actual_time = max(int(travel_time * efficiency_modifier), 60)
+                        
+                        # Determine route type emoji
+                        if "Approach" in corridor_name:
+                            route_emoji = "🌌"
+                        elif "Ungated" in corridor_name:
+                            route_emoji = "⭕"
+                        else:
+                            route_emoji = "🔵"
+                        
+                        dest_emoji = {
+                            'colony': '🏭',
+                            'space_station': '🛰️',
+                            'outpost': '🛤️',
+                            'gate': '🚪'
+                        }.get(dest_type, '📍')
+                        
+                        # Format time - more compact format
+                        mins = actual_time // 60
+                        if mins >= 60:
+                            hours = mins // 60
+                            mins = mins % 60
+                            time_text = f"{hours}h{mins}m"
+                        else:
+                            time_text = f"{mins}m"
+                        
+                        # Compact format: emoji + destination + time + fuel
+                        route_lines.append(f"{route_emoji} {dest_emoji} **{dest_name}** • `{time_text}` • {fuel_cost}⚡")
+                    
+                    # Add field for this chunk
+                    field_name = "🚀 Available Departures" if chunk_idx == 0 else f"🚀 More Routes ({chunk_idx + 1})"
+                    embed.add_field(
+                        name=field_name,
+                        value="\n".join(route_lines),
+                        inline=False
+                    )
+                
+                # Show count and truncation info
+                if total_routes > 30:  # 3 fields * 10 routes each
+                    embed.add_field(
+                        name="📊 Route Summary",
+                        value=f"Showing first 30 of {total_routes} routes.\nUse `/travel go` to see all options.",
+                        inline=False
+                    )
                 else:
-                    route_emoji = "🔵"  # Safe gated
+                    embed.add_field(
+                        name="📊 Route Summary",
+                        value=f"Showing all {total_routes} available routes.",
+                        inline=False
+                    )
                 
-                dest_emoji = {
-                    'colony': '🏭',
-                    'space_station': '🛰️',
-                    'outpost': '🛤️',
-                    'gate': '🚪'
-                }.get(dest_type, '📍')
-                
-                # Format time with ship efficiency
-                mins = actual_time // 60
-                secs = actual_time % 60
-                if mins >= 60:
-                    hours = mins // 60
-                    mins = mins % 60
-                    time_text = f"{hours}h{mins}m"
-                else:
-                    time_text = f"{mins}m{secs}s" if secs > 0 else f"{mins}m"
-                
-                danger_text = "⚠️" * danger if danger > 0 else ""
-                
-                # Show both base time and ship-modified time
-                base_mins = travel_time // 60
-                if base_mins != mins:
-                    time_text += f" (base: {base_mins}m)"
-                
-                route_lines.append(f"{route_emoji} **{current_location_name}** → {dest_emoji} **{dest_name}**\n   `{time_text}` travel time {danger_text}")
-            
-            embed.add_field(
-                name="🚀 Available Departures",
-                value="\n".join(route_lines),
-                inline=False
-            )
-            
-            if ship_efficiency:
+                if ship_efficiency:
+                    embed.add_field(
+                        name="🔧 Ship Performance",
+                        value=f"Efficiency: {ship_eff}/10 • Better efficiency = faster travel",
+                        inline=True
+                    )
+            else:
                 embed.add_field(
-                    name="🔧 Ship Performance",
-                    value=f"Your ship efficiency: {ship_eff}/10\nBetter efficiency = faster travel",
+                    name="🚀 Available Departures",
+                    value="*No active routes from this location*",
                     inline=False
                 )
-        else:
+                
             embed.add_field(
-                name="🚀 Available Departures",
-                value="*No active routes from this location*",
-                inline=False
+                name="🗺️ Legend",
+                value="🌌 Local • 🔵 Gated • ⭕ Ungated",
+                inline=True
             )
             
-        embed.add_field(
-            name="💡 How to Travel",
-            value="Use `/travel go` to select a route and begin your journey.",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
+            embed.add_field(
+                name="💡 Next Step",
+                value="Use `/travel go` to depart",
+                inline=True
+            )
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            print(f"❌ Error in view_routes: {e}")
+            await interaction.response.send_message("❌ An error occurred while loading routes. Please try again.", ephemeral=True)
     
     @travel_group.command(name="emergency_exit", description="Attempt an emergency exit from a corridor (EXTREMELY DANGEROUS)")
     async def emergency_exit(self, interaction: discord.Interaction):
@@ -1964,3 +2263,317 @@ class JobCancellationConfirmView(discord.ui.View):
         
 async def setup(bot):
     await bot.add_cog(TravelCog(bot))
+    
+# Add this class to travel.py after the imports
+
+class PaginatedCorridorSelectView(discord.ui.View):
+    def __init__(self, bot, user_id: int, corridors: list, current_location_name: str, origin_id: int):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.user_id = user_id
+        self.corridors = corridors
+        self.current_location_name = current_location_name
+        self.origin_id = origin_id
+        self.current_page = 1
+        self.items_per_page = 25
+        self.max_page = (len(corridors) - 1) // self.items_per_page + 1
+        
+        self._update_buttons()
+        self._create_select()
+    
+    def _get_current_page_corridors(self):
+        """Get corridors for the current page"""
+        start_idx = (self.current_page - 1) * self.items_per_page
+        end_idx = start_idx + self.items_per_page
+        return self.corridors[start_idx:end_idx]
+    
+    def _create_select(self):
+        """Create the select menu for the current page"""
+        # Remove old select if exists
+        for item in self.children:
+            if isinstance(item, discord.ui.Select):
+                self.remove_item(item)
+        
+        # Build options for current page
+        options = []
+        page_corridors = self._get_current_page_corridors()
+        
+        for cid, cname, dest_name, ttime, cost, dest_type in page_corridors:
+            label = f"{self.current_location_name} → {dest_name}"
+            hours = ttime // 3600
+            minutes = (ttime % 3600) // 60
+            if hours:
+                time_text = f"{hours}h {minutes}m"
+            else:
+                time_text = f"{minutes}m"
+
+            # Determine travel type
+            if "Approach" in cname:
+                travel_type = "🌌 LOCAL"
+            elif dest_type == "gate":
+                travel_type = "🔵 GATED"
+            elif "Ungated" in cname:
+                travel_type = "⭕ UNGATED"
+            else:
+                travel_type = "🔵 GATED"
+
+            desc = f"via {cname} · {time_text} · {cost}⚡ fuel · {travel_type}"
+            options.append(discord.SelectOption(
+                label=label[:100],
+                description=desc[:100],
+                value=str(cid)
+            ))
+
+        select = discord.ui.Select(
+            placeholder=f"Choose your corridor (Page {self.current_page}/{self.max_page})", 
+            options=options,
+            min_values=1,
+            max_values=1,
+            row=0  # Place select at top
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
+    
+    def _update_buttons(self):
+        """Update navigation button states"""
+        # First page button
+        self.first_page.disabled = self.current_page == 1
+        
+        # Previous page button
+        self.previous_page.disabled = self.current_page == 1
+        
+        # Next page button
+        self.next_page.disabled = self.current_page == self.max_page
+        
+        # Last page button
+        self.last_page.disabled = self.current_page == self.max_page
+        
+        # Page indicator
+        self.page_indicator.label = f"Page {self.current_page}/{self.max_page}"
+    
+    async def select_callback(self, interaction: discord.Interaction):
+        """Handle corridor selection"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your travel menu!", ephemeral=True)
+            return
+        
+        # Get the travel cog and handle selection
+        travel_cog = self.bot.get_cog('TravelCog')
+        if travel_cog:
+            await travel_cog._handle_corridor_selection(
+                interaction, 
+                self.corridors, 
+                self.origin_id, 
+                self.current_location_name
+            )
+    
+    @discord.ui.button(label="◀◀", style=discord.ButtonStyle.secondary, row=1)
+    async def first_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Go to first page"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        self.current_page = 1
+        self._update_buttons()
+        self._create_select()
+        
+        embed = interaction.message.embeds[0]
+        embed.description = f"From **{self.current_location_name}** - Page {self.current_page}/{self.max_page}"
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary, row=1)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Go to previous page"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        self.current_page = max(1, self.current_page - 1)
+        self._update_buttons()
+        self._create_select()
+        
+        embed = interaction.message.embeds[0]
+        embed.description = f"From **{self.current_location_name}** - Page {self.current_page}/{self.max_page}"
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    @discord.ui.button(label="Page 1/1", style=discord.ButtonStyle.primary, disabled=True, row=1)
+    async def page_indicator(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Page indicator - non-functional"""
+        pass
+    
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary, row=1)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Go to next page"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        self.current_page = min(self.max_page, self.current_page + 1)
+        self._update_buttons()
+        self._create_select()
+        
+        embed = interaction.message.embeds[0]
+        embed.description = f"From **{self.current_location_name}** - Page {self.current_page}/{self.max_page}"
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    @discord.ui.button(label="▶▶", style=discord.ButtonStyle.secondary, row=1)
+    async def last_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Go to last page"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        self.current_page = self.max_page
+        self._update_buttons()
+        self._create_select()
+        
+        embed = interaction.message.embeds[0]
+        embed.description = f"From **{self.current_location_name}** - Page {self.current_page}/{self.max_page}"
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    @discord.ui.button(label="Search", style=discord.ButtonStyle.success, emoji="🔍", row=2)
+    async def search_routes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open search modal for filtering routes"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = CorridorSearchModal(self)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌", row=2)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Cancel travel selection"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        await interaction.response.edit_message(
+            content="Travel selection cancelled.",
+            embed=None,
+            view=None
+        )
+    
+    def filter_corridors(self, search_term: str):
+        """Filter corridors based on search term"""
+        search_lower = search_term.lower()
+        filtered = []
+        
+        for corridor in self.corridors:
+            cid, cname, dest_name, ttime, cost, dest_type = corridor
+            # Search in destination name and corridor name
+            if (search_lower in dest_name.lower() or 
+                search_lower in cname.lower() or
+                search_lower in dest_type.lower()):
+                filtered.append(corridor)
+        
+        return filtered
+
+
+class CorridorSearchModal(discord.ui.Modal):
+    def __init__(self, parent_view: PaginatedCorridorSelectView):
+        super().__init__(title="Search Routes")
+        self.parent_view = parent_view
+        
+        self.search_input = discord.ui.TextInput(
+            label="Search Term",
+            placeholder="Enter destination name, corridor type, or keyword...",
+            max_length=100,
+            required=True
+        )
+        self.add_item(self.search_input)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        search_term = self.search_input.value
+        
+        # Filter corridors
+        filtered = self.parent_view.filter_corridors(search_term)
+        
+        if not filtered:
+            await interaction.response.send_message(
+                f"No routes found matching '{search_term}'.",
+                ephemeral=True
+            )
+            return
+        
+        # Update the view with filtered results
+        self.parent_view.corridors = filtered
+        self.parent_view.current_page = 1
+        self.parent_view.max_page = (len(filtered) - 1) // self.parent_view.items_per_page + 1
+        self.parent_view._update_buttons()
+        self.parent_view._create_select()
+        
+        embed = discord.Embed(
+            title="🔍 Search Results",
+            description=f"Found {len(filtered)} routes matching '{search_term}' - Page 1/{self.parent_view.max_page}",
+            color=0x00ff00
+        )
+        embed.add_field(
+            name="Search Active",
+            value=f"Showing filtered results. The search button will clear the filter.",
+            inline=False
+        )
+        embed.set_footer(text="Select a route from the dropdown menu")
+        
+        # Change search button to clear filter
+        for item in self.parent_view.children:
+            if isinstance(item, discord.ui.Button) and item.label == "Search":
+                item.label = "Clear Filter"
+                item.emoji = "🔄"
+                item.style = discord.ButtonStyle.secondary
+                
+                async def clear_filter(inter: discord.Interaction):
+                    if inter.user.id != self.parent_view.user_id:
+                        await inter.response.send_message("This is not your panel!", ephemeral=True)
+                        return
+                    
+                    # Restore original corridors
+                    travel_cog = self.parent_view.bot.get_cog('TravelCog')
+                    if travel_cog:
+                        original_corridors = travel_cog.db.execute_query(
+                            '''
+                            SELECT c.corridor_id,
+                                   c.name,
+                                   l.name AS dest_name,
+                                   c.travel_time,
+                                   c.fuel_cost,
+                                   l.location_type
+                              FROM corridors c
+                              JOIN locations l ON c.destination_location = l.location_id
+                             WHERE c.origin_location = ? AND c.is_active = 1
+                            ''',
+                            (self.parent_view.origin_id,),
+                            fetch='all'
+                        )
+                        
+                        self.parent_view.corridors = original_corridors
+                        self.parent_view.current_page = 1
+                        self.parent_view.max_page = (len(original_corridors) - 1) // self.parent_view.items_per_page + 1
+                        self.parent_view._update_buttons()
+                        self.parent_view._create_select()
+                        
+                        # Restore search button
+                        item.label = "Search"
+                        item.emoji = "🔍"
+                        item.style = discord.ButtonStyle.success
+                        item.callback = self.parent_view.search_routes
+                        
+                        embed = discord.Embed(
+                            title="🚀 Select Travel Route",
+                            description=f"From **{self.parent_view.current_location_name}** - Page 1/{self.parent_view.max_page}",
+                            color=0x4169e1
+                        )
+                        embed.add_field(
+                            name="Available Routes",
+                            value=f"{len(original_corridors)} corridors available. Use the navigation buttons to browse.",
+                            inline=False
+                        )
+                        embed.set_footer(text="Select a route from the dropdown menu")
+                        
+                        await inter.response.edit_message(embed=embed, view=self.parent_view)
+                
+                item.callback = clear_filter
+                break
+        
+        await interaction.response.edit_message(embed=embed, view=self.parent_view)
