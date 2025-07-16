@@ -20,6 +20,28 @@ import re
 from threading import Thread
 import logging
 
+class LoginRequest(BaseModel):
+    discord_id: str
+    password: str
+
+class CommandRequest(BaseModel):
+    command: str
+    args: list = []
+
+class MessageRequest(BaseModel):
+    content: str
+    location_id: Optional[int] = None
+
+class WebSession:
+    def __init__(self, session_id: str, user_id: int, character_name: str, location_id: int):
+        self.session_id = session_id
+        self.user_id = user_id
+        self.character_name = character_name
+        self.current_location = location_id
+        self.websocket = None
+        self.created_at = datetime.now()
+        self.last_activity = datetime.now()
+        
 # Suppress FastAPI/Uvicorn logs
 logging.getLogger("uvicorn").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -241,8 +263,9 @@ class WebClient(commands.Cog):
             if session_id not in self.sessions:
                 raise HTTPException(status_code=401, detail="Unauthorized")
             
+            # Use explicit column names to avoid index confusion
             location = self.db.execute_query(
-                """SELECT l.*, 
+                """SELECT l.location_id, l.name, l.description, l.location_type, 
                    (SELECT COUNT(*) FROM characters WHERE current_location = l.location_id AND is_logged_in = 1) as player_count
                    FROM locations l WHERE l.location_id = ?""",
                 (location_id,),
@@ -259,13 +282,16 @@ class WebClient(commands.Cog):
                 fetch='all'
             )
             
+            # Extract values using proper indices
+            loc_id, loc_name, loc_desc, loc_type, player_count = location
+            
             return {
                 "location": {
-                    "id": location[0],
-                    "name": location[1],
-                    "description": location[2],
-                    "type": location[3],
-                    "player_count": location[-1],
+                    "id": loc_id,
+                    "name": loc_name,
+                    "description": loc_desc,
+                    "type": loc_type,  # This will now have the actual location_type value
+                    "player_count": player_count,
                     "players": [p[0] for p in players]
                 }
             }
@@ -336,6 +362,16 @@ class WebClient(commands.Cog):
                     "location_id": session.current_location
                 })
                 
+                # Send initial location info
+                if session.current_location:
+                    location_info = await self._get_location_info(session.current_location)
+                    if location_info:
+                        await websocket.send_json({
+                            "type": "location_update",
+                            "location": location_info["location"],
+                            "players": location_info["location"]["players"]
+                        })
+                
                 # Keep connection alive
                 while True:
                     try:
@@ -374,20 +410,33 @@ class WebClient(commands.Cog):
         except:
             return False
     
-    @tasks.loop(seconds=1)
-    async def process_messages(self):
-        """Process queued messages and commands"""
-        try:
-            while not self.message_queue.empty():
-                msg_data = await self.message_queue.get()
-                
-                if msg_data['type'] == 'command':
-                    await self._process_command(msg_data)
-                elif msg_data['type'] == 'message':
-                    await self._process_message(msg_data)
-                    
-        except Exception as e:
-            print(f"Error processing messages: {e}")
+    async def _process_message(self, data: dict):
+        """Process a regular message from web client"""
+        user_id = data['user_id']
+        content = data['content']
+        location_id = data['location_id']
+        
+        # Get location channel
+        location_data = self.db.execute_query(
+            "SELECT channel_id, name FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_data or not location_data[0]:
+            return
+        
+        channel_id, location_name = location_data
+        channel = self.bot.get_channel(channel_id)
+        
+        if channel:
+            # Get character name
+            char_name = self.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (user_id,),
+                fetch='one'
+            )
+            
     
     async def _process_command(self, data: dict):
         """Process a command from web client"""
@@ -1371,15 +1420,119 @@ body {
 
 /* Location Details */
 .location-type {
-    font-size: 0.8rem;
     color: var(--accent-color);
+    font-size: 0.9rem;
     text-transform: uppercase;
-    margin-bottom: 0.5rem;
+    margin-bottom: 8px;
 }
 
 .location-description {
-    color: var(--text-primary);
+    color: var(--text-secondary);
+    font-size: 0.95rem;
     line-height: 1.4;
+}
+
+/* Player List */
+.player-item {
+    padding: 8px 12px;
+    background-color: rgba(0, 255, 255, 0.1);
+    border-left: 2px solid var(--accent-color);
+    margin-bottom: 4px;
+    transition: background-color 0.2s;
+}
+
+.player-item:hover {
+    background-color: rgba(0, 255, 255, 0.2);
+}
+
+.no-players {
+    color: var(--text-secondary);
+    font-style: italic;
+    text-align: center;
+    padding: 20px;
+}
+
+/* Message Styles */
+.message {
+    padding: 10px 15px;
+    margin-bottom: 8px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+}
+
+.message-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.message-author {
+    color: var(--accent-color);
+    font-weight: 600;
+}
+
+.message-time {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+}
+
+.message-content {
+    color: var(--text-primary);
+}
+
+/* System Messages */
+.system-message {
+    padding: 8px 15px;
+    margin-bottom: 8px;
+    border-left: 3px solid var(--accent-color);
+    background-color: rgba(0, 255, 255, 0.1);
+}
+
+.system-message.error {
+    border-left-color: #ff4444;
+    background-color: rgba(255, 68, 68, 0.1);
+    color: #ff6666;
+}
+
+.system-prefix {
+    font-weight: 600;
+    color: var(--accent-color);
+}
+
+/* Embed Messages */
+.embed-message {
+    background-color: rgba(0, 255, 255, 0.05);
+    border-left: 4px solid var(--accent-color);
+    padding: 15px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+}
+
+.embed-title {
+    color: var(--accent-color);
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.embed-description {
+    color: var(--text-primary);
+    margin-bottom: 12px;
+}
+
+.embed-fields {
+    display: grid;
+    gap: 10px;
+}
+
+.embed-field-name {
+    color: var(--accent-color);
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.embed-field-value {
+    color: var(--text-secondary);
 }
 
 /* Scrollbar Styling */
@@ -1406,53 +1559,51 @@ body {
     def _create_client_javascript(self):
         """Create the client JavaScript file"""
         js_content = '''// Galaxy Web Client JavaScript
+// Galaxy Web Client - Fixed Version
 class GalaxyWebClient {
     constructor() {
-        this.ws = null;
         this.sessionId = localStorage.getItem('galaxySessionId');
-        this.characterName = null;
+        this.ws = null;
+        this.characterName = '';
         this.currentLocation = null;
+        this.commands = [];
         
-        this.init();
-    }
-    
-    init() {
-        // Check authentication on load
+        this.initializeEventListeners();
+        
+        // Check if already authenticated
         if (this.sessionId) {
             this.checkAuth();
         }
-        
-        // Set up event listeners
-        this.setupEventListeners();
     }
     
-    setupEventListeners() {
+    initializeEventListeners() {
         // Login form
         const loginForm = document.getElementById('login-form');
         if (loginForm) {
             loginForm.addEventListener('submit', (e) => this.handleLogin(e));
         }
         
-        // Message input
+        // Message input and send button
         const messageInput = document.getElementById('message-input');
         const sendButton = document.getElementById('send-button');
         
         if (messageInput) {
             messageInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    this.sendMessage();
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    this.handleSendMessage();
                 }
             });
         }
         
         if (sendButton) {
-            sendButton.addEventListener('click', () => this.sendMessage());
+            sendButton.addEventListener('click', () => this.handleSendMessage());
         }
         
         // Logout button
         const logoutBtn = document.getElementById('btn-logout');
         if (logoutBtn) {
-            logoutBtn.addEventListener('click', () => this.logout());
+            logoutBtn.addEventListener('click', () => this.handleLogout());
         }
         
         // Commands button
@@ -1525,7 +1676,9 @@ class GalaxyWebClient {
                 
                 this.showGameScreen();
                 this.connectWebSocket();
-                this.loadLocationInfo();
+                
+                // Load location info after connection
+                setTimeout(() => this.loadLocationInfo(), 500);
             } else {
                 errorDiv.textContent = data.detail || 'Login failed';
                 errorDiv.classList.add('show');
@@ -1552,6 +1705,9 @@ class GalaxyWebClient {
         this.ws.onopen = () => {
             console.log('Connected to game server');
             this.addSystemMessage('Connected to galactic network');
+            
+            // Load initial location info
+            this.loadLocationInfo();
         };
         
         this.ws.onmessage = (event) => {
@@ -1589,183 +1745,55 @@ class GalaxyWebClient {
     }
     
     handleWebSocketMessage(data) {
-        switch (data.type) {
+        switch(data.type) {
+            case 'connected':
+                this.characterName = data.character;
+                this.currentLocation = data.location_id;
+                document.getElementById('character-name').textContent = this.characterName;
+                break;
+                
             case 'message':
-                // Regular or bot messages
-                if (data.embeds && data.embeds.length > 0) {
-                    this.displayEmbedsMessage(data);
-                } else {
-                    this.addMessage(data.author, data.content, data.timestamp);
-                }
+                this.addMessage(data.author, data.content, data.timestamp);
                 break;
-            
-            case 'ephemeral':
-                // Private messages just for this user
-                this.displayEphemeralMessage(data);
-                break;
-            
+                
             case 'system':
                 this.addSystemMessage(data.content, data.level);
                 break;
-            
-            // ... other cases ...
-        }
-    }
-
-    displayEmbedsMessage(data) {
-        const messageArea = document.getElementById('message-area');
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'message embed-container';
-        
-        let html = `
-            <div class="message-header">
-                <span class="message-author">${data.author}</span>
-                <span class="message-time">${new Date(data.timestamp).toLocaleTimeString()}</span>
-            </div>
-        `;
-        
-        if (data.content) {
-            html += `<div class="message-content">${data.content}</div>`;
-        }
-        
-        // Render each embed
-        data.embeds.forEach(embed => {
-            html += '<div class="discord-embed" style="';
-            if (embed.color) {
-                const color = '#' + embed.color.toString(16).padStart(6, '0');
-                html += `border-left: 4px solid ${color};`;
-            }
-            html += '">';
-            
-            if (embed.author && embed.author.name) {
-                html += `<div class="embed-author">`;
-                if (embed.author.icon_url) {
-                    html += `<img src="${embed.author.icon_url}" class="author-icon">`;
-                }
-                html += `<span>${embed.author.name}</span></div>`;
-            }
-            
-            if (embed.title) {
-                html += `<div class="embed-title">${embed.title}</div>`;
-            }
-            
-            if (embed.description) {
-                html += `<div class="embed-description">${embed.description}</div>`;
-            }
-            
-            if (embed.fields && embed.fields.length > 0) {
-                html += '<div class="embed-fields">';
-                embed.fields.forEach(field => {
-                    html += `
-                        <div class="embed-field ${field.inline ? 'inline' : ''}">
-                            <div class="field-name">${field.name}</div>
-                            <div class="field-value">${field.value}</div>
-                        </div>
-                    `;
-                });
-                html += '</div>';
-            }
-            
-            if (embed.image) {
-                html += `<img src="${embed.image}" class="embed-image">`;
-            }
-            
-            if (embed.footer) {
-                html += `<div class="embed-footer">${embed.footer}</div>`;
-            }
-            
-            html += '</div>';
-        });
-        
-        messageDiv.innerHTML = html;
-        messageArea.appendChild(messageDiv);
-        messageArea.scrollTop = messageArea.scrollHeight;
-    }
-
-    displayEphemeralMessage(data) {
-        const messageArea = document.getElementById('message-area');
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'message ephemeral-message';
-        
-        let html = `
-            <div class="ephemeral-indicator">🔒 Only visible to you</div>
-        `;
-        
-        if (data.content) {
-            html += `<div class="message-content">${data.content}</div>`;
-        }
-        
-        if (data.embed) {
-            // Render the embed similar to above
-            html += this.renderEmbed(data.embed);
-        }
-        
-        messageDiv.innerHTML = html;
-        messageArea.appendChild(messageDiv);
-        messageArea.scrollTop = messageArea.scrollHeight;
-    }
-    
-    async sendMessage() {
-        const input = document.getElementById('message-input');
-        const content = input.value.trim();
-        
-        if (!content) return;
-        
-        // Check if it's a command
-        if (content.startsWith('/')) {
-            const parts = content.substring(1).split(' ');
-            const command = parts[0];
-            const args = parts.slice(1);
-            
-            await this.executeCommand(command, args);
-        } else {
-            // Regular message
-            try {
-                await fetch('/api/message', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        content: content,
-                        location_id: this.currentLocation,
-                        session_id: this.sessionId
-                    })
-                });
                 
-                // Clear input
-                input.value = '';
-            } catch (error) {
-                this.addSystemMessage('Failed to send message', 'error');
-            }
-        }
-    }
-    
-    async executeCommand(command, args = []) {
-        try {
-            const response = await fetch(`/api/command?session_id=${this.sessionId}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    command: command,
-                    args: args
-                })
-            });
-            
-            const data = await response.json();
-            
-            if (!data.success) {
-                this.addSystemMessage(data.message || 'Command failed', 'error');
-            }
-        } catch (error) {
-            this.addSystemMessage('Failed to execute command', 'error');
+            case 'location_update':
+                this.updateLocation(data.location);
+                this.updatePlayersList(data.players);
+                break;
+                
+            case 'player_joined':
+                this.addSystemMessage(`${data.player} entered the area`);
+                this.loadLocationInfo();
+                break;
+                
+            case 'player_left':
+                this.addSystemMessage(`${data.player} left the area`);
+                this.loadLocationInfo();
+                break;
+                
+            case 'command_response':
+                this.handleCommandResponse(data);
+                break;
+                
+            case 'error':
+                this.addSystemMessage(data.message, 'error');
+                break;
+                
+            case 'pong':
+                // Keep-alive response
+                break;
+                
+            default:
+                console.log('Unknown message type:', data.type);
         }
     }
     
     async loadLocationInfo() {
-        if (!this.currentLocation) return;
+        if (!this.currentLocation || !this.sessionId) return;
         
         try {
             const response = await fetch(`/api/location/${this.currentLocation}?session_id=${this.sessionId}`);
@@ -1803,6 +1831,68 @@ class GalaxyWebClient {
         }
     }
     
+    async handleSendMessage() {
+        const input = document.getElementById('message-input');
+        const content = input.value.trim();
+        
+        if (!content) return;
+        
+        // Check if it's a command
+        if (content.startsWith('/')) {
+            const parts = content.substring(1).split(' ');
+            const command = parts[0];
+            const args = parts.slice(1);
+            
+            await this.executeCommand(command, args);
+        } else {
+            // Regular message
+            try {
+                const response = await fetch(`/api/message?session_id=${this.sessionId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        content: content,
+                        location_id: this.currentLocation
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to send message');
+                }
+                
+                // Clear input
+                input.value = '';
+            } catch (error) {
+                this.addSystemMessage('Failed to send message', 'error');
+            }
+        }
+    }
+    
+    async executeCommand(command, args = []) {
+        try {
+            const response = await fetch(`/api/command?session_id=${this.sessionId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    command: command,
+                    args: args
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (!data.success) {
+                this.addSystemMessage(data.message || 'Command failed', 'error');
+            }
+        } catch (error) {
+            this.addSystemMessage('Failed to execute command', 'error');
+        }
+    }
+    
     addMessage(author, content, timestamp) {
         const messageArea = document.getElementById('message-area');
         const messageDiv = document.createElement('div');
@@ -1815,7 +1905,7 @@ class GalaxyWebClient {
                 <span class="message-author">${author}</span>
                 <span class="message-time">${time}</span>
             </div>
-            <div class="message-content">${content}</div>
+            <div class="message-content">${this.escapeHtml(content)}</div>
         `;
         
         messageArea.appendChild(messageDiv);
@@ -1825,10 +1915,10 @@ class GalaxyWebClient {
     addSystemMessage(content, level = 'info') {
         const messageArea = document.getElementById('message-area');
         const messageDiv = document.createElement('div');
-        messageDiv.className = `message system-message ${level}-message`;
+        messageDiv.className = `system-message ${level}`;
         
         messageDiv.innerHTML = `
-            <div class="message-content">${content}</div>
+            <span class="system-prefix">SYSTEM:</span> ${content}
         `;
         
         messageArea.appendChild(messageDiv);
@@ -1836,60 +1926,59 @@ class GalaxyWebClient {
     }
     
     handleCommandResponse(data) {
-        if (data.embed) {
-            // Display embed-style response
-            this.displayEmbed(data.embed);
+        if (data.embeds && data.embeds.length > 0) {
+            data.embeds.forEach(embed => {
+                this.addEmbedMessage(embed);
+            });
         } else if (data.content) {
             this.addSystemMessage(data.content);
         }
     }
     
-    displayEmbed(embed) {
+    addEmbedMessage(embed) {
         const messageArea = document.getElementById('message-area');
         const embedDiv = document.createElement('div');
-        embedDiv.className = 'message embed-message';
+        embedDiv.className = 'embed-message';
         
-        let embedHtml = '<div class="embed">';
-        
+        let html = '';
         if (embed.title) {
-            embedHtml += `<div class="embed-title">${embed.title}</div>`;
+            html += `<div class="embed-title">${embed.title}</div>`;
         }
-        
         if (embed.description) {
-            embedHtml += `<div class="embed-description">${embed.description}</div>`;
+            html += `<div class="embed-description">${embed.description}</div>`;
         }
-        
-        if (embed.fields) {
-            embedHtml += '<div class="embed-fields">';
+        if (embed.fields && embed.fields.length > 0) {
+            html += '<div class="embed-fields">';
             embed.fields.forEach(field => {
-                embedHtml += `
+                html += `
                     <div class="embed-field">
-                        <div class="field-name">${field.name}</div>
-                        <div class="field-value">${field.value}</div>
+                        <div class="embed-field-name">${field.name}</div>
+                        <div class="embed-field-value">${field.value}</div>
                     </div>
                 `;
             });
-            embedHtml += '</div>';
+            html += '</div>';
         }
         
-        embedHtml += '</div>';
-        embedDiv.innerHTML = embedHtml;
-        
+        embedDiv.innerHTML = html;
         messageArea.appendChild(embedDiv);
         messageArea.scrollTop = messageArea.scrollHeight;
     }
     
     showCommandsModal() {
-        document.getElementById('command-modal').classList.add('show');
+        // This would show a modal with available commands
+        // Implementation depends on your modal system
+        this.addSystemMessage('Available commands: /status, /here, /inventory, /travel, /look, /say, /emote');
     }
     
     closeModal() {
+        // Close any open modals
         document.querySelectorAll('.modal').forEach(modal => {
-            modal.classList.remove('show');
+            modal.classList.remove('active');
         });
     }
     
-    async logout() {
+    async handleLogout() {
         try {
             await fetch('/api/logout', {
                 method: 'POST',
@@ -1920,6 +2009,12 @@ class GalaxyWebClient {
         // Clear form
         document.getElementById('login-form').reset();
         document.getElementById('login-error').classList.remove('show');
+    }
+    
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 }
 
@@ -2142,6 +2237,7 @@ document.addEventListener('DOMContentLoaded', () => {
             )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        
     async def sync_discord_message(self, message: discord.Message, message_type: str = "normal"):
         """Sync a Discord message to web clients at the same location"""
         
@@ -2194,22 +2290,206 @@ document.addEventListener('DOMContentLoaded', () => {
             if session.current_location == location_id and session.websocket:
                 try:
                     await session.websocket.send_json(message_data)
-                except Exception as e:
-                    print(f"Failed to sync message to web client {session.session_id}: {e}")
-
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        """Enhanced message listener with full sync support"""
+                except:
+                    pass
+                    
+    async def _process_message(self, data: dict):
+        """Process a regular message from web client"""
+        user_id = data['user_id']
+        content = data['content']
+        location_id = data['location_id']
         
-        # Skip bot messages unless they're game responses
-        if message.author.bot:
-            # Check if it's a game bot response (has embeds or specific format)
-            if message.embeds or (message.author.id == self.bot.user.id):
-                await self.sync_discord_message(message, "bot_response")
+        # Get location channel
+        location_data = self.db.execute_query(
+            "SELECT channel_id, name FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_data or not location_data[0]:
             return
         
-        # Sync player messages
-        await self.sync_discord_message(message, "player")
+        channel_id, location_name = location_data
+        channel = self.bot.get_channel(channel_id)
+        
+        if channel:
+            # Get character name
+            char_name = self.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (user_id,),
+                fetch='one'
+            )
+            
+            if char_name:
+                # Send message to Discord channel
+                await channel.send(f"**{char_name[0]}** (via web): {content}")
+
+    async def _process_command(self, data: dict):
+        """Process a command from web client"""
+        user_id = data['user_id']
+        command = data['command']
+        args = data['args']
+        session_id = data.get('session_id')
+        
+        # Get user and their current location
+        user = self.bot.get_user(user_id)
+        if not user:
+            return
+        
+        # Find appropriate channel for command execution
+        char_data = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (user_id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            return
+        
+        location_id = char_data[0]
+        location_data = self.db.execute_query(
+            "SELECT channel_id FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_data or not location_data[0]:
+            # Send error back to web client
+            if user_id in self.user_websockets:
+                await self.user_websockets[user_id].send_json({
+                    "type": "error",
+                    "message": "Cannot execute commands in locations without Discord channels"
+                })
+            return
+        
+        channel_id = location_data[0]
+        channel = self.bot.get_channel(channel_id)
+        
+        if not channel:
+            return
+        
+        # Build command string
+        full_command = f"/{command}"
+        if args:
+            full_command += " " + " ".join(args)
+        
+        try:
+            # Send command notification to channel
+            await channel.send(f"**Web Client Command**: {user.mention} executed `{full_command}`")
+            
+            # Get the appropriate cog and command
+            # This is a simplified approach - you'll need to enhance based on your command structure
+            command_mapping = {
+                'status': ('CharacterCog', 'status'),
+                'here': ('LocationCog', 'here'),
+                'inventory': ('InventoryCog', 'inventory'),
+                'travel': ('TravelCog', 'travel'),
+                'look': ('LocationCog', 'look'),
+                'say': ('CommunicationCog', 'say'),
+                'emote': ('CommunicationCog', 'emote'),
+                # Add more command mappings as needed
+            }
+            
+            if command in command_mapping:
+                cog_name, method_name = command_mapping[command]
+                cog = self.bot.get_cog(cog_name)
+                
+                if cog:
+                    # Create a fake context for command execution
+                    # This is a basic implementation - enhance as needed
+                    result_embed = await self._execute_command_for_user(
+                        cog, method_name, user, channel, args
+                    )
+                    
+                    # Send result back to web client
+                    if result_embed and user_id in self.user_websockets:
+                        await self.user_websockets[user_id].send_json({
+                            "type": "command_response",
+                            "embeds": [{
+                                "title": result_embed.title,
+                                "description": result_embed.description,
+                                "fields": [
+                                    {"name": f.name, "value": f.value, "inline": f.inline}
+                                    for f in result_embed.fields
+                                ],
+                                "color": result_embed.color.value if result_embed.color else None
+                            }]
+                        })
+            else:
+                # Unknown command
+                if user_id in self.user_websockets:
+                    await self.user_websockets[user_id].send_json({
+                        "type": "error",
+                        "message": f"Unknown command: {command}"
+                    })
+                
+        except Exception as e:
+            print(f"Error executing command: {e}")
+            if user_id in self.user_websockets:
+                await self.user_websockets[user_id].send_json({
+                    "type": "error",
+                    "message": f"Command execution failed: {str(e)}"
+                })
+
+    async def _execute_command_for_user(self, cog, method_name, user, channel, args):
+        """Execute a command on behalf of a web client user"""
+        # This is a placeholder - implement based on your command structure
+        # You may need to create a custom context or interaction object
+        # For now, return a simple embed
+        
+        embed = discord.Embed(
+            title=f"Command: /{method_name}",
+            description=f"Executed by {user.mention} via web client",
+            color=0x00ff00
+        )
+        
+        # Add basic implementation for common commands
+        if method_name == 'status':
+            char_data = self.db.execute_query(
+                """SELECT name, health, energy, current_location 
+                   FROM characters WHERE user_id = ?""",
+                (user.id,),
+                fetch='one'
+            )
+            if char_data:
+                embed.add_field(name="Character", value=char_data[0], inline=True)
+                embed.add_field(name="Health", value=f"{char_data[1]}/100", inline=True)
+                embed.add_field(name="Energy", value=f"{char_data[2]}/100", inline=True)
+        
+        return embed
+
+    
+
+    async def _get_location_info(self, location_id: int):
+        """Get location information"""
+        location = self.db.execute_query(
+            """SELECT l.location_id, l.name, l.description, l.location_type, 
+               (SELECT COUNT(*) FROM characters WHERE current_location = l.location_id AND is_logged_in = 1) as player_count
+               FROM locations l WHERE l.location_id = ?""",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location:
+            return None
+        
+        # Get players at location
+        players = self.db.execute_query(
+            "SELECT name FROM characters WHERE current_location = ? AND is_logged_in = 1",
+            (location_id,),
+            fetch='all'
+        )
+        
+        return {
+            "location": {
+                "id": location[0],
+                "name": location[1],
+                "description": location[2],
+                "type": location[3],
+                "player_count": location[-1],
+                "players": [p[0] for p in players]
+            }
+        }
 
     async def sync_interaction_response(self, interaction: discord.Interaction, 
                                        content: str = None, embed: discord.Embed = None, 
