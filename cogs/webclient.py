@@ -2397,7 +2397,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     "message": f"Command execution failed: {str(e)}"
                 })
 
-
+#
     async def _execute_web_command(self, cog, method_name, user, location_id, args, character_name):
         """Execute a command for web client without requiring Discord interaction"""
         
@@ -2416,16 +2416,17 @@ document.addEventListener('DOMContentLoaded', () => {
         # Handle different commands
         try:
             if method_name == 'status':
+                # FIXED: Using correct column names
                 char_data = self.db.execute_query(
-                    """SELECT name, health, energy, credits, current_location,
-                       corruption_level, combat_rating, reputation
+                    """SELECT name, hp, max_hp, money, current_location,
+                       combat, engineering, navigation, medical
                        FROM characters WHERE user_id = ?""",
                     (user.id,),
                     fetch='one'
                 )
                 
                 if char_data:
-                    name, health, energy, credits, loc_id, corruption, combat, rep = char_data
+                    name, hp, max_hp, money, loc_id, combat, engineering, navigation, medical = char_data
                     
                     # Get location name
                     loc_name = self.db.execute_query(
@@ -2434,34 +2435,44 @@ document.addEventListener('DOMContentLoaded', () => {
                         fetch='one'
                     )
                     
+                    # Get reputation if needed (from separate table)
+                    reputation_data = self.db.execute_query(
+                        """SELECT SUM(reputation) FROM character_reputation 
+                           WHERE user_id = ?""",
+                        (user.id,),
+                        fetch='one'
+                    )
+                    total_reputation = reputation_data[0] if reputation_data and reputation_data[0] else 0
+                    
                     return {
                         "type": "command_response",
                         "embeds": [{
                             "title": f"📊 {name}'s Status",
                             "fields": [
-                                {"name": "Health", "value": f"{health}/100", "inline": True},
-                                {"name": "Energy", "value": f"{energy}/100", "inline": True},
-                                {"name": "Credits", "value": f"{credits:,} cr", "inline": True},
+                                {"name": "Health", "value": f"{hp}/{max_hp}", "inline": True},
+                                {"name": "Credits", "value": f"{money:,} cr", "inline": True},
                                 {"name": "Location", "value": loc_name[0] if loc_name else "Unknown", "inline": True},
-                                {"name": "Combat Rating", "value": str(combat), "inline": True},
-                                {"name": "Reputation", "value": str(rep), "inline": True}
+                                {"name": "Combat", "value": str(combat), "inline": True},
+                                {"name": "Engineering", "value": str(engineering), "inline": True},
+                                {"name": "Navigation", "value": str(navigation), "inline": True},
+                                {"name": "Medical", "value": str(medical), "inline": True},
+                                {"name": "Total Reputation", "value": str(total_reputation), "inline": True}
                             ],
                             "color": 0x00ff00
                         }]
                     }
                     
             elif method_name == 'here':
-                # Get location details
+                # Get location details - most columns don't exist, using basic query
                 location = self.db.execute_query(
-                    """SELECT name, description, location_type, wealth_level, population,
-                       has_shops, has_jobs, has_medical, has_repairs, has_fuel
+                    """SELECT name, description, location_type, wealth_level, population
                        FROM locations WHERE location_id = ?""",
                     (location_id,),
                     fetch='one'
                 )
                 
                 if location:
-                    name, desc, loc_type, wealth, pop, shops, jobs, med, repair, fuel = location
+                    name, desc, loc_type, wealth, pop = location
                     
                     # Get players here
                     players = self.db.execute_query(
@@ -2470,18 +2481,30 @@ document.addEventListener('DOMContentLoaded', () => {
                         fetch='all'
                     )
                     
-                    # Build services list
+                    # Check for shops
+                    has_shops = self.db.execute_query(
+                        "SELECT COUNT(*) FROM shop_items WHERE location_id = ? AND stock > 0",
+                        (location_id,),
+                        fetch='one'
+                    )[0] > 0
+                    
+                    # Check for jobs
+                    has_jobs = self.db.execute_query(
+                        "SELECT COUNT(*) FROM jobs WHERE location_id = ? AND is_taken = 0",
+                        (location_id,),
+                        fetch='one'
+                    )[0] > 0
+                    
+                    # Build services list based on actual data
                     services = []
-                    if shops: services.append("🛒 Shopping")
-                    if jobs: services.append("💼 Jobs")
-                    if med: services.append("🏥 Medical")
-                    if repair: services.append("🔧 Repairs")
-                    if fuel: services.append("⛽ Fuel")
+                    if has_shops: services.append("🛒 Shopping")
+                    if has_jobs: services.append("💼 Jobs")
+                    # Medical/Repairs/Fuel aren't stored as location properties in your schema
                     
                     fields = [
                         {"name": "Type", "value": loc_type.replace('_', ' ').title(), "inline": True},
                         {"name": "Wealth", "value": f"{wealth}/10", "inline": True},
-                        {"name": "Population", "value": f"{pop:,}", "inline": True}
+                        {"name": "Population", "value": f"{pop:,}" if pop else "Unknown", "inline": True}
                     ]
                     
                     if services:
@@ -2495,20 +2518,19 @@ document.addEventListener('DOMContentLoaded', () => {
                         "type": "command_response",
                         "embeds": [{
                             "title": f"📍 {name}",
-                            "description": desc,
+                            "description": desc or "No description available",
                             "fields": fields,
                             "color": 0x4169E1
                         }]
                     }
                     
             elif method_name == 'inventory':
-                # Get inventory items
+                # Get inventory items - fixed query for your schema
                 items = self.db.execute_query(
-                    """SELECT i.name, ii.quantity, i.item_type, i.value
-                       FROM inventory_items ii
-                       JOIN items i ON ii.item_id = i.item_id
-                       WHERE ii.user_id = ?
-                       ORDER BY i.item_type, i.name""",
+                    """SELECT item_name, quantity, item_type, value
+                       FROM inventory
+                       WHERE owner_id = ?
+                       ORDER BY item_type, item_name""",
                     (user.id,),
                     fetch='all'
                 )
@@ -2587,7 +2609,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 "type": "error",
                 "message": f"Error executing {method_name}: {str(e)}"
             }
-
     
 
     async def _get_location_info(self, location_id: int):
