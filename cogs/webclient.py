@@ -535,45 +535,7 @@ class WebClient(commands.Cog):
                     "type": "error",
                     "message": f"Command execution failed: {str(e)}"
                 })
-    
-    async def _process_message(self, data: dict):
-        """Process a regular message from web client"""
-        user_id = data['user_id']
-        content = data['content']
-        location_id = data['location_id']
         
-        # Get location channel
-        location_data = self.db.execute_query(
-            "SELECT channel_id, name FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
-        
-        if not location_data or not location_data[0]:
-            return
-        
-        channel_id, location_name = location_data
-        channel = self.bot.get_channel(channel_id)
-        
-        if channel:
-            # Get character name
-            char_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
-                (user_id,),
-                fetch='one'
-            )[0]
-            
-            # Send message to Discord channel
-            embed = discord.Embed(
-                description=content,
-                color=0x00ff00,
-                timestamp=datetime.utcnow()
-            )
-            embed.set_author(name=f"{char_name} (Web)", icon_url="https://i.imgur.com/WmgKGNp.png")
-            embed.set_footer(text=f"Sent from web client • {location_name}")
-            
-            await channel.send(embed=embed)
-    
     async def _start_session_cleanup_loop(self):
         """Clean up expired sessions"""
         while self.is_running:
@@ -2321,36 +2283,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 except:
                     pass
                     
-    async def _process_message(self, data: dict):
-        """Process a regular message from web client"""
-        user_id = data['user_id']
-        content = data['content']
-        location_id = data['location_id']
-        
-        # Get location channel
-        location_data = self.db.execute_query(
-            "SELECT channel_id, name FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
-        
-        if not location_data or not location_data[0]:
-            return
-        
-        channel_id, location_name = location_data
-        channel = self.bot.get_channel(channel_id)
-        
-        if channel:
-            # Get character name
-            char_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
-                (user_id,),
-                fetch='one'
-            )
-            
-            if char_name:
-                # Send message to Discord channel
-                await channel.send(f"**{char_name[0]}** (via web): {content}")
 
     async def _process_command(self, data: dict):
         """Process a command from web client"""
@@ -2364,9 +2296,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if not user:
             return
         
-        # Find appropriate channel for command execution
+        # Find user's current location
         char_data = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = ?",
             (user_id,),
             fetch='one'
         )
@@ -2375,26 +2307,20 @@ document.addEventListener('DOMContentLoaded', () => {
             return
         
         location_id = char_data[0]
+        character_name = char_data[1]
+        
+        # Get location info (but don't require a channel)
         location_data = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
+            "SELECT name, channel_id FROM locations WHERE location_id = ?",
             (location_id,),
             fetch='one'
         )
         
-        if not location_data or not location_data[0]:
-            # Send error back to web client
-            if user_id in self.user_websockets:
-                await self.user_websockets[user_id].send_json({
-                    "type": "error",
-                    "message": "Cannot execute commands in locations without Discord channels"
-                })
+        if not location_data:
             return
         
-        channel_id = location_data[0]
-        channel = self.bot.get_channel(channel_id)
-        
-        if not channel:
-            return
+        location_name = location_data[0]
+        channel_id = location_data[1]  # May be None, and that's OK!
         
         # Build command string
         full_command = f"/{command}"
@@ -2402,11 +2328,7 @@ document.addEventListener('DOMContentLoaded', () => {
             full_command += " " + " ".join(args)
         
         try:
-            # Send command notification to channel
-            await channel.send(f"**Web Client Command**: {user.mention} executed `{full_command}`")
-            
             # Get the appropriate cog and command
-            # This is a simplified approach - you'll need to enhance based on your command structure
             command_mapping = {
                 'status': ('CharacterCog', 'status'),
                 'here': ('LocationCog', 'here'),
@@ -2415,6 +2337,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 'look': ('LocationCog', 'look'),
                 'say': ('CommunicationCog', 'say'),
                 'emote': ('CommunicationCog', 'emote'),
+                'shop': ('ShopCog', 'shop'),
+                'buy': ('ShopCog', 'buy'),
+                'sell': ('ShopCog', 'sell'),
+                'jobs': ('JobsCog', 'jobs'),
+                'work': ('JobsCog', 'work'),
+                'rest': ('CharacterCog', 'rest'),
+                'heal': ('MedicalCog', 'heal'),
+                'repair': ('ShipCog', 'repair'),
+                'refuel': ('ShipCog', 'refuel'),
+                'ship': ('ShipCog', 'ship'),
+                'cargo': ('CargoCog', 'cargo'),
+                'load': ('CargoCog', 'load'),
+                'unload': ('CargoCog', 'unload'),
                 # Add more command mappings as needed
             }
             
@@ -2423,25 +2358,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 cog = self.bot.get_cog(cog_name)
                 
                 if cog:
-                    # Create a fake context for command execution
-                    # This is a basic implementation - enhance as needed
-                    result_embed = await self._execute_command_for_user(
-                        cog, method_name, user, channel, args
+                    # Create a web context for command execution
+                    result = await self._execute_web_command(
+                        cog, method_name, user, location_id, args, character_name
                     )
                     
                     # Send result back to web client
-                    if result_embed and user_id in self.user_websockets:
+                    if result and user_id in self.user_websockets:
+                        await self.user_websockets[user_id].send_json(result)
+                        
+                    # If there's a Discord channel, notify it (but don't require it)
+                    if channel_id:
+                        channel = self.bot.get_channel(channel_id)
+                        if channel:
+                            await channel.send(f"**{character_name}** (via web): `{full_command}`")
+                else:
+                    # Cog not found
+                    if user_id in self.user_websockets:
                         await self.user_websockets[user_id].send_json({
-                            "type": "command_response",
-                            "embeds": [{
-                                "title": result_embed.title,
-                                "description": result_embed.description,
-                                "fields": [
-                                    {"name": f.name, "value": f.value, "inline": f.inline}
-                                    for f in result_embed.fields
-                                ],
-                                "color": result_embed.color.value if result_embed.color else None
-                            }]
+                            "type": "error",
+                            "message": f"Command system '{cog_name}' not available"
                         })
             else:
                 # Unknown command
@@ -2452,39 +2388,205 @@ document.addEventListener('DOMContentLoaded', () => {
                     })
                 
         except Exception as e:
-            print(f"Error executing command: {e}")
+            print(f"Error executing web command: {e}")
+            import traceback
+            traceback.print_exc()
             if user_id in self.user_websockets:
                 await self.user_websockets[user_id].send_json({
                     "type": "error",
                     "message": f"Command execution failed: {str(e)}"
                 })
 
-    async def _execute_command_for_user(self, cog, method_name, user, channel, args):
-        """Execute a command on behalf of a web client user"""
-        # This is a placeholder - implement based on your command structure
-        # You may need to create a custom context or interaction object
-        # For now, return a simple embed
+
+    async def _execute_web_command(self, cog, method_name, user, location_id, args, character_name):
+        """Execute a command for web client without requiring Discord interaction"""
         
-        embed = discord.Embed(
-            title=f"Command: /{method_name}",
-            description=f"Executed by {user.mention} via web client",
-            color=0x00ff00
-        )
+        # Create a mock context for web commands
+        class WebCommandContext:
+            def __init__(self, bot, user, location_id, character_name):
+                self.bot = bot
+                self.author = user
+                self.user = user
+                self.location_id = location_id
+                self.character_name = character_name
+                self.db = bot.db
+                
+        ctx = WebCommandContext(self.bot, user, location_id, character_name)
         
-        # Add basic implementation for common commands
-        if method_name == 'status':
-            char_data = self.db.execute_query(
-                """SELECT name, health, energy, current_location 
-                   FROM characters WHERE user_id = ?""",
-                (user.id,),
-                fetch='one'
-            )
-            if char_data:
-                embed.add_field(name="Character", value=char_data[0], inline=True)
-                embed.add_field(name="Health", value=f"{char_data[1]}/100", inline=True)
-                embed.add_field(name="Energy", value=f"{char_data[2]}/100", inline=True)
-        
-        return embed
+        # Handle different commands
+        try:
+            if method_name == 'status':
+                char_data = self.db.execute_query(
+                    """SELECT name, health, energy, credits, current_location,
+                       corruption_level, combat_rating, reputation
+                       FROM characters WHERE user_id = ?""",
+                    (user.id,),
+                    fetch='one'
+                )
+                
+                if char_data:
+                    name, health, energy, credits, loc_id, corruption, combat, rep = char_data
+                    
+                    # Get location name
+                    loc_name = self.db.execute_query(
+                        "SELECT name FROM locations WHERE location_id = ?",
+                        (loc_id,),
+                        fetch='one'
+                    )
+                    
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": f"📊 {name}'s Status",
+                            "fields": [
+                                {"name": "Health", "value": f"{health}/100", "inline": True},
+                                {"name": "Energy", "value": f"{energy}/100", "inline": True},
+                                {"name": "Credits", "value": f"{credits:,} cr", "inline": True},
+                                {"name": "Location", "value": loc_name[0] if loc_name else "Unknown", "inline": True},
+                                {"name": "Combat Rating", "value": str(combat), "inline": True},
+                                {"name": "Reputation", "value": str(rep), "inline": True}
+                            ],
+                            "color": 0x00ff00
+                        }]
+                    }
+                    
+            elif method_name == 'here':
+                # Get location details
+                location = self.db.execute_query(
+                    """SELECT name, description, location_type, wealth_level, population,
+                       has_shops, has_jobs, has_medical, has_repairs, has_fuel
+                       FROM locations WHERE location_id = ?""",
+                    (location_id,),
+                    fetch='one'
+                )
+                
+                if location:
+                    name, desc, loc_type, wealth, pop, shops, jobs, med, repair, fuel = location
+                    
+                    # Get players here
+                    players = self.db.execute_query(
+                        "SELECT name FROM characters WHERE current_location = ? AND is_logged_in = 1",
+                        (location_id,),
+                        fetch='all'
+                    )
+                    
+                    # Build services list
+                    services = []
+                    if shops: services.append("🛒 Shopping")
+                    if jobs: services.append("💼 Jobs")
+                    if med: services.append("🏥 Medical")
+                    if repair: services.append("🔧 Repairs")
+                    if fuel: services.append("⛽ Fuel")
+                    
+                    fields = [
+                        {"name": "Type", "value": loc_type.replace('_', ' ').title(), "inline": True},
+                        {"name": "Wealth", "value": f"{wealth}/10", "inline": True},
+                        {"name": "Population", "value": f"{pop:,}", "inline": True}
+                    ]
+                    
+                    if services:
+                        fields.append({"name": "Services", "value": "\n".join(services), "inline": False})
+                    
+                    if players:
+                        player_list = [p[0] for p in players]
+                        fields.append({"name": f"Players Here ({len(player_list)})", "value": ", ".join(player_list[:10]), "inline": False})
+                    
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": f"📍 {name}",
+                            "description": desc,
+                            "fields": fields,
+                            "color": 0x4169E1
+                        }]
+                    }
+                    
+            elif method_name == 'inventory':
+                # Get inventory items
+                items = self.db.execute_query(
+                    """SELECT i.name, ii.quantity, i.item_type, i.value
+                       FROM inventory_items ii
+                       JOIN items i ON ii.item_id = i.item_id
+                       WHERE ii.user_id = ?
+                       ORDER BY i.item_type, i.name""",
+                    (user.id,),
+                    fetch='all'
+                )
+                
+                if items:
+                    inventory_text = []
+                    current_type = None
+                    
+                    for name, qty, item_type, value in items:
+                        if item_type != current_type:
+                            if current_type:
+                                inventory_text.append("")
+                            inventory_text.append(f"**{item_type.title()}:**")
+                            current_type = item_type
+                        
+                        inventory_text.append(f"• {name} x{qty} ({value} cr each)")
+                    
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": f"🎒 {character_name}'s Inventory",
+                            "description": "\n".join(inventory_text) if inventory_text else "Your inventory is empty.",
+                            "color": 0x9370DB
+                        }]
+                    }
+                else:
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": f"🎒 {character_name}'s Inventory",
+                            "description": "Your inventory is empty.",
+                            "color": 0x9370DB
+                        }]
+                    }
+                    
+            elif method_name == 'say' and args:
+                # Handle say command
+                message = ' '.join(args)
+                
+                # Broadcast to other web clients at same location
+                for session in self.sessions.values():
+                    if session.current_location == location_id and session.user_id != user.id and session.websocket:
+                        try:
+                            await session.websocket.send_json({
+                                "type": "message",
+                                "author": character_name,
+                                "content": message,
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "location": location_id
+                            })
+                        except:
+                            pass
+                
+                return {
+                    "type": "message_sent",
+                    "message": f"You said: {message}"
+                }
+                
+            # Add more command implementations as needed
+            else:
+                # For commands not yet implemented, return a generic message
+                return {
+                    "type": "command_response",
+                    "embeds": [{
+                        "title": f"Command: /{method_name}",
+                        "description": f"This command is being processed...",
+                        "color": 0xFFFF00
+                    }]
+                }
+                
+        except Exception as e:
+            print(f"Error in _execute_web_command: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "type": "error",
+                "message": f"Error executing {method_name}: {str(e)}"
+            }
 
     
 
