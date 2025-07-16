@@ -202,7 +202,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
             # Verify server is running
             try:
                 import aiohttp
-                verify_url = f"http://localhost:{port}/"
+                verify_url = f"http://localhost:{port}/map"
                 async with aiohttp.ClientSession() as session:
                     async with session.get(verify_url, timeout=10) as resp:
                         if resp.status != 200:
@@ -3695,6 +3695,74 @@ class WebMapCog(commands.Cog, name="WebMap"):
         except Exception as e:
             print(f"⚠️ Static files mount error: {e}")
         
+        @app.get("/", response_class=HTMLResponse)
+        async def root():
+            """Root route - serve landing page with navigation"""
+            return HTMLResponse(content="""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Galaxy Map & Wiki - The Quiet End</title>
+                <style>
+                    body { 
+                        background: #000814; 
+                        color: #00ffff; 
+                        font-family: 'Share Tech Mono', 'Courier New', monospace; 
+                        display: flex; 
+                        justify-content: center; 
+                        align-items: center; 
+                        height: 100vh; 
+                        margin: 0;
+                        text-align: center;
+                    }
+                    .container { 
+                        background: rgba(0, 29, 61, 0.8);
+                        border: 2px solid #00ffff;
+                        border-radius: 10px;
+                        padding: 3rem;
+                        box-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
+                    }
+                    h1 {
+                        margin-bottom: 2rem;
+                        text-shadow: 0 0 10px #00ffff;
+                    }
+                    .nav-links {
+                        display: flex;
+                        gap: 2rem;
+                        justify-content: center;
+                        margin-top: 2rem;
+                    }
+                    a {
+                        color: #00ffff;
+                        text-decoration: none;
+                        padding: 1rem 2rem;
+                        border: 2px solid #00ffff;
+                        border-radius: 5px;
+                        transition: all 0.3s ease;
+                        display: inline-block;
+                        background: rgba(0, 255, 255, 0.1);
+                    }
+                    a:hover {
+                        background: rgba(0, 255, 255, 0.3);
+                        box-shadow: 0 0 20px #00ffff;
+                        transform: translateY(-2px);
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>🌌 Galaxy Navigation Terminal</h1>
+                    <p>Welcome to The Quiet End</p>
+                    <div class="nav-links">
+                        <a href="/map">🗺️ Interactive Map</a>
+                        <a href="/wiki">📚 Galaxy Wiki</a>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """)
+        
+        # Keep the existing routes as they are
         @app.get("/map", response_class=HTMLResponse)
         async def read_map():
             """Serve the interactive map"""
@@ -7028,6 +7096,12 @@ class WebMapCog(commands.Cog, name="WebMap"):
             
             self.host = host
             self.port = port
+            
+            # Ensure web directories exist
+            self._ensure_web_directories()
+            # Create web files if they don't exist
+            self._create_web_files()
+            
             self.app = self._setup_fastapi()
             
             if not self.app:
@@ -7049,9 +7123,6 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     async with session.get(verify_url, timeout=10) as resp:
                         if resp.status != 200:
                             raise Exception(f"Server returned status {resp.status}")
-                        content = await resp.text()
-                        if "Galaxy Map" not in content:
-                            raise Exception("Server response doesn't contain expected content")
             except asyncio.TimeoutError:
                 await interaction.followup.send("❌ Server start timed out. Try a different port or check for conflicts.")
                 self.is_running = False
@@ -7064,6 +7135,21 @@ class WebMapCog(commands.Cog, name="WebMap"):
             # Set state and start updates
             self.is_running = True
             
+            # Create the embed FIRST, before any other operations that might fail
+            embed = discord.Embed(
+                title="🌐 Web Map Server Started",
+                description="Interactive galaxy map is now available!",
+                color=0x00ff00
+            )
+            
+            # Add local URL
+            embed.add_field(
+                name="🏠 Local Access",
+                value=f"http://localhost:{port}/map",
+                inline=False
+            )
+            
+            # Now handle web client auto-start if needed
             if self.is_running:
                 # Auto-start web client if available
                 webclient_cog = self.bot.get_cog('WebClient')
@@ -7077,6 +7163,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         value=f"Also started on port {webclient_cog.port}",
                         inline=False
                     )
+            
             # Update game panels with proper sequencing
             await self._update_game_panels_for_map_status()
             
@@ -7084,47 +7171,36 @@ class WebMapCog(commands.Cog, name="WebMap"):
             external_ip = None
             try:
                 external_ip = await self._get_external_ip()
+                
+                if external_ip:
+                    # Use detected external IP
+                    external_url = f"http://{external_ip}:{port}/map"
+                    embed.add_field(
+                        name="🌐 External Access URL (Auto-detected)",
+                        value=f"{external_url}",
+                        inline=False
+                    )
+                    embed.add_field(
+                        name="💡 Custom Domain/IP",
+                        value="Use `/webmap_set_ip <domain_or_ip>` if you have a custom domain or different external IP",
+                        inline=False
+                    )
+                else:
+                    # Couldn't detect external IP
+                    embed.add_field(
+                        name="⚠️ External IP Detection Failed",
+                        value="Use `/webmap_set_ip <your_external_ip_or_domain>` to set the external address for remote users",
+                        inline=False
+                    )
             except Exception as e:
-                print(f"Failed to detect external IP: {e}")
-            
-            embed = discord.Embed(
-                title="🌐 Web Map Server Started",
-                description="Interactive galaxy map is now available!",
-                color=0x00ff00
-            )
-            
-            # Determine URLs to display
-            local_url = f"http://localhost:{port}/map"
-            
-            if self.external_ip_override:
-                # Use override
-                external_url = f"http://{self.external_ip_override}:{port}"
+                # Handle external IP detection error
                 embed.add_field(
-                    name="🌐 Public Access URL (Custom)",
-                    value=f"{external_url}",
-                    inline=False
-                )
-            elif external_ip:
-                # Use detected external IP
-                external_url = f"http://{external_ip}:{port}/map"
-                embed.add_field(
-                    name="🌐 External Access URL (Auto-detected)",
-                    value=f"{external_url}",
-                    inline=False
-                )
-                embed.add_field(
-                    name="💡 Custom Domain/IP",
-                    value="Use `/webmap_set_ip <domain_or_ip>` if you have a custom domain or different external IP",
-                    inline=False
-                )
-            else:
-                # Couldn't detect external IP
-                embed.add_field(
-                    name="⚠️ External IP Detection Failed",
-                    value="Use `/webmap_set_ip <your_external_ip_or_domain>` to set the external address for remote users",
+                    name="⚠️ Auto-detection Error",
+                    value=f"Error detecting external IP: {str(e)}",
                     inline=False
                 )
             
+            # Add features info
             embed.add_field(
                 name="🔄 Features",
                 value="• Real-time player positions\n• Interactive location details\n• Zoomable/scrollable map\n• Live updates every minute\n• Route planning\n• Location search",
@@ -7136,6 +7212,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         except Exception as e:
             await interaction.followup.send(f"❌ Failed to start web map server: {str(e)}")
             self.is_running = False
+            
     @app_commands.command(name="webmap_set_ip", description="Set custom external IP or domain for the web map")
     @app_commands.describe(
         address="External IP address or domain name (e.g., '123.45.67.89' or 'myserver.com')"
