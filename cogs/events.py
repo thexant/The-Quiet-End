@@ -580,7 +580,30 @@ class EventsCog(commands.Cog):
         
         except Exception as e:
             print(f"Error in random events: {e}")
-    
+
+    def stop_all_tasks(self):
+        """Stop all background tasks in EventsCog"""
+        tasks_to_stop = [
+            'cleanup_tasks',
+            'random_events', 
+            'job_generation',
+            'micro_events',
+            'economic_fluctuation',
+            'enhanced_random_events',
+            'shift_change_monitor'
+        ]
+        
+        for task_name in tasks_to_stop:
+            task = getattr(self, task_name, None)
+            if task and hasattr(task, 'cancel'):
+                task.cancel()
+                print(f"❌ Cancelled {task_name}")
+        
+        # Also cancel any corridor management tasks
+        if hasattr(self, '_corridor_management_task'):
+            if self._corridor_management_task and not self._corridor_management_task.done():
+                self._corridor_management_task.cancel()
+                
     @tasks.loop(hours=2)
     async def job_generation(self):
         """Generate new jobs at locations with increased frequency and quantity"""
@@ -1472,7 +1495,7 @@ class EventsCog(commands.Cog):
                 ("Docking Operations", f"Coordinate ship docking at {loc_name}."),
                 ("Traffic Control", f"Manage shipping traffic at {loc_name}."),
                 ("Station Inspection", f"Inspect critical station systems at {loc_name}."),
-                ("Cargo Processing", f"Process incoming cargo at {loc_name}."),
+                ("Inventory Processing", f"Process incoming inventory at {loc_name}."),
                 ("Navigation Update", f"Update navigation databases at {loc_name}."),
                 ("Security Sweep", f"Conduct security checks at {loc_name}."),
                 ("Power Systems Check", f"Monitor power systems at {loc_name}."),
@@ -1514,8 +1537,9 @@ class EventsCog(commands.Cog):
             '''INSERT INTO jobs
                (location_id, title, description, reward_money, required_skill, min_skill_level,
                 danger_level, duration_minutes, expires_at, is_taken, destination_location_id)
-               VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0, ?)''', # ADD destination_location_id and its placeholder
-            (location_id, title, desc, reward, danger, duration, expire_str, location_id) # ADD location_id for destination
+               VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0, ?)''',
+            (location_id, title, desc, reward, danger, duration, expire_str, None)
         )
+        
 async def setup(bot):
     await bot.add_cog(EventsCog(bot))

@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import List, Tuple, Dict
 import uuid
-
+import math
 from utils.ship_data import get_random_starter_ship
     
 # Replace the entire create_random_character function at the end of utils/views.py
@@ -3031,4 +3031,430 @@ class LogbookEntryModal(discord.ui.Modal):
         
         embed.add_field(name="Your Entry", value=f'"{message}"', inline=False)
         
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+      
+      
+class UndockJobConfirmView(discord.ui.View):
+    def __init__(self, bot, user_id: int, current_location: int):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        self.current_location = current_location
+    
+    @discord.ui.button(label="Confirm Undock (Cancel Jobs)", style=discord.ButtonStyle.danger, emoji="🚀")
+    async def confirm_undock(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your undock panel!", ephemeral=True)
+            return
+        
+        # Cancel active jobs
+        active_jobs = self.bot.db.execute_query(
+            '''SELECT j.job_id FROM jobs j 
+               JOIN job_tracking jt ON j.job_id = jt.job_id
+               WHERE j.taken_by = ? AND j.job_status = 'active' AND jt.start_location = ?''',
+            (self.user_id, self.current_location),
+            fetch='all'
+        )
+        
+        for job_row in active_jobs:
+            job_id = job_row[0]
+            self.bot.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+            self.bot.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, self.user_id))
+        
+        # Undock the ship
+        self.bot.db.execute_query(
+            "UPDATE characters SET location_status = 'in_space' WHERE user_id = ?",
+            (self.user_id,)
+        )
+        
+        location_name = self.bot.db.execute_query(
+            "SELECT name FROM locations WHERE location_id = ?",
+            (self.current_location,),
+            fetch='one'
+        )[0]
+        
+        embed = discord.Embed(
+            title="🚀 Ship Undocked",
+            description=f"Your ship is now in space near **{location_name}**.",
+            color=0x4169e1
+        )
+        
+        embed.add_field(
+            name="⚠️ Jobs Cancelled",
+            value=f"{len(active_jobs)} active job(s) were cancelled without reward.",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="Status Change",
+            value="• You can now engage in ship combat\n• Limited access to location services\n• Full radio range available",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    @discord.ui.button(label="Cancel Undocking", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_undock(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your undock panel!", ephemeral=True)
+            return
+        
+        await interaction.response.send_message("Undocking cancelled. Your jobs remain active.", ephemeral=True)
+        
+        
+# Personal Log View Classes
+class PersonalLogMainView(discord.ui.View):
+    def __init__(self, bot, user_id: int, logbook_id: str, char_name: str):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.logbook_id = logbook_id
+        self.char_name = char_name
+
+    @discord.ui.button(label="View Logs", style=discord.ButtonStyle.primary, emoji="📖")
+    async def view_logs(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your logbook!", ephemeral=True)
+            return
+        
+        # Get all log entries for this logbook
+        entries = self.bot.db.execute_query(
+            '''SELECT entry_id, entry_title, created_at, author_name 
+               FROM logbook_entries 
+               WHERE logbook_id = ? 
+               ORDER BY created_at DESC''',
+            (self.logbook_id,),
+            fetch='all'
+        )
+        
+        if not entries:
+            await interaction.response.send_message("This logbook is empty. Create your first entry!", ephemeral=True)
+            return
+        
+        # Create log selection view
+        view = PersonalLogSelectView(self.bot, self.user_id, self.logbook_id, entries, 0)
+        
+        embed = discord.Embed(
+            title="📖 Select Log Entry",
+            description=f"**{len(entries)}** entries found in this logbook",
+            color=0x4169E1
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @discord.ui.button(label="Create New Log", style=discord.ButtonStyle.success, emoji="✏️")
+    async def create_log(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your logbook!", ephemeral=True)
+            return
+        
+        # Get current in-game time
+        try:
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            current_time = time_system.get_current_time()
+            ingame_date = current_time.strftime("%Y-%m-%d %H:%M")
+        except:
+            # Fallback to real time if time system isn't available
+            ingame_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+        
+        # Create log entry modal
+        modal = PersonalLogEntryModal(self.bot, self.logbook_id, self.char_name, ingame_date)
+        await interaction.response.send_modal(modal)
+
+class PersonalLogSelectView(discord.ui.View):
+    def __init__(self, bot, user_id: int, logbook_id: str, entries: list, page: int = 0):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.logbook_id = logbook_id
+        self.entries = entries
+        self.page = page
+        self.items_per_page = 25
+        
+        self.setup_pagination()
+
+    def setup_pagination(self):
+        self.clear_items()
+        
+        total_pages = math.ceil(len(self.entries) / self.items_per_page)
+        start_idx = self.page * self.items_per_page
+        end_idx = min(start_idx + self.items_per_page, len(self.entries))
+        
+        current_entries = self.entries[start_idx:end_idx]
+        
+        # Create dropdown for current page entries
+        if current_entries:
+            options = []
+            for entry_id, title, created_at, author_name in current_entries:
+                # Limit option label and description length
+                display_title = title[:80] + "..." if len(title) > 80 else title
+                created_date = created_at[:16]  # YYYY-MM-DD HH:MM
+                
+                options.append(
+                    discord.SelectOption(
+                        label=display_title,
+                        description=f"By {author_name} on {created_date}",
+                        value=str(entry_id)
+                    )
+                )
+            
+            select = discord.ui.Select(
+                placeholder=f"Choose a log entry... (Page {self.page + 1}/{total_pages})",
+                options=options
+            )
+            select.callback = self.entry_selected
+            self.add_item(select)
+        
+        # Add pagination buttons if needed
+        if total_pages > 1:
+            prev_button = discord.ui.Button(
+                label="Previous", 
+                style=discord.ButtonStyle.secondary,
+                disabled=(self.page == 0),
+                emoji="⬅️"
+            )
+            prev_button.callback = self.previous_page
+            self.add_item(prev_button)
+            
+            next_button = discord.ui.Button(
+                label="Next",
+                style=discord.ButtonStyle.secondary, 
+                disabled=(self.page >= total_pages - 1),
+                emoji="➡️"
+            )
+            next_button.callback = self.next_page
+            self.add_item(next_button)
+        
+        # Back button
+        back_button = discord.ui.Button(
+            label="Back to Logbook",
+            style=discord.ButtonStyle.primary,
+            emoji="📖"
+        )
+        back_button.callback = self.back_to_main
+        self.add_item(back_button)
+
+    async def entry_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your logbook!", ephemeral=True)
+            return
+        
+        entry_id = int(interaction.data['values'][0])
+        
+        # Get the full log entry
+        entry = self.bot.db.execute_query(
+            '''SELECT entry_title, entry_content, created_at, author_name, ingame_date
+               FROM logbook_entries 
+               WHERE entry_id = ?''',
+            (entry_id,),
+            fetch='one'
+        )
+        
+        if not entry:
+            await interaction.response.send_message("Log entry not found.", ephemeral=True)
+            return
+        
+        title, content, created_at, author_name, ingame_date = entry
+        
+        # Create sci-fi styled embed
+        embed = discord.Embed(
+            title="📖 Personal Log Entry",
+            color=0x00ff88
+        )
+        
+        embed.add_field(
+            name="🏷️ Entry Title",
+            value=f"**{title}**",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="👤 Author",
+            value=author_name,
+            inline=True
+        )
+        
+        embed.add_field(
+            name="📅 Stardate",
+            value=ingame_date,
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🕐 Recorded",
+            value=created_at[:16],
+            inline=True
+        )
+        
+        # Format content with sci-fi styling
+        if len(content) > 1000:
+            embed.add_field(
+                name="📝 Log Content",
+                value=content[:1000] + "...",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📝 Log Content",
+                value=f"```\n--- PERSONAL LOG ENTRY ---\nSTARDATE: {ingame_date}\nAUTHOR: {author_name}\n\n{content}\n\n--- END LOG ENTRY ---```",
+                inline=False
+            )
+        
+        embed.set_footer(text=f"Logbook ID: {self.logbook_id[:8]}...")
+        
+        view = PersonalLogEntryView(self.bot, self.user_id, self.logbook_id, self.entries, self.page)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    async def previous_page(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your logbook!", ephemeral=True)
+            return
+        
+        self.page = max(0, self.page - 1)
+        self.setup_pagination()
+        await interaction.response.edit_message(view=self)
+
+    async def next_page(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your logbook!", ephemeral=True)
+            return
+        
+        total_pages = math.ceil(len(self.entries) / self.items_per_page)
+        self.page = min(total_pages - 1, self.page + 1)
+        self.setup_pagination()
+        await interaction.response.edit_message(view=self)
+
+    async def back_to_main(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your logbook!", ephemeral=True)
+            return
+        
+        # Get character name
+        char_name = self.bot.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )[0]
+        
+        view = PersonalLogMainView(self.bot, self.user_id, self.logbook_id, char_name)
+        
+        embed = discord.Embed(
+            title="📖 Personal Logbook Interface",
+            description="Access your personal logs and create new entries.",
+            color=0x4169E1
+        )
+        
+        embed.add_field(
+            name="📋 Logbook ID", 
+            value=f"`{self.logbook_id[:8]}...`",
+            inline=True
+        )
+        
+        entry_count = len(self.entries)
+        embed.add_field(
+            name="📊 Total Entries",
+            value=str(entry_count),
+            inline=True
+        )
+        
+        await interaction.response.edit_message(embed=embed, view=view)
+
+class PersonalLogEntryView(discord.ui.View):
+    def __init__(self, bot, user_id: int, logbook_id: str, entries: list, page: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.logbook_id = logbook_id
+        self.entries = entries
+        self.page = page
+
+    @discord.ui.button(label="Back to List", style=discord.ButtonStyle.secondary, emoji="📋")
+    async def back_to_list(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your logbook!", ephemeral=True)
+            return
+        
+        view = PersonalLogSelectView(self.bot, self.user_id, self.logbook_id, self.entries, self.page)
+        
+        embed = discord.Embed(
+            title="📖 Select Log Entry",
+            description=f"**{len(self.entries)}** entries found in this logbook",
+            color=0x4169E1
+        )
+        
+        await interaction.response.edit_message(embed=embed, view=view)
+
+class PersonalLogEntryModal(discord.ui.Modal):
+    def __init__(self, bot, logbook_id: str, char_name: str, ingame_date: str):
+        super().__init__(title="Create Personal Log Entry")
+        self.bot = bot
+        self.logbook_id = logbook_id
+        self.char_name = char_name
+        self.ingame_date = ingame_date
+        
+        self.title_input = discord.ui.TextInput(
+            label="Log Entry Title",
+            placeholder=f"{char_name} - {ingame_date}",
+            default=f"{char_name} - {ingame_date}",
+            max_length=200
+        )
+        self.add_item(self.title_input)
+        
+        self.content_input = discord.ui.TextInput(
+            label="Log Content",
+            placeholder="Enter your personal log entry here...",
+            style=discord.TextStyle.paragraph,
+            max_length=1800,
+            required=True
+        )
+        self.add_item(self.content_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Get user ID for the entry
+        user_id = interaction.user.id
+        
+        # Save the log entry
+        self.bot.db.execute_query(
+            '''INSERT INTO logbook_entries 
+               (logbook_id, author_name, author_id, entry_title, entry_content, ingame_date)
+               VALUES (?, ?, ?, ?, ?, ?)''',
+            (self.logbook_id, self.char_name, user_id, 
+             self.title_input.value, self.content_input.value, self.ingame_date)
+        )
+        
+        embed = discord.Embed(
+            title="✅ Log Entry Created",
+            description="Your personal log entry has been saved successfully!",
+            color=0x00ff00
+        )
+        
+        embed.add_field(
+            name="📝 Title",
+            value=self.title_input.value,
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📅 Stardate",
+            value=self.ingame_date,
+            inline=True
+        )
+        
+        embed.add_field(
+            name="📖 Logbook",
+            value=f"`{self.logbook_id[:8]}...`",
+            inline=True
+        )
+        char_cog = self.bot.get_cog('CharacterCog')
+        xp_awarded = False
+        if char_cog:
+            xp_awarded = await char_cog.try_award_passive_xp(interaction.user.id, "personal_log")
+
+        if xp_awarded:
+            embed.add_field(
+                name="✨ Reflection", 
+                value="Taking time to document your experiences has made you wiser. (+5 XP)", 
+                inline=False
+            )
         await interaction.response.send_message(embed=embed, ephemeral=True)

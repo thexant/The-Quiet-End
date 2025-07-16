@@ -17,20 +17,20 @@ class LocationLogsCog(commands.Cog):
     async def view_logs(self, interaction: discord.Interaction):
         # Get current location
         char_location = self.db.execute_query(
-            '''SELECT c.current_location, l.name, l.location_type
+            '''SELECT c.current_location, l.name, l.location_type, l.is_derelict
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
                WHERE c.user_id = ?''',
             (interaction.user.id,),
             fetch='one'
         )
-        
+
         if not char_location:
             await interaction.response.send_message("Location not found!", ephemeral=True)
             return
-        
-        location_id, location_name, location_type = char_location
-        
+
+        location_id, location_name, location_type, is_derelict = char_location
+
         # Check if location is derelict
         if is_derelict:
             await interaction.response.send_message(

@@ -22,75 +22,122 @@ class StatusUpdaterCog(commands.Cog):
         The core logic for updating status voice channels.
         Returns: (number_of_channels_updated, reason_string)
         """
-        try:
-            servers_with_status = self.db.execute_query(
-                "SELECT guild_id, status_voice_channel_id FROM server_config WHERE status_voice_channel_id IS NOT NULL",
-                fetch='all'
-            )
-            
-            if not servers_with_status:
-                return (0, "No servers have a status channel configured.")
-            
-            current_ingame_time = self.time_system.calculate_current_ingame_time()
-            if not current_ingame_time:
-                print("❌ Could not calculate in-game time for status update")
-                return (0, "Could not calculate in-game time.")
-            
-            # Use the shortened date format
-            date_str = current_ingame_time.strftime("%d-%m-%Y")
-            
-            minutes = current_ingame_time.minute
-            if minutes < 15:
-                approx_time = f"{current_ingame_time.hour:02d}:00"
-            elif minutes < 45:
-                approx_time = f"{current_ingame_time.hour:02d}:30"
-            else:
-                next_hour = (current_ingame_time.hour + 1) % 24
-                approx_time = f"{next_hour:02d}:00"
-            
-            active_players = self.db.execute_query(
-                "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
-                fetch='one'
-            )[0]
-            
-            dynamic_npcs = self.db.execute_query(
-                "SELECT COUNT(*) FROM dynamic_npcs WHERE is_alive = 1",
-                fetch='one'
-            )[0]
-            
-            # Use the shortened name format
-            new_channel_name = f"🌐{date_str}|⌚{approx_time}"
-            
-            updated_count = 0
-            for guild_id, channel_id in servers_with_status:
-                guild = self.bot.get_guild(guild_id)
-                if not guild:
-                    continue
-                
-                channel = guild.get_channel(channel_id)
-                if not channel or not isinstance(channel, discord.VoiceChannel):
-                    continue
-                
+        max_retries = 3
+        retry_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                # Check if database is accessible before proceeding
                 try:
-                    if channel.name != new_channel_name:
-                        await channel.edit(name=new_channel_name, reason="Automated status update")
-                        updated_count += 1
-                        await asyncio.sleep(1)
-                        
-                except discord.HTTPException as e:
-                    print(f"❌ Failed to update status channel in {guild.name}: {e}")
+                    # Simple test query with timeout
+                    test_result = self.db.execute_query("SELECT 1", fetch='one')
+                    if not test_result:
+                        if attempt < max_retries - 1:
+                            print(f"⚠️ Database test failed, retrying in {retry_delay}s...")
+                            await asyncio.sleep(retry_delay)
+                            retry_delay *= 2
+                            continue
+                        return (0, "Database is not accessible")
                 except Exception as e:
-                    print(f"❌ Unexpected error updating status channel in {guild.name}: {e}")
-            
-            if updated_count > 0:
-                print(f"🔄 Updated {updated_count} status voice channel(s): {new_channel_name}")
-                return (updated_count, f"Successfully updated channels with: {new_channel_name}")
-            else:
-                return (0, "Channel names were already up-to-date.")
+                    if "database is locked" in str(e).lower():
+                        if attempt < max_retries - 1:
+                            print(f"⚠️ Database locked during status update, retrying in {retry_delay}s...")
+                            await asyncio.sleep(retry_delay)
+                            retry_delay *= 2
+                            continue
+                        return (0, "Database is locked (galaxy generation may be running)")
+                    else:
+                        raise e
                 
-        except Exception as e:
-            print(f"❌ Error in status channel update task: {e}")
-            return (0, f"An unexpected error occurred: {e}")
+                servers_with_status = self.db.execute_query(
+                    "SELECT guild_id, status_voice_channel_id FROM server_config WHERE status_voice_channel_id IS NOT NULL",
+                    fetch='all'
+                )
+                
+                if not servers_with_status:
+                    return (0, "No servers have a status channel configured.")
+                
+                current_ingame_time = self.time_system.calculate_current_ingame_time()
+                if not current_ingame_time:
+                    print("❌ Could not calculate in-game time for status update")
+                    return (0, "Could not calculate in-game time.")
+                
+                # Use the shortened date format
+                date_str = current_ingame_time.strftime("%d-%m-%Y")
+                
+                minutes = current_ingame_time.minute
+                if minutes < 15:
+                    approx_time = f"{current_ingame_time.hour:02d}:00"
+                elif minutes < 45:
+                    approx_time = f"{current_ingame_time.hour:02d}:30"
+                else:
+                    next_hour = (current_ingame_time.hour + 1) % 24
+                    approx_time = f"{next_hour:02d}:00"
+                
+                # Get player counts with error handling
+                try:
+                    active_players = self.db.execute_query(
+                        "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
+                        fetch='one'
+                    )[0]
+                    
+                    dynamic_npcs = self.db.execute_query(
+                        "SELECT COUNT(*) FROM dynamic_npcs WHERE is_alive = 1",
+                        fetch='one'
+                    )[0]
+                except Exception as e:
+                    if "no such table" in str(e).lower():
+                        # Galaxy not yet generated
+                        return (0, "Galaxy not yet generated")
+                    else:
+                        raise e
+                
+                # Use the shortened name format
+                new_channel_name = f"🌐{date_str}|⌚{approx_time}"
+                
+                updated_count = 0
+                for guild_id, channel_id in servers_with_status:
+                    guild = self.bot.get_guild(guild_id)
+                    if not guild:
+                        continue
+                    
+                    channel = guild.get_channel(channel_id)
+                    if not channel or not isinstance(channel, discord.VoiceChannel):
+                        continue
+                    
+                    try:
+                        if channel.name != new_channel_name:
+                            await channel.edit(name=new_channel_name, reason="Automated status update")
+                            updated_count += 1
+                            await asyncio.sleep(1)
+                            
+                    except discord.HTTPException as e:
+                        print(f"❌ Failed to update status channel in {guild.name}: {e}")
+                    except Exception as e:
+                        print(f"❌ Unexpected error updating status channel in {guild.name}: {e}")
+                
+                if updated_count > 0:
+                    print(f"🔄 Updated {updated_count} status voice channel(s): {new_channel_name}")
+                    return (updated_count, f"Successfully updated channels with: {new_channel_name}")
+                else:
+                    return (0, "Channel names were already up-to-date.")
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "database is locked" in error_msg:
+                    if attempt < max_retries - 1:
+                        print(f"⚠️ Database locked during status update (attempt {attempt + 1}), retrying in {retry_delay}s...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2
+                        continue
+                    else:
+                        print(f"❌ Database remained locked after {max_retries} attempts")
+                        return (0, "Database is locked (galaxy generation may be running)")
+                else:
+                    print(f"❌ Error in status channel update task: {e}")
+                    return (0, f"An unexpected error occurred: {e}")
+        
+        return (0, "Failed after maximum retries")
 
     @tasks.loop(seconds=480)
     async def update_status_channels(self):

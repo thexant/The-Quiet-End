@@ -35,15 +35,29 @@ class ChannelManager:
         async def background_cleanup():
             while True:
                 try:
-                    await asyncio.sleep(30)  # Check every 30 seconds
+                    await asyncio.sleep(60)  # Increased from 30 seconds to reduce conflicts
                     
                     # Get all guilds the bot is in
                     for guild in self.bot.guilds:
-                        await self._check_and_cleanup_empty_channels(guild)
+                        try:
+                            # Use a timeout for cleanup operations
+                            await asyncio.wait_for(
+                                self._check_and_cleanup_empty_channels(guild),
+                                timeout=30.0  # 30 second timeout
+                            )
+                        except asyncio.TimeoutError:
+                            print(f"⚠️ Channel cleanup timed out for guild {guild.name}")
+                            continue
+                        except Exception as e:
+                            print(f"❌ Error in channel cleanup for guild {guild.name}: {e}")
+                            continue
                         
+                        # Yield between guilds
+                        await asyncio.sleep(1)
+                            
                 except Exception as e:
                     print(f"❌ Error in background cleanup: {e}")
-                    await asyncio.sleep(60)  # Wait longer if there's an error
+                    await asyncio.sleep(120)  # Wait longer if there's an error
         
         # Start the background task
         self.bot.loop.create_task(background_cleanup())
@@ -1016,40 +1030,45 @@ class ChannelManager:
             return False
     
     async def _check_and_cleanup_empty_channels(self, guild: discord.Guild):
-        """Background task to check and cleanup empty channels - IMPROVED to check login status"""
+        """Background task to check and cleanup empty channels - IMPROVED with timeout handling"""
         if not self.auto_cleanup_enabled:
             return
             
         # More aggressive cleanup - only 1 minute instead of 2
-        cutoff_time = datetime.now() - timedelta(minutes=1)
+        cutoff_time = datetime.now() - timedelta(minutes=2)  # Increased from 1 minute
         
-        # IMPROVED: Only count LOGGED-IN players for location channels
-        empty_channels = self.db.execute_query(
-            '''SELECT l.location_id, l.channel_id, l.name,
-                      COUNT(CASE WHEN c.is_logged_in = 1 THEN c.user_id END) as logged_in_count
-               FROM locations l
-               LEFT JOIN characters c ON l.location_id = c.current_location
-               WHERE l.channel_id IS NOT NULL 
-               AND (l.channel_last_active IS NULL OR l.channel_last_active < ?)
-               GROUP BY l.location_id, l.channel_id, l.name
-               HAVING logged_in_count = 0
-               LIMIT 5''',  # Process max 5 at a time to avoid rate limits
-            (cutoff_time,),
-            fetch='all'
-        )
-        
-        # NEW: Also check for empty ship channels
-        empty_ship_channels = self.db.execute_query(
-            '''SELECT s.ship_id, s.channel_id, s.name,
-                      COUNT(CASE WHEN c.is_logged_in = 1 THEN c.user_id END) as logged_in_count
-               FROM ships s
-               LEFT JOIN characters c ON s.ship_id = c.current_ship_id
-               WHERE s.channel_id IS NOT NULL
-               GROUP BY s.ship_id, s.channel_id, s.name
-               HAVING logged_in_count = 0
-               LIMIT 3''',  # Limit ship cleanup too
-            fetch='all'
-        )
+        try:
+            # Use read-only query with timeout
+            empty_channels = self.db.execute_read_query(
+                '''SELECT l.location_id, l.channel_id, l.name,
+                          COUNT(CASE WHEN c.is_logged_in = 1 THEN c.user_id END) as logged_in_count
+                   FROM locations l
+                   LEFT JOIN characters c ON l.location_id = c.current_location
+                   WHERE l.channel_id IS NOT NULL 
+                   AND (l.channel_last_active IS NULL OR l.channel_last_active < ?)
+                   GROUP BY l.location_id, l.channel_id, l.name
+                   HAVING logged_in_count = 0
+                   LIMIT 3''',  # Reduced from 5 to avoid conflicts
+                (cutoff_time,),
+                fetch='all'
+            )
+            
+            # Also check for empty ship channels with read-only query
+            empty_ship_channels = self.db.execute_read_query(
+                '''SELECT s.ship_id, s.channel_id, s.name,
+                          COUNT(CASE WHEN c.is_logged_in = 1 THEN c.user_id END) as logged_in_count
+                   FROM ships s
+                   LEFT JOIN characters c ON s.ship_id = c.current_ship_id
+                   WHERE s.channel_id IS NOT NULL
+                   GROUP BY s.ship_id, s.channel_id, s.name
+                   HAVING logged_in_count = 0
+                   LIMIT 2''',  # Reduced limit
+                fetch='all'
+            )
+            
+        except Exception as e:
+            print(f"⚠️ Database timeout in cleanup query: {e}")
+            return  # Skip cleanup if database is busy
         
         cleaned_count = 0
         
@@ -1059,7 +1078,7 @@ class ChannelManager:
             if channel:
                 try:
                     # Additional check: make sure no one is traveling TO this location
-                    travelers_coming = self.db.execute_query(
+                    travelers_coming = self.db.execute_read_query(
                         "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = ? AND status = 'traveling'",
                         (location_id,),
                         fetch='one'
@@ -1069,21 +1088,24 @@ class ChannelManager:
                         await channel.delete(reason="Automated cleanup - no logged-in players")
                         print(f"🧹 Auto-cleaned channel #{channel.name} for {location_name} (no logged-in players)")
                         cleaned_count += 1
+                        
+                        # Update database after successful deletion
+                        self.db.execute_query(
+                            "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
+                            (location_id,)
+                        )
                     else:
                         # Someone is traveling here, update activity to keep channel
                         await self._update_channel_activity(location_id)
                         continue
-                        
+                            
                 except Exception as e:
                     print(f"❌ Failed to delete channel for {location_name}: {e}")
             
-            # Clear channel reference from database regardless
-            self.db.execute_query(
-                "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
-                (location_id,)
-            )
+            # Yield between deletions
+            await asyncio.sleep(0.5)
         
-        # NEW: Clean up ship channels
+        # Clean up ship channels
         for ship_id, channel_id, ship_name, logged_in_count in empty_ship_channels:
             channel = guild.get_channel(channel_id)
             if channel:
@@ -1091,17 +1113,21 @@ class ChannelManager:
                     await channel.delete(reason="Automated cleanup - no players aboard ship")
                     print(f"🧹 Auto-cleaned ship channel #{channel.name} for {ship_name} (no players aboard)")
                     cleaned_count += 1
+                    
+                    # Update database after successful deletion
+                    self.db.execute_query(
+                        "UPDATE ships SET channel_id = NULL WHERE ship_id = ?",
+                        (ship_id,)
+                    )
                 except Exception as e:
                     print(f"❌ Failed to delete ship channel for {ship_name}: {e}")
             
-            # Clear channel reference from database
-            self.db.execute_query(
-                "UPDATE ships SET channel_id = NULL WHERE ship_id = ?",
-                (ship_id,)
-            )
+            # Yield between deletions
+            await asyncio.sleep(0.5)
         
         if cleaned_count > 0:
             print(f"🧹 Background cleanup: removed {cleaned_count} channels with no logged-in players")
+            
     async def immediate_ship_cleanup(self, guild: discord.Guild, ship_id: int):
         """Check if a ship should be cleaned up immediately when someone leaves"""
         # Wait just a moment for database to update

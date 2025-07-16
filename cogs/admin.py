@@ -2125,112 +2125,227 @@ class AdminCog(commands.Cog):
         """Perform the actual reset operation, including channel cleanup for full/galaxy resets"""
         reset_counts = {}
 
-        # ————— Character data —————
-        if reset_type in ["full", "characters"]:
-            reset_counts["Characters"] = self.db.execute_query(
-                "SELECT COUNT(*) FROM characters", fetch='one'
-            )[0]
-            reset_counts["Ships"] = self.db.execute_query(
-                "SELECT COUNT(*) FROM ships", fetch='one'
-            )[0]
-            reset_counts["Inventory Items"] = self.db.execute_query(
-                "SELECT COUNT(*) FROM inventory", fetch='one'
-            )[0]
-            reset_counts["Character Identities"] = self.db.execute_query(
-                "SELECT COUNT(*) FROM character_identity", fetch='one'
-            )[0]
-
-            # Delete in proper order to avoid foreign key issues
-            self.db.execute_query("DELETE FROM character_identity")
-            self.db.execute_query("DELETE FROM characters")
-            self.db.execute_query("DELETE FROM ships")
-            self.db.execute_query("DELETE FROM inventory")
-
-        # ————— Galaxy data + Location channel cleanup —————
-        if reset_type in ["full", "galaxy"]:
-            # Count rows before deletion
-            reset_counts["Locations"] = self.db.execute_query(
-                "SELECT COUNT(*) FROM locations", fetch='one'
-            )[0]
-            reset_counts["Corridors"] = self.db.execute_query(
-                "SELECT COUNT(*) FROM corridors", fetch='one'
-            )[0]
-
-            # 1) Collect every channel_id we need to delete
+        if reset_type == "full":
+            # For full reset, we need to clear EVERYTHING
+            # Get counts of all tables before deletion
+            all_tables = [
+                # Character related
+                "characters", "character_identity", "character_reputation", "character_experience",
+                "character_inventory", "afk_warnings", "search_cooldowns",
+                
+                # Ship related
+                "ships", "ship_upgrades", "ship_customizations", "ship_activities", "player_ships",
+                
+                # Location related
+                "locations", "corridors", "location_items", "location_logs", "location_homes",
+                "home_activities", "home_interiors", "home_market_listings", "home_invitations",
+                "location_economy", "economic_events", "location_ownership", "location_upgrades",
+                "location_access_control", "location_income_log", "location_storage", "sub_locations",
+                
+                # NPC related
+                "static_npcs", "dynamic_npcs", "npc_respawn_queue", "npc_inventory", 
+                "npc_trade_inventory", "npc_jobs", "npc_job_completions",
+                
+                # Economy related
+                "jobs", "job_tracking", "shop_items", "inventory", "black_markets", "black_market_items",
+                
+                # Group related
+                "groups", "group_invites", "group_vote_sessions", "group_votes", "group_ships",
+                
+                # Combat related
+                "combat_states", "combat_encounters", "pvp_opt_outs", "pvp_combat_states", 
+                "pvp_cooldowns", "pending_robberies",
+                
+                # Travel related
+                "travel_sessions", "corridor_events", "active_beacons",
+                
+                # System related
+                "repeaters", "user_location_panels", "logbook_entries", "news_queue", 
+                "galactic_history", "game_panels", "galaxy_info", "galaxy_settings",
+                "endgame_config", "endgame_evacuations"
+            ]
+            
+            # Count rows in each table
+            for table in all_tables:
+                try:
+                    count = self.db.execute_query(f"SELECT COUNT(*) FROM {table}", fetch='one')[0]
+                    if count > 0:
+                        reset_counts[table] = count
+                except:
+                    pass  # Table might not exist
+            
+            # Get location channels before deletion
             location_channels = self.db.execute_query(
                 "SELECT channel_id FROM locations WHERE channel_id IS NOT NULL",
                 fetch='all'
             )
-
-            # 2) Use comprehensive galaxy data clearing (same as galaxy generator)
-            await self._clear_comprehensive_galaxy_data()
-
-            # 3) Delete the actual Discord channels
+            
+            # Get temporary travel channels
+            temp_channels = self.db.execute_query(
+                "SELECT DISTINCT temp_channel_id FROM travel_sessions WHERE temp_channel_id IS NOT NULL",
+                fetch='all'
+            )
+            
+            # Clear all tables in reverse dependency order
+            # This order is important to avoid foreign key constraint issues
+            tables_to_clear_in_order = [
+                # Clear dependent tables first
+                "afk_warnings", "search_cooldowns", "user_location_panels", "active_beacons",
+                "pvp_cooldowns", "pending_robberies", "pvp_combat_states", "pvp_opt_outs",
+                "combat_encounters", "combat_states",
+                "group_votes", "group_vote_sessions", "group_invites", "group_ships",
+                "ship_activities", "ship_customizations", "ship_upgrades", "player_ships",
+                "character_inventory", "character_experience", "character_reputation", "character_identity",
+                "home_invitations", "home_market_listings", "home_interiors", "home_activities",
+                "location_storage", "location_income_log", "location_access_control", 
+                "location_upgrades", "location_ownership", "economic_events", "location_economy",
+                "location_logs", "location_items", "location_homes",
+                "npc_job_completions", "npc_jobs", "npc_trade_inventory", "npc_inventory",
+                "npc_respawn_queue", "dynamic_npcs", "static_npcs",
+                "black_market_items", "black_markets", "sub_locations",
+                "job_tracking", "jobs", "shop_items", "inventory",
+                "corridor_events", "travel_sessions", "repeaters",
+                "logbook_entries", "groups", "ships", "characters",
+                "corridors", "locations",
+                "news_queue", "galactic_history", "game_panels",
+                "endgame_evacuations", "endgame_config",
+                "galaxy_settings", "galaxy_info"
+            ]
+            
+            # Delete all data
+            for table in tables_to_clear_in_order:
+                try:
+                    self.db.execute_query(f"DELETE FROM {table}")
+                except Exception as e:
+                    # Some tables might not exist, which is fine
+                    print(f"Note: Could not clear table {table}: {e}")
+            
+            # Delete Discord channels
             channels_deleted = 0
             for (channel_id,) in location_channels:
                 channel = guild.get_channel(channel_id)
                 if channel:
                     try:
-                        await channel.delete(reason="Galaxy reset — removing location channel")
+                        await channel.delete(reason="Full server reset")
                         channels_deleted += 1
                     except:
-                        pass  # ignore if already gone or lacking perms
-
-            reset_counts["Location Channels Deleted"] = channels_deleted
-
-        # ————— Economy data —————
-        if reset_type in ["full", "economy"]:
-            reset_counts["Jobs"] = self.db.execute_query(
-                "SELECT COUNT(*) FROM jobs", fetch='one'
-            )[0]
-            reset_counts["Shop Items"] = self.db.execute_query(
-                "SELECT COUNT(*) FROM shop_items", fetch='one'
-            )[0]
-
-            self.db.execute_query("DELETE FROM jobs")
-            self.db.execute_query("DELETE FROM shop_items")
-
-            if reset_type != "full":
-                # For an economy-only reset we also clear inventory
-                reset_counts["Inventory Items"] = self.db.execute_query(
-                    "SELECT COUNT(*) FROM inventory", fetch='one'
-                )[0]
-                self.db.execute_query("DELETE FROM inventory")
-
-        # ————— Travel data + Temp channel cleanup —————
-        if reset_type in ["full", "travel"]:
-            reset_counts["Travel Sessions"] = self.db.execute_query(
-                "SELECT COUNT(*) FROM travel_sessions", fetch='one'
-            )[0]
-
-            # Get any temporary channels from travel sessions
-            temp_channels = self.db.execute_query(
-                "SELECT DISTINCT temp_channel_id FROM travel_sessions WHERE temp_channel_id IS NOT NULL",
-                fetch='all'
-            )
-
-            self.db.execute_query("DELETE FROM travel_sessions")
-
-            temp_deleted = 0
+                        pass
+            
             for (channel_id,) in temp_channels:
                 channel = guild.get_channel(channel_id)
                 if channel:
                     try:
-                        await channel.delete(reason="Travel reset — session cancelled")
-                        temp_deleted += 1
+                        await channel.delete(reason="Full server reset")
+                        channels_deleted += 1
                     except:
                         pass
+            
+            reset_counts["Discord Channels"] = channels_deleted
+            
+        else:
+            # Handle other reset types (unchanged from original)
+            
+            # ————— Character data —————
+            if reset_type in ["characters"]:
+                reset_counts["Characters"] = self.db.execute_query(
+                    "SELECT COUNT(*) FROM characters", fetch='one'
+                )[0]
+                reset_counts["Ships"] = self.db.execute_query(
+                    "SELECT COUNT(*) FROM ships", fetch='one'
+                )[0]
+                reset_counts["Inventory Items"] = self.db.execute_query(
+                    "SELECT COUNT(*) FROM inventory", fetch='one'
+                )[0]
 
-            reset_counts["Temporary Channels Deleted"] = temp_deleted
+                # Delete in proper order to avoid foreign key issues
+                self.db.execute_query("DELETE FROM logbook_entries")
+                self.db.execute_query("DELETE FROM character_identity")
+                self.db.execute_query("DELETE FROM character_reputation")
+                self.db.execute_query("DELETE FROM character_experience")
+                self.db.execute_query("DELETE FROM character_inventory")
+                self.db.execute_query("DELETE FROM characters")
+                self.db.execute_query("DELETE FROM ships")
+                self.db.execute_query("DELETE FROM inventory")
 
-        # ————— Group data —————
-        if reset_type in ["full", "groups"]:
-            reset_counts["Groups"] = self.db.execute_query(
-                "SELECT COUNT(*) FROM groups", fetch='one'
-            )[0]
-            self.db.execute_query("DELETE FROM groups")
-            if reset_type != "full":
-                # If characters weren't wiped, clear their group_id
+            # ————— Galaxy data —————
+            if reset_type in ["galaxy"]:
+                reset_counts["Locations"] = self.db.execute_query(
+                    "SELECT COUNT(*) FROM locations", fetch='one'
+                )[0]
+                reset_counts["Corridors"] = self.db.execute_query(
+                    "SELECT COUNT(*) FROM corridors", fetch='one'
+                )[0]
+
+                location_channels = self.db.execute_query(
+                    "SELECT channel_id FROM locations WHERE channel_id IS NOT NULL",
+                    fetch='all'
+                )
+
+                await self._clear_comprehensive_galaxy_data()
+
+                channels_deleted = 0
+                for (channel_id,) in location_channels:
+                    channel = guild.get_channel(channel_id)
+                    if channel:
+                        try:
+                            await channel.delete(reason="Galaxy reset")
+                            channels_deleted += 1
+                        except:
+                            pass
+
+                reset_counts["Location Channels Deleted"] = channels_deleted
+
+            # ————— Economy data —————
+            if reset_type in ["economy"]:
+                reset_counts["Jobs"] = self.db.execute_query(
+                    "SELECT COUNT(*) FROM jobs", fetch='one'
+                )[0]
+                reset_counts["Shop Items"] = self.db.execute_query(
+                    "SELECT COUNT(*) FROM shop_items", fetch='one'
+                )[0]
+
+                self.db.execute_query("DELETE FROM jobs")
+                self.db.execute_query("DELETE FROM job_tracking")
+                self.db.execute_query("DELETE FROM shop_items")
+                self.db.execute_query("DELETE FROM inventory")
+
+            # ————— Travel data —————
+            if reset_type in ["travel"]:
+                reset_counts["Travel Sessions"] = self.db.execute_query(
+                    "SELECT COUNT(*) FROM travel_sessions", fetch='one'
+                )[0]
+
+                temp_channels = self.db.execute_query(
+                    "SELECT DISTINCT temp_channel_id FROM travel_sessions WHERE temp_channel_id IS NOT NULL",
+                    fetch='all'
+                )
+
+                self.db.execute_query("DELETE FROM travel_sessions")
+                self.db.execute_query("DELETE FROM corridor_events")
+
+                temp_deleted = 0
+                for (channel_id,) in temp_channels:
+                    channel = guild.get_channel(channel_id)
+                    if channel:
+                        try:
+                            await channel.delete(reason="Travel reset")
+                            temp_deleted += 1
+                        except:
+                            pass
+
+                reset_counts["Temporary Channels Deleted"] = temp_deleted
+
+            # ————— Group data —————
+            if reset_type in ["groups"]:
+                reset_counts["Groups"] = self.db.execute_query(
+                    "SELECT COUNT(*) FROM groups", fetch='one'
+                )[0]
+                
+                self.db.execute_query("DELETE FROM group_votes")
+                self.db.execute_query("DELETE FROM group_vote_sessions")
+                self.db.execute_query("DELETE FROM group_invites")
+                self.db.execute_query("DELETE FROM group_ships")
+                self.db.execute_query("DELETE FROM groups")
                 self.db.execute_query("UPDATE characters SET group_id = NULL")
 
         return reset_counts
@@ -2583,15 +2698,31 @@ class ServerResetConfirmView(discord.ui.View):
             admin_cog.db.execute_query("DELETE FROM galaxy_info")
             
             # Clear any remaining tables that might not be in _perform_reset
-            additional_tables = [
+            additional_tables_to_clear = [
                 "game_panels", "news_queue", "galactic_history", 
-                "endgame_config", "endgame_evacuations"
+                "endgame_config", "endgame_evacuations", "active_beacons",
+                "afk_warnings", "search_cooldowns", "user_location_panels",
+                "pvp_opt_outs", "pvp_combat_states", "pvp_cooldowns", 
+                "pending_robberies", "character_inventory", "ship_activities",
+                "player_ships", "repeaters", "corridor_events", "logbook_entries",
+                "character_reputation", "character_experience", "character_identity",
+                "home_invitations", "home_market_listings", "home_interiors", 
+                "home_activities", "location_homes", "location_economy", 
+                "economic_events", "location_ownership", "location_upgrades",
+                "location_access_control", "location_income_log", "location_storage",
+                "sub_locations", "black_markets", "black_market_items",
+                "static_npcs", "dynamic_npcs", "npc_respawn_queue", "npc_inventory",
+                "npc_trade_inventory", "npc_jobs", "npc_job_completions",
+                "combat_states", "combat_encounters", "group_invites",
+                "group_vote_sessions", "group_votes", "group_ships",
+                "job_tracking", "ship_upgrades", "ship_customizations"
             ]
-            for table in additional_tables:
+
+            for table in additional_tables_to_clear:
                 try:
                     admin_cog.db.execute_query(f"DELETE FROM {table}")
                 except:
-                    pass
+                    pass  # Table might not exist
             
             # Final status update
             total_deleted = sum(reset_results.values())

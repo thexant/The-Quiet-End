@@ -5,6 +5,7 @@ import json
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
+import uuid
 
 class ItemUsageCog(commands.Cog):
     def __init__(self, bot):
@@ -344,7 +345,67 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "emergency_signal":
             # Emergency beacon - could trigger admin notification or spawn rescue event
             return {"success": True, "message": "Emergency signal transmitted! Help may be on the way..."}
-        
+        elif usage_type == "personal_log":
+            # Handle personal log usage
+            char_data = self.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (user_id,), fetch='one'
+            )
+            
+            if not char_data:
+                return {"success": False, "message": "Character not found"}
+            
+            char_name = char_data[0]
+            
+            # Get or create logbook ID
+            logbook_id = metadata.get("logbook_id")
+            if not logbook_id:
+                # Generate new logbook ID and update metadata
+                logbook_id = str(uuid.uuid4())
+                metadata["logbook_id"] = logbook_id
+                
+                # Update item metadata in database
+                self.db.execute_query(
+                    "UPDATE inventory SET metadata = ? WHERE item_id = ?",
+                    (json.dumps(metadata), item_id)
+                )
+            
+            # Create personal log interface
+            from views.personal_log_views import PersonalLogMainView
+            view = PersonalLogMainView(self.bot, user_id, logbook_id, char_name)
+            
+            embed = discord.Embed(
+                title="📖 Personal Logbook Interface",
+                description=f"**{item_name}**\nAccess your personal logs and create new entries.",
+                color=0x4169E1
+            )
+            
+            embed.add_field(
+                name="📋 Logbook ID", 
+                value=f"`{logbook_id[:8]}...`",
+                inline=True
+            )
+            
+            # Count existing entries
+            entry_count = self.db.execute_query(
+                "SELECT COUNT(*) FROM logbook_entries WHERE logbook_id = ?",
+                (logbook_id,),
+                fetch='one'
+            )[0]
+            
+            embed.add_field(
+                name="📊 Total Entries",
+                value=str(entry_count),
+                inline=True
+            )
+            
+            return {
+                "success": True,
+                "message": "Personal log interface activated",
+                "requires_interaction": True,
+                "embed": embed,
+                "view": view
+            }
         else:
             return {"success": False, "message": f"Unknown usage type: {usage_type}"}
 

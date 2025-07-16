@@ -6,6 +6,7 @@ import random
 import asyncio
 from datetime import datetime, timedelta
 import json
+from typing import Optional, Literal
 
 class EnhancedEventsCog(commands.Cog):
     def __init__(self, bot):
@@ -2050,6 +2051,427 @@ class EnhancedEventsCog(commands.Cog):
                 ephemeral=False
             )
 
+
+    def _get_available_events(self):
+        """Get a mapping of all available events for admin commands"""
+        return {
+            # Colony Events
+            "industrial_accident": {
+                "name": "Industrial Accident",
+                "description": "Factory malfunction requiring emergency response",
+                "types": ["colony"],
+                "handler": "location_event",
+                "event_key": "Industrial Accident"
+            },
+            "worker_strike": {
+                "name": "Worker Strike", 
+                "description": "Labor dispute requiring mediation",
+                "types": ["colony"],
+                "handler": "location_event",
+                "event_key": "Worker Strike"
+            },
+            "equipment_malfunction": {
+                "name": "Equipment Malfunction",
+                "description": "Critical system failure needing repairs",
+                "types": ["colony", "space_station", "outpost"],
+                "handler": "location_event", 
+                "event_key": "Equipment Malfunction"
+            },
+            "refugee_arrival": {
+                "name": "Refugee Arrival",
+                "description": "Displaced civilians requesting sanctuary",
+                "types": ["colony", "space_station"],
+                "handler": "location_event",
+                "event_key": "Refugee Arrival"
+            },
+            "celebration": {
+                "name": "Celebration Festival",
+                "description": "Colony anniversary celebration",
+                "types": ["colony"],
+                "handler": "location_event",
+                "event_key": "Celebration Festival"
+            },
+            
+            # Station Events
+            "docking_overload": {
+                "name": "Docking Overload",
+                "description": "Traffic control systems failing",
+                "types": ["space_station"],
+                "handler": "location_event",
+                "event_key": "Docking System Overload"
+            },
+            "trade_convoy": {
+                "name": "Trade Convoy",
+                "description": "Major merchant fleet arrival",
+                "types": ["space_station"],
+                "handler": "location_event",
+                "event_key": "Trade Convoy Arrival"
+            },
+            "vip_arrival": {
+                "name": "VIP Arrival",
+                "description": "Corporate executive visit",
+                "types": ["space_station"],
+                "handler": "location_event",
+                "event_key": "VIP Arrival"
+            },
+            
+            # Outpost Events
+            "supply_shortage": {
+                "name": "Supply Shortage",
+                "description": "Critical resources running low",
+                "types": ["outpost"],
+                "handler": "location_event",
+                "event_key": "Supply Shortage"
+            },
+            "salvage_discovery": {
+                "name": "Salvage Discovery",
+                "description": "Valuable debris detected nearby",
+                "types": ["outpost"],
+                "handler": "location_event",
+                "event_key": "Salvage Discovery"
+            },
+            "comm_blackout": {
+                "name": "Communication Blackout",
+                "description": "Array failure isolating outpost",
+                "types": ["outpost"],
+                "handler": "location_event",
+                "event_key": "Communication Blackout"
+            },
+            "mysterious_signal": {
+                "name": "Mysterious Signal",
+                "description": "Unknown transmission from deep space",
+                "types": ["outpost", "gate"],
+                "handler": "location_event",
+                "event_key": "Mysterious Signal"
+            },
+            
+            # Space Phenomena (work anywhere)
+            "solar_flare": {
+                "name": "Solar Flare",
+                "description": "Massive solar activity interfering with systems",
+                "types": ["colony", "space_station", "outpost", "gate"],
+                "handler": "space_phenomena",
+                "event_key": "Solar Flare"
+            },
+            "quantum_storm": {
+                "name": "Static Fog Storm",
+                "description": "Electromagnetic interference affecting systems",
+                "types": ["colony", "space_station", "outpost", "gate"],
+                "handler": "space_phenomena",
+                "event_key": "Quantum Storm"
+            },
+            "asteroid_field": {
+                "name": "Asteroid Field",
+                "description": "Debris field requiring navigation",
+                "types": ["colony", "space_station", "outpost", "gate"],
+                "handler": "space_phenomena",
+                "event_key": "Asteroid Field"
+            },
+            "radiation_nebula": {
+                "name": "Radiation Nebula",
+                "description": "High-energy particles causing damage",
+                "types": ["colony", "space_station", "outpost", "gate"],
+                "handler": "space_phenomena",
+                "event_key": "Radiation Nebula"
+            },
+            
+            # Hostile Encounters
+            "pirate_raiders": {
+                "name": "Pirate Raiders",
+                "description": "Hostile ships on intercept course",
+                "types": ["colony", "space_station", "outpost", "gate"],
+                "handler": "hostile_encounter",
+                "event_key": "Pirate Raiders"
+            },
+            "scavenger_drones": {
+                "name": "Scavenger Drones",
+                "description": "Automated mining drones targeting ships",
+                "types": ["colony", "space_station", "outpost", "gate"],
+                "handler": "hostile_encounter",
+                "event_key": "Scavenger Drones"
+            },
+            "corporate_security": {
+                "name": "Corporate Security",
+                "description": "Mega-corp enforcement demanding inspection",
+                "types": ["space_station", "colony"],
+                "handler": "hostile_encounter",
+                "event_key": "Corporate Security"
+            },
+            
+            # Reputation Events
+            "lost_child": {
+                "name": "Lost Child Emergency",
+                "description": "Missing child requiring search assistance",
+                "types": ["colony", "space_station"],
+                "handler": "reputation_event",
+                "event_key": "Lost Child Emergency"
+            },
+            "medical_emergency": {
+                "name": "Medical Emergency",
+                "description": "Civilian collapse requiring medical aid",
+                "types": ["colony", "space_station", "outpost"],
+                "handler": "reputation_event",
+                "event_key": "Medical Emergency"
+            },
+            "whistleblower": {
+                "name": "Corporate Whistleblower",
+                "description": "Evidence of corporate malfeasance discovered",
+                "types": ["colony", "space_station"],
+                "handler": "reputation_event", 
+                "event_key": "Corporate Whistleblower"
+            }
+        }
+
+    @app_commands.command(name="trigger_event", description="Manually trigger a location event (Admin only)")
+    @app_commands.describe(
+        event="The event to trigger",
+        player="Player whose location to use for the event",
+        location="Location name to trigger event at (if no player specified)"
+    )
+    @app_commands.choices(event=[
+        app_commands.Choice(name="Industrial Accident", value="industrial_accident"),
+        app_commands.Choice(name="Worker Strike", value="worker_strike"),
+        app_commands.Choice(name="Equipment Malfunction", value="equipment_malfunction"),
+        app_commands.Choice(name="Refugee Arrival", value="refugee_arrival"),
+        app_commands.Choice(name="Celebration Festival", value="celebration"),
+        app_commands.Choice(name="Docking Overload", value="docking_overload"),
+        app_commands.Choice(name="Trade Convoy", value="trade_convoy"),
+        app_commands.Choice(name="VIP Arrival", value="vip_arrival"),
+        app_commands.Choice(name="Supply Shortage", value="supply_shortage"),
+        app_commands.Choice(name="Salvage Discovery", value="salvage_discovery"),
+        app_commands.Choice(name="Communication Blackout", value="comm_blackout"),
+        app_commands.Choice(name="Mysterious Signal", value="mysterious_signal"),
+        app_commands.Choice(name="Solar Flare", value="solar_flare"),
+        app_commands.Choice(name="Static Fog Storm", value="quantum_storm"),
+        app_commands.Choice(name="Asteroid Field", value="asteroid_field"),
+        app_commands.Choice(name="Radiation Nebula", value="radiation_nebula"),
+        app_commands.Choice(name="Pirate Raiders", value="pirate_raiders"),
+        app_commands.Choice(name="Scavenger Drones", value="scavenger_drones"),
+        app_commands.Choice(name="Corporate Security", value="corporate_security"),
+        app_commands.Choice(name="Lost Child Emergency", value="lost_child"),
+        app_commands.Choice(name="Medical Emergency", value="medical_emergency"),
+        app_commands.Choice(name="Corporate Whistleblower", value="whistleblower"),
+    ])
+    async def trigger_event(
+        self, 
+        interaction: discord.Interaction, 
+        event: str,
+        player: Optional[discord.Member] = None,
+        location: Optional[str] = None
+    ):
+        """Manually trigger a location event"""
+        
+        # Check admin permissions
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Administrator permissions required.", ephemeral=True)
+            return
+        
+        # Get event info
+        available_events = self._get_available_events()
+        if event not in available_events:
+            await interaction.response.send_message(f"❌ Unknown event: {event}", ephemeral=True)
+            return
+        
+        event_info = available_events[event]
+        
+        # Determine target location
+        target_location_id = None
+        target_location_name = None
+        target_location_type = None
+        
+        if player:
+            # Get player's current location
+            char_data = self.db.execute_query(
+                """SELECT c.current_location, l.name, l.location_type 
+                   FROM characters c 
+                   JOIN locations l ON c.current_location = l.location_id 
+                   WHERE c.user_id = ?""",
+                (player.id,),
+                fetch='one'
+            )
+            
+            if not char_data:
+                await interaction.response.send_message(f"❌ {player.display_name} has no character or location.", ephemeral=True)
+                return
+            
+            target_location_id, target_location_name, target_location_type = char_data
+            
+        elif location:
+            # Find location by name
+            location_data = self.db.execute_query(
+                "SELECT location_id, name, location_type FROM locations WHERE LOWER(name) LIKE LOWER(?)",
+                (f"%{location}%",),
+                fetch='one'
+            )
+            
+            if not location_data:
+                await interaction.response.send_message(f"❌ Location '{location}' not found.", ephemeral=True)
+                return
+            
+            target_location_id, target_location_name, target_location_type = location_data
+            
+        else:
+            await interaction.response.send_message("❌ Must specify either a player or location.", ephemeral=True)
+            return
+        
+        # Check if event is compatible with location type
+        if target_location_type not in event_info["types"]:
+            compatible_types = ", ".join(event_info["types"])
+            await interaction.response.send_message(
+                f"❌ Event '{event_info['name']}' cannot occur at {target_location_type} locations.\n"
+                f"Compatible types: {compatible_types}", 
+                ephemeral=True
+            )
+            return
+        
+        # Check for players at location
+        players_present = self.db.execute_query(
+            "SELECT user_id FROM characters WHERE current_location = ?",
+            (target_location_id,),
+            fetch='all'
+        )
+        
+        if not players_present:
+            await interaction.response.send_message(
+                f"❌ No players present at {target_location_name}.", 
+                ephemeral=True
+            )
+            return
+        
+        player_ids = [p[0] for p in players_present]
+        
+        # Get location channel
+        channel = await self._get_location_channel(target_location_id)
+        if not channel:
+            await interaction.response.send_message(
+                f"❌ No Discord channel found for {target_location_name}.", 
+                ephemeral=True
+            )
+            return
+        
+        # Trigger the event based on type
+        try:
+            await interaction.response.send_message(
+                f"🎲 Triggering '{event_info['name']}' at {target_location_name}...", 
+                ephemeral=True
+            )
+            
+            if event_info["handler"] == "location_event":
+                await self._trigger_specific_location_event(
+                    target_location_id, target_location_type, event_info["event_key"], player_ids
+                )
+                
+            elif event_info["handler"] == "space_phenomena":
+                await self._trigger_space_phenomena_event(
+                    target_location_id, event_info["event_key"], player_ids, target_location_name
+                )
+                
+            elif event_info["handler"] == "hostile_encounter":
+                await self._trigger_hostile_encounter_event(
+                    target_location_id, event_info["event_key"], player_ids, target_location_name
+                )
+                
+            elif event_info["handler"] == "reputation_event":
+                await self._trigger_reputation_event_specific(
+                    target_location_id, event_info["event_key"], player_ids
+                )
+            
+            # Log the admin action
+            print(f"🎲 Admin {interaction.user.display_name} triggered '{event_info['name']}' at {target_location_name}")
+            
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error triggering event: {str(e)}", ephemeral=True)
+            print(f"❌ Error in admin event trigger: {e}")
+
+    async def _trigger_specific_location_event(self, location_id: int, location_type: str, event_key: str, player_ids: list):
+        """Trigger a specific location event by key"""
+        wealth = 5  # Default wealth for admin events
+        population = 100  # Default population
+        
+        # Get the appropriate event pool
+        if location_type == 'colony':
+            events = self._get_colony_events(wealth, population)
+        elif location_type == 'space_station':
+            events = self._get_station_events(wealth, population)
+        elif location_type == 'outpost':
+            events = self._get_outpost_events(wealth, population)
+        elif location_type == 'gate':
+            events = self._get_gate_events(wealth, population)
+        else:
+            return
+        
+        # Find the specific event
+        target_event = None
+        for event in events:
+            if event['name'] == event_key:
+                target_event = event
+                break
+        
+        if not target_event:
+            return
+        
+        # Execute the event
+        channel = await self._get_location_channel(location_id)
+        location_name = self.db.execute_query(
+            "SELECT name FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )[0]
+        
+        await self._execute_location_event(channel, target_event, player_ids, location_name)
+
+    async def _trigger_space_phenomena_event(self, location_id: int, event_key: str, player_ids: list, location_name: str):
+        """Trigger a space phenomena event"""
+        phenomena_map = {
+            "Solar Flare": (self._handle_solar_flare, 0xff4500),
+            "Quantum Storm": (self._handle_quantum_storm, 0x9400d3), 
+            "Asteroid Field": (self._handle_asteroid_field, 0x8b4513),
+            "Radiation Nebula": (self._handle_radiation_nebula, 0xff0000)
+        }
+        
+        if event_key in phenomena_map:
+            handler, color = phenomena_map[event_key]
+            description = f"Admin-triggered {event_key} event at {location_name}."
+            await handler(location_id, player_ids, location_name, event_key, description, color)
+
+    async def _trigger_hostile_encounter_event(self, location_id: int, event_key: str, player_ids: list, location_name: str):
+        """Trigger a hostile encounter event"""
+        encounter_map = {
+            "Pirate Raiders": (self._handle_pirate_encounter, 0x8b0000),
+            "Scavenger Drones": (self._handle_scavenger_encounter, 0x708090),
+            "Corporate Security": (self._handle_security_encounter, 0x000080)
+        }
+        
+        if event_key in encounter_map:
+            handler, color = encounter_map[event_key]
+            description = f"Admin-triggered {event_key} detected at {location_name}."
+            await handler(location_id, player_ids, location_name, event_key, description, color)
+
+    async def _trigger_reputation_event_specific(self, location_id: int, event_key: str, player_ids: list):
+        """Trigger a specific reputation event"""
+        # Get appropriate reputation events
+        all_reputation_events = (
+            self._get_positive_reputation_events("colony", 5) +
+            self._get_negative_reputation_events("colony", 5) +
+            self._get_mixed_reputation_events("colony", 5)
+        )
+        
+        # Find the specific event
+        target_event = None
+        for event in all_reputation_events:
+            if event['title'] == event_key:
+                target_event = event
+                break
+        
+        if target_event:
+            channel = await self._get_location_channel(location_id)
+            location_name = self.db.execute_query(
+                "SELECT name FROM locations WHERE location_id = ?",
+                (location_id,),
+                fetch='one'
+            )[0]
+            
+            await self._execute_reputation_event(channel, target_event, player_ids, location_id, location_name)
 class PirateEncounterView(discord.ui.View):
     def __init__(self, bot, encounter_id, players, pirate_ships):
         super().__init__(timeout=300)

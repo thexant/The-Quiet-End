@@ -1784,9 +1784,9 @@ class CombatCog(commands.Cog):
                     await channel.send(embed=embed)
                 except Exception:
                     pass  # Channel not accessible
-    @rob_group.command(name="rob_player", description="Attempt to rob another player")
+    @rob_group.command(name="player", description="Attempt to rob another player")
     @app_commands.describe(target="The player you want to rob")
-    async def rob_player(self, interaction: discord.Interaction, target: discord.Member):
+    async def player(self, interaction: discord.Interaction, target: discord.Member):
         # Basic validation
         if target.id == interaction.user.id:
             await interaction.response.send_message("You cannot rob yourself!", ephemeral=True)

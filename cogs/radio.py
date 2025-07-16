@@ -105,10 +105,19 @@ class RadioCog(commands.Cog):
             sender_system_display, message, recipients
         )
         
-        await interaction.response.send_message(
-            f"📡 Radio transmission sent!",
-            ephemeral=True
-        )
+        # Try to award passive XP for radio communication (add this before the final response)
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            xp_awarded = await char_cog.try_award_passive_xp(interaction.user.id, "radio")
+            if xp_awarded:
+                # Modify the final response to include XP notification
+                final_message = f"📡 Radio transmission sent!\n✨ *You feel more experienced with radio operations.* (+5 XP)"
+            else:
+                final_message = f"📡 Radio transmission sent!"
+        else:
+            final_message = f"📡 Radio transmission sent!"
+
+        await interaction.response.send_message(final_message, ephemeral=True)
     
     # Replace the _handle_gated_corridor_radio method with this new _handle_transit_radio method.
     # It now correctly handles both gated and ungated transit based on corridor type.
@@ -662,8 +671,7 @@ class RadioCog(commands.Cog):
         
         # Add atmospheric footer
         embed.set_footer(
-            text=f"• Received in {corridor_name} • Signal relayed through corridor endpoints",
-            icon_url="https://cdn.discordapp.com/emojis/📻.png"
+            text=f"• Received in {corridor_name} • Signal relayed through corridor endpoints"
         )
         embed.timestamp = discord.utils.utcnow()
         
@@ -785,8 +793,7 @@ class RadioCog(commands.Cog):
         
         # Add atmospheric footer
         embed.set_footer(
-            text=f"• Signal strength varies by distance and interference",
-            icon_url="https://cdn.discordapp.com/emojis/📻.png"
+            text=f"📻 Signal strength varies by distance and interference"
         )
         embed.timestamp = discord.utils.utcnow()
         

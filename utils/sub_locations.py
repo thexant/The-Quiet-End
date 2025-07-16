@@ -3487,7 +3487,7 @@ class SubLocationServiceView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def _handle_traveler_info(self, interaction, char_name: str):
+    async def _handle_travel_info(self, interaction, char_name: str):
         """Handle getting travel information"""
         import random
         

@@ -134,14 +134,34 @@ class Database:
             conn.close()
         except:
             pass
-    
-    def execute_query(self, query, params=None, fetch=None):
+            
+    def execute_read_query(self, query, params=None, fetch='all'):
+        """Execute a read-only query without acquiring the main lock"""
+        if self._shutdown:
+            raise RuntimeError("Database is shutting down")
+        
+        # Don't use the main lock for read operations
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(query, params or [])
+            
+            if fetch == 'one':
+                return cursor.fetchone()
+            elif fetch == 'all':
+                return cursor.fetchall()
+            else:
+                return None
+        finally:
+            self._close_connection(conn)
+            
+    def execute_query(self, query, params=None, fetch=None, many=False):
         """Execute a single query with automatic connection management"""
         if self._shutdown:
             raise RuntimeError("Database is shutting down")
             
         max_retries = 3
-        retry_delay = 0.1
+        retry_delay = 0.5  # Start with longer delay
         
         for attempt in range(max_retries):
             try:
@@ -149,12 +169,21 @@ class Database:
                     conn = self.get_connection()
                     try:
                         cursor = conn.cursor()
-                        cursor.execute(query, params or [])
+                        
+                        # Support bulk inserts with executemany
+                        if many and params:
+                            cursor.executemany(query, params)
+                        elif params:
+                            cursor.execute(query, params or [])
+                        else:
+                            cursor.execute(query)
                         
                         if fetch == 'one':
                             result = cursor.fetchone()
                         elif fetch == 'all':
                             result = cursor.fetchall()
+                        elif fetch == 'lastrowid':
+                            result = cursor.lastrowid
                         else:
                             result = None
                         
@@ -163,6 +192,7 @@ class Database:
                     except sqlite3.Error as e:
                         conn.rollback()
                         if attempt < max_retries - 1 and "database is locked" in str(e):
+                            print(f"⚠️ Database locked on attempt {attempt + 1}, retrying...")
                             time.sleep(retry_delay * (attempt + 1))
                             continue
                         raise e
@@ -174,20 +204,54 @@ class Database:
                     continue
                 print(f"❌ Database error: {e}")
                 print(f"Query: {query}")
-                print(f"Params: {params}")
+                if not many:
+                    print(f"Params: {params}")
+                else:
+                    print(f"Params: {len(params) if params else 0} rows")
                 raise e
 
     def begin_transaction(self):
         """Begin a transaction with proper connection tracking"""
         if self._shutdown:
             raise RuntimeError("Database is shutting down")
+        
+        # Try to acquire lock with timeout
+        acquired = self.lock.acquire(timeout=30)
+        if not acquired:
+            raise RuntimeError("Could not acquire database lock for transaction")
+        
+        try:
+            conn = self.get_connection()
+            # Use IMMEDIATE to lock the database right away
+            conn.execute("BEGIN IMMEDIATE")
+            return conn
+        except:
+            # If we fail to begin transaction, release the lock
+            self.lock.release()
+            raise
             
-        self.lock.acquire()
+    def execute_bulk_read_queries(self, queries_and_params):
+        """Execute multiple read-only queries in a single connection to reduce overhead"""
+        if self._shutdown:
+            raise RuntimeError("Database is shutting down")
+        
+        results = []
         conn = self.get_connection()
-        # Set transaction mode
-        conn.execute("BEGIN IMMEDIATE")
-        return conn
-
+        try:
+            cursor = conn.cursor()
+            for query, params, fetch_type in queries_and_params:
+                cursor.execute(query, params or [])
+                
+                if fetch_type == 'one':
+                    results.append(cursor.fetchone())
+                elif fetch_type == 'all':
+                    results.append(cursor.fetchall())
+                else:
+                    results.append(None)
+            return results
+        finally:
+            self._close_connection(conn)
+            
     def execute_in_transaction(self, conn, query, params=None, fetch=None):
         """Execute a query within an existing transaction"""
         try:
@@ -472,7 +536,17 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
-
+            # Add this to the queries list in init_database()
+            '''CREATE TABLE IF NOT EXISTS logbook_entries (
+                entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                logbook_id TEXT NOT NULL,
+                author_name TEXT NOT NULL,
+                author_id INTEGER NOT NULL,
+                entry_title TEXT NOT NULL,
+                entry_content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ingame_date TEXT NOT NULL
+            )''',
             # Black market items
             '''CREATE TABLE IF NOT EXISTS black_market_items (
                 item_id INTEGER PRIMARY KEY AUTOINCREMENT,

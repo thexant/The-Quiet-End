@@ -40,12 +40,18 @@ class HelpCog(commands.Cog):
         embed.add_field(
             name="👤 Character Management",
             value=(
-                "`/character create` - Create your character\n"
+                "`/here` - Open your location interaction panel\n"
+                "`/status` - View your character, stats, ship and inventory\n"
                 "`/character delete` - Permanently delete your character\n"
                 "`/character login` - Log into the game world\n"
                 "`/character logout` - Safely log out\n"
-                "`/here` - Open your location interaction panel\n"
-                "`/status` - View your character, stats, ship and inventory"
+                "`/character name` - Toggle automatic nickname changing\n"
+                "`/act <action>` - Perform a roleplay action\n"
+                "`/character dock/undock` - Manage ship docking status\n"
+                "`/character search` - Search location for items\n"
+                "`/character train` - Train skills at certain locations\n"
+                "`/character drop/pickup` - Manage items at locations\n"
+                "`/use <item>` - Use an item from your inventory"
             ),
             inline=False
         )
@@ -55,12 +61,32 @@ class HelpCog(commands.Cog):
             name="🚀 Travel & Navigation",
             value=(
                 "`/travel go` - Travel between locations\n"
-                "`/webmap_status` - View web-map and it's status\n"
+                "`/travel status` - Check your current travel progress\n"
+                "`/travel routes` - View available routes from current location\n"
+                "`/travel plotroute <destination>` - Calculate best route to destination\n"
+                "`/travel fuel_estimate` - Calculate fuel requirements for routes\n"
+                "`/travel emergency_exit` - Emergency corridor exit (DANGEROUS)\n"
+                "`/webmap_status` - View web-map and its status\n"
                 "📍 Visit location channels to dock and access services"
             ),
             inline=False
         )
-        
+        embed.add_field(
+            name="💰 Economy & Jobs",
+            value=(
+                "`/shop list` - Browse available items for purchase\n"
+                "`/shop buy <item> [qty]` - Buy items from shop\n"
+                "`/shop sell <item> [qty]` - Sell items from inventory\n"
+                "`/job list` - View available jobs at location\n"
+                "`/job accept <job>` - Accept a job by title or ID\n"
+                "`/job status` - Check current job progress\n"
+                "`/job complete` - Complete your current job\n"
+                "`/job abandon` - Abandon current job\n"
+                "`/federal_supply list` - Access Federal Supply depot\n"
+                "`/npc` - Interact with NPCs at your location"
+            ),
+            inline=False
+        )
         # Communication
         embed.add_field(
             name="📻 Communication",
@@ -71,21 +97,81 @@ class HelpCog(commands.Cog):
             ),
             inline=False
         )
-        
+        # Time System - NEW
+        embed.add_field(
+            name="🕐 Time System",
+            value=(
+                "`/date` - View current Inter-Solar Standard Time (ISST)\n"
+                "⏰ Galaxy operates on accelerated time scale"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="🏢 Area Access",
+            value=(
+                "`/area enter <type>` - Enter location sub-areas (bar, medbay, etc.)\n"
+                "`/area leave` - Leave current sub-location area\n"
+                "`/area list` - View available areas at your location\n"
+                "🍺 Access specialized areas like bars, medical bays, and more"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="⚔️ Combat Commands",
+            value=(
+                "`/attack npc` - Initiate combat with an NPC\n"
+                "`/attack player` - Initiate PvP combat with player\n"
+                "`/attack fight` - Continue an ongoing fight\n"
+                "`/attack flee` - Attempt to escape from combat\n"
+                "`/pvp_opt` - Manage your PvP opt-out status\n"
+                "`/rob npc` - Attempt to rob an NPC\n"
+                "`/rob player` - Attempt to rob another player"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="🚀 Ship Management",
+            value=(
+                "`/ship interior enter` - Enter your ship's interior\n"
+                "`/ship interior leave` - Exit your ship\n"
+                "`/ship interior board <player>` - Request to board another ship\n"
+                "`/ship customize` - Customize ship appearance and upgrades\n"
+                "`/ship upgrade` - Purchase ship component upgrades\n"
+                "`/ship shipyard` - Access shipyard services\n"
+                "`/ship group_ship` - Manage group ship settings"
+            ),
+            inline=False
+        )
         # Group System
         embed.add_field(
             name="👥 Group System",
             value=(
-                "`/group create <size>` - Start a crew (2-4 members)\n"
-                "`/group join <leader>` - Join someone's crew\n"
-                "`/group leave` - Leave your current crew\n"
-                "`/group travel_vote` - Vote on group travel\n"
-                "`/group job_vote` - Vote on group jobs\n"
-                "`/group vote <Yes/No>` - Cast your vote on group votes"
+                "`/group create [name]` - Start a group\n"
+                "`/group invite <player>` - Invite someone to your group (leader only)\n"
+                "`/group join <group_name>` - Join a group (requires invitation)\n"
+                "`/group leave` - Leave your current group\n"
+                "`/group disband` - Dissolve your group (leader only)\n"
+                "`/group info` - View group information\n"
+                "`/group kick <player>` - Remove member (leader only)\n"
+                "`/group travel_vote` - Start group travel vote (leader only)\n"
+                "`/group vote <yes/no>` - Cast your vote in group decisions"
             ),
             inline=False
         )
-        
+        embed.add_field(
+            name="📍 Location Management",
+            value=(
+                "`/here` - View interactive location panel\n"
+                "`/location_info` - View detailed location information\n"
+                "`/purchase_location` - Purchase or claim current location\n"
+                "`/upgrade_location` - Upgrade your owned locations\n"
+                "`/logs view` - View location's log/guestbook\n"
+                "`/logs add <message>` - Add entry to location log\n"
+                "🏢 Own and develop locations across the galaxy"
+            ),
+            inline=False
+        )
+
         # Quick Start
         embed.add_field(
             name="🎯 Quick Start Guide",
@@ -146,7 +232,71 @@ class HelpCog(commands.Cog):
             ),
             inline=False
         )
-        
+        # Area Access - NEW (add after Core Commands)
+        embed.add_field(
+            name="🏢 Area Access",
+            value=(
+                "`/area list` - View available sub-areas at this location\n"
+                "`/area enter <type>` - Enter specialized areas\n"
+                "`/area leave` - Exit current sub-area\n"
+                "• Access bars, medical bays, engineering, security offices\n"
+                "• Different locations offer different specialized areas"
+            ),
+            inline=False
+        )
+        # Location Management & Logs
+        # NPC Interactions
+        embed.add_field(
+            name="👥 NPC Interactions",
+            value=(
+                "`/npc` - Interact with NPCs at this location\n"
+                "• Browse NPC job offerings\n"
+                "• Trade items with NPCs\n"
+                "• General conversation and roleplay"
+            ),
+            inline=False
+        )
+        # Ship Commands - UPDATED
+        embed.add_field(
+            name="🚀 Ship Commands",
+            value=(
+                "`/ship interior enter` - Enter your ship\n"
+                "`/ship interior leave` - Exit ship interior\n"
+                "`/ship interior board <player>` - Board another ship\n"
+                "`/ship customize` - Customize ship appearance\n"
+                "`/ship upgrade` - Purchase ship upgrades\n"
+                "`/ship shipyard` - Access shipyard services\n"
+                "`/ship group_ship` - Manage group ship settings"
+            ),
+            inline=True
+        )
+         # Home Management (if applicable)
+        if has_shops:  # Assuming homes are available where shops are
+            embed.add_field(
+                name="🏠 Home Services",
+                value=(
+                    "If this location has homes available, you may be able to purchase one\n"
+                    "`/home buy` - Purchase available homes\n"
+                    "`/homes view` - View your properties\n"
+                    "`/home interior enter` - Enter your home\n"
+                    "`/home market` - List home for sale"
+                ),
+                inline=False
+            )
+        # Location Logs and Ownership
+        embed.add_field(
+            name="📜 Location Services",
+            value=(
+                "`/location_info` - View detailed location information\n"
+                "`/logs view` - Read location log/guestbook\n"
+                "`/logs add <message>` - Add entry to location log\n"
+                "`/purchase_location` - Purchase/claim location (if available)\n"
+                "`/upgrade_location` - Upgrade owned locations\n"
+                "• View ownership status and upgrade information\n"
+                "• Read and contribute to location history"
+            ),
+            inline=False
+        )
         # Services Available
         services = []
         if has_shops:
@@ -154,16 +304,18 @@ class HelpCog(commands.Cog):
                 "🛒 **Shopping Available**",
                 "`/shop list` - Browse available items",
                 "`/shop buy <item> [quantity]` - Purchase items",
-                "`/shop sell <item> [quantity]` - Sell your items"
+                "`/shop sell <item> [quantity]` - Sell your items",
+                "`/federal_supply list` - Access Federal supplies (if available)"
             ])
-        
+
         if has_jobs:
             services.extend([
                 "💼 **Jobs Available**",
                 "`/job list` - View available jobs",
                 "`/job accept <job_id>` - Accept a job",
                 "`/job status` - Check current job progress",
-                "`/job complete` - Complete current job"
+                "`/job complete` - Complete current job",
+                "`/job abandon` - Abandon current job"
             ])
         
         if has_medical:
@@ -255,7 +407,31 @@ class HelpCog(commands.Cog):
                 "🔧 Advanced repair and modification services",
                 "💰 Often expensive but high-quality services"
             ])
-        
+        if location_type in ["colony", "space_station", "outpost"]:
+            tips.extend([
+                "📜 Check the location log to read about recent events",
+                "💰 Some distressed locations may be available for purchase",
+                "⬆️ Owned locations can be upgraded to improve services"
+            ])
+        # Add ownership-specific tips
+        if owner_id == interaction.user.id:
+            tips.extend([
+                "🏢 You own this location! Use `/upgrade_location` to improve it",
+                "💰 Collect income regularly from your location",
+                "📊 Monitor your location's performance and upgrade strategically"
+            ])
+        elif is_derelict or wealth_level <= 3:
+            tips.extend([
+                "💰 This location may be available for purchase",
+                "🏗️ Purchasing allows you to upgrade and improve the location",
+                "📈 Ownership can provide passive income over time"
+            ])
+
+        # Add log-specific tips for all locations
+        tips.extend([
+            "📜 Use `/logs view` to read about this location's history",
+            "✍️ Add your own entry with `/logs add` to leave your mark"
+        ])
         if tips:
             embed.add_field(
                 name="💡 Location Tips",
@@ -289,7 +465,9 @@ class HelpCog(commands.Cog):
                 "`/status` - Open your interactive character panel\n"
                 "`/here` - Open your interactive location panel\n"
                 "`/radio send <message>` - Send radio transmission\n"
-                "`/galaxy visual_map` - View your route on the galaxy map"
+                "`/travel status` - Check your travel progress\n"
+                "`/travel emergency_exit` - Emergency exit (DANGEROUS)\n"
+                "`/date` - View current galactic time"
             ),
             inline=False
         )
@@ -343,7 +521,6 @@ class HelpCog(commands.Cog):
         embed.add_field(
             name="👤 Character Commands",
             value=(
-                "`/character create` - Create new character\n"
                 "`/status` - Open your interactive character panel\n"
                 "`/here` - Open your interactive location panel\n"
                 "`/character login` - Login to game\n"
@@ -352,20 +529,56 @@ class HelpCog(commands.Cog):
             ),
             inline=True
         )
-        
-        # Travel Commands
+        # Time System Commands - NEW
+        embed.add_field(
+            name="🕐 Time Commands",
+            value=(
+                "`/date` - View current galactic time\n"
+                "⏰ Inter-Solar Standard Time (ISST)"
+            ),
+            inline=True
+        )
+
+        # Area Commands - NEW
+        embed.add_field(
+            name="🏢 Area Commands",
+            value=(
+                "`/area enter <type>` - Enter sub-areas\n"
+                "`/area leave` - Leave current area\n"
+                "`/area list` - List available areas\n"
+                "🍺 Bars, medbays, hangars, and more"
+            ),
+            inline=True
+        )
+        # Travel Commands - UPDATED
         embed.add_field(
             name="🚀 Travel Commands",
             value=(
                 "`/travel go` - Travel between locations\n"
-                "`/galaxy visual_map` - Generate a galaxy map\n"
-                "`/travel plotroute` - Plot a route to a destination\n"
-                "`/travel routes` - View Available travel routes\n"
-                "`/webmap status` - Get the webmap status"
+                "`/travel status` - Check travel progress\n"
+                "`/travel routes` - View available routes\n"
+                "`/travel plotroute <dest>` - Calculate route\n"
+                "`/travel fuel_estimate` - Calculate fuel needs\n"
+                "`/travel emergency_exit` - Emergency exit\n"
+                "`/webmap status` - Get webmap status"
             ),
             inline=True
         )
         
+        # Ship Commands - UPDATED
+        embed.add_field(
+            name="🚀 Ship Commands",
+            value=(
+                "`/ship interior enter` - Enter your ship\n"
+                "`/ship interior leave` - Exit ship interior\n"
+                "`/ship interior board <player>` - Board another ship\n"
+                "`/ship customize` - Customize ship appearance\n"
+                "`/ship upgrade` - Purchase ship upgrades\n"
+                "`/ship shipyard` - Access shipyard services\n"
+                "`/ship group_ship` - Manage group ship settings"
+            ),
+            inline=True
+        )
         # Economy Commands
         embed.add_field(
             name="💰 Economy Commands",
@@ -373,14 +586,29 @@ class HelpCog(commands.Cog):
                 "`/shop list` - Browse shop items\n"
                 "`/shop buy <item> [qty]` - Buy items\n"
                 "`/shop sell <item> [qty]` - Sell items\n"
+                "`/federal_supply list` - Access Federal Supply\n"
                 "`/job list` - View available jobs\n"
                 "`/job accept <id>` - Accept job\n"
                 "`/job status` - Check job progress\n"
-                "`/job complete` - Complete job"
+                "`/job complete` - Complete job\n"
+                "`/job abandon` - Abandon current job"
             ),
             inline=True
         )
-        
+        # Character Actions
+        embed.add_field(
+            name="🎭 Character Actions",
+            value=(
+                "`/act <action>` - Perform roleplay action\n"
+                "`/character search` - Search location for items\n"
+                "`/character train <skill>` - Train at locations\n"
+                "`/character drop <item>` - Drop item at location\n"
+                "`/character pickup <item>` - Pick up items\n"
+                "`/character dock/undock` - Manage ship status\n"
+                "`/character name` - Toggle nickname auto-change"
+            ),
+            inline=True
+        )
         # Group Commands
         embed.add_field(
             name="👥 Group Commands",
@@ -397,56 +625,111 @@ class HelpCog(commands.Cog):
             inline=True
         )
         
-        # Communication Commands
+        # Communication
         embed.add_field(
-            name="📻 Communication Commands",
+            name="📻 Communication & Reputation",
             value=(
-                "`/radio send <message>` - Send radio\n"
+                "`/radio send <message>` - Send radio transmission\n"
+                "`/reputation` - View your regional reputation standings\n"
+                "📡 Range affected by distance & interference\n"
+                "🔄 Messages may be relayed through repeaters"
+            ),
+            inline=False
+        )
+        # Home Commands
+        embed.add_field(
+            name="🏠 Home Commands",
+            value=(
+                "`/home buy` - Purchase homes\n"
+                "`/homes view [player]` - View properties\n"
+                "`/home interior enter` - Enter your home\n"
+                "`/home interior leave` - Exit home\n"
+                "`/home interior invite <player>` - Invite to home\n"
+                "`/home interior accept` - Accept invitation\n"
+                "`/home market` - List home for sale\n"
+                "`/home sell <player> <price>` - Sell directly"
             ),
             inline=True
         )
         embed.add_field(
-            name="🎯 Reputation Bounty Commands",
+            name="📍 Location Management",
+            value=(
+                "`/location_info` - View location details\n"
+                "`/purchase_location` - Buy/claim location\n"
+                "`/upgrade_location` - Upgrade owned locations\n"
+                "`/logs view` - View location log/guestbook\n"
+                "`/logs add <message>` - Add log entry\n"
+                "🏢 Own, develop, and manage locations"
+            ),
+            inline=True
+        )
+        embed.add_field(
+            name="🎯 Reputation & Bounty Commands",
             value=(
                 "`/reputation` - View your regional reputation\n"
-                "`/capture` - Attempt to capture a player of an opposing alignment for a reward\n"
-                "`/bounty` - Attempt to capture a player with a bounty on their head\n"
+                "`/postbounty <player> <amount>` - Post bounty\n"
+                "`/removebounty <player>` - Remove bounty\n"
+                "`/removeallbounties` - Remove all bounties\n"
+                "`/capture <player>` - Capture opposing player\n"
+                "`/bounty <player>` - Capture bountied player\n"
                 "`/bounties` - View active bounties nearby\n"
-                "`/bounty_status` - Check your bounty capture status and active bounties\n"
-                "`/postbounty <player>` - Post a bounty on another player\n"
-                "`/removebounty <player>` - Remove your posted bounty from another player\n"
-                "`/paybounty` - Pay off your bounties\n"
-                "`/removeallbounties` - Remove *all* of your set bounties"
+                "`/bounty_status` - Check bounty status\n"
+                "`/paybounty <amount>` - Pay off bounties"
             ),
             inline=True
         )
+        # Combat Commands
         embed.add_field(
             name="⚔️ Combat Commands",
             value=(
                 "`/attack npc` - Initiate combat with an NPC\n"
-                "`/attack fight` - Make an attack while in combat\n"
+                "`/attack player` - Initiate PvP combat with player\n"
+                "`/attack fight` - Continue an ongoing fight\n"
                 "`/attack flee` - Attempt to escape from combat\n"
-                "`/rob` - Attempt to rob an NPC\n"
-                "PvP and Player Robberies coming soon..."
+                "`/pvp_opt` - Manage your PvP opt-out status\n"
+                "`/rob npc` - Attempt to rob an NPC\n"
+                "`/rob rob_player` - Attempt to rob another player"
+            ),
+            inline=False
+        )
+        # Admin Commands - UPDATED (add these lines to existing admin section)
+        embed.add_field(
+            name="⚙️ Admin Commands",
+            value=(
+                "`/admin setup` - Initial server setup\n"
+                "`/admin config` - View/modify server configuration\n"
+                "`/admin teleport` - Teleport players\n"
+                "`/admin create_item` - Create items for shops/players\n"
+                "`/admin create_job` - Create jobs at locations\n"
+                "`/admin create_location` - Create new locations\n"
+                "`/admin create_corridor` - Create travel corridors\n"
+                "`/admin stats` - View server statistics\n"
+                "`/admin backup` - Backup database\n"
+                "`/admin reset` - Reset various game data\n"
+                "`/setreputation <user> <location> <value>` - Set reputation\n"
+                "`/galaxy generate` - Generate a galaxy\n"
+                "`/web_map start/stop` - Manage webmap service\n"
+                "`/export` - Export galaxy data\n"
+                "`/time_admin pause/resume` - Control time flow\n"
+                "`/time_admin set_time <time>` - Set galactic time\n"
+                "`/time_admin set_speed <factor>` - Set time scale\n"
+                "`/time_admin debug` - Time system diagnostics"
             ),
             inline=True
         )
-        # Admin Commands (if applicable)
-        if interaction.user.guild_permissions.administrator:
-            embed.add_field(
-                name="⚙️ Admin Commands",
-                value=(
-                    "`/admin setup` - Initial server setup\n"
-                    "`/galaxy generate` - Generate a galaxy for the game\n"
-                    "`/web_map start` - Start the webmap service on port 8090\n"
-                    "`/web_map stop` - Stop the webmap service\n"
-                    "`/export` - Export the current galaxy state in a Wiki format, HTML or Markdown\n"
-                    "`/admin teleport` - Teleport players\n"
-                    "`/admin reset` - Reset galaxy\n"
-                    "`/admin backup` - Backup data"
-                ),
-                inline=True
-            )
+        # Event System Admin Commands - NEW
+        embed.add_field(
+            name="🎲 Event System Admin",
+            value=(
+                "`/events trigger_corridor` - Manually trigger corridor check\n"
+                "`/events generate_jobs [location]` - Generate jobs\n"
+                "`/events status` - View event system status\n"
+                "`/events force_collapse <corridor>` - Force corridor collapse\n"
+                "`/events emergency_jobs [count]` - Generate emergency jobs\n"
+                "⚙️ Manage dynamic events and systems"
+            ),
+            inline=True
+        )
         
         embed.set_footer(text="💡 Use /help in specific locations for contextual assistance!")
         

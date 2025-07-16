@@ -3,6 +3,7 @@ import random
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple
 from utils.npc_data import generate_npc_name
+import asyncio
 
 class HistoryGenerator:
     """Generates galactic history events for locations and notable figures"""
@@ -119,31 +120,68 @@ class HistoryGenerator:
                 else:
                     raise e
             
+            # Limit locations for very large galaxies to prevent hanging
+            if len(locations) > 200:
+                locations = random.sample(locations, 200)
+                print(f"📚 Limited history generation to 200 locations (out of {len(locations)} total)")
+            
+            # Pre-fetch all NPCs in one query for efficiency
+            all_npcs = {}
+            if locations:
+                location_ids = [loc[0] for loc in locations]
+                # Create placeholders for IN clause
+                placeholders = ','.join(['?' for _ in location_ids])
+                npc_query = f"SELECT location_id, name FROM static_npcs WHERE location_id IN ({placeholders})"
+                all_npcs_list = self.db.execute_in_transaction(conn, npc_query, location_ids, fetch='all')
+                
+                # Group NPCs by location
+                for loc_id, npc_name in all_npcs_list:
+                    if loc_id not in all_npcs:
+                        all_npcs[loc_id] = []
+                    all_npcs[loc_id].append(npc_name)
+            
             total_events = 0
             current_date_obj = datetime.strptime(current_date, '%Y-%m-%d')
             
             # Collect all history events to insert in bulk
             all_history_events = []
             
-            # Generate events for each location
-            for location_id, name, location_type, establishment_date in locations:
-                location_events = await self._prepare_location_history_data(
-                    conn, location_id, name, location_type, establishment_date, start_year, current_date_obj
+            # Generate events for each location with progress tracking
+            print(f"📚 Generating history for {len(locations)} locations...")
+            for i, (location_id, name, location_type, establishment_date) in enumerate(locations):
+                # Reduced from 10 to 3-5 events per location
+                num_events = random.randint(3, 5)
+                location_events = await self._prepare_location_history_data_optimized(
+                    conn, location_id, name, location_type, establishment_date, 
+                    start_year, current_date_obj, all_npcs.get(location_id, []), num_events
                 )
                 all_history_events.extend(location_events)
                 total_events += len(location_events)
+                
+                # Yield control every 25 locations
+                if i % 25 == 0:
+                    await asyncio.sleep(0.05)
+                    if i % 100 == 0:
+                        progress = (i / len(locations)) * 100
+                        print(f"    History progress: {progress:.0f}% ({i}/{len(locations)})")
             
-            # Generate general galactic events
-            general_events = await self._prepare_general_history_data(start_year, current_date_obj)
+            # Generate fewer general galactic events (reduced from 25 to 10)
+            print("📚 Generating general galactic events...")
+            general_events = await self._prepare_general_history_data_optimized(start_year, current_date_obj, 10)
             all_history_events.extend(general_events)
             total_events += len(general_events)
             
-            # Bulk insert all history events
+            # Bulk insert all history events in batches
             if all_history_events:
+                batch_size = 500
                 query = '''INSERT INTO galactic_history 
                            (location_id, event_title, event_description, historical_figure, event_date, event_type)
                            VALUES (?, ?, ?, ?, ?, ?)'''
-                self.db.executemany_in_transaction(conn, query, all_history_events)
+                
+                for i in range(0, len(all_history_events), batch_size):
+                    batch = all_history_events[i:i + batch_size]
+                    self.db.executemany_in_transaction(conn, query, batch)
+                    await asyncio.sleep(0.1)  # Yield between batches
             
             # Commit the transaction
             self.db.commit_transaction(conn)
@@ -155,6 +193,7 @@ class HistoryGenerator:
             print(f"❌ Error generating galactic history: {e}")
             self.db.rollback_transaction(conn)
             raise e
+            
     async def _prepare_location_history_data(self, conn, location_id: int, location_name: str, 
                                            location_type: str, establishment_date: str, 
                                            start_year: int, current_date: datetime) -> List[Tuple]:
@@ -400,7 +439,101 @@ class HistoryGenerator:
             return "Heroic Action"
         else:
             return "Historical Event"
+    async def _prepare_location_history_data_optimized(self, conn, location_id: int, location_name: str, 
+                                                     location_type: str, establishment_date: str, 
+                                                     start_year: int, current_date: datetime, 
+                                                     existing_npcs: List[str], num_events: int) -> List[Tuple]:
+        """Optimized location history data preparation with pre-fetched NPCs"""
+        history_events = []
+        
+        # Use existing NPCs or generate minimal figures
+        historical_figures = existing_npcs[:5] if existing_npcs else []
+        
+        # Generate fewer additional figures (3-5 instead of 10)
+        while len(historical_figures) < 5:
+            first_name, last_name = generate_npc_name()
+            historical_figures.append(f"{first_name} {last_name}")
+        
+        # Parse establishment date (reuse existing logic but simplified)
+        try:
+            if establishment_date and establishment_date.strip() and '-' in establishment_date:
+                parts = establishment_date.split('-')
+                if len(parts) == 3:
+                    if len(parts[0]) == 4:  # YYYY-MM-DD
+                        est_date = datetime.strptime(establishment_date, '%Y-%m-%d')
+                    else:  # DD-MM-YYYY
+                        est_date = datetime.strptime(establishment_date, '%d-%m-%Y')
+                else:
+                    raise ValueError("Invalid format")
+            else:
+                raise ValueError("No valid date")
+        except:
+            # Fallback date
+            est_date = datetime(start_year - random.randint(1, 10), 
+                               random.randint(1, 12), 
+                               random.randint(1, 28))
+        
+        # Generate fewer events per location
+        templates = self.event_templates.get(location_type, self.event_templates['outpost'])
+        for _ in range(num_events):
+            # Random date between establishment and current date
+            time_span = current_date - est_date
+            if time_span.days > 0:
+                random_days = random.randint(0, time_span.days)
+                event_date = est_date + timedelta(days=random_days)
+            else:
+                event_date = est_date
+            
+            # Choose event template and figure
+            event_template = random.choice(templates)
+            figure = random.choice(historical_figures)
+            
+            # Format the event
+            event_description = event_template.format(figure=figure, location=location_name)
+            event_title = self._generate_event_title(event_description)
+            event_type = random.choice(self.event_types)
+            
+            # Add to bulk insert list
+            history_events.append((
+                location_id, event_title, event_description, figure, 
+                event_date.strftime('%Y-%m-%d'), event_type
+            ))
+        
+        return history_events
 
+    async def _prepare_general_history_data_optimized(self, start_year: int, current_date: datetime, num_events: int) -> List[Tuple]:
+        """Optimized general galactic history data preparation"""
+        history_events = []
+        start_date = datetime(start_year - 100, 1, 1)  # Reduced history span
+        
+        # Generate fewer general galactic events
+        for _ in range(num_events):
+            # Random date between early history and current date
+            time_span = current_date - start_date
+            random_days = random.randint(0, time_span.days)
+            event_date = start_date + timedelta(days=random_days)
+            
+            # Choose general event
+            event_description = random.choice(self.general_events)
+            event_title = self._generate_event_title(event_description)
+            
+            # Generate a historical figure for some events
+            figure = None
+            if random.random() < 0.4:  # Reduced from 60% to 40%
+                first_name, last_name = generate_npc_name()
+                figure = f"{first_name} {last_name}"
+                
+                # Add figure to some descriptions
+                if "began" in event_description or "established" in event_description:
+                    event_description = f"{figure} initiated what became known as: {event_description}"
+            
+            # Add to bulk insert list
+            history_events.append((
+                None, event_title, event_description, figure, 
+                event_date.strftime('%Y-%m-%d'), 'general'
+            ))
+        
+        return history_events
     async def get_random_history_event(self, location_id: int = None) -> Dict:
         """Get a random historical event, optionally filtered by location"""
         if location_id:

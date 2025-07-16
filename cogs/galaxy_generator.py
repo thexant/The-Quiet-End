@@ -480,89 +480,188 @@ class GalaxyGeneratorCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         progress_msg = await interaction.followup.send("🌌 **Galaxy Generation Started**\n⏳ Pausing background tasks...", ephemeral=True)
         
-        # --- TRANSACTIONAL GENERATION START ---
+        # Stop ALL background tasks more thoroughly
+        print("🛑 Stopping all background tasks aggressively...")
         self.bot.stop_background_tasks()
-        await asyncio.sleep(1)
-        # Phase 1: Galaxy setup and locations (single transaction)
-        conn = self.db.begin_transaction()
-        try:
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n🗑️ Setting up galaxy...")
-            
-            # Galaxy info and clearing
-            current_time = datetime.now()
-            self.db.execute_in_transaction(conn,
-                """INSERT OR REPLACE INTO galaxy_info 
-                   (galaxy_id, name, start_date, time_scale_factor, time_started_at, is_time_paused, current_ingame_time) 
-                   VALUES (1, ?, ?, 4.0, ?, 0, ?)""",
-                (galaxy_name, start_date, current_time.isoformat(), start_date_obj.isoformat())
-            )
-            
-            if clear_existing:
-                await self._clear_existing_galaxy_data(conn)
-            
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n🏭 Creating major locations...")
-            major_locations = await self._generate_major_locations(conn, num_locations, start_date_obj.year)
-            
-            self.db.commit_transaction(conn)
-            conn = None
-        except Exception as e:
-            if conn:
-                self.db.rollback_transaction(conn)
-            raise
+
+        # Stop status updater specifically
+        status_updater_cog = self.bot.get_cog('StatusUpdaterCog')
+        if status_updater_cog:
+            status_updater_cog.update_status_channels.cancel()
+            print("🛑 Stopped status updater")
+
+        # Stop channel manager background tasks specifically
+        channel_manager = getattr(self.bot, 'channel_manager', None)
+        if channel_manager:
+            channel_manager.auto_cleanup_enabled = False
+            print("🛑 Disabled channel manager auto-cleanup")
+
+        # Also stop any cog-specific tasks
+        events_cog = self.bot.get_cog('EventsCog')
+        if events_cog:
+            events_cog.stop_all_tasks()
+
+        # Give more time for tasks to actually stop
+        await asyncio.sleep(3.0)
         
-        # Allow other tasks to run
-        await asyncio.sleep(0.5)
-            
-        # Phase 2: Routes and infrastructure (separate transaction)
-        conn = self.db.begin_transaction()
-        try:
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n🛣️ Planning active corridor routes...")
-            corridor_routes = await self._plan_corridor_routes(major_locations)
-            
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n🚪 Generating transit gates...")
-            gates = await self._generate_gates_for_routes(conn, corridor_routes, major_locations)
-            
-            all_locations = major_locations + gates
-            
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n🌉 Creating active corridor network...")
-            corridors = await self._create_corridors(conn, corridor_routes, all_locations)
-            
-            self.db.commit_transaction(conn)
-            conn = None
-        except Exception as e:
-            if conn:
-                self.db.rollback_transaction(conn)
-            raise
+        # Initialize safe defaults for all variables
+        major_locations = []
+        gates = []
+        corridors = []
+        corridor_routes = []
+        black_markets = 0
+        federal_depots = 0
+        total_homes = 0
+        total_sub_locations = 0
+        built_repeaters = 0
+        log_books_created = 0
+        total_history_events = 0
         
-        # Allow other tasks to run
-        await asyncio.sleep(0.5)
-        # Phase 3: Additional features (separate transaction)
-        conn = self.db.begin_transaction()
         try:
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n🌫️ Creating dormant corridors...")
-            await self._create_dormant_corridors(conn, all_locations, corridor_routes)
+            # Phase 1: Galaxy setup and locations (single transaction)
+            conn = self.db.begin_transaction()
+            try:
+                await progress_msg.edit(content="🌌 **Galaxy Generation**\n🗑️ Setting up galaxy...")
+                
+                # Galaxy info and clearing
+                current_time = datetime.now()
+                self.db.execute_in_transaction(conn,
+                    """INSERT OR REPLACE INTO galaxy_info 
+                       (galaxy_id, name, start_date, time_scale_factor, time_started_at, is_time_paused, current_ingame_time) 
+                       VALUES (1, ?, ?, 4.0, ?, 0, ?)""",
+                    (galaxy_name, start_date, current_time.isoformat(), start_date_obj.isoformat())
+                )
+                
+                if clear_existing:
+                    await self._clear_existing_galaxy_data(conn)
+                await asyncio.sleep(0.5)
+                await progress_msg.edit(content="🌌 **Galaxy Generation**\n🏭 Creating major locations...")
+                major_locations = await self._generate_major_locations(conn, num_locations, start_date_obj.year)
+                
+                self.db.commit_transaction(conn)
+                conn = None
+                # Force WAL checkpoint to ensure data is written
+                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+            except Exception as e:
+                if conn:
+                    self.db.rollback_transaction(conn)
+                raise
             
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n🎭 Establishing facilities...")
-            black_markets = await self._generate_black_markets(conn, major_locations)
-            federal_depots = await self._assign_federal_supplies(conn, major_locations)
-            
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n🏢 Creating infrastructure...")
-            total_sub_locations = await self._generate_sub_locations_for_all_locations(conn, all_locations)
-            
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n📡 Installing systems...")
-            built_repeaters = await self._generate_built_in_repeaters(conn, all_locations)
-            # In Phase 3, after generating built-in repeaters:
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n📜 Creating location log books...")
-            log_books_created = await self._generate_initial_location_logs(conn, all_locations, start_date_obj)
-            self.db.commit_transaction(conn)
-            conn = None
+            await asyncio.sleep(1.0)
             await asyncio.sleep(0.5)
-            # Phase 4: NPC Generation (outside transaction for performance)
+                
+            # Phase 2: Routes and infrastructure (separate transactions to avoid locks)
+            try:
+                await progress_msg.edit(content="🌌 **Galaxy Generation**\n🛣️ Planning active corridor routes...")
+                corridor_routes = await self._plan_corridor_routes(major_locations)
+                
+                if not corridor_routes:
+                    print("⚠️ No corridor routes generated, creating emergency connections...")
+                    # Create at least one route to prevent complete isolation
+                    if len(major_locations) >= 2:
+                        corridor_routes = [{
+                            'from': major_locations[0],
+                            'to': major_locations[1], 
+                            'importance': 'critical',
+                            'distance': self._calculate_distance(major_locations[0], major_locations[1])
+                        }]
+                
+                await asyncio.sleep(0.1)
+                await progress_msg.edit(content="🌌 **Galaxy Generation**\n🚪 Generating transit gates...")
+                gates = await self._generate_gates_for_routes(None, corridor_routes, major_locations)
+                
+                all_locations = major_locations + gates
+                await asyncio.sleep(0.1)
+                await progress_msg.edit(content="🌌 **Galaxy Generation**\n🌉 Creating active corridor network...")
+                corridors = await self._create_corridors(None, corridor_routes, all_locations)
+                
+                # Force checkpoint to ensure data is written
+                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+                await asyncio.sleep(1.0)
+
+            except Exception as e:
+                print(f"❌ Error in Phase 2: {e}")
+                raise
+                
+            if 'all_locations' not in locals():
+                all_locations = major_locations + gates
+                print(f"📍 Defined all_locations: {len(major_locations)} major + {len(gates)} gates = {len(all_locations)} total")
+                
+            # Allow other tasks to run
+            await asyncio.sleep(0.5)
+            
+            # Phase 3: Additional features (separate transaction with better yielding)
+            conn = self.db.begin_transaction()
+            try:
+                await progress_msg.edit(content="🌌 **Galaxy Generation**\n🎭 Establishing facilities...")
+                black_markets = await self._generate_black_markets(conn, major_locations)
+                federal_depots = await self._assign_federal_supplies(conn, major_locations)
+                
+                await progress_msg.edit(content="🌌 **Galaxy Generation**\n🏢 Creating infrastructure...")
+                total_sub_locations = await self._generate_sub_locations_for_all_locations(conn, all_locations)
+                
+                await progress_msg.edit(content="🌌 **Galaxy Generation**\n📡 Installing systems...")
+                built_repeaters = await self._generate_built_in_repeaters(conn, all_locations)
+                
+                # Commit this transaction before log generation
+                self.db.commit_transaction(conn)
+                conn = None
+                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+                await asyncio.sleep(1.0)
+
+                # Generate logs in separate transaction
+                await progress_msg.edit(content="🌌 **Galaxy Generation**\n📜 Creating location log books...")
+                try:
+                    # Don't pass a connection since _generate_initial_location_logs manages its own
+                    log_books_created = await self._generate_initial_location_logs(None, all_locations, start_date_obj)
+                except Exception as e:
+                    print(f"⚠️ Log generation failed: {e}")
+                    log_books_created = 0  # Continue even if log generation fails
+                
+                # Force checkpoint before dormant corridor generation
+                self.db.execute_query("PRAGMA wal_checkpoint(TRUNCATE)")
+                await asyncio.sleep(2.0)
+                
+                try:
+                    # Generate dormant corridors (this now handles its own transactions)
+                    await progress_msg.edit(content="🌌 **Galaxy Generation**\n🌫️ Creating dormant corridors...")
+                    if corridor_routes:  # Only if we have active routes
+                        await self._create_dormant_corridors(None, all_locations, corridor_routes)
+                        print("✅ Dormant corridor generation completed")
+                    else:
+                        print("⚠️ Skipping dormant corridors - no active routes to base them on")
+                    
+                    await asyncio.sleep(1.0)
+                    
+                except Exception as dormant_error:
+                    print(f"⚠️ Dormant corridor generation failed: {dormant_error}")
+                    print("   Continuing with galaxy generation...")
+                
+                await asyncio.sleep(1.0)
+
+            except Exception as e:
+                if conn:
+                    self.db.rollback_transaction(conn)
+                raise
+                
+            await asyncio.sleep(0.5)
+            
+            # Phase 4: NPC Generation (completely outside any transaction)
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n🤖 Populating with inhabitants...")
+
+            # Ensure ALL transactions are committed before NPC generation
+            await asyncio.sleep(0.5)  # Give time for any pending operations
+
+            # Now generate NPCs without any active transactions
             await self._create_npcs_outside_transaction(all_locations, progress_msg)
+
+            # Add another delay before history generation
+            await asyncio.sleep(0.5)
+            
             # Step 8: Generate homes for colonies and space stations
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n🏠 Creating residential properties...")
             total_homes = await self._generate_homes_for_locations(major_locations)
+            
             # Post-generation tasks (outside transactions)
             npc_cog = self.bot.get_cog('NPCCog')
             if npc_cog:
@@ -575,11 +674,19 @@ class GalaxyGeneratorCog(commands.Cog):
 
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n✅ **Generation Complete!**")
 
+        except Exception as e:
+            print(f"❌ Error during galaxy generation: {e}")
+            import traceback
+            traceback.print_exc()
+            # Continue to try sending an embed even if generation partially failed
+
+        # MOVED: Embed creation and sending outside of try blocks with safe defaults
+        try:
+            # Ensure all variables are properly defined with safe defaults
             total_locations_generated = len(major_locations) + len(gates)
-            # Calculate totals for embed
             total_infrastructure = total_locations_generated
 
-            # Add this before creating the embed
+            # Add randomization info
             randomized_info = []
             if num_locations is None:
                 randomized_info.append("Number of locations")
@@ -588,19 +695,16 @@ class GalaxyGeneratorCog(commands.Cog):
             if start_date is None:
                 randomized_info.append("Start date")
 
-            # Modify the embed description to include randomization info
-            if randomized_info:
-                randomized_text = f"\n*Randomly generated: {', '.join(randomized_info)}*"
-            else:
-                randomized_text = ""
+            randomized_text = f"\n*Randomly generated: {', '.join(randomized_info)}*" if randomized_info else ""
 
+            # Create and send the embed
             embed = discord.Embed(
                 title=f"🌌 {galaxy_name} - Creation Complete",
                 description=f"Successfully generated {total_locations_generated} major locations plus {len(gates)} transit gates ({total_infrastructure} total infrastructure) and {len(corridors)} corridors.\n**Galactic Era Begins:** {start_date_obj.strftime('%d-%m-%Y')} 00:00 ISST{randomized_text}",
                 color=0x00ff00
             )
 
-            # Count major location types
+            # Count major location types safely
             location_counts = {'colony': 0, 'space_station': 0, 'outpost': 0}
             for loc in major_locations:
                 location_counts[loc['type']] += 1
@@ -615,7 +719,7 @@ class GalaxyGeneratorCog(commands.Cog):
 
             embed.add_field(name="Infrastructure Generated", value=location_text, inline=True)
 
-            # Count corridor types
+            # Count corridor types safely
             gated_routes = len([r for r in corridor_routes if r.get('has_gates', False)])
             ungated_routes = len(corridor_routes) - gated_routes
             estimated_corridors = (gated_routes * 6) + (ungated_routes * 2)
@@ -635,25 +739,67 @@ class GalaxyGeneratorCog(commands.Cog):
                 value=f"Galaxy Start Date: {start_date_obj.strftime('%d-%m-%Y')}\nIn-game time flows at 4x speed\nUse `/date` to check current galactic time",
                 inline=False
             )
+            
             embed.add_field(
                 name="🏠 Residential Properties",
                 value=f"{total_homes} homes generated",
                 inline=True
             )
+
             # Ensure galactic news channel is configured and send connection announcement
             await self._ensure_galactic_news_setup(interaction.guild, galaxy_name)
 
+            # Send the success embed
             await interaction.followup.send(embed=embed, ephemeral=True)
 
-        except Exception as e:
-            if conn:
-                self.db.rollback_transaction(conn)
-            await interaction.followup.send(f"❌ Error generating galaxy: {str(e)}\nRolling back changes.", ephemeral=True)
-            import traceback
-            traceback.print_exc()
-        finally:
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n▶️ Resuming background tasks...")
+        except Exception as embed_error:
+            # If embed creation fails, send a simple success message
+            print(f"❌ Error creating success embed: {embed_error}")
+            try:
+                await interaction.followup.send(
+                    f"✅ **Galaxy Generation Complete!**\n"
+                    f"Galaxy '{galaxy_name}' has been successfully generated.\n"
+                    f"Generated {len(major_locations)} major locations with transit infrastructure.\n"
+                    f"Start date: {start_date_obj.strftime('%d-%m-%Y')} 00:00 ISST", 
+                    ephemeral=True
+                )
+            except Exception as fallback_error:
+                print(f"❌ Error sending fallback message: {fallback_error}")
+
+        # Restart background tasks in finally block to ensure they always restart
+        try:
+            await progress_msg.edit(content="🔄 **Galaxy Generation**\n🔄 Resuming background tasks...")
+            # Longer delay before restarting
+            await asyncio.sleep(2.0)
+
+            # Restart background tasks
+            print("🔄 Restarting background tasks...")
             self.bot.start_background_tasks()
+
+            status_updater_cog = self.bot.get_cog('StatusUpdaterCog')
+            if status_updater_cog:
+                # Check if the task exists and use correct Loop methods
+                if hasattr(status_updater_cog, 'update_status_channels'):
+                    task_loop = status_updater_cog.update_status_channels
+                    # Use is_running() instead of done() for discord.ext.tasks.Loop
+                    if not task_loop.is_running():
+                        try:
+                            task_loop.restart()
+                            print("🔄 Restarted status updater")
+                        except Exception as restart_error:
+                            print(f"⚠️ Could not restart status updater: {restart_error}")
+                    else:
+                        print("🔄 Status updater already running")
+                else:
+                    print("⚠️ Status updater task not found")
+
+            # Re-enable channel manager cleanup
+            channel_manager = getattr(self.bot, 'channel_manager', None)
+            if channel_manager:
+                channel_manager.auto_cleanup_enabled = True
+                print("🔄 Re-enabled channel manager auto-cleanup")
+        except Exception as restart_error:
+            print(f"❌ Error restarting background tasks: {restart_error}")
 
     async def _create_earth(self, conn, start_year: int) -> Dict[str, Any]:
         """Creates the static Earth location within a transaction."""
@@ -677,78 +823,93 @@ class GalaxyGeneratorCog(commands.Cog):
         print("🌍 Created static location: Earth in Sol system.")
         return location
     async def _create_npcs_outside_transaction(self, all_locations: List[Dict], progress_msg=None):
-        """Create NPCs outside of transaction for better performance"""
+        """Create NPCs with better transaction isolation"""
         npc_cog = self.bot.get_cog('NPCCog')
         if not npc_cog:
             print("❌ NPCCog not found, skipping NPC creation.")
             return
         
         total_npcs_created = 0
-        batch_size = 100  # Insert NPCs in batches
+        batch_size = 50  # Smaller batches
         current_batch = []
         
+        # Pre-fetch all location data to avoid queries during generation
+        location_data_map = {}
+        for location in all_locations:
+            location_data_map[location['id']] = {
+                'population': location.get('population', 100),
+                'type': location['type'],
+                'wealth_level': location['wealth_level'],
+                'has_black_market': location.get('has_black_market', False)
+            }
+        
         for i, location in enumerate(all_locations):
-            # Update progress every 25 locations
-            if progress_msg and i % 25 == 0:
+            if progress_msg and i % 10 == 0:
                 percent_complete = (i / len(all_locations)) * 100
                 await progress_msg.edit(
                     content=f"🌌 **Galaxy Generation**\n🤖 Populating with inhabitants... ({percent_complete:.0f}%)"
                 )
+                # Yield control
+                await asyncio.sleep(0.05)
             
-            # Get NPC data for this location - THIS WAS MISSING!
+            # Get NPC data without database calls
             npc_data_list = npc_cog.generate_static_npc_batch_data(
-                location['id'], 
-                location.get('population', 100),
-                location['type'],
-                location['wealth_level'],
-                location.get('has_black_market', False)
+                location['id'],
+                location_data_map[location['id']]['population'],
+                location_data_map[location['id']]['type'],
+                location_data_map[location['id']]['wealth_level'],
+                location_data_map[location['id']]['has_black_market']
             )
             
             current_batch.extend(npc_data_list)
             
-            # Insert batch when it reaches the size limit or every 10 locations
-            if len(current_batch) >= batch_size or (i + 1) % 10 == 0:
-                if current_batch:
-                    # Use a separate transaction for each batch
-                    conn = self.db.begin_transaction()
-                    try:
-                        query = '''INSERT INTO static_npcs 
-                                   (location_id, name, age, occupation, personality, alignment, hp, max_hp, combat_rating, credits) 
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
-                        self.db.executemany_in_transaction(conn, query, current_batch)
-                        self.db.commit_transaction(conn)
-                        
-                        total_npcs_created += len(current_batch)
-                        print(f"🤖 Created {len(current_batch)} static NPCs (total: {total_npcs_created})...")
-                        current_batch = []
-                        
-                    except Exception as e:
-                        if conn:
-                            self.db.rollback_transaction(conn)
-                        print(f"❌ Error creating NPC batch: {e}")
-                        # Continue with next batch even if one fails
-                
-                # Yield control to event loop
-                await asyncio.sleep(0.1)  # Slightly longer yield to ensure other tasks can run
-        
-        # Insert any remaining NPCs
-        if current_batch:
-            conn = self.db.begin_transaction()
-            try:
-                query = '''INSERT INTO static_npcs 
+            # Insert batch when it reaches size limit
+            if len(current_batch) >= batch_size:
+                # Use a completely new connection for each batch
+                try:
+                    # Direct insert without transaction wrapper
+                    self.db.execute_query(
+                        '''INSERT INTO static_npcs 
                            (location_id, name, age, occupation, personality, alignment, hp, max_hp, combat_rating, credits) 
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
-                self.db.executemany_in_transaction(conn, query, current_batch)
-                self.db.commit_transaction(conn)
-                
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                        current_batch,
+                        many=True
+                    )
+                    
+                    total_npcs_created += len(current_batch)
+                    print(f"🤖 Created {len(current_batch)} static NPCs (total: {total_npcs_created})...")
+                    current_batch = []
+                    
+                    # Longer yield between batches
+                    await asyncio.sleep(0.1)
+                    
+                except Exception as e:
+                    print(f"❌ Error creating NPC batch: {e}")
+                    current_batch = []  # Clear failed batch
+                    await asyncio.sleep(0.5)  # Wait before continuing
+        
+        # Insert remaining NPCs
+        if current_batch:
+            try:
+                self.db.execute_query(
+                    '''INSERT INTO static_npcs 
+                       (location_id, name, age, occupation, personality, alignment, hp, max_hp, combat_rating, credits) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    current_batch,
+                    many=True
+                )
                 total_npcs_created += len(current_batch)
             except Exception as e:
-                if conn:
-                    self.db.rollback_transaction(conn)
                 print(f"❌ Error creating final NPC batch: {e}")
         
         print(f"🤖 Total NPCs created: {total_npcs_created}")
     
+    def _cleanup_large_arrays(self):
+        """Clear large arrays from memory to prevent buildup"""
+        # Force garbage collection of large message arrays
+        import gc
+        gc.collect()
+        
     async def _generate_major_locations(self, conn, num_locations: int, start_year: int) -> List[Dict]:
         """Generate colonies, space stations, and outposts within a transaction."""
         distributions = {'colony': 0.30, 'space_station': 0.35, 'outpost': 0.40}
@@ -847,7 +1008,7 @@ class GalaxyGeneratorCog(commands.Cog):
 
         for location in major_locations:
             # Determine if a black market should be created
-            if location['wealth_level'] <= 4 and random.random() < 0.10:
+            if location['wealth_level'] <= 3 and random.random() < 0.10:
                 
                 # Step 1: Create the black market record and get its ID immediately.
                 # This avoids a separate SELECT query and is a key optimization.
@@ -1395,10 +1556,8 @@ class GalaxyGeneratorCog(commands.Cog):
         for location in major_locations:
             # Federal supplies appear at wealthy locations, inverse of black markets
             if location['wealth_level'] >= 7:
-                # Higher wealth increases the chance
+                # Flat 10% chance for wealth level 7 or higher (inverse of black markets)
                 federal_chance = 0.10
-                if location['wealth_level'] >= 9:
-                    federal_chance += 0.05
                     
                 if random.random() < federal_chance:
                     # Prepare a tuple for the executemany call.
@@ -1500,6 +1659,8 @@ class GalaxyGeneratorCog(commands.Cog):
     # OPTIMIZED CORRIDOR PLANNING (REPLACEMENT FOR _plan_corridor_routes and helpers)
     # =================================================================================
 
+# In _plan_corridor_routes method, replace the existing method with proper variable handling:
+
     async def _plan_corridor_routes(self, major_locations: List[Dict]) -> List[Dict]:
         """
         Plans logical corridor routes with improved connectivity and performance for large galaxies.
@@ -1513,8 +1674,6 @@ class GalaxyGeneratorCog(commands.Cog):
         print(f"🛣️ Planning routes for {num_locs} locations using spatial grid optimization...")
 
         # Step 0: Create the spatial grid for efficient lookups.
-        # Grid size is a balance; too large and cells have too many items, too small and we check too many cells.
-        # A size of 50-100 is generally good for coordinates ranging up to ~100.
         grid_size = 75
         spatial_grid = self._create_spatial_grid(major_locations, grid_size)
         location_map = {loc['id']: loc for loc in major_locations}
@@ -1523,32 +1682,56 @@ class GalaxyGeneratorCog(commands.Cog):
         connected_pairs = set()
         routes = []
 
+        # Step tracking variables
+        total_steps = 5
+        current_step = 0
+
         # Step 1: Create a Minimum Spanning Tree (MST) to ensure base connectivity.
-        # This uses an optimized Prim's algorithm with a priority queue.
+        current_step += 1
         print("  - Step 1/5: Building Minimum Spanning Tree...")
         mst_routes = await self._create_mst_optimized(major_locations, location_map, connected_pairs)
         routes.extend(mst_routes)
-        await asyncio.sleep(0)  # Yield control to event loop
-
+        
+        # Yield and progress for Step 1
+        await asyncio.sleep(0.2)
+        if num_locs > 100:
+            print(f"  ✓ Step 1/5 complete - {len(mst_routes)} MST routes created")
+            
         # Step 2: Add hub connections (stations to high-value colonies).
+        current_step += 1
         print("  - Step 2/5: Creating hub connections...")
         hub_routes = await self._create_hub_connections_optimized(major_locations, location_map, spatial_grid, grid_size, connected_pairs)
         routes.extend(hub_routes)
-        await asyncio.sleep(0)
-
+        
+        # Yield and progress for Step 2
+        await asyncio.sleep(0.15)
+        if num_locs > 100:
+            print(f"  ✓ Step 2/5 complete - {len(hub_routes)} hub routes created")
+            
         # Step 3: Add redundant connections for resilience.
+        current_step += 1
         print("  - Step 3/5: Adding redundant connections...")
         redundant_routes = await self._add_redundant_connections_optimized(major_locations, location_map, spatial_grid, grid_size, connected_pairs)
         routes.extend(redundant_routes)
-        await asyncio.sleep(0)
-
+        
+        # Yield and progress for Step 3
+        await asyncio.sleep(0.15)
+        if num_locs > 100:
+            print(f"  ✓ Step 3/5 complete - {len(redundant_routes)} redundant routes created")
+            
         # Step 4: Create long-range "bridge" connections to link distant regions.
+        current_step += 1
         print("  - Step 4/5: Forging long-range bridges...")
         bridge_routes = await self._create_regional_bridges_optimized(major_locations, location_map, spatial_grid, connected_pairs)
         routes.extend(bridge_routes)
-        await asyncio.sleep(0)
-
+        
+        # Yield and progress for Step 4
+        await asyncio.sleep(0.1)
+        if num_locs > 100:
+            print(f"  ✓ Step 4/5 complete - {len(bridge_routes)} bridge routes created")
+            
         # Step 5: Final validation and fixing of any isolated clusters.
+        current_step += 1
         print("  - Step 5/5: Validating and fixing connectivity...")
         final_routes = await self._validate_and_fix_connectivity_optimized(major_locations, routes, location_map)
         
@@ -1691,25 +1874,51 @@ class GalaxyGeneratorCog(commands.Cog):
             
         # Identify locations with 1 or 2 connections.
         low_connectivity_locs = [loc for loc in locations if connectivity_map[loc['id']] <= 2]
-
+        
+        print(f"    Adding redundant connections for {len(low_connectivity_locs)} low-connectivity locations...")
+        
+        processed = 0
         for loc in low_connectivity_locs:
+            # Yield control every 10 locations
+            if processed % 10 == 0:
+                await asyncio.sleep(0.01)
+            
             # Find 1-2 nearby locations to connect to.
             nearby_candidates = []
             grid_x = int(loc['x_coord'] // grid_size)
             grid_y = int(loc['y_coord'] // grid_size)
 
-            # Search nearby grid cells.
-            cells_to_check = self._get_nearby_cells(grid_x, grid_y, radius=1)
-            for cell_coord in cells_to_check:
-                if cell_coord in spatial_grid:
-                    for candidate in spatial_grid[cell_coord]:
-                        if candidate['id'] != loc['id']:
-                            nearby_candidates.append(candidate)
+            # Search nearby grid cells with expanding radius if needed
+            max_candidates = 20  # Limit candidates to prevent hanging
+            for radius in range(1, 4):  # Try expanding radius if not enough candidates
+                if len(nearby_candidates) >= max_candidates:
+                    break
+                    
+                cells_to_check = self._get_nearby_cells(grid_x, grid_y, radius=radius)
+                for cell_coord in cells_to_check:
+                    if cell_coord in spatial_grid:
+                        for candidate in spatial_grid[cell_coord]:
+                            if candidate['id'] != loc['id']:
+                                # Quick distance check before adding to candidates
+                                distance = self._calculate_distance(loc, candidate)
+                                if distance < 100:  # Pre-filter by distance
+                                    nearby_candidates.append(candidate)
+                                    if len(nearby_candidates) >= max_candidates:
+                                        break
+                        if len(nearby_candidates) >= max_candidates:
+                            break
+                
+                # If we found some candidates, don't expand radius unnecessarily
+                if len(nearby_candidates) >= 5:
+                    break
             
+            # Sort by distance (but limit to reasonable number)
+            nearby_candidates = nearby_candidates[:max_candidates]
             nearby_candidates.sort(key=lambda c: self._calculate_distance(loc, c))
             
-            connections_to_add = 2 - connectivity_map[loc['id']]
+            connections_to_add = max(0, min(2, 2 - connectivity_map[loc['id']]))  # Ensure non-negative
             connections_made = 0
+            
             for target in nearby_candidates:
                 if connections_made >= connections_to_add:
                     break
@@ -1729,6 +1938,15 @@ class GalaxyGeneratorCog(commands.Cog):
                         connectivity_map[loc['id']] += 1
                         connectivity_map[target['id']] += 1
                         connections_made += 1
+            
+            processed += 1
+            
+            # Progress reporting for large galaxies
+            if len(low_connectivity_locs) > 50 and processed % 25 == 0:
+                progress = (processed / len(low_connectivity_locs)) * 100
+                print(f"      Redundant connections progress: {progress:.0f}% ({processed}/{len(low_connectivity_locs)})")
+        
+        print(f"    Added {len(routes)} redundant connections")
         return routes
 
     async def _create_regional_bridges_optimized(self, locations: List[Dict], location_map: Dict, spatial_grid: Dict, connected_pairs: set) -> List[Dict]:
@@ -2295,111 +2513,149 @@ class GalaxyGeneratorCog(commands.Cog):
         return routes
 
     async def _create_dormant_corridors(self, conn, all_locations: List[Dict], active_routes: List[Dict]):
-        """Creates dormant corridors in bulk for future potential - with improved batching and performance."""
+        """Creates dormant corridors with radical optimization using spatial binning and micro-transactions"""
+        
+        # Commit current transaction before starting dormant generation (only if conn exists)
+        if conn is not None:
+            self.db.commit_transaction(conn)
+            conn = None  # Clear the connection reference
+        
         active_pairs = {tuple(sorted([r['from']['id'], r['to']['id']])) for r in active_routes}
         num_locs = len(all_locations)
-        # More aggressive scaling for large galaxies to prevent performance issues
-        if num_locs > 200:
-            base_chance = 0.03  # Very low chance for huge galaxies
-            max_dist = 50
-            sample_size = 10
-        elif num_locs > 100:
-            base_chance = 0.05
-            max_dist = 60
-            sample_size = 15
-        else:
-            base_chance = 0.15
-            max_dist = 100
-            sample_size = 20
         
-        print(f"🌌 Generating dormant corridors for {num_locs} locations (chance: {base_chance}, max_dist: {max_dist})")
+        # Calculate target dormant corridors to maintain ratio
+        target_dormant_total = int(num_locs * 15)  # Maintain same ratio as before
         
-        # Process in smaller batches to avoid memory issues and long transactions
-        batch_size = 100  # Insert in batches of 100 corridors
+        print(f"🌫️ Generating {target_dormant_total} dormant corridors for {num_locs} locations using spatial optimization...")
+        
+        # Create spatial bins for ultra-fast proximity lookups
+        spatial_bins = self._create_spatial_bins(all_locations, bin_size=25)
+        
+        corridors_created = 0
+        max_attempts = target_dormant_total * 3  # Prevent infinite loops
+        attempts = 0
+        
+        # Process in very small independent transactions
+        batch_size = 25  # Much smaller batches
         current_batch = []
-        total_created = 0
-        locations_processed = 0
         
-        for i, loc_a in enumerate(all_locations):
-            # Yield control every 10 locations to prevent hanging
-            if i % 10 == 0:
-                await asyncio.sleep(0.1)  # Longer yield for better responsiveness
-                locations_processed = i
-                print(f"  📍 Processed {locations_processed}/{num_locs} locations...")
+        while corridors_created < target_dormant_total and attempts < max_attempts:
+            attempts += 1
             
-            # Sample other locations to check
-            remaining_locations = all_locations[i+1:]
-            if not remaining_locations:
+            # Pick a random location
+            loc_a = random.choice(all_locations)
+            
+            # Get nearby locations using spatial binning (much faster than distance calc)
+            nearby_candidates = self._get_nearby_from_bins(loc_a, spatial_bins, max_candidates=8)
+            
+            if not nearby_candidates:
                 continue
-            
-            sample_count = min(len(remaining_locations), sample_size)
-            sampled_locations = random.sample(remaining_locations, sample_count)
-            
-            for loc_b in sampled_locations:
-                pair = tuple(sorted([loc_a['id'], loc_b['id']]))
                 
-                # Skip if already connected or too far
-                if pair in active_pairs:
-                    continue
+            # Pick a random nearby candidate
+            loc_b = random.choice(nearby_candidates)
+            
+            pair = tuple(sorted([loc_a['id'], loc_b['id']]))
+            
+            # Skip if already exists
+            if pair in active_pairs:
+                continue
+                
+            # Quick distance check (only now do we calculate distance)
+            distance = self._calculate_distance(loc_a, loc_b)
+            if distance > 60:  # Skip very long corridors
+                continue
+                
+            # Create corridor data
+            name = self._generate_corridor_name(loc_a, loc_b)
+            fuel = max(10, int(distance * 0.8) + 5)
+            danger = random.randint(2, 5)
+            travel_time = self._calculate_ungated_route_time(distance)
+            
+            # Add to batch (bidirectional)
+            current_batch.extend([
+                (f"{name} (Dormant)", loc_a['id'], loc_b['id'], travel_time, fuel, danger),
+                (f"{name} Return (Dormant)", loc_b['id'], loc_a['id'], travel_time, fuel, danger)
+            ])
+            
+            active_pairs.add(pair)
+            corridors_created += 2
+            
+            # Insert batch in micro-transaction when ready
+            if len(current_batch) >= batch_size:
+                await self._insert_dormant_batch(current_batch)
+                current_batch = []
+                
+                # Progress and yield much more frequently
+                if corridors_created % 100 == 0:
+                    progress = (corridors_created / target_dormant_total) * 100
+                    print(f"    🌫️ Dormant corridors: {progress:.0f}% ({corridors_created}/{target_dormant_total})")
                     
-                distance = self._calculate_distance(loc_a, loc_b)
-                if distance > max_dist:
-                    continue
-                
-                # Random chance to create dormant corridor
-                if random.random() < base_chance:
-                    try:
-                        name = self._generate_corridor_name(loc_a, loc_b)
-                        fuel = max(10, int(distance * 0.8) + 5)
-                        danger = random.randint(2, 5)
-                        travel_time = self._calculate_ungated_route_time(distance)
-                        
-                        # Add forward and reverse dormant corridors to batch
-                        current_batch.extend([
-                            (f"{name} (Dormant)", loc_a['id'], loc_b['id'], travel_time, fuel, danger),
-                            (f"{name} Return (Dormant)", loc_b['id'], loc_a['id'], travel_time, fuel, danger)
-                        ])
-                        
-                        active_pairs.add(pair)  # Avoid creating duplicates
-                        
-                    except Exception as e:
-                        print(f"❌ Error creating dormant corridor between {loc_a.get('name', 'Unknown')} and {loc_b.get('name', 'Unknown')}: {e}")
-                        continue
-                
-                # Insert batch when it reaches the size limit
-                if len(current_batch) >= batch_size:
-                    try:
-                        query = '''INSERT INTO corridors 
-                                   (name, origin_location, destination_location, travel_time, fuel_cost, 
-                                    danger_level, is_active, is_generated)
-                                   VALUES (?, ?, ?, ?, ?, ?, 0, 1)'''
-                        self.db.executemany_in_transaction(conn, query, current_batch)
-                        total_created += len(current_batch)
-                        print(f"  💾 Inserted batch of {len(current_batch)} dormant corridors (total: {total_created})")
-                        current_batch = []
-                        
-                        # Yield after each batch insertion
-                        await asyncio.sleep(0.1)
-                        
-                    except Exception as e:
-                        print(f"❌ Error inserting dormant corridor batch: {e}")
-                        current_batch = []  # Clear the failed batch and continue
-                        continue
+                # Yield control very frequently
+                await asyncio.sleep(0.05)
         
-        # Insert any remaining corridors in the final batch
+        # Insert remaining batch
         if current_batch:
-            try:
-                query = '''INSERT INTO corridors 
-                           (name, origin_location, destination_location, travel_time, fuel_cost, 
-                            danger_level, is_active, is_generated)
-                           VALUES (?, ?, ?, ?, ?, ?, 0, 1)'''
-                self.db.executemany_in_transaction(conn, query, current_batch)
-                total_created += len(current_batch)
-                print(f"  💾 Inserted final batch of {len(current_batch)} dormant corridors")
-            except Exception as e:
-                print(f"❌ Error inserting final dormant corridor batch: {e}")
+            await self._insert_dormant_batch(current_batch)
         
-        print(f"🌌 Created {total_created} dormant corridor segments total.")
+        print(f"🌫️ Created {corridors_created} dormant corridor segments in {attempts} attempts")
+
+    def _create_spatial_bins(self, locations: List[Dict], bin_size: float = 25) -> Dict:
+        """Create spatial bins for ultra-fast proximity lookups"""
+        bins = {}
+        
+        for loc in locations:
+            bin_x = int(loc['x_coord'] // bin_size)
+            bin_y = int(loc['y_coord'] // bin_size)
+            bin_key = (bin_x, bin_y)
+            
+            if bin_key not in bins:
+                bins[bin_key] = []
+            bins[bin_key].append(loc)
+        
+        return bins
+
+    def _get_nearby_from_bins(self, location: Dict, spatial_bins: Dict, max_candidates: int = 8) -> List[Dict]:
+        """Get nearby locations using spatial bins (much faster than distance calculations)"""
+        bin_size = 25
+        bin_x = int(location['x_coord'] // bin_size)
+        bin_y = int(location['y_coord'] // bin_size)
+        
+        nearby = []
+        
+        # Check the location's bin and adjacent bins (3x3 grid)
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                check_bin = (bin_x + dx, bin_y + dy)
+                if check_bin in spatial_bins:
+                    for candidate in spatial_bins[check_bin]:
+                        if candidate['id'] != location['id']:
+                            nearby.append(candidate)
+                            
+                            # Early exit when we have enough candidates
+                            if len(nearby) >= max_candidates:
+                                return nearby[:max_candidates]
+        
+        return nearby
+
+    async def _insert_dormant_batch(self, batch_data: List[tuple]):
+        """Insert dormant corridors in independent micro-transaction"""
+        if not batch_data:
+            return
+            
+        # Use completely independent transaction
+        micro_conn = self.db.begin_transaction()
+        try:
+            query = '''INSERT INTO corridors 
+                       (name, origin_location, destination_location, travel_time, fuel_cost, 
+                        danger_level, is_active, is_generated)
+                       VALUES (?, ?, ?, ?, ?, ?, 0, 1)'''
+            self.db.executemany_in_transaction(micro_conn, query, batch_data)
+            self.db.commit_transaction(micro_conn)
+        except Exception as e:
+            self.db.rollback_transaction(micro_conn)
+            print(f"❌ Error inserting dormant batch: {e}")
+        finally:
+            micro_conn = None
         
     @galaxy_group.command(name="shift_corridors", description="Trigger corridor shifts to change galaxy connectivity")
     @app_commands.describe(
@@ -2910,32 +3166,180 @@ class GalaxyGeneratorCog(commands.Cog):
             print(f"🏢 Generated {len(sub_locations_to_insert)} sub-locations in total.")
             
         return len(sub_locations_to_insert)
+        
     async def _generate_gates_for_routes(self, conn, routes: List[Dict], major_locations: List[Dict]) -> List[Dict]:
-        """Generate gates for some routes, now within a transaction."""
+        """Generate gates for routes with optimized batching and yielding"""
+        if not routes:
+            return []
+        
+        # Commit current transaction to avoid long locks
+        if conn:
+            self.db.commit_transaction(conn)
+            conn = None
+        
+        print(f"🚪 Generating gates for {len(routes)} routes...")
+        
         gates = []
         used_names = set()
-
-        for route in routes:
-            gate_chance = 0.5 # Simplified chance
+        gates_to_create = []
+        
+        # First pass: determine which routes get gates and prepare gate data
+        for i, route in enumerate(routes):
+            gate_chance = 0.5
             if random.random() < gate_chance:
-                origin_gate_data = self._create_gate_near_location(route['from'], 'origin', used_names)
-                origin_gate_data['id'] = self._save_location_to_db(conn, origin_gate_data)
-                used_names.add(origin_gate_data['name'])
-                gates.append(origin_gate_data)
-
-                dest_gate_data = self._create_gate_near_location(route['to'], 'destination', used_names)
-                dest_gate_data['id'] = self._save_location_to_db(conn, dest_gate_data)
-                used_names.add(dest_gate_data['name'])
-                gates.append(dest_gate_data)
-
-                route['origin_gate'] = origin_gate_data
-                route['destination_gate'] = dest_gate_data
+                # Pre-generate gate names to avoid conflicts
+                origin_name = self._generate_unique_gate_name(route['from'], used_names)
+                dest_name = self._generate_unique_gate_name(route['to'], used_names)
+                
+                used_names.add(origin_name)
+                used_names.add(dest_name)
+                
+                gates_to_create.append({
+                    'route_index': i,
+                    'origin_data': self._create_gate_data(route['from'], origin_name),
+                    'dest_data': self._create_gate_data(route['to'], dest_name)
+                })
+                
                 route['has_gates'] = True
             else:
                 route['has_gates'] = False
+            
+            # Yield every 20 routes in planning phase
+            if i % 20 == 0:
+                await asyncio.sleep(0.01)
+        
+        print(f"🚪 Creating {len(gates_to_create) * 2} gate locations...")
+        
+        # Second pass: create gates in small batches
+        batch_size = 10  # Small batches to avoid long transactions
+        
+        for batch_start in range(0, len(gates_to_create), batch_size):
+            batch_end = min(batch_start + batch_size, len(gates_to_create))
+            batch = gates_to_create[batch_start:batch_end]
+            
+            # Create gates in independent micro-transaction
+            batch_gates = await self._create_gate_batch(batch, routes)
+            gates.extend(batch_gates)
+            
+            # Progress reporting
+            progress = ((batch_end) / len(gates_to_create)) * 100
+            if batch_start % 50 == 0:  # Report every 50 items processed
+                print(f"    🚪 Gate creation progress: {progress:.0f}% ({batch_end}/{len(gates_to_create)} routes)")
+            
+            # Yield control after each batch
+            await asyncio.sleep(0.05)
+        
+        print(f"✅ Created {len(gates)} gate locations")
         return gates
 
+    def _generate_unique_gate_name(self, location: Dict, used_names: set) -> str:
+        """Generate unique gate name more efficiently"""
+        location_name = location['name']
+        
+        # Pre-generate several candidates to reduce conflicts
+        candidates = [
+            f"{location_name}-{random.choice(self.location_names)} {random.choice(self.gate_names)}",
+            f"{location_name} {random.choice(self.gate_names)}",
+            f"{random.choice(self.location_names)} {random.choice(self.gate_names)}",
+            f"{location_name}-{random.choice(['Alpha', 'Beta', 'Gamma', 'Delta'])} {random.choice(self.gate_names)}"
+        ]
+        
+        # Try candidates first
+        for candidate in candidates:
+            if candidate not in used_names:
+                return candidate
+        
+        # Fallback with counter if all candidates taken
+        base_name = f"{location_name} {random.choice(self.gate_names)}"
+        counter = 1
+        while f"{base_name} {counter}" in used_names:
+            counter += 1
+        
+        return f"{base_name} {counter}"
     
+    def _create_gate_data(self, location: Dict, gate_name: str) -> Dict:
+        """Create gate data without database interaction"""
+        import math
+        
+        # Position gate close to but not overlapping the location
+        angle = random.uniform(0, 2 * math.pi)
+        distance = random.uniform(3, 8)
+        
+        gate_x = location['x_coord'] + distance * math.cos(angle)
+        gate_y = location['y_coord'] + distance * math.sin(angle)
+        
+        return {
+            'name': gate_name,
+            'type': 'gate',
+            'x_coord': gate_x,
+            'y_coord': gate_y,
+            'system_name': location['system_name'],
+            'description': f"Transit gate providing safe passage to and from {location['name']}. Features decontamination facilities and basic services.",
+            'wealth_level': min(location['wealth_level'] + 1, 8),
+            'population': random.randint(15, 40),
+            'has_jobs': False,
+            'has_shops': True,
+            'has_medical': True,
+            'has_repairs': True,
+            'has_fuel': True,
+            'has_upgrades': False,
+            'is_generated': True,
+            'parent_location': location['id']
+        }
+    async def _create_gate_batch(self, gate_batch: List[Dict], routes: List[Dict]) -> List[Dict]:
+        """Create a batch of gates in independent transaction with retry logic"""
+        created_gates = []
+        
+        # Retry logic for database lock issues
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Wait a bit if this is a retry
+                if attempt > 0:
+                    await asyncio.sleep(0.5 * attempt)
+                
+                # Use independent micro-transaction
+                micro_conn = self.db.begin_transaction()
+                break
+            except RuntimeError as e:
+                if "database lock" in str(e) and attempt < max_retries - 1:
+                    print(f"⚠️ Database lock in gate creation, retry {attempt + 1}/{max_retries}")
+                    continue
+                else:
+                    print(f"❌ Failed to acquire database lock for gate creation: {e}")
+                    return []  # Return empty list instead of crashing
+        try:
+            for gate_info in gate_batch:
+                route_index = gate_info['route_index']
+                route = routes[route_index]
+                
+                # Create origin gate
+                origin_data = gate_info['origin_data']
+                origin_id = self._save_location_to_db(micro_conn, origin_data)
+                origin_data['id'] = origin_id
+                created_gates.append(origin_data)
+                
+                # Create destination gate
+                dest_data = gate_info['dest_data']
+                dest_id = self._save_location_to_db(micro_conn, dest_data)
+                dest_data['id'] = dest_id
+                created_gates.append(dest_data)
+                
+                # Update route with gate references
+                route['origin_gate'] = origin_data
+                route['destination_gate'] = dest_data
+            
+            self.db.commit_transaction(micro_conn)
+            
+        except Exception as e:
+            self.db.rollback_transaction(micro_conn)
+            print(f"❌ Error creating gate batch: {e}")
+            # Return empty list for this batch
+            return []
+        finally:
+            micro_conn = None
+        
+        return created_gates    
     def _create_gate_near_location(self, location: Dict, gate_type: str, used_names: set) -> Dict:
         """Create a gate near a major location"""
         
@@ -2992,33 +3396,46 @@ class GalaxyGeneratorCog(commands.Cog):
         }
     
     async def _create_corridors(self, conn, routes: List[Dict], all_locations: List[Dict]) -> List[Dict]:
-        """Optimized to create corridors in bulk within a transaction."""
+        """Create corridors with optimized batching and independent transaction management"""
+        if not routes:
+            return []
+        
+        # Handle transaction properly - commit if passed, otherwise start fresh
+        if conn:
+            self.db.commit_transaction(conn)
+            conn = None
+        
+        print(f"🌉 Creating corridor network for {len(routes)} routes...")
+        
         corridors_to_insert = []
-        loc_map = {loc['id']: loc for loc in all_locations}
-
-        for route in routes:
+        batch_size = 50  # Smaller batches
+        corridors_created = 0
+        
+        for i, route in enumerate(routes):
             name = self._generate_corridor_name(route['from'], route['to'])
             loc1_id, loc2_id = route['from']['id'], route['to']['id']
             dist = route['distance']
             fuel = max(10, int(dist * 0.8) + 5)
             danger = max(1, min(5, 2 + random.randint(-1, 2)))
 
-            if route.get('has_gates', False):
+            if route.get('has_gates', False) and 'origin_gate' in route and 'destination_gate' in route:
+                # Gated route with 6 segments
                 og_id = route['origin_gate']['id']
                 dg_id = route['destination_gate']['id']
                 approach_time, main_time = self._calculate_gated_route_times(dist)
                 gate_danger = max(1, danger - 1)
                 
-                # Tuples for executemany
                 corridors_to_insert.extend([
                     (f"{name} Approach", loc1_id, og_id, approach_time, int(fuel*0.2), gate_danger, 1, 1),
                     (name, og_id, dg_id, main_time, int(fuel*0.6), danger, 1, 1),
-                    (f"{name} Approach", dg_id, loc2_id, approach_time, int(fuel*0.2), gate_danger, 1, 1),
-                    (f"{name} Return Approach", loc2_id, dg_id, approach_time, int(fuel*0.2), gate_danger, 1, 1),
+                    (f"{name} Arrival", dg_id, loc2_id, approach_time, int(fuel*0.2), gate_danger, 1, 1),
+                    (f"{name} Return Departure", loc2_id, dg_id, approach_time, int(fuel*0.2), gate_danger, 1, 1),
                     (f"{name} Return", dg_id, og_id, main_time, int(fuel*0.6), danger, 1, 1),
-                    (f"{name} Return Approach", og_id, loc1_id, approach_time, int(fuel*0.2), gate_danger, 1, 1),
+                    (f"{name} Return Arrival", og_id, loc1_id, approach_time, int(fuel*0.2), gate_danger, 1, 1),
                 ])
+                corridors_created += 6
             else:
+                # Ungated route with 2 segments
                 ungated_time = self._calculate_ungated_route_time(dist)
                 ungated_danger = min(5, danger + 2)
                 ungated_fuel = int(fuel * 0.7)
@@ -3026,12 +3443,61 @@ class GalaxyGeneratorCog(commands.Cog):
                     (f"{name} (Ungated)", loc1_id, loc2_id, ungated_time, ungated_fuel, ungated_danger, 1, 1),
                     (f"{name} Return (Ungated)", loc2_id, loc1_id, ungated_time, ungated_fuel, ungated_danger, 1, 1),
                 ])
+                corridors_created += 2
+            
+            # Insert in batches with micro-transactions
+            if len(corridors_to_insert) >= batch_size:
+                await self._insert_corridor_batch(corridors_to_insert)
+                corridors_to_insert = []
+                
+                # Progress reporting
+                progress = ((i + 1) / len(routes)) * 100
+                if i % 25 == 0:
+                    print(f"    🌉 Corridor progress: {progress:.0f}% ({corridors_created} segments)")
+                
+                # Yield control
+                await asyncio.sleep(0.05)
         
+        # Insert remaining corridors
         if corridors_to_insert:
-            query = '''INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'''
-            self.db.executemany_in_transaction(conn, query, corridors_to_insert)
+            await self._insert_corridor_batch(corridors_to_insert)
 
+        print(f"✅ Created {corridors_created} corridor segments")
         return corridors_to_insert
+
+    async def _insert_corridor_batch(self, batch_data: List[tuple]):
+        """Insert corridor batch in independent micro-transaction with retry logic"""
+        if not batch_data:
+            return
+        
+        # Retry logic for database lock issues    
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Wait a bit if this is a retry
+                if attempt > 0:
+                    await asyncio.sleep(0.3 * attempt)
+                
+                micro_conn = self.db.begin_transaction()
+                break
+            except RuntimeError as e:
+                if "database lock" in str(e) and attempt < max_retries - 1:
+                    print(f"⚠️ Database lock in corridor creation, retry {attempt + 1}/{max_retries}")
+                    continue
+                else:
+                    print(f"❌ Failed to acquire database lock for corridor creation: {e}")
+                    return  # Skip this batch instead of crashing
+        try:
+            query = '''INSERT INTO corridors (name, origin_location, destination_location, 
+                       travel_time, fuel_cost, danger_level, is_active, is_generated) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)'''
+            self.db.executemany_in_transaction(micro_conn, query, batch_data)
+            self.db.commit_transaction(micro_conn)
+        except Exception as e:
+            self.db.rollback_transaction(micro_conn)
+            print(f"❌ Error inserting corridor batch: {e}")
+        finally:
+            micro_conn = None
 
     def _calculate_gated_route_times(self, distance: float) -> Tuple[int, int]:
         """Calculate travel times for gated routes (approach + main corridor) - 4-20 minute total limit"""
@@ -4399,540 +4865,308 @@ class GalaxyGeneratorCog(commands.Cog):
         print("🗑️ Cleared existing galaxy data in proper order")
         
     async def _generate_initial_location_logs(self, conn, all_locations: List[Dict], start_date_obj) -> int:
-        """Generate initial log books for locations during galaxy creation"""
+        """Generate initial log books for locations with ultra-aggressive optimization for large galaxies"""
         from utils.npc_data import generate_npc_name, get_occupation
         
-        log_entries_to_insert = []
-        locations_with_logs = 0
+        # Commit the current transaction immediately to avoid long locks
+        if conn:
+            self.db.commit_transaction(conn)
+            conn = None
         
-        # Pre-define message pools to avoid repeated list creation
-        location_messages = {
+        print(f"📜 Generating log books for {len(all_locations)} locations...")
+        
+        locations_with_logs = 0
+        total_entries_created = 0
+        
+        # Ultra-small batch sizes for massive galaxies
+        location_chunk_size = 3  # Process only 3 locations at a time
+        batch_size = 15  # Very small batches for database inserts
+        current_batch = []
+        
+        # Pre-filter locations to avoid processing derelicts
+        valid_locations = [loc for loc in all_locations if not loc.get('is_derelict', False)]
+        print(f"📜 Processing {len(valid_locations)} non-derelict locations for log books...")
+        
+        # Process locations in tiny chunks with frequent yielding
+        for chunk_start in range(0, len(valid_locations), location_chunk_size):
+            chunk_end = min(chunk_start + location_chunk_size, len(valid_locations))
+            location_chunk = valid_locations[chunk_start:chunk_end]
+            
+            # Pre-generate all log data for this chunk without database calls
+            chunk_log_entries = []
+            
+            for location in location_chunk:
+                # 25% chance for each location to have a log book (same as original)
+                if random.random() < 0.25:
+                    locations_with_logs += 1
+                    num_entries = random.randint(3, 5)  # Same range as original
+                    
+                    # Pre-generate all entries for this location
+                    for _ in range(num_entries):
+                        # Generate NPC author efficiently
+                        first_name, last_name = generate_npc_name()
+                        wealth_level = location.get('wealth_level', 5)
+                        occupation = get_occupation(location['type'], wealth_level)
+                        name_format = f"{first_name} {last_name}, {occupation}"
+                        
+                        # Get message using optimized selection
+                        message = self._get_optimized_log_message(location['type'])
+                        
+                        # Generate historical date
+                        days_ago = random.randint(1, 365)
+                        hours_ago = random.randint(0, 23)
+                        entry_time = start_date_obj - timedelta(days=days_ago, hours=hours_ago)
+                        
+                        # Add to chunk entries
+                        chunk_log_entries.append(
+                            (location['id'], 0, name_format, message, entry_time.isoformat(), 1)
+                        )
+            
+            # Add chunk entries to current batch
+            current_batch.extend(chunk_log_entries)
+            total_entries_created += len(chunk_log_entries)
+            
+            # Insert when batch is ready, using micro-transactions
+            if len(current_batch) >= batch_size:
+                await self._insert_log_batch_micro_transaction(current_batch[:batch_size])
+                current_batch = current_batch[batch_size:]
+                
+                # Aggressive yielding after each micro-transaction
+                await asyncio.sleep(0.1)
+            
+            # Yield control after each chunk
+            await asyncio.sleep(0.05)
+            
+            # Progress reporting every 25 locations
+            if chunk_start % 25 == 0 and chunk_start > 0:
+                progress = (chunk_start / len(valid_locations)) * 100
+                print(f"    📜 Log generation progress: {progress:.0f}% ({chunk_start}/{len(valid_locations)}) - {total_entries_created} entries created")
+                
+                # Extra yield for progress reporting
+                await asyncio.sleep(0.1)
+        
+        # Insert any remaining entries
+        while current_batch:
+            batch_to_insert = current_batch[:batch_size]
+            current_batch = current_batch[batch_size:]
+            await self._insert_log_batch_micro_transaction(batch_to_insert)
+            await asyncio.sleep(0.05)
+        
+        print(f"📜 Generated log books for {locations_with_logs} locations with {total_entries_created} total entries")
+        return locations_with_logs
+
+    async def _insert_log_batch_micro_transaction(self, batch_data: List[tuple]):
+        """Insert log entries in completely independent micro-transaction with retry logic"""
+        if not batch_data:
+            return
+        
+        # Retry logic for database lock issues
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Wait a bit if this is a retry
+                if attempt > 0:
+                    await asyncio.sleep(0.2 * attempt)
+                
+                # Use completely independent micro-transaction
+                micro_conn = self.db.begin_transaction()
+                
+                query = '''INSERT INTO location_logs 
+                           (location_id, author_id, author_name, message, posted_at, is_generated)
+                           VALUES (?, ?, ?, ?, ?, ?)'''
+                self.db.executemany_in_transaction(micro_conn, query, batch_data)
+                self.db.commit_transaction(micro_conn)
+                
+                # Success - break out of retry loop
+                break
+                
+            except Exception as e:
+                if micro_conn:
+                    try:
+                        self.db.rollback_transaction(micro_conn)
+                    except:
+                        pass
+                
+                if "database lock" in str(e).lower() and attempt < max_retries - 1:
+                    print(f"⚠️ Database lock in log generation, retry {attempt + 1}/{max_retries}")
+                    continue
+                else:
+                    print(f"❌ Error inserting log batch: {e}")
+                    if attempt == max_retries - 1:
+                        print("⚠️ Skipping this log batch to continue generation")
+                    break
+            finally:
+                micro_conn = None
+
+    def _get_optimized_log_message(self, location_type: str) -> str:
+        """Get a random log message using optimized selection without loading large arrays"""
+        
+        # Use smaller, focused message pools with weighted selection
+        # 40% chance for location-specific, 60% for generic (same as original)
+        if random.random() < 0.4:
+            return self._get_location_specific_message(location_type)
+        else:
+            return self._get_generic_log_message()
+
+    def _get_location_specific_message(self, location_type: str) -> str:
+        """Get location-specific message using efficient selection"""
+        
+        # Smaller, curated pools for each type (maintaining variety but reducing memory)
+        type_message_pools = {
             'colony': [
                 "Agricultural output exceeding projections this quarter.",
-                "Population growth steady. Housing expansion approved.",
+                "Population growth steady. Housing expansion approved.", 
                 "Mining operations proceeding on schedule.",
                 "Trade relations with neighboring systems improving.",
                 "Colonial infrastructure upgrade project initiated.",
                 "Atmospheric processors maintaining optimal conditions.",
                 "New settlers orientation program completed successfully.",
-                "Local star radiation levels fluctuated today.",
-                "Large planetary storm hit the colony.",
-                "Resource extraction quotas met ahead of deadline.",
                 "Terraforming efforts progressing as planned.",
                 "Water recycling efficiency at 98%.",
-                "Biodome 3 experiencing minor fungal bloom, contained.",
+                "Biodome experiencing minor issues, contained.",
                 "Educational programs seeing increased enrollment.",
                 "Defensive perimeter generators at full power.",
-                "Long-range probe returned with new stellar cartography data.",
-                "Medical facilities reporting low incidence of new diseases.",
+                "Medical facilities reporting low disease incidence.",
                 "Energy grid experiencing peak demand fluctuations.",
-                "Cultural exchange program with Sector Gamma approved.",
-                "Geological survey team discovered new geothermal vents."
+                "Geological survey discovered new resources.",
+                "Long-range probe returned with stellar data.",
+                "Cultural exchange program approved.",
+                "Resource extraction quotas met ahead of deadline.",
+                "How much further to Earth?",
+                "Another quiet day. Good for catching up on paperwork."
             ],
             'space_station': [
-                "Docking bay efficiency improved with new traffic protocols.",
-                "Station rotation mechanics functioning within normal parameters.",
+                "Docking bay efficiency improved with new protocols.",
+                "Station rotation mechanics functioning normally.",
                 "Merchant traffic up 15% compared to last cycle.",
                 "Artificial gravity generators running smoothly.",
-                "Recycling systems processing waste at maximum efficiency.",
-                "How much further to Earth?",
-                "Tourist accommodation bookings at capacity.",
-                "Station-wide maintenance inspection scheduled for next week.",
+                "Recycling systems processing at maximum efficiency.",
+                "Tourist accommodations at capacity.",
+                "Station-wide maintenance inspection scheduled.",
                 "Emergency response drill conducted successfully.",
-                "Module 7 atmospheric pressure stable.",
-                "Life support environmental scrubbers cleaned.",
-                "Exterior hull plating integrity check passed.",
-                "Research lab reporting anomalous energy readings from deep space.",
+                "Life support scrubbers cleaned and calibrated.",
+                "Exterior hull integrity check passed.",
+                "Research lab reporting deep space anomalies.",
                 "Crew rotation completed without incident.",
-                "Power conduits 4 and 5 showing minor thermal variations.",
-                "Observation deck windows cleaned, visibility excellent.",
-                "Zero-G training simulations for new recruits underway.",
-                "Communications array received faint distress signal from unknown vessel.",
-                "Cafeteria menu updated with fresh hydroponic produce.",
-                "Internal security patrol routes optimized for coverage."
+                "Zero-G training for new recruits underway.",
+                "Communications array received distress signal.",
+                "Internal security patrol routes optimized.",
+                "Cafeteria menu updated with hydroponic produce.",
+                "Observatory windows cleaned, visibility excellent.",
+                "Module atmospheric pressure stable.",
+                "Power conduits showing minor thermal variations.",
+                "How much further to Earth?"
             ],
             'outpost': [
-                "Long-range communications restored after equipment failure.",
+                "Long-range communications restored after failure.",
                 "Supply cache inventory updated and secured.",
-                "Mineral survey scan detected ores.",
-                "Perimeter sensors detecting normal background activity only.",
-                "Generator fuel reserves adequate for six months operation.",
-                "Weather monitoring equipment requires minor calibration.",
-                "Emergency beacon tested and confirmed operational.",
-                "Staff rotation schedule updated for next assignment period.",
+                "Mineral survey detected promising ores.",
+                "Perimeter sensors showing normal activity.",
+                "Generator fuel reserves adequate for six months.",
+                "Weather monitoring equipment calibrated.",
+                "Emergency beacon tested and operational.",
+                "Staff rotation schedule updated.",
                 "Isolation protocols reviewed and updated.",
                 "Automated drills reached target depth.",
                 "Seismic activity within expected parameters.",
-                "Atmospheric processing unit 2 showing slight pressure drop.",
-                "Wildlife deterrent system activated after local fauna approached perimeter.",
+                "Wildlife deterrent system activated.",
                 "Excavation team unearthed ancient artifacts.",
-                "Solar array alignment adjusted for optimal energy capture.",
-                "Dust storm visibility zero for past 12 hours.",
-                "Water purification units operating at peak capacity.",
-                "Geothermal power conduit A-7 sealed for repair.",
-                "Relay station 4 signal strength improved after antenna adjustment.",
-                "Drone reconnaissance mission returned with mapping data."
+                "Solar array alignment optimized.",
+                "Dust storm reduced visibility to zero.",
+                "Water purification at peak capacity.",
+                "Relay station signal strength improved.",
+                "Drone reconnaissance returned with mapping data.",
+                "Geothermal conduit sealed for repair.",
+                "Another quiet shift on the frontier."
             ],
             'gate': [
-                "Corridor stability measurements within acceptable variance.",
-                "Transit queue processing efficiently during peak hours.",
-                "Gate energy consumption optimized for cost savings.",
-                "Safety protocols updated following recent navigation incidents.",
-                "Decontamination procedures enhanced per Federal directives.",
-                "Navigation beacon alignment verified and corrected.",
-                "Traffic control systems upgraded to latest specification.",
-                "Emergency transit procedures drilled with all staff.",
+                "Corridor stability within acceptable variance.",
+                "Transit queue processing efficiently.",
+                "Gate energy consumption optimized.",
+                "Safety protocols updated per incidents.",
+                "Decontamination procedures enhanced.",
+                "Navigation beacon alignment verified.",
+                "Traffic control systems upgraded.",
+                "Emergency transit procedures drilled.",
                 "Inter-system data packets flowing normally.",
-                "Security checkpoint 3 reported minor contraband seizure.",
-                "Corridor stabilizer operating within expected tolerances.",
-                "Anomaly detection systems on standby, no readings.",
-                "Personnel transit logs audited for compliance.",
-                "Customs declaration forms updated, new tariff rates applied.",
-                "Scheduled shutdown for primary power coupling replacement."
+                "Security checkpoint contraband seizure.",
+                "Corridor stabilizer operating normally.",
+                "Anomaly detection on standby.",
+                "Personnel transit logs audited.",
+                "Customs forms updated with new tariffs.",
+                "Scheduled shutdown for power coupling replacement.",
+                "Transit gate maintenance completed.",
+                "Energy field fluctuations minimal.",
+                "Gate synchronization nominal.",
+                "Passenger manifest verification complete.",
+                "How much further to Earth?"
             ]
         }
+        
+        pool = type_message_pools.get(location_type, type_message_pools['colony'])
+        return random.choice(pool)
 
-        # Generic messages that work for any location
-        generic_messages = [
-            "Completed daily inspection rounds. All systems nominal.",
-            "Shift report: No incidents to report. Operations running smoothly.",
-            "Updated safety protocols as per latest regulations.",
-            "Monthly evaluation complete. Performance metrics within acceptable range.",
-            "Routine maintenance scheduled for next cycle.",
-            "Quality control checks passed. Standards maintained.",
-            "Staff briefing conducted. New procedures implemented.",
-            "Equipment calibration complete. Ready for continued operations.",
-            "Inventory audit finished. Supplies adequate for current needs.",
-            "Training session completed for new personnel.",
-            "All systems green. No anomalies detected.",
-            "Environmental conditions stable.",
-            "Security sweep complete. Perimeter secure.",
-            "Communications array functioning normally.",
-            "Power grid operating at optimal efficiency.",
-            "Life support systems within normal parameters.",
-            "Navigation beacons updated and verified.",
-            "Emergency systems tested and confirmed operational.",
-            "Radiation levels remain within safe limits.",
-            "Structural integrity checks completed successfully.",
-            "Another quiet day. Good for getting caught up on paperwork.",
-            "Coffee supply running low. Need to add that to the next order.",
-            "Met some interesting travelers today. Always enjoy hearing their stories.",
-            "Long shift, but someone has to keep things running.",
-            "Received a message from family today. Always brightens the mood.",
-            "Weather patterns have been unusual lately. Hope it doesn't affect operations.",
-            "New arrival seemed nervous. First time this far from home, I'd guess.",
-            "Reminder to self: check the backup generators tomorrow.",
-            "Quiet night shift. Perfect time for reading technical manuals.",
-            "Looking forward to my next leave. Could use a change of scenery.",
-            "Cargo manifests reviewed and approved for processing.",
-            "Price negotiations concluded. Fair deal reached.",
-            "Supply shipment arrived on schedule. Quality goods as usual.",
-            "Market analysis complete. Prices holding steady.",
-            "New trade agreement signed. Should improve local economy.",
-            "Customs inspection finished. All documentation in order.",
-            "Freight scheduling updated. Traffic flow optimized.",
-            "Quality assessment of incoming goods complete. Standards met.",
-            "Export permits processed. Shipments cleared for departure.",
-            "Trade route security briefing attended. Safety first.",
-            "Diagnostic complete. Minor adjustments made to improve efficiency.",
-            "Software update installed. No compatibility issues detected.",
-            "Preventive maintenance performed on critical systems.",
-            "Backup systems tested. Failsafes functioning properly.",
-            "Network connectivity stable. Data transmission normal.",
-            "Sensor array recalibrated for optimal performance.",
-            "Firmware update applied successfully. System restart completed.",
-            "Performance metrics analyzed. Operating within design parameters.",
-            "Component replacement scheduled for next maintenance window.",
-            "System logs reviewed. No error conditions found.",
-            "Energy consumption holding steady.",
-            "Waste disposal systems operating at capacity.",
-            "Air filtration systems cleaned and re-calibrated.",
-            "Hydraulics checked. Pressure levels optimal.",
-            "Coolant levels within acceptable range.",
-            "Structural stress tests performed, no anomalies.",
-            "Vibration dampeners adjusted.",
-            "Power conduits inspected for wear.",
-            "Data core integrity verified.",
-            "Auxiliary power unit on standby.",
-            "Automated repair drones deployed for minor hull abrasions.",
-            "Environmental controls stable across all zones.",
-            "Routine software patch deployed system-wide.",
-            "Emergency lighting systems tested and confirmed.",
-            "Life support nutrient re-supply completed.",
-            "Maintenance crew reported no critical issues.",
-            "Internal pressure differentials normalized.",
-            "Atmospheric composition analyzed, optimal.",
-            "Waste heat exchangers functioning efficiently.",
-            "Generator coolant lines purged.",
-            "Plasma conduits inspected for energy leaks.",
-            "Shield emitters recalibrated.",
-            "Weapon systems on standby, no threats detected.",
-            "Crew quarters sanitation levels verified.",
-            "Recreational facilities maintenance completed.",
-            "Medical bay inventory updated.",
-            "Laboratory samples secured for transport.",
-            "Command center displays updated with latest intel.",
-            "Communications relays checked for interference.",
-            "Telemetry data streams nominal.",
-            "Navigation charts updated with recent discoveries.",
-            "Astrogation calculations verified.",
-            "Engine output efficiency within parameters.",
-            "Fuel cells operating at optimal temperature.",
-            "Thrust vectoring systems tested.",
-            "Landing gear cycles performed, no issues.",
-            "Flight control surfaces checked for responsiveness.",
-            "Warp core diagnostic run completed.",
-            "Jump drive capacitor charge holding steady.",
-            "Hyperdrive calibrations verified.",
-            "Pilot flight hours logged and approved.",
-            "Cargo hold pressurized, secure for transit.",
-            "Manifest discrepancies resolved.",
-            "Loading bay activity nominal.",
-            "Unloading operations proceeding efficiently.",
-            "Freight containers secured for departure.",
-            "Supply chain logistics reviewed and optimized.",
-            "Inventory tracking system updated.",
-            "Material requisitions approved.",
-            "Shipment manifests cross-referenced.",
-            "Trade agreements reviewed for compliance.",
-            "Economic projections holding steady.",
-            "Market fluctuations monitored, no significant shifts.",
-            "Revenue reports submitted for analysis.",
-            "Budget allocations reviewed.",
-            "Financial projections updated.",
-            "Investment portfolio performing as expected.",
-            "Audit completed, all accounts balanced.",
-            "Resource allocation strategy refined.",
-            "Operational expenses within budget.",
-            "Profit margins stable this quarter.",
-            "Contract negotiations progressing well.",
-            "Legal compliance checks completed.",
-            "Data privacy protocols reinforced.",
-            "Information security audit passed.",
-            "Network firewall updated.",
-            "System access logs reviewed.",
-            "Personnel records updated.",
-            "Training modules completed by all staff.",
-            "Performance reviews scheduled for next cycle.",
-            "Inter-departmental communication flow optimized.",
-            "Project timelines adjusted for efficiency.",
-            "Team morale holding strong.",
-            "New initiatives launched successfully.",
-            "Feedback mechanisms implemented.",
-            "Suggestions box reviewed, actionable items noted.",
-            "Work-life balance initiatives promoting well-being.",
-            "Community outreach program showing positive results.",
-            "Public relations messages approved.",
-            "Crisis communication protocols on standby.",
-            "Media monitoring active, no negative reports.",
-            "Brand reputation holding strong.",
-            "Stakeholder engagement meeting concluded.",
-            "Partnership discussions initiated.",
-            "Regulatory compliance documents filed.",
-            "Certification renewals processed.",
-            "Quality assurance checks consistently high.",
-            "Innovation pipeline developing new concepts.",
-            "Research and development showing promise.",
-            "Prototype testing underway.",
-            "Design specifications finalized for new project.",
-            "Technical documentation updated and distributed.",
-            "User interface feedback incorporated into next revision.",
-            "Software architecture reviewed for scalability.",
-            "Database optimization completed.",
-            "Cloud infrastructure capacity increased.",
-            "Cybersecurity threat level remains low.",
-            "Automated defense systems active.",
-            "Intrusion detection systems on high alert.",
-            "Forensics team reviewing past anomalies.",
-            "Encryption protocols updated to latest standards.",
-            "Network traffic flow analyzed for irregularities.",
-            "Secure communication channels verified.",
-            "Disaster recovery plan reviewed and updated.",
-            "Data backup procedures confirmed.",
-            "Archived data integrity checks passed.",
-            "System restore points created.",
-            "Contingency plans in place for all scenarios.",
-            "Supply chain resilience assessment completed.",
-            "Critical resource stockpiles verified.",
-            "Emergency supply routes mapped.",
-            "Logistics network efficiency analyzed.",
-            "Transportation schedules optimized.",
-            "Fleet maintenance logs reviewed.",
-            "Vehicle diagnostics running smoothly.",
-            "Crew readiness drills performed.",
-            "Medical personnel on standby.",
-            "First aid stations resupplied.",
-            "Sanitation crews performed deep clean.",
-            "Waste management systems running without issue.",
-            "Recycling rates up this cycle.",
-            "Environmental impact assessments completed.",
-            "Conservation efforts showing progress.",
-            "Resource management policies reinforced.",
-            "Water consumption within targets.",
-            "Energy conservation initiatives underway.",
-            "Waste heat capture systems online.",
-            "Air quality sensors showing optimal readings.",
-            "Hydroponics bay yield exceeding expectations.",
-            "Food processing units operating at capacity.",
-            "Nutritional supplements inventory full.",
-            "Recreational activities participation increased.",
-            "Fitness center equipment serviced.",
-            "Educational resources updated.",
-            "Library archives cataloged.",
-            "Entertainment schedules posted.",
-            "Visitor log updated.",
-            "Guest services feedback positive.",
-            "Concierge desk reports no unusual requests.",
-            "Gift shop inventory refreshed.",
-            "Observation deck popularity high.",
-            "Public announcement system tested.",
-            "Internal comms channels clear.",
-            "Security camera feeds reviewed.",
-            "Access control systems verified.",
-            "Perimeter alarm systems armed.",
-            "Patrol drone battery levels optimal.",
-            "Response teams on alert.",
-            "Evacuation routes marked and clear.",
-            "Emergency shelters stocked.",
-            "Medical emergency protocols drilled.",
-            "Fire suppression systems tested.",
-            "Hazardous materials containment procedures reviewed.",
-            "Structural diagnostics running.",
-            "Hull stress levels nominal.",
-            "Internal bracing inspected for integrity.",
-            "External sensors cleaned.",
-            "Navigation lights functioning.",
-            "Comm dish alignment confirmed.",
-            "Power transfer conduits checked.",
-            "Auxiliary battery array charged.",
-            "Gravitational plating calibration complete.",
-            "Sub-systems all reporting green.",
-            "Core temperature stable.",
-            "Main reactor output steady.",
-            "Energy shields at optimal strength.",
-            "Weapon system arming sequence verified.",
-            "Targeting arrays locked and ready.",
-            "Missile tubes reloaded.",
-            "Laser cannons charged.",
-            "Defensive countermeasures deployed for testing.",
-            "Attack patterns simulated.",
-            "Tactical displays updated.",
-            "Strategic planning session completed.",
-            "Fleet movements logged.",
-            "Scout reports analyzed.",
-            "Intelligence briefing conducted.",
-            "Diplomatic communications established.",
-            "Treaty negotiations ongoing.",
-            "Ambassadorial reports submitted.",
-            "Trade embargos maintained.",
-            "Alliance protocols reviewed.",
-            "Non-aggression pacts confirmed.",
-            "Interstellar law briefings attended.",
-            "Legal disputes mediated.",
-            "Justice department caseload reviewed.",
-            "Criminal activity reported low.",
-            "Security forces on high alert.",
-            "Civilian unrest reported minimal.",
-            "Public services operating efficiently.",
-            "Infrastructure development projects on schedule.",
-            "Urban planning initiatives progressing.",
-            "Housing sector expanding.",
-            "Agricultural yields projected strong.",
-            "Mining operations meeting quotas.",
-            "Manufacturing output increasing.",
-            "Supply chain efficiency improved.",
-            "Distribution networks optimized.",
-            "Retail sector reporting healthy sales.",
-            "Service industry expanding.",
-            "Tourism sector showing growth.",
-            "Financial markets stable.",
-            "Banking services operating normally.",
-            "Credit ratings maintained.",
-            "Tax revenues collected.",
-            "Budget surplus reported.",
-            "Investment opportunities identified.",
-            "Philanthropic initiatives supported.",
-            "Charitable donations processed.",
-            "Volunteer efforts lauded.",
-            "Community events well-attended.",
-            "Art and culture programs flourishing.",
-            "Historical archives updated.",
-            "Scientific research grants awarded.",
-            "Technological advancements reported.",
-            "Education system reforms implemented.",
-            "Healthcare access expanded.",
-            "Public health initiatives successful.",
-            "Emergency medical services on standby.",
-            "Disease outbreak protocols reviewed.",
-            "Mental health support services available.",
-            "Social welfare programs benefiting many.",
-            "Infrastructure integrity check completed.",
-            "Power conduit junction box maintenance.",
-            "HVAC system diagnostics run.",
-            "Automated janitorial units deployed.",
-            "Replicator output calibrated.",
-            "Food synthesis unit filter replacement.",
-            "Cargo lift mechanism inspected.",
-            "Habitat module pressure verified.",
-            "Waste heat recovery system optimized.",
-            "Airlock seals tested.",
-            "Magnetic containment field stable.",
-            "Cryogenic storage units at optimal temperature.",
-            "Antigrav platform stability confirmed.",
-            "Bio-containment protocols enforced.",
-            "Genetics lab data encrypted.",
-            "Robotics division completed new prototype.",
-            "AI core diagnostics nominal.",
-            "Virtual reality training simulations updated.",
-            "Holographic display projectors serviced.",
-            "Quantum entanglement communicators online.",
-            "Psionic inhibitor field operating.",
-            "Warp field generator coolant levels nominal.",
-            "Ion cannon capacitor banks charged.",
-            "Plasma rifle maintenance complete.",
-            "Energy shield modulator recalibrated.",
-            "Anti-gravity lift systems checked.",
-            "Medical drone calibration complete.",
-            "Surgical bay sterilization cycle finished.",
-            "Rehabilitation unit patient logs updated.",
-            "Pharmacology lab inventory refreshed.",
-            "Contamination showers tested.",
-            "Environmental suit integrity checked.",
-            "Personal comms device signal strength strong.",
-            "Recreational drone flight paths mapped.",
-            "Zero-g sports arena scheduled for deep clean.",
-            "Library access terminals updated.",
-            "Theatre projection systems tested.",
-            "Art gallery environmental controls stable.",
-            "Marketplace vendor licenses renewed.",
-            "Security presence increased in commercial districts.",
-            "Banking terminal network secure.",
-            "Data center cooling systems optimal.",
-            "Server farm power draw stable.",
-            "Network security protocols updated.",
-            "Fire suppression system pressure checked.",
-            "Emergency exits clear and lit.",
-            "Backup power cells fully charged.",
-            "Structural integrity sensors green.",
-            "Shield emitters cycling normally.",
-            "Life support primary filters replaced.",
-            "Atmospheric composition stable.",
-            "Water reclamation systems efficient.",
-            "Power grid load balanced.",
-            "Waste disposal schedule maintained.",
-            "Medical bay equipped and ready.",
-            "Security team on regular patrol.",
-            "Communications satellite link strong.",
-            "Navigation computer updated.",
-            "Thruster array responsive.",
-            "Fuel cells at optimum levels.",
-            "Environmental control systems fully operational.",
-            "Routine systems check completed.",
-            "All indicators show normal activity.",
-            "No anomalies reported on any watch.",
-            "Day's operations concluded without incident.",
-            "Handover brief given to next shift.",
-            "Personnel accounted for.",
-            "Sleep cycle protocols initiated.",
-            "Quiet hours observed throughout facility.",
-            "Thinking about home today. Miss the open skies of Earth.",
-            "Wish they had real rain here, not fire sprinklers.",
-            "Heard some new music on the radio. Might have to track that artist down.",
-            "Almost forgot my lunch today. Good thing the emergency rations are, uh... edible.",
-            "My plant is actually thriving in the hydroponics bay. Little victories.",
-            "Got stuck in a queue for the public transit, even in space!",
-            "Someone left a really weird message in the last log entry. Hope they're okay.",
-            "The new synthetic coffee isn't half bad, for synthetic coffee.",
-            "Spotted a derelict freighter on the long-range scanners. Spooky.",
-            "Wishing I could just step outside and feel the sun on my face.",
-            "The comms were down for a bit. Always unsettling.",
-            "My back is killing me. Guess endless console sitting isn't good for you.",
-            "Someone keeps leaving their dirty dishes in the communal sink. Ugh.",
-            "Found a forgotten data drive with some old music. Nostalgic.",
-            "The stars really make you feel small, don't they?",
-            "Another day, another credit earned. Living the dream.",
-            "Trying to remember what day of the week it is. Feels like all of them.",
-            "My plant died. Guess I'm not a natural botanist.",
-            "The new uniforms are surprisingly comfortable.",
-            "Finally got a response from that long-lost relative. Good to hear from them.",
-            "The recycled water tastes a bit metallic today. Or maybe I'm just paranoid.",
-            "Wish I had brought more snacks.",
-            "The humming of the life support system is surprisingly soothing.",
-            "Decided to try a new recipe in the mess hall. Didn't burn anything this time.",
-            "Got a promotion today! All those late nights paid off.",
-            "The stars are truly beautiful...",
-            "Saw some impressive acrobatics on broadcast today.",
-            "My radio unit kept bugging out. Think I need a new one.",
-            "Almost forgot my duty shift. Time flies when you're procrastinating.",
-            "Got a call from a friend in another system. Good to catch up.",
-            "Feeling philosophical tonight. What really is 'home'?",
-            "My sleep's all over the place with these varying shifts.",
-            "Someone drew a smiley face on the comms console. Made me smile.",
-            "The new art exhibit is actually pretty good.",
-            "Trying to figure out where all the dust comes from in a sealed environment.",
-            "Managed to get my laundry done before the machines broke down again.",
-            "The new filtration system is making the air smell oddly fresh."
+    def _get_generic_log_message(self) -> str:
+        """Get generic message using efficient random selection"""
+        
+        # Create message categories for variety without huge arrays
+        categories = [
+            # System status messages
+            [
+                "All systems nominal. No incidents to report.",
+                "Routine maintenance completed successfully.",
+                "Equipment calibration finished, ready for operation.",
+                "Environmental conditions stable.",
+                "Security sweep complete. All clear.",
+                "Communications array functioning normally.",
+                "Power grid operating at optimal efficiency.",
+                "Navigation systems updated and verified.",
+                "Emergency systems tested and operational.",
+                "Structural integrity checks passed."
+            ],
+            # Personal/crew messages  
+            [
+                "Another quiet day. Good for paperwork.",
+                "Coffee supply running low again.",
+                "Met interesting travelers today.",
+                "Long shift, but someone has to keep things running.", 
+                "Received message from family. Always nice.",
+                "New arrival seemed nervous. First timer probably.",
+                "Reminder to check backup generators tomorrow.",
+                "Quiet night shift. Perfect for reading.",
+                "Looking forward to next leave.",
+                "The stars really make you feel small."
+            ],
+            # Technical/operational messages
+            [
+                "Diagnostic complete. Minor adjustments made.",
+                "Software update installed successfully.",
+                "Preventive maintenance on critical systems.",
+                "Backup systems tested and functional.",
+                "Network connectivity stable.",
+                "Sensor array recalibrated.",
+                "Performance metrics within parameters.",
+                "System logs reviewed. No errors found.",
+                "Component replacement scheduled.",
+                "Energy consumption holding steady."
+            ],
+            # Trade/economic messages
+            [
+                "Cargo manifests reviewed and approved.",
+                "Price negotiations concluded fairly.",
+                "Supply shipment arrived on schedule.",
+                "Market analysis complete. Prices steady.",
+                "Trade agreement signed successfully.",
+                "Customs inspection finished.",
+                "Freight scheduling optimized.",
+                "Quality assessment completed.",
+                "Export permits processed.",
+                "Trade route security briefing attended."
+            ]
         ]
-
         
-        for i, location in enumerate(all_locations):
-            # Skip derelict locations
-            if location.get('is_derelict', False):
-                continue
-                
-            # 25% chance for each location to have a log book
-            if random.random() < 0.25:
-                locations_with_logs += 1
-                num_entries = random.randint(3, 7)
-                
-                # Generate entries for this location
-                for _ in range(num_entries):
-                    # Generate NPC author
-                    first_name, last_name = generate_npc_name()
-                    
-                    # Determine wealth level for occupation
-                    wealth_level = location.get('wealth_level', 5)
-                    
-                    # Get occupation based on location type and wealth
-                    occupation = get_occupation(location['type'], wealth_level)
-                    
-                    # Create author name format variety
-                    name_format = random.choice([
-                        f"{first_name} {last_name}, {occupation}",
-                        f"{first_name} {last_name}",
-                        f"{occupation} {last_name}",
-                        f"{first_name}, {occupation}"
-                    ])
-                    
-                    # Select message
-                    specific_messages = location_messages.get(location['type'], [])
-                    if specific_messages and random.random() < 0.35:
-                        message = random.choice(specific_messages)
-                    else:
-                        message = random.choice(generic_messages)
-                    
-                    # Generate historical date (within past year of galaxy start)
-                    days_ago = random.randint(1, 365)
-                    hours_ago = random.randint(0, 23)
-                    entry_time = start_date_obj - timedelta(days=days_ago, hours=hours_ago)
-                    
-                    # Add to batch (location_id, author_id, author_name, message, posted_at, is_generated)
-                    log_entries_to_insert.append(
-                        (location['id'], 0, name_format, message, entry_time.isoformat(), 1)
-                    )
-            
-            # Yield control every 50 locations
-            if i % 50 == 0:
-                await asyncio.sleep(0.1)
-        
-        # Bulk insert all log entries
-        if log_entries_to_insert:
-            query = '''INSERT INTO location_logs 
-                       (location_id, author_id, author_name, message, posted_at, is_generated)
-                       VALUES (?, ?, ?, ?, ?, ?)'''
-            self.db.executemany_in_transaction(conn, query, log_entries_to_insert)
-            print(f"📜 Generated log books for {locations_with_logs} locations with {len(log_entries_to_insert)} total entries")
-        
-        return locations_with_logs    
+        # Select random category, then random message from that category
+        category = random.choice(categories)
+        return random.choice(category)
 async def setup(bot):
     await bot.add_cog(GalaxyGeneratorCog(bot))

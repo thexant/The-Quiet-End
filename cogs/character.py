@@ -12,6 +12,111 @@ class CharacterCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
     
+    
+    
+    @app_commands.command(name="emote", description="Express an emotion or reaction")
+    @app_commands.describe(emotion="The emotion or reaction to express")
+    async def emote(self, interaction: discord.Interaction, emotion: str):
+        char_data = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.response.send_message(
+                "You don't have a character yet! Use `/character create` first.",
+                ephemeral=True
+            )
+            return
+        
+        char_name = char_data[0]
+        await interaction.response.send_message(f"**{char_name}** {emotion}")
+        
+        # Try to award passive XP
+        xp_awarded = await self.try_award_passive_xp(interaction.user.id, "emote")
+        if xp_awarded:
+            try:
+                await interaction.followup.send("✨ *Expressing yourself helps you understand the world better.* (+5 XP)", ephemeral=True)
+            except:
+                pass
+
+    @app_commands.command(name="think", description="Share your character's internal thoughts")
+    @app_commands.describe(thought="What your character is thinking")
+    async def think(self, interaction: discord.Interaction, thought: str):
+        char_data = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.response.send_message(
+                "You don't have a character yet! Use `/character create` first.",
+                ephemeral=True
+            )
+            return
+        
+        char_name = char_data[0]
+        
+        embed = discord.Embed(
+            title="💭 Internal Thoughts",
+            description=f"**{char_name}** thinks to themselves:",
+            color=0x9370DB
+        )
+        embed.add_field(name="💭", value=f"*{thought}*", inline=False)
+        
+        # Try to award passive XP
+        xp_awarded = await self.try_award_passive_xp(interaction.user.id, "think")
+        if xp_awarded:
+            embed.add_field(name="✨ Introspection", value="Deep thinking has expanded your awareness. (+5 XP)", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="observe", description="Describe what your character observes around them")
+    @app_commands.describe(observation="What you observe in your surroundings")
+    async def observe(self, interaction: discord.Interaction, observation: str):
+        char_data = self.db.execute_query(
+            "SELECT name, current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.response.send_message(
+                "You don't have a character yet! Use `/character create` first.",
+                ephemeral=True
+            )
+            return
+        
+        char_name, current_location = char_data
+        
+        # Get location name for context
+        location_name = "Unknown Location"
+        if current_location:
+            loc_info = self.db.execute_query(
+                "SELECT name FROM locations WHERE location_id = ?",
+                (current_location,),
+                fetch='one'
+            )
+            if loc_info:
+                location_name = loc_info[0]
+        
+        embed = discord.Embed(
+            title="👁️ Observation",
+            description=f"**{char_name}** carefully observes their surroundings at **{location_name}**:",
+            color=0x4682B4
+        )
+        embed.add_field(name="🔍 Noticed", value=observation, inline=False)
+        
+        # Try to award passive XP
+        xp_awarded = await self.try_award_passive_xp(interaction.user.id, "observe")
+        if xp_awarded:
+            embed.add_field(name="✨ Awareness", value="You learn from your observations. (+5 XP)", inline=False)
+        
+        await interaction.response.send_message(embed=embed)
+
+    
     character_group = app_commands.Group(name="character", description="Character management commands")
 
     @app_commands.command(name="status", description="Quick access to character information and management")
@@ -127,7 +232,13 @@ class CharacterCog(commands.Cog):
         # send publicly in the channel
         await interaction.response.send_message(f"{char_name} *{action}*")
         
-    
+                # Optional: Send a follow-up message if XP was awarded
+        if xp_awarded:
+            try:
+                await interaction.followup.send("✨ *You feel slightly more experienced from that action.* (+5 XP)", ephemeral=True)
+            except:
+                pass  # Ignore if follow-up fails
+                
     @character_group.command(name="create", description="Create a new character")
     async def create_character(self, interaction: discord.Interaction):
         existing = self.db.execute_query(
@@ -971,7 +1082,39 @@ class CharacterCog(commands.Cog):
             inline=False
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
+        
+    async def try_award_passive_xp(self, user_id: int, action_type: str = "roleplay"):
+        """Award passive XP with 25% chance for roleplay actions"""
+        import random
+        
+        # 25% chance to gain XP
+        if random.random() > 0.25:
+            return False
+        
+        # Check if character exists and is logged in
+        char_data = self.db.execute_query(
+            "SELECT name, is_logged_in FROM characters WHERE user_id = ?",
+            (user_id,),
+            fetch='one'
+        )
+        
+        if not char_data or not char_data[1]:  # Character doesn't exist or not logged in
+            return False
+        
+        char_name = char_data[0]
+        xp_gained = 5
+        
+        # Award XP
+        self.db.execute_query(
+            "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+            (xp_gained, user_id)
+        )
+        
+        # Check for level up
+        await self.level_up_check(user_id)
+        
+        return True
+        
     async def cleanup_character_homes(self, user_id: int):
         """Release all homes owned by a character when they die or are deleted"""
         
@@ -2328,6 +2471,202 @@ class CharacterPanelView(discord.ui.View):
         super().__init__(timeout=300)
         self.bot = bot
         self.user_id = user_id
+        
+        # Check for active job and add job button if needed
+        self._add_job_button_if_needed()
+    
+    def _check_job_status(self):
+        """Check if user has active job and if it's ready for completion"""
+        # Get active job info
+        job_info = self.bot.db.execute_query(
+            '''SELECT j.job_id, j.title, j.description, j.reward_money, j.taken_at, j.duration_minutes,
+                      j.danger_level, l.name as location_name, j.job_status
+               FROM jobs j
+               JOIN locations l ON j.location_id = l.location_id
+               WHERE j.taken_by = ? AND j.is_taken = 1''',
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not job_info:
+            return None, False  # No active job
+        
+        job_id, title, description, reward, taken_at, duration_minutes, danger, location_name, job_status = job_info
+        
+        # Check if job is ready for completion
+        is_ready = False
+        
+        # Check for transport job finalization
+        if job_status == 'awaiting_finalization':
+            is_ready = True
+        else:
+            # Determine if this is a transport job
+            title_lower = title.lower()
+            desc_lower = description.lower()
+            is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
+                              any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
+            
+            if is_transport_job:
+                # For transport jobs, check elapsed time
+                from datetime import datetime
+                taken_time = datetime.fromisoformat(taken_at)
+                current_time = datetime.utcnow()
+                elapsed_minutes = (current_time - taken_time).total_seconds() / 60
+                is_ready = elapsed_minutes >= duration_minutes
+            else:
+                # For stationary jobs, check location tracking
+                tracking = self.bot.db.execute_query(
+                    "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
+                    (job_id, self.user_id),
+                    fetch='one'
+                )
+                
+                if tracking:
+                    time_at_location, required_duration = tracking
+                    time_at_location = float(time_at_location) if time_at_location else 0.0
+                    required_duration = float(required_duration) if required_duration else 1.0
+                    is_ready = time_at_location >= required_duration
+        
+        return job_info, is_ready
+    
+    def _add_job_button_if_needed(self):
+        """Add job button if user has an active job"""
+        job_info, is_ready = self._check_job_status()
+        
+        if job_info:
+            # User has an active job, add the appropriate button
+            if is_ready:
+                job_button = discord.ui.Button(
+                    label="Complete Job",
+                    style=discord.ButtonStyle.success,
+                    emoji="✅"
+                )
+                job_button.callback = self.complete_job
+            else:
+                job_button = discord.ui.Button(
+                    label="Job Status",
+                    style=discord.ButtonStyle.primary,
+                    emoji="💼"
+                )
+                job_button.callback = self.view_job_status
+            
+            self.add_item(job_button)
+    
+    async def complete_job(self, interaction: discord.Interaction):
+        """Handle job completion"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get the EconomyCog and call its job completion logic
+        econ_cog = self.bot.get_cog('EconomyCog')
+        if econ_cog:
+            await econ_cog.job_complete.callback(econ_cog, interaction)
+        else:
+            await interaction.response.send_message("Job system is currently unavailable.", ephemeral=True)
+    
+    async def view_job_status(self, interaction: discord.Interaction):
+        """Handle viewing job status"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Force a manual update first (same as job_status command)
+        econ_cog = self.bot.get_cog('EconomyCog')
+        if econ_cog:
+            await econ_cog._manual_job_update(interaction.user.id)
+        
+        # Get job info (same logic as job_status command)
+        job_info = self.bot.db.execute_query(
+            '''SELECT j.job_id, j.title, j.description, j.reward_money, j.taken_at, j.duration_minutes,
+                      j.danger_level, l.name as location_name, j.job_status
+               FROM jobs j
+               JOIN locations l ON j.location_id = l.location_id
+               WHERE j.taken_by = ? AND j.is_taken = 1''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not job_info:
+            await interaction.response.send_message("You don't have any active jobs.", ephemeral=True)
+            return
+
+        job_id, title, description, reward, taken_at, duration_minutes, danger, location_name, job_status = job_info
+
+        # Determine job type
+        title_lower = title.lower()
+        desc_lower = description.lower()
+        is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
+                          any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
+
+        from datetime import datetime
+        taken_time = datetime.fromisoformat(taken_at)
+        current_time = datetime.utcnow()
+        elapsed_minutes = (current_time - taken_time).total_seconds() / 60
+
+        # Truncate description to prevent Discord limit issues
+        truncated_description = description[:800] + "..." if len(description) > 800 else description
+        
+        embed = discord.Embed(
+            title="💼 Current Job Status",
+            description=f"**{title}**\n{truncated_description}",
+            color=0x4169E1
+        )
+
+        # Status based on job type and current state
+        if job_status == 'awaiting_finalization':
+            status_text = "🚛 **Unloading cargo** - Use `/job complete` to finalize immediately"
+            progress_text = "✅ Transport completed, finalizing delivery..."
+        elif job_status == 'completed':
+            status_text = "✅ **Completed** - Job finished!"
+            progress_text = "Job has been completed successfully"
+        elif is_transport_job:
+            if elapsed_minutes >= duration_minutes:
+                status_text = "✅ **Ready for completion** - Use `/job complete`"
+                progress_text = "Minimum travel time completed"
+            else:
+                remaining_minutes = duration_minutes - elapsed_minutes
+                status_text = f"⏳ **In Transit** - {remaining_minutes:.1f} minutes remaining"
+                progress_pct = (elapsed_minutes / duration_minutes) * 100
+                bars = int(progress_pct // 10)
+                progress_text = "🟩" * bars + "⬜" * (10 - bars) + f" {progress_pct:.0f}%"
+        else:
+            # Stationary job - check tracking
+            tracking = self.bot.db.execute_query(
+                "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
+                (job_id, interaction.user.id),
+                fetch='one'
+            )
+            
+            if tracking:
+                time_at_location, required_duration = tracking
+                time_at_location = float(time_at_location) if time_at_location else 0.0
+                required_duration = float(required_duration) if required_duration else 1.0
+                
+                if time_at_location >= required_duration:
+                    status_text = "✅ **Ready for completion** - Use `/job complete`"
+                    progress_text = "Required time at location completed"
+                else:
+                    remaining = max(0, required_duration - time_at_location)
+                    status_text = f"📍 **Working on-site** - {remaining:.1f} minutes remaining"
+                    progress_pct = min(100, (time_at_location / required_duration) * 100)
+                    bars = int(progress_pct // 10)
+                    progress_text = "🟩" * bars + "⬜" * (10 - bars) + f" {progress_pct:.0f}%"
+            else:
+                status_text = "📍 **Needs location tracking** - Use `/job complete` to start"
+                progress_text = "Location-based work not yet started"
+
+        # Truncate field values to stay under Discord's 1024 character limit
+        status_text = status_text[:1020] + "..." if len(status_text) > 1020 else status_text
+        progress_text = progress_text[:1020] + "..." if len(progress_text) > 1020 else progress_text
+
+        embed.add_field(name="Status", value=status_text, inline=False)
+        embed.add_field(name="Progress", value=progress_text, inline=False)
+        embed.add_field(name="Reward", value=f"{reward:,} credits", inline=True)
+        embed.add_field(name="Danger", value="⚠️" * danger if danger > 0 else "Safe", inline=True)
+        embed.add_field(name="Location", value=location_name[:1020] if len(location_name) > 1020 else location_name, inline=True)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     
     @discord.ui.button(label="Character Info", style=discord.ButtonStyle.primary, emoji="👤")
     async def view_character(self, interaction: discord.Interaction, button: discord.ui.Button):

@@ -210,7 +210,16 @@ class ItemConfig:
             "single_use": False,
             "rarity": "legendary"
         },
-        
+        # Add this entry to the ITEM_DEFINITIONS dictionary
+        "Personal Log": {
+            "type": "equipment",
+            "description": "A digital logbook for recording personal entries and memories",
+            "base_value": 120,
+            "usage_type": "personal_log",
+            "effect_value": 1,
+            "single_use": False,
+            "rarity": "uncommon"
+        },
         # Upgrade Items
         "Engine Booster": {
             "type": "upgrade",

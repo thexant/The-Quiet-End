@@ -121,7 +121,7 @@ RADIO_MESSAGES = [
     "This is {callsign}, reports of unexpected Corridor collapse near the old {system} jump point. Verify your navigation data twice before jumping.",
     "Witnessed a ship vanish mid-transit. Just... gone. This is {callsign} still shaking from the sight. Corridors are a fickle mistress.",
     "Days blur into weeks out here. This is {callsign}, just a voice in the dark. Anyone else feel it? The quiet end.",
-    "Overheard some disturbing chatter from a pilot who spent too long in a storm. Mentioned 'voices in the static'."
+    "Overheard some disturbing chatter from a pilot who spent too long in a storm. Mentioned 'voices in the static'.",
     "Emergency broadcast: This is {callsign}, my ship is adrift. Power failing. I'm dumping all non-essentials. If you hear explosions, it's just my life savings going out the airlock. Farewell."
 ]
 

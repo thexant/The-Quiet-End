@@ -19,11 +19,116 @@ try:
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
-
+    
+class WebMapDatabaseWrapper:
+    """Wrapper to handle database operations for web map with better concurrency"""
+    
+    def __init__(self, db):
+        self.db = db
+        self._cache = {}
+        self._cache_timestamps = {}
+        self._cache_ttl = 5  # 5 seconds cache for frequently accessed data
+    
+    def _is_cache_valid(self, key):
+        """Check if cached data is still valid"""
+        if key not in self._cache_timestamps:
+            return False
+        return (datetime.now() - self._cache_timestamps[key]).total_seconds() < self._cache_ttl
+    
+    def get_locations(self, use_cache=True):
+        """Get all locations with caching"""
+        cache_key = "locations"
+        
+        if use_cache and self._is_cache_valid(cache_key):
+            return self._cache[cache_key]
+        
+        try:
+            locations = self.db.execute_read_query(
+                """SELECT location_id, name, location_type, x_coord, y_coord, 
+                          wealth_level, population, description, has_black_market, 
+                          has_federal_supplies, faction
+                   FROM locations ORDER BY name""",
+                fetch='all'
+            )
+            
+            if use_cache:
+                self._cache[cache_key] = locations
+                self._cache_timestamps[cache_key] = datetime.now()
+            
+            return locations or []
+        except Exception as e:
+            print(f"Error fetching locations: {e}")
+            return []
+    
+    def get_corridors(self, use_cache=True):
+        """Get active corridors with caching"""
+        cache_key = "corridors"
+        
+        if use_cache and self._is_cache_valid(cache_key):
+            return self._cache[cache_key]
+        
+        try:
+            corridors = self.db.execute_read_query(
+                '''SELECT c.corridor_id, c.name, c.danger_level, c.travel_time, c.fuel_cost,
+                          c.origin_location, c.destination_location,
+                          ol.x_coord as origin_x, ol.y_coord as origin_y,
+                          dl.x_coord as dest_x, dl.y_coord as dest_y, ol.location_type as origin_type
+                   FROM corridors c
+                   JOIN locations ol ON c.origin_location = ol.location_id
+                   JOIN locations dl ON c.destination_location = dl.location_id
+                   WHERE c.is_active = 1''',
+                fetch='all'
+            )
+            
+            if use_cache:
+                self._cache[cache_key] = corridors
+                self._cache_timestamps[cache_key] = datetime.now()
+            
+            return corridors or []
+        except Exception as e:
+            print(f"Error fetching corridors: {e}")
+            return []
+    
+    def get_online_players(self):
+        """Get online players - no caching for real-time data"""
+        try:
+            return self.db.execute_read_query(
+                """SELECT c.name, c.current_location, c.is_logged_in, c.user_id
+                   FROM characters c
+                   WHERE c.is_logged_in = 1 AND c.current_location IS NOT NULL""",
+                fetch='all'
+            ) or []
+        except Exception as e:
+            print(f"Error fetching online players: {e}")
+            return []
+    
+    def get_players_in_transit(self):
+        """Get players in transit - no caching for real-time data"""
+        try:
+            return self.db.execute_read_query(
+                """SELECT ts.corridor_id, c.name as character_name, ts.origin_location, 
+                          ts.destination_location, ol.name as origin_name, dl.name as dest_name, c.user_id
+                   FROM travel_sessions ts
+                   JOIN characters c ON ts.user_id = c.user_id
+                   JOIN locations ol ON ts.origin_location = ol.location_id
+                   JOIN locations dl ON ts.destination_location = dl.location_id
+                   WHERE ts.status = 'traveling'""",
+                fetch='all'
+            ) or []
+        except Exception as e:
+            print(f"Error fetching players in transit: {e}")
+            return []
+    
+    def clear_cache(self):
+        """Clear all cached data"""
+        self._cache.clear()
+        self._cache_timestamps.clear()
+        
 class WebMapCog(commands.Cog, name="WebMap"):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
+        self.db_wrapper = WebMapDatabaseWrapper(bot.db)
         self.app = None
         self.server = None
         self.server_thread = None
@@ -6497,12 +6602,14 @@ class WebMapCog(commands.Cog, name="WebMap"):
         
         current_time = time_system.calculate_current_ingame_time()
         formatted_time = time_system.format_ingame_datetime(current_time) if current_time else "Unknown"
+        
         # Add theme synchronization - use a deterministic seed
         import hashlib
         theme_seed = hashlib.md5(f"{galaxy_name}{formatted_time[:10]}".encode()).hexdigest()
         theme_index = int(theme_seed[:8], 16) % 5
         themes = ['blue', 'amber', 'green', 'red', 'purple']
         selected_theme = themes[theme_index]
+        
         # Define alignment function properly
         def determine_location_alignment(has_black_market, has_federal_supplies, wealth_level):
             """Determine location alignment based on properties"""
@@ -6513,27 +6620,13 @@ class WebMapCog(commands.Cog, name="WebMap"):
             else:
                 return "neutral"
         
-        # Get locations
-        try:
-            locations = self.db.execute_query(
-                """SELECT location_id, name, location_type, x_coord, y_coord, 
-                          wealth_level, population, description, has_black_market, has_federal_supplies
-                   FROM locations ORDER BY name""",
-                fetch='all'
-            )
-            if locations is None:
-                locations = []
-        except Exception as e:
-            print(f"Error fetching locations: {e}")
-            locations = []
+        # Use the wrapper for database operations
+        locations = self.db_wrapper.get_locations()
         
-        # Ensure locations is not None
-        if locations is None:
-            locations = []
-        # Get static NPCs for each location FIRST
+        # Get static NPCs using read query
         static_npcs_by_location = {}
         try:
-            static_npcs = self.db.execute_query(
+            static_npcs = self.db.execute_read_query(
                 """SELECT location_id, name, age, occupation, personality 
                    FROM static_npcs ORDER BY location_id, name""",
                 fetch='all'
@@ -6550,11 +6643,10 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     })
         except Exception as e:
             print(f"Warning: Could not fetch static NPCs: {e}")
-            static_npcs_by_location = {}
-
+        
         # Process locations with alignment
         processed_locations = []
-        for loc in (locations or []):
+        for loc in locations:
             alignment = determine_location_alignment(loc[8], loc[9], loc[5])
             processed_locations.append({
                 "location_id": loc[0],
@@ -6568,60 +6660,18 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 "alignment": alignment,
                 "static_npcs": static_npcs_by_location.get(loc[0], [])
             })
-        # Get active corridors
-        try:
-            corridors = self.db.execute_query(
-                '''SELECT c.corridor_id, c.name, c.danger_level, c.travel_time, c.fuel_cost,
-                          c.origin_location, c.destination_location,
-                          ol.x_coord as origin_x, ol.y_coord as origin_y,
-                          dl.x_coord as dest_x, dl.y_coord as dest_y, ol.location_type as origin_type
-                   FROM corridors c
-                   JOIN locations ol ON c.origin_location = ol.location_id
-                   JOIN locations dl ON c.destination_location = dl.location_id
-                   WHERE c.is_active = 1''',
-                fetch='all'
-            )
-            if corridors is None:
-                corridors = []
-        except Exception as e:
-            print(f"Error fetching corridors: {e}")
-            corridors = []
         
-        # Get online players
-        # Get online players with better error handling
-        try:
-            players = self.db.execute_query(
-                """SELECT c.name, c.current_location, c.is_logged_in
-                   FROM characters c
-                   WHERE c.is_logged_in = 1""",
-                fetch='all'
-            )
-            if players is None:
-                players = []
-        except Exception as e:
-            print(f"Error fetching players: {e}")
-            players = []
+        # Get corridors and players using wrapper
+        corridors = self.db_wrapper.get_corridors()
+        players = self.db_wrapper.get_online_players()
+        players_in_transit = self.db_wrapper.get_players_in_transit()
         
-        try:
-            players_in_transit = self.db.execute_query(
-                """SELECT ts.corridor_id, c.name as character_name, ts.origin_location, ts.destination_location,
-                          ol.name as origin_name, dl.name as dest_name, c.user_id
-                   FROM travel_sessions ts
-                   JOIN characters c ON ts.user_id = c.user_id
-                   JOIN locations ol ON ts.origin_location = ol.location_id
-                   JOIN locations dl ON ts.destination_location = dl.location_id
-                   WHERE ts.status = 'traveling'""",
-                fetch='all'
-            )
-            if players_in_transit is None:
-                players_in_transit = []
-        except Exception as e:
-            print(f"Error fetching players in transit: {e}")
-            players_in_transit = []
-        # Get NPCs in transit using their own travel system
+        # Get NPCs data with error handling
         npcs_in_transit = []
+        dynamic_npcs = []
+        
         try:
-            npcs_in_transit = self.db.execute_query(
+            npcs_in_transit_data = self.db.execute_read_query(
                 """SELECT n.npc_id, n.name, n.callsign, n.ship_name, 
                           n.current_location as origin_location, n.destination_location,
                           ol.name as origin_name, dl.name as dest_name, c.corridor_id
@@ -6632,33 +6682,24 @@ class WebMapCog(commands.Cog, name="WebMap"):
                    WHERE n.travel_start_time IS NOT NULL AND n.destination_location IS NOT NULL AND n.is_alive = 1""",
                 fetch='all'
             )
-            if npcs_in_transit is None:
-                npcs_in_transit = []
+            if npcs_in_transit_data:
+                npcs_in_transit = [
+                    {
+                        "npc_id": npc[0],
+                        "name": npc[1],
+                        "callsign": npc[2],
+                        "ship_name": npc[3],
+                        "origin": npc[6],
+                        "destination": npc[7],
+                        "corridor_id": npc[8]
+                    }
+                    for npc in npcs_in_transit_data
+                ]
         except Exception as e:
             print(f"Warning: Could not fetch NPCs in transit: {e}")
-            npcs_in_transit = []
-        except Exception as e:
-            # If that fails, try a simpler approach or just return empty list
-            print(f"Warning: Could not fetch NPCs in transit (travel_sessions approach): {e}")
-            try:
-                # Alternative: just return NPCs that have travel_start_time set (but no destination info)
-                npcs_with_travel_time = self.db.execute_query(
-                    """SELECT n.npc_id, n.name, n.callsign, n.ship_name, n.current_location
-                       FROM dynamic_npcs n
-                       WHERE n.travel_start_time IS NOT NULL AND n.is_alive = 1""",
-                    fetch='all'
-                )
-                # For now, we can't determine their destination, so return empty list
-                npcs_in_transit = []
-                if npcs_with_travel_time:
-                    print(f"Found {len(npcs_with_travel_time)} NPCs with travel_start_time set, but no destination info available")
-            except Exception as e2:
-                print(f"Warning: Could not fetch NPCs in transit (fallback approach): {e2}")
-                npcs_in_transit = []
-        # Get dynamic NPCs - with error handling
-        dynamic_npcs = []
+        
         try:
-            dynamic_npcs = self.db.execute_query(
+            dynamic_npcs_data = self.db.execute_read_query(
                 """SELECT n.name, n.callsign, n.current_location, n.ship_name, n.ship_type,
                           n.is_alive, n.travel_start_time
                    FROM dynamic_npcs n
@@ -6666,12 +6707,22 @@ class WebMapCog(commands.Cog, name="WebMap"):
                    AND n.travel_start_time IS NULL""",
                 fetch='all'
             )
-            if dynamic_npcs is None:
-                dynamic_npcs = []
+            if dynamic_npcs_data:
+                dynamic_npcs = [
+                    {
+                        "name": npc[0],
+                        "callsign": npc[1],
+                        "location_id": npc[2],
+                        "ship_name": npc[3],
+                        "ship_type": npc[4],
+                        "is_alive": npc[5]
+                    }
+                    for npc in dynamic_npcs_data
+                ]
         except Exception as e:
             print(f"Warning: Could not fetch dynamic NPCs: {e}")
-            dynamic_npcs = []
         
+        # Build the return data
         return {
             "galaxy_name": galaxy_name,
             "current_time": formatted_time,
@@ -6691,7 +6742,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     "dest_x": cor[9],
                     "dest_y": cor[10]
                 }
-                for cor in (corridors or [])
+                for cor in corridors
             ],
             "players": [
                 {
@@ -6699,7 +6750,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     "location_id": player[1],
                     "is_logged_in": player[2]
                 }
-                for player in (players or [])
+                for player in players
             ],
             "players_in_transit": [
                 {
@@ -6709,34 +6760,11 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     "destination": transit[5],
                     "user_id": transit[6]
                 }
-                for transit in (players_in_transit or [])
+                for transit in players_in_transit
             ],
-            # Add NPC transit data
-            "npcs_in_transit": [
-                {
-                    "npc_id": npc[0],
-                    "name": npc[1],
-                    "callsign": npc[2], 
-                    "ship_name": npc[3],
-                    "origin": npc[6],
-                    "destination": npc[7],
-                    "corridor_id": npc[8]
-                }
-                for npc in npcs_in_transit
-            ] if npcs_in_transit else [],
-            "dynamic_npcs": [
-                {
-                    "name": npc[0],
-                    "callsign": npc[1],
-                    "location_id": npc[2],
-                    "ship_name": npc[3],
-                    "ship_type": npc[4],
-                    "is_alive": npc[5]
-                }
-                for npc in dynamic_npcs
-            ],
-            # Add total player count including transit
-            "total_player_count": len(players or []) + len(players_in_transit or [])
+            "npcs_in_transit": npcs_in_transit,
+            "dynamic_npcs": dynamic_npcs,
+            "total_player_count": len(players) + len(players_in_transit)
         }
     async def trigger_wiki_update(self, update_type="general"):
         """Trigger a wiki update when game events occur"""
@@ -6787,22 +6815,10 @@ class WebMapCog(commands.Cog, name="WebMap"):
             await self._broadcast_player_updates()
             
     async def _broadcast_player_updates(self):
-        """Optimized player and NPC updates with caching"""
+        """Optimized player and NPC updates with better error handling"""
         try:
-            # Get current player data
-            players_data = []
-            try:
-                players_data = self.db.execute_query(
-                    """SELECT c.name, c.current_location, c.is_logged_in, c.user_id
-                       FROM characters c
-                       WHERE c.is_logged_in = 1 AND c.current_location IS NOT NULL""",
-                    fetch='all'
-                )
-                if players_data is None:
-                    players_data = []
-            except Exception as e:
-                print(f"Warning: Could not fetch player data: {e}")
-                players_data = []
+            # Use wrapper for player data
+            players_data = self.db_wrapper.get_online_players()
             
             current_players = [
                 {
@@ -6813,115 +6829,100 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 }
                 for player in players_data
             ]
-            # Get NPCs in transit using their own travel system
+            
+            # Get NPCs data with read-only queries
             npcs_in_transit = []
+            current_npcs = []
+            
             try:
-                npcs_in_transit_data = self.db.execute_query(
+                # Get NPCs in transit
+                npcs_transit_data = self.db.execute_read_query(
                     """SELECT n.npc_id, n.name, n.callsign, n.ship_name, 
-                              n.current_location as origin_location, n.destination_location,
+                              n.current_location, n.destination_location,
                               ol.name as origin_name, dl.name as dest_name, c.corridor_id
                        FROM dynamic_npcs n
-                       JOIN locations ol ON n.current_location = ol.location_id
-                       JOIN locations dl ON n.destination_location = dl.location_id
-                       JOIN corridors c ON (c.origin_location = n.current_location AND c.destination_location = n.destination_location)
-                       WHERE n.travel_start_time IS NOT NULL AND n.destination_location IS NOT NULL AND n.is_alive = 1""",
+                       LEFT JOIN locations ol ON n.current_location = ol.location_id
+                       LEFT JOIN locations dl ON n.destination_location = dl.location_id
+                       LEFT JOIN corridors c ON (c.origin_location = n.current_location AND c.destination_location = n.destination_location)
+                       WHERE n.travel_start_time IS NOT NULL AND n.is_alive = 1""",
                     fetch='all'
                 )
-                if npcs_in_transit_data:
-                    npcs_in_transit = [
-                        {
-                            "npc_id": npc[0],
-                            "name": npc[1],
-                            "callsign": npc[2],
-                            "ship_name": npc[3],
-                            "origin": npc[6],
-                            "destination": npc[7],
-                            "corridor_id": npc[8]
-                        }
-                        for npc in npcs_in_transit_data
-                    ]
+                
+                if npcs_transit_data:
+                    for npc in npcs_transit_data:
+                        if npc[8]:  # Has corridor_id
+                            npcs_in_transit.append({
+                                "npc_id": npc[0],
+                                "name": npc[1],
+                                "callsign": npc[2],
+                                "ship_name": npc[3],
+                                "origin": npc[6] or "Unknown",
+                                "destination": npc[7] or "Unknown",
+                                "corridor_id": npc[8]
+                            })
             except Exception as e:
-                print(f"Warning: Could not fetch NPCs in transit: {e}")
-                npcs_in_transit = []
-            # Get current dynamic NPC data
-            npcs_data = []
+                print(f"Warning: Error getting NPCs in transit: {e}")
+            
             try:
-                npcs_data = self.db.execute_query(
+                # Get current NPCs
+                npcs_data = self.db.execute_read_query(
                     """SELECT n.name, n.callsign, n.current_location, n.ship_name, n.ship_type,
                               n.travel_start_time, n.destination_location
                        FROM dynamic_npcs n
                        WHERE n.is_alive = 1""",
                     fetch='all'
                 )
-                if npcs_data is None:
-                    npcs_data = []
+                
+                if npcs_data:
+                    # Get location names efficiently
+                    location_ids = list(set(n[2] for n in npcs_data if n[2]))
+                    location_names = {}
+                    
+                    if location_ids:
+                        placeholders = ','.join('?' * len(location_ids))
+                        loc_data = self.db.execute_read_query(
+                            f"SELECT location_id, name FROM locations WHERE location_id IN ({placeholders})",
+                            location_ids,
+                            fetch='all'
+                        )
+                        location_names = {loc[0]: loc[1] for loc in (loc_data or [])}
+                    
+                    for npc in npcs_data:
+                        is_traveling = npc[5] is not None
+                        location_id = npc[2] if not is_traveling else None
+                        
+                        location_info = None
+                        if location_id and location_id in location_names:
+                            location_info = {
+                                "id": location_id,
+                                "name": location_names[location_id]
+                            }
+                        
+                        current_npcs.append({
+                            "name": npc[0],
+                            "callsign": npc[1],
+                            "location_id": location_id,
+                            "current_location": location_info,
+                            "ship": {"name": npc[3], "type": npc[4]},
+                            "ship_name": npc[3],
+                            "ship_type": npc[4],
+                            "faction": "independent",
+                            "alignment": "independent",
+                            "personality": "No data available.",
+                            "wanted_level": 0,
+                            "is_traveling": is_traveling
+                        })
             except Exception as e:
-                print(f"Warning: Could not fetch NPC data: {e}")
-                npcs_data = []
+                print(f"Warning: Error getting current NPCs: {e}")
             
-            # Get current dynamic NPC data with location names
-            location_ids = []
-            for npc in (npcs_data or []):
-                if npc[2]: location_ids.append(npc[2])  # current location
-                if npc[6]: location_ids.append(npc[6])  # destination location
-
-            location_names = {}
-            if location_ids:
-                location_ids = list(set(location_ids))  # Remove duplicates
-                placeholders = ','.join('?' * len(location_ids))
-                locations = self.db.execute_query(
-                    f"SELECT location_id, name FROM locations WHERE location_id IN ({placeholders})",
-                    location_ids,
-                    fetch='all'
-                )
-                location_names = {loc[0]: loc[1] for loc in (locations or [])}
-
-             # Build NPC data
-            current_npcs = []
-            for npc in (npcs_data or []):
-                is_traveling = npc[5] is not None  # travel_start_time
-                
-                # Always include location_id for map display
-                location_id = npc[2] if not is_traveling else None
-                
-                if is_traveling and npc[6]:  # Has destination
-                    # NPC is in transit
-                    origin_name = location_names.get(npc[2], "Unknown")
-                    dest_name = location_names.get(npc[6], "Unknown")
-                    location_info = {
-                        "id": None, 
-                        "name": f"In Transit: {origin_name} → {dest_name}"
-                    }
-                elif npc[2]:  # At a location
-                    location_info = {
-                        "id": npc[2], 
-                        "name": location_names.get(npc[2], "Unknown Location")
-                    }
-                else:
-                    location_info = None
-                
-                current_npcs.append({
-                    "name": npc[0],
-                    "callsign": npc[1],
-                    "location_id": location_id,  # Add this for map compatibility
-                    "current_location": location_info,  # Keep this for detailed info
-                    "ship": {"name": npc[3], "type": npc[4]},
-                    "ship_name": npc[3],
-                    "ship_type": npc[4],
-                    "faction": "independent",
-                    "alignment": "independent",
-                    "personality": "No data available.",
-                    "wanted_level": 0,
-                    "is_traveling": is_traveling
-                })
-            
-            # Broadcast both updates
+            # Broadcast updates
             await self._broadcast_update("player_update", current_players)
             await self._broadcast_update("npc_update", current_npcs)
             await self._broadcast_update("npc_transit_update", npcs_in_transit)
             
         except Exception as e:
             print(f"Error broadcasting updates: {e}")
+        
     async def _start_update_loop(self):
         """Start the periodic update loop"""
         while self.is_running:
