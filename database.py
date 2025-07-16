@@ -7,7 +7,7 @@ import atexit
 import time
 
 class Database:
-    def __init__(self, db_path="thequietend.db"):
+    def __init__(self, db_path="betalaunch.db"):
         self.db_path = db_path
         self.lock = threading.Lock()
         self._shutdown = False

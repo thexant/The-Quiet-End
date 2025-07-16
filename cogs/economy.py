@@ -755,7 +755,11 @@ class EconomyCog(commands.Cog):
                 ephemeral=True
             )
             return
-
+        
+        # ADD THESE TWO LINES HERE - Define title_lower and desc_lower before they're used
+        title_lower = title.lower()
+        desc_lower = description.lower()
+        
         # Determine job type - check destination_location_id first for definitive classification
         if destination_location_id and destination_location_id != job_location_id:
             # Has a different destination location = definitely a transport job

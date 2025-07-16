@@ -202,11 +202,13 @@ class WebMapCog(commands.Cog, name="WebMap"):
             # Verify server is running
             try:
                 import aiohttp
-                verify_url = f"http://localhost:{port}/"
+                # Check the map endpoint instead of root
+                verify_url = f"http://localhost:{port}/map"
                 async with aiohttp.ClientSession() as session:
                     async with session.get(verify_url, timeout=10) as resp:
                         if resp.status != 200:
                             raise Exception(f"Server returned status {resp.status}")
+                        # Just check that we get a successful response
             except Exception as e:
                 print(f"❌ Web map auto-start verification failed: {e}")
                 self.is_running = False
@@ -281,17 +283,17 @@ class WebMapCog(commands.Cog, name="WebMap"):
         """Get the display URL and note for users"""
         # If there's an override, use it
         if self.external_ip_override:
-            display_url = f"http://{self.external_ip_override}:{self.port}"
+            display_url = f"http://{self.external_ip_override}:{self.port}/map"
             url_note = f"Connect to: {display_url}"
             return display_url, url_note
         
         # If bound to specific host, use that
         if self.host != "0.0.0.0":
-            display_url = f"http://{self.host}:{self.port}"
+            display_url = f"http://{self.host}:{self.port}/map"
             url_note = f"Connect to: {display_url}"
             return display_url, url_note
         # Default fallback
-        display_url = f"http://[SERVER_IP]:{self.port}"
+        display_url = f"http://[SERVER_IP]:{self.port}/map"
         url_note = f"Connect to: {display_url}\n*Use `/webmap_set_ip <your_external_ip_or_domain>` to set the correct address*"
         return display_url, url_note
         
@@ -3681,14 +3683,47 @@ class WebMapCog(commands.Cog, name="WebMap"):
             print(f"⚠️ Template setup error: {e}")
             templates = None
         
-        # Mount static files
+        # Mount static files for the web app
         try:
             app.mount("/static", StaticFiles(directory="web/static"), name="static")
         except Exception as e:
             print(f"⚠️ Static files mount error: {e}")
         
+        # Mount your landing page static files correctly
+        try:
+            # Mount the entire Landing directory as static files
+            app.mount("/landing", StaticFiles(directory="Landing"), name="landing")
+            print("✅ Landing page static files mounted")
+        except Exception as e:
+            print(f"⚠️ Landing page static files mount error: {e}")
+        
+        # Serve landing page at root
         @app.get("/", response_class=HTMLResponse)
         async def read_root():
+            """Serve the landing page"""
+            try:
+                with open("Landing/index.html", "r", encoding='utf-8') as f:
+                    content = f.read()
+                    
+                    # Fix the paths in the HTML to match the mounted static files
+                    # Replace relative paths with the correct mounted paths
+                    content = content.replace('href="css/', 'href="/landing/css/')
+                    content = content.replace('src="scripts/', 'src="/landing/scripts/')
+                    content = content.replace('href="offline/', 'href="/landing/offline/')
+                    
+                    return HTMLResponse(content=content)
+            except FileNotFoundError:
+                # Fallback to map if landing page not found
+                return RedirectResponse(url="/map")
+            except Exception as e:
+                return HTMLResponse(
+                    content=f"<h1>Error</h1><p>Error loading landing page: {str(e)}</p>",
+                    status_code=500
+                )
+        
+        # Move the map to /map instead of root
+        @app.get("/map", response_class=HTMLResponse)
+        async def read_map():
             """Serve the interactive map"""
             try:
                 with open("web/templates/index.html", "r", encoding='utf-8') as f:
@@ -3703,6 +3738,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     content=f"<h1>Map Error</h1><p>Error loading map: {str(e)}</p>",
                     status_code=500
                 )
+    
         
         @app.get("/wiki", response_class=HTMLResponse)
         async def wiki_page(request: Request):
@@ -3817,7 +3853,32 @@ class WebMapCog(commands.Cog, name="WebMap"):
             except Exception as e:
                 print(f"Error calculating route: {e}")
                 return {"error": "Route calculation failed"}
-                
+        @app.get("/css/{filename}")
+        async def get_css(filename: str):
+            """Serve CSS files"""
+            css_path = os.path.join(landing_path, "css", filename)
+            if os.path.exists(css_path):
+                return FileResponse(css_path, media_type="text/css")
+            return HTMLResponse(content="/* CSS file not found */", status_code=404)
+
+        @app.get("/js/{filename}")
+        async def get_js(filename: str):
+            """Serve JS files"""
+            js_path = os.path.join(landing_path, "js", filename)
+            if os.path.exists(js_path):
+                return FileResponse(js_path, media_type="application/javascript")
+            return HTMLResponse(content="// JS file not found", status_code=404)
+
+        @app.get("/images/{filename}")
+        async def get_image(filename: str):
+            """Serve image files"""
+            img_path = os.path.join(landing_path, "images", filename)
+            if os.path.exists(img_path):
+                # Detect mime type based on extension
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(img_path)
+                return FileResponse(img_path, media_type=mime_type or "application/octet-stream")
+            return HTMLResponse(content="Image not found", status_code=404)        
         @app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
@@ -3934,7 +3995,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 <button class="nav-btn" data-section="logs">Logs & History</button>
                 <button class="nav-btn" data-section="news">News Archive</button>
                 <button class="nav-btn" data-section="search">Search</button>
-                <a href="/" class="nav-btn map-link">🗺️ Live Map</a>
+                <a href="/map" class="nav-btn map-link">🗺️ Live Map</a>
             </nav>
         </header>
 
@@ -3986,9 +4047,9 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 <div class="map-container">
                     <h3>Live Galaxy Map</h3>
                     <div class="embedded-map-frame">
-                        <iframe src="/" frameborder="0" class="live-map-embed"></iframe>
+                        <iframe src="/map" frameborder="0" class="live-map-embed"></iframe>
                         <div class="map-overlay">
-                            <a href="/" target="_blank" class="fullscreen-btn">🔍 Open Full Map</a>
+                            <a href="/map" target="_blank" class="fullscreen-btn">🔍 Open Full Map</a>
                         </div>
                     </div>
                 </div>
@@ -6974,11 +7035,15 @@ class WebMapCog(commands.Cog, name="WebMap"):
     @app_commands.command(name="webmap_start", description="Start the interactive web map server")
     @app_commands.describe(
         port="Port to run the web server on (default: 8090)",
-        host="Host to bind to (default: 0.0.0.0)"
+        host="Host to bind to (default: 0.0.0.0)",
+        domain="Domain name to display in URLs (optional, e.g., 'myserver.com')"
     )
-    async def start_webmap(self, interaction: discord.Interaction, port: int = 8090, host: str = "0.0.0.0"):
+    async def start_webmap(self, interaction: discord.Interaction, 
+                          port: int = 8090, 
+                          host: str = "0.0.0.0",
+                          domain: str = None):
         """Start the web map server"""
-        
+        self.external_ip_override = domain
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
@@ -7036,13 +7101,15 @@ class WebMapCog(commands.Cog, name="WebMap"):
             # Verify server is actually running
             try:
                 import aiohttp
-                verify_url = f"http://localhost:{port}/"
+                # Check the map endpoint instead of root
+                verify_url = f"http://localhost:{port}/map"
                 async with aiohttp.ClientSession() as session:
                     async with session.get(verify_url, timeout=10) as resp:
                         if resp.status != 200:
                             raise Exception(f"Server returned status {resp.status}")
                         content = await resp.text()
-                        if "Galaxy Map" not in content:
+                        # Check for content that's definitely in the map page
+                        if "Galaxy Map" not in content and "map" not in content.lower():
                             raise Exception("Server response doesn't contain expected content")
             except asyncio.TimeoutError:
                 await interaction.followup.send("❌ Server start timed out. Try a different port or check for conflicts.")
@@ -7052,7 +7119,13 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 await interaction.followup.send(f"❌ Server failed to start properly: {str(e)}")
                 self.is_running = False
                 return
-            
+            if domain:
+                # Clean up the domain
+                domain = domain.strip()
+                if domain.startswith(('http://', 'https://')):
+                    domain = domain.split('://', 1)[1]
+                domain = domain.rstrip('/')
+                self.external_ip_override = domain
             # Set state and start updates
             self.is_running = True
 
@@ -7073,7 +7146,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
             )
             
             # Determine URLs to display
-            local_url = f"http://localhost:{port}"
+            local_url = f"http://localhost:{port}/map"
             
             if self.external_ip_override:
                 # Use override
@@ -7085,7 +7158,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 )
             elif external_ip:
                 # Use detected external IP
-                external_url = f"http://{external_ip}:{port}"
+                external_url = f"http://{external_ip}:{port}/map"
                 embed.add_field(
                     name="🌐 External Access URL (Auto-detected)",
                     value=f"{external_url}",
@@ -7570,7 +7643,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         """
         # 1. Check for an explicit IP/domain override
         if self.external_ip_override:
-            url = f"http://{self.external_ip_override}:{self.port}"
+            url = f"http://{self.external_ip_override}:{self.port}/map"
             note = f"Map available at your custom address."
             return url, note
 
@@ -7578,14 +7651,14 @@ class WebMapCog(commands.Cog, name="WebMap"):
         try:
             external_ip = await self._get_external_ip()
             if external_ip:
-                url = f"http://{external_ip}:{self.port}"
+                url = f"http://{external_ip}:{self.port}/map"
                 note = "URL is based on auto-detected server IP."
                 return url, note
         except Exception as e:
             print(f"Failed to get external IP for panel: {e}")
 
         # 3. Fallback if override is not set and detection fails
-        url = f"http://http://184.64.30.214:8090/"
+        url = f"http://[SERVER_IP]:{self.port}/map"  # Fixed this line too
         note = "Could not determine server IP. Admin should use `/webmap_set_ip`."
         return url, note
         
