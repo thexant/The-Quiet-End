@@ -61,14 +61,15 @@ class WebClient(commands.Cog):
         self.message_queue = asyncio.Queue()
         
         # Start message processor
-        self.process_messages_task.start()
+        # Start message processor
+        self.process_messages.start()
         
         # Create web directories
         self._create_web_directories()
         
     def cog_unload(self):
         """Clean up when cog is unloaded"""
-        self.process_messages_task.cancel()
+        self.process_messages.cancel()
         if self.is_running:
             self.is_running = False
             # Clean up websockets
@@ -2141,130 +2142,144 @@ document.addEventListener('DOMContentLoaded', () => {
             )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-async def sync_discord_message(self, message: discord.Message, message_type: str = "normal"):
-    """Sync a Discord message to web clients at the same location"""
-    
-    # Get location from channel
-    location_data = self.db.execute_query(
-        "SELECT location_id, name FROM locations WHERE channel_id = ?",
-        (message.channel.id,),
-        fetch='one'
-    )
-    
-    if not location_data:
-        return
-    
-    location_id, location_name = location_data
-    
-    # Format message data
-    message_data = {
-        "type": "message",
-        "author": message.author.display_name,
-        "author_id": str(message.author.id),
-        "content": message.content,
-        "timestamp": message.created_at.isoformat(),
-        "location": location_name,
-        "message_type": message_type,
-        "embeds": []
-    }
-    
-    # Process embeds
-    for embed in message.embeds:
-        embed_data = {
-            "title": embed.title,
-            "description": embed.description,
-            "color": embed.color.value if embed.color else None,
-            "fields": [
-                {"name": field.name, "value": field.value, "inline": field.inline}
-                for field in embed.fields
-            ],
-            "footer": embed.footer.text if embed.footer else None,
-            "thumbnail": embed.thumbnail.url if embed.thumbnail else None,
-            "image": embed.image.url if embed.image else None,
-            "author": {
-                "name": embed.author.name if embed.author else None,
-                "icon_url": embed.author.icon_url if embed.author else None
+    async def sync_discord_message(self, message: discord.Message, message_type: str = "normal"):
+        """Sync a Discord message to web clients at the same location"""
+        
+        # Get location from channel
+        location_data = self.db.execute_query(
+            "SELECT location_id, name FROM locations WHERE channel_id = ?",
+            (message.channel.id,),
+            fetch='one'
+        )
+        
+        if not location_data:
+            return
+        
+        location_id, location_name = location_data
+        
+        # Format message data
+        message_data = {
+            "type": "message",
+            "author": message.author.display_name,
+            "author_id": str(message.author.id),
+            "content": message.content,
+            "timestamp": message.created_at.isoformat(),
+            "location": location_name,
+            "message_type": message_type,
+            "embeds": []
+        }
+        
+        # Process embeds
+        for embed in message.embeds:
+            embed_data = {
+                "title": embed.title,
+                "description": embed.description,
+                "color": embed.color.value if embed.color else None,
+                "fields": [
+                    {"name": field.name, "value": field.value, "inline": field.inline}
+                    for field in embed.fields
+                ],
+                "footer": embed.footer.text if embed.footer else None,
+                "thumbnail": embed.thumbnail.url if embed.thumbnail else None,
+                "image": embed.image.url if embed.image else None,
+                "author": {
+                    "name": embed.author.name if embed.author else None,
+                    "icon_url": embed.author.icon_url if embed.author else None
+                }
             }
+            message_data["embeds"].append(embed_data)
+        
+        # Send to all web clients at this location
+        for session in self.sessions.values():
+            if session.current_location == location_id and session.websocket:
+                try:
+                    await session.websocket.send_json(message_data)
+                except Exception as e:
+                    print(f"Failed to sync message to web client {session.session_id}: {e}")
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """Enhanced message listener with full sync support"""
+        
+        # Skip bot messages unless they're game responses
+        if message.author.bot:
+            # Check if it's a game bot response (has embeds or specific format)
+            if message.embeds or (message.author.id == self.bot.user.id):
+                await self.sync_discord_message(message, "bot_response")
+            return
+        
+        # Sync player messages
+        await self.sync_discord_message(message, "player")
+
+    async def sync_interaction_response(self, interaction: discord.Interaction, 
+                                       content: str = None, embed: discord.Embed = None, 
+                                       ephemeral: bool = False):
+        """Sync interaction responses (including ephemeral) to web clients"""
+        
+        if not ephemeral:
+            return  # Non-ephemeral will be caught by on_message
+        
+        # Get user's web session
+        session = None
+        for s in self.sessions.values():
+            if s.user_id == interaction.user.id:
+                session = s
+                break
+        
+        if not session or not session.websocket:
+            return
+        
+        # Format ephemeral message
+        message_data = {
+            "type": "ephemeral",
+            "content": content,
+            "timestamp": datetime.utcnow().isoformat(),
+            "embed": None
         }
-        message_data["embeds"].append(embed_data)
-    
-    # Send to all web clients at this location
-    for session in self.sessions.values():
-        if session.current_location == location_id and session.websocket:
-            try:
-                await session.websocket.send_json(message_data)
-            except Exception as e:
-                print(f"Failed to sync message to web client {session.session_id}: {e}")
+        
+        if embed:
+            message_data["embed"] = {
+                "title": embed.title,
+                "description": embed.description,
+                "color": embed.color.value if embed.color else None,
+                "fields": [
+                    {"name": field.name, "value": field.value, "inline": field.inline}
+                    for field in embed.fields
+                ],
+                "footer": embed.footer.text if embed.footer else None
+            }
+        
+        try:
+            await session.websocket.send_json(message_data)
+        except Exception as e:
+            print(f"Failed to sync ephemeral to web client: {e}")
 
-@commands.Cog.listener()
-async def on_message(self, message: discord.Message):
-    """Enhanced message listener with full sync support"""
-    
-    # Skip bot messages unless they're game responses
-    if message.author.bot:
-        # Check if it's a game bot response (has embeds or specific format)
-        if message.embeds or (message.author.id == self.bot.user.id):
-            await self.sync_discord_message(message, "bot_response")
-        return
-    
-    # Sync player messages
-    await self.sync_discord_message(message, "player")
 
-async def sync_interaction_response(self, interaction: discord.Interaction, 
-                                   content: str = None, embed: discord.Embed = None, 
-                                   ephemeral: bool = False):
-    """Sync interaction responses (including ephemeral) to web clients"""
-    
-    if not ephemeral:
-        return  # Non-ephemeral will be caught by on_message
-    
-    # Get user's web session
-    session = None
-    for s in self.sessions.values():
-        if s.user_id == interaction.user.id:
-            session = s
-            break
-    
-    if not session or not session.websocket:
-        return
-    
-    # Format ephemeral message
-    message_data = {
-        "type": "ephemeral",
-        "content": content,
-        "timestamp": datetime.utcnow().isoformat(),
-        "embed": None
-    }
-    
-    if embed:
-        message_data["embed"] = {
-            "title": embed.title,
-            "description": embed.description,
-            "color": embed.color.value if embed.color else None,
-            "fields": [
-                {"name": field.name, "value": field.value, "inline": field.inline}
-                for field in embed.fields
-            ],
-            "footer": embed.footer.text if embed.footer else None
-        }
-    
-    try:
-        await session.websocket.send_json(message_data)
-    except Exception as e:
-        print(f"Failed to sync ephemeral to web client: {e}")
 
-# Hook into the bot's command handler to catch ephemeral responses
-# Add this to your main bot file or command handler:
-
-original_send = discord.InteractionResponse.send_message
+_original_send_message = discord.InteractionResponse.send_message
 
 async def patched_send_message(self, content=None, *, embed=None, embeds=None, 
                               view=None, ephemeral=False, **kwargs):
     """Patched send_message to sync ephemeral messages"""
     
+    # Build kwargs for original call
+    call_kwargs = {"ephemeral": ephemeral}
+    if content is not None:
+        call_kwargs["content"] = content
+    if view is not None:
+        call_kwargs["view"] = view
+    
+    # Handle embed vs embeds
+    if embeds is not None:
+        call_kwargs["embeds"] = embeds
+    elif embed is not None:
+        call_kwargs["embed"] = embed
+    
+    # Add any additional kwargs
+    call_kwargs.update(kwargs)
+    
     # Call original
-    result = await original_send(self, content=content, embed=embed, embeds=embeds, 
-                                view=view, ephemeral=ephemeral, **kwargs)
+    result = await _original_send_message(self, **call_kwargs)
     
     # Sync to web client if ephemeral
     if ephemeral:
@@ -2278,10 +2293,6 @@ async def patched_send_message(self, content=None, *, embed=None, embeds=None,
     
     return result
 
-# Apply the patch when bot starts
-discord.InteractionResponse.send_message = patched_send_message
-
-# Add to the JavaScript client to handle different message types:
 
 
 async def setup(bot):
