@@ -2331,13 +2331,10 @@ document.addEventListener('DOMContentLoaded', () => {
             # Get the appropriate cog and command
             command_mapping = {
                 'status': ('CharacterCog', 'status'),
-                'here': ('LocationCog', 'here'),
-                'inventory': ('InventoryCog', 'inventory'),
+                'here': ('CharacterCog', 'here_shorthand'),
+                'inventory': ('CharacterCog', 'view_inventory'),
                 'travel': ('TravelCog', 'travel'),
-                'look': ('LocationCog', 'look'),
-                'say': ('CommunicationCog', 'say'),
-                'emote': ('CommunicationCog', 'emote'),
-                'shop': ('ShopCog', 'shop'),
+                'shop': ('EconomyCog', 'shop'),
                 'buy': ('ShopCog', 'buy'),
                 'sell': ('ShopCog', 'sell'),
                 'jobs': ('JobsCog', 'jobs'),
@@ -2397,7 +2394,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     "message": f"Command execution failed: {str(e)}"
                 })
 
-#
+
     async def _execute_web_command(self, cog, method_name, user, location_id, args, character_name):
         """Execute a command for web client without requiring Discord interaction"""
         
