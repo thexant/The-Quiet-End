@@ -7,7 +7,7 @@ import atexit
 import time
 
 class Database:
-    def __init__(self, db_path="thequietend.db"):
+    def __init__(self, db_path="test.db"):
         self.db_path = db_path
         self.lock = threading.Lock()
         self._shutdown = False
@@ -1259,6 +1259,36 @@ class Database:
                 FOREIGN KEY (ship_id) REFERENCES ships (ship_id)
             )''',
             '''ALTER TABLE characters ADD COLUMN auto_rename INTEGER DEFAULT 0 NOT NULL''',
+            '''CREATE TABLE IF NOT EXISTS web_passwords (
+                user_id INTEGER PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id) ON DELETE CASCADE
+            )''',
+            '''CREATE TABLE IF NOT EXISTS web_sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ip_address TEXT,
+                user_agent TEXT,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id) ON DELETE CASCADE
+            )''',
+            '''CREATE TABLE IF NOT EXISTS web_client_logs (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                session_id TEXT,
+                action TEXT NOT NULL,
+                details TEXT,
+                ip_address TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )''',
+            '''CREATE INDEX IF NOT EXISTS idx_web_sessions_user_id ON web_sessions(user_id)''',
+            '''CREATE INDEX IF NOT EXISTS idx_web_sessions_last_activity ON web_sessions(last_activity)''',
+            '''CREATE INDEX IF NOT EXISTS idx_web_client_logs_user_id ON web_client_logs(user_id)''',
+            '''CREATE INDEX IF NOT EXISTS idx_web_client_logs_timestamp ON web_client_logs(timestamp)'''
         ]
         
         for q in queries:

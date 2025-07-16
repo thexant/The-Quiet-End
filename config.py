@@ -41,6 +41,14 @@ WEBMAP_CONFIG = {
     'auto_start_time': 30,         # Seconds to wait after bot startup before starting web map
 }
 
+WEBCLIENT_CONFIG = {
+    'auto_start': False,           # Auto-start with web map
+    'port': 8091,                 # Port for web client (different from web map)
+    'host': '0.0.0.0',           # Host to bind to
+    'session_timeout': 30,        # Minutes before auto-logout
+    'max_sessions_per_user': 1,   # Limit concurrent sessions
+}
+
 # Game Balance Settings
 GAME_BALANCE = {
     'starting_credits': 500,         # Credits new characters start with

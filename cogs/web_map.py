@@ -214,7 +214,15 @@ class WebMapCog(commands.Cog, name="WebMap"):
             
             # Set running state
             self.is_running = True
-            
+            if self.is_running:
+                # Also start web client
+                webclient_cog = self.bot.get_cog('WebClient')
+                if webclient_cog:
+                    await webclient_cog._auto_start_webclient()
+                    print(f"✅ Web client auto-started alongside web map")
+                    
+        except Exception as e:
+            print(f"❌ Error in auto-start: {e}")
             # Update game panels
             await self._update_game_panels_for_map_status()
             
@@ -281,17 +289,17 @@ class WebMapCog(commands.Cog, name="WebMap"):
         """Get the display URL and note for users"""
         # If there's an override, use it
         if self.external_ip_override:
-            display_url = f"http://{self.external_ip_override}:{self.port}"
+            display_url = f"http://{self.external_ip_override}:{self.port}/map"
             url_note = f"Connect to: {display_url}"
             return display_url, url_note
         
         # If bound to specific host, use that
         if self.host != "0.0.0.0":
-            display_url = f"http://{self.host}:{self.port}"
+            display_url = f"http://{self.host}:{self.port}/map"
             url_note = f"Connect to: {display_url}"
             return display_url, url_note
         # Default fallback
-        display_url = f"http://[SERVER_IP]:{self.port}"
+        display_url = f"http://[SERVER_IP]:{self.port}/map"
         url_note = f"Connect to: {display_url}\n*Use `/webmap_set_ip <your_external_ip_or_domain>` to set the correct address*"
         return display_url, url_note
         
@@ -3687,8 +3695,8 @@ class WebMapCog(commands.Cog, name="WebMap"):
         except Exception as e:
             print(f"⚠️ Static files mount error: {e}")
         
-        @app.get("/", response_class=HTMLResponse)
-        async def read_root():
+        @app.get("/map", response_class=HTMLResponse)
+        async def read_map():
             """Serve the interactive map"""
             try:
                 with open("web/templates/index.html", "r", encoding='utf-8') as f:
@@ -3934,7 +3942,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 <button class="nav-btn" data-section="logs">Logs & History</button>
                 <button class="nav-btn" data-section="news">News Archive</button>
                 <button class="nav-btn" data-section="search">Search</button>
-                <a href="/" class="nav-btn map-link">🗺️ Live Map</a>
+                <a href="/map" class="nav-btn map-link">🗺️ Live Map</a>
             </nav>
         </header>
 
@@ -3986,9 +3994,9 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 <div class="map-container">
                     <h3>Live Galaxy Map</h3>
                     <div class="embedded-map-frame">
-                        <iframe src="/" frameborder="0" class="live-map-embed"></iframe>
+                        <iframe src="/map" frameborder="0" class="live-map-embed"></iframe>
                         <div class="map-overlay">
-                            <a href="/" target="_blank" class="fullscreen-btn">🔍 Open Full Map</a>
+                            <a href="/map" target="_blank" class="fullscreen-btn">🔍 Open Full Map</a>
                         </div>
                     </div>
                 </div>
@@ -7055,7 +7063,20 @@ class WebMapCog(commands.Cog, name="WebMap"):
             
             # Set state and start updates
             self.is_running = True
-
+            
+            if self.is_running:
+                # Auto-start web client if available
+                webclient_cog = self.bot.get_cog('WebClient')
+                if webclient_cog and not webclient_cog.is_running:
+                    await asyncio.sleep(1)  # Brief delay to ensure web map is ready
+                    await webclient_cog._auto_start_webclient()
+                    
+                    # Update the embed to show both services
+                    embed.add_field(
+                        name="🌐 Web Client",
+                        value=f"Also started on port {webclient_cog.port}",
+                        inline=False
+                    )
             # Update game panels with proper sequencing
             await self._update_game_panels_for_map_status()
             
@@ -7073,7 +7094,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
             )
             
             # Determine URLs to display
-            local_url = f"http://localhost:{port}"
+            local_url = f"http://localhost:{port}/map"
             
             if self.external_ip_override:
                 # Use override
@@ -7085,7 +7106,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 )
             elif external_ip:
                 # Use detected external IP
-                external_url = f"http://{external_ip}:{port}"
+                external_url = f"http://{external_ip}:{port}/map"
                 embed.add_field(
                     name="🌐 External Access URL (Auto-detected)",
                     value=f"{external_url}",
@@ -7109,6 +7130,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                 value="• Real-time player positions\n• Interactive location details\n• Zoomable/scrollable map\n• Live updates every minute\n• Route planning\n• Location search",
                 inline=False
             )
+            
             await interaction.followup.send(embed=embed, ephemeral=True)
             
         except Exception as e:
@@ -7570,7 +7592,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
         """
         # 1. Check for an explicit IP/domain override
         if self.external_ip_override:
-            url = f"http://{self.external_ip_override}:{self.port}"
+            url = f"http://{self.external_ip_override}:{self.port}/map"
             note = f"Map available at your custom address."
             return url, note
 
@@ -7578,14 +7600,14 @@ class WebMapCog(commands.Cog, name="WebMap"):
         try:
             external_ip = await self._get_external_ip()
             if external_ip:
-                url = f"http://{external_ip}:{self.port}"
+                url = f"http://{external_ip}:{self.port}/map"
                 note = "URL is based on auto-detected server IP."
                 return url, note
         except Exception as e:
             print(f"Failed to get external IP for panel: {e}")
 
         # 3. Fallback if override is not set and detection fails
-        url = f"http://http://184.64.30.214:8090/"
+        url = f"http://[SERVER_IP]:{self.port}/map"  # Fixed this line too
         note = "Could not determine server IP. Admin should use `/webmap_set_ip`."
         return url, note
         

@@ -175,20 +175,13 @@ class LogoutButton(discord.ui.Button):
             )
 
 class ViewMapButton(discord.ui.Button):
-    def __init__(self, row=None):
-        super().__init__(
-            label="View Map",
-            style=discord.ButtonStyle.secondary,
-            emoji="🗺️",
-            custom_id=f"game_panel:view_map:{int(time.time())}",
-            row=row
-        )
-    
     async def callback(self, interaction: discord.Interaction):
         bot = interaction.client
         
         # Check if webmap is running
         webmap_cog = bot.get_cog('WebMap')
+        webclient_cog = bot.get_cog('WebClient')
+        
         if not webmap_cog or not webmap_cog.is_running:
             await interaction.response.send_message(
                 "Interactive map is not currently available.",
@@ -211,21 +204,30 @@ class ViewMapButton(discord.ui.Button):
             inline=False
         )
         
-        # Only show a note if the IP address is not configured
-        if "[SERVER_IP]" in final_url:
+        # Add web client info if running
+        if webclient_cog and webclient_cog.is_running:
             embed.add_field(
-                name="Note for Admins",
-                value="The server's external IP could not be detected. Please use the `/webmap_set_ip` command so this link works for everyone.",
+                name="🌐 Web Client",
+                value=f"Play from browser: http://localhost:{webclient_cog.port}",
                 inline=False
             )
-        
-        embed.add_field(
-            name="Features",
-            value="• Real-time player positions\n• Location details\n• Travel routes\n• Galaxy overview",
-            inline=True
-        )
+            
+            # Check if user has password
+            has_password = bot.db.execute_query(
+                "SELECT user_id FROM web_passwords WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not has_password:
+                embed.add_field(
+                    name="💡 Tip",
+                    value="Set a password with `/password` to use the web client!",
+                    inline=False
+                )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        
 class CreateRandomCharacterButton(discord.ui.Button):
     def __init__(self, row=None):
         super().__init__(
