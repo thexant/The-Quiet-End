@@ -1603,12 +1603,19 @@ class GalaxyWebClient {
         }
         
         // Quick action buttons
-        document.querySelectorAll('.btn-action').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const command = e.target.dataset.command;
-                this.executeCommand(command);
-            });
-        });
+        // Quick action buttons
+                document.querySelectorAll('.btn-action').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const commandString = e.target.dataset.command;
+                        
+                        // Split the command string into command and args
+                        const parts = commandString.split(' ');
+                        const command = parts[0];
+                        const args = parts.slice(1);
+                        
+                        this.executeCommand(command, args);
+                    });
+                });
         
         // Modal close
         document.querySelectorAll('.close-modal').forEach(btn => {
@@ -2328,34 +2335,152 @@ document.addEventListener('DOMContentLoaded', () => {
             full_command += " " + " ".join(args)
         
         try:
-            # Get the appropriate cog and command
+            # Handle compound commands (e.g., "travel routes" -> "travel_routes")
+            compound_command = command
+            if args and len(args) > 0:
+                # Check if first argument might be a subcommand
+                potential_compound = f"{command}_{args[0]}"
+                
+                # List of known compound commands
+                compound_commands = [
+                    'travel_status', 'travel_routes', 'travel_plotroute', 
+                    'travel_fuel_estimate', 'travel_emergency_exit',
+                    'area_enter', 'area_leave', 
+                    'ship_interior_enter', 'ship_interior_leave', 'ship_interior_board',
+                    'ship_customize', 'ship_upgrade', 'ship_shipyard', 'ship_group_ship',
+                    'job_accept', 'job_status', 'job_complete', 'job_abandon',
+                    'group_invite', 'group_join', 'group_leave', 'group_status', 'group_disband',
+                    'attack_player', 'attack_fight', 'attack_flee',
+                    'home_purchase', 'home_sell',
+                    'logs_add'
+                ]
+                
+                if potential_compound in compound_commands:
+                    compound_command = potential_compound
+                    args = args[1:]  # Remove the subcommand from args
+            
+            # Complete command mapping
             command_mapping = {
+                # Character Commands
                 'status': ('CharacterCog', 'status'),
                 'here': ('CharacterCog', 'here_shorthand'),
                 'inventory': ('CharacterCog', 'view_inventory'),
-                'travel': ('TravelCog', 'travel'),
-                'shop': ('EconomyCog', 'shop'),
-                'buy': ('ShopCog', 'buy'),
-                'sell': ('ShopCog', 'sell'),
-                'jobs': ('JobsCog', 'jobs'),
-                'work': ('JobsCog', 'work'),
                 'rest': ('CharacterCog', 'rest'),
-                'heal': ('MedicalCog', 'heal'),
-                'repair': ('ShipCog', 'repair'),
-                'refuel': ('ShipCog', 'refuel'),
-                'ship': ('ShipCog', 'ship'),
-                'cargo': ('CargoCog', 'cargo'),
-                'load': ('CargoCog', 'load'),
-                'unload': ('CargoCog', 'unload'),
-                # Add more command mappings as needed
+                'search': ('CharacterCog', 'search_location'),
+                'train': ('CharacterCog', 'train_skill'),
+                'drop': ('CharacterCog', 'drop_item'),
+                'pickup': ('CharacterCog', 'pickup_item'),
+                'act': ('CharacterCog', 'roleplay_action'),
+                'use': ('CharacterCog', 'use_item'),
+                
+                # Travel Commands
+                'travel': ('TravelCog', 'travel_go'),
+                'travel_status': ('TravelCog', 'travel_status'),
+                'travel_routes': ('TravelCog', 'travel_routes'),
+                'travel_plotroute': ('TravelCog', 'travel_plotroute'),
+                'travel_fuel_estimate': ('TravelCog', 'travel_fuel_estimate'),
+                'travel_emergency_exit': ('TravelCog', 'travel_emergency_exit'),
+                
+                # Shop/Economy Commands
+                'shop': ('ShopCog', 'shop_list'),
+                'buy': ('ShopCog', 'shop_buy'),
+                'sell': ('ShopCog', 'shop_sell'),
+                'job': ('EconomyCog', 'job_list'),
+                'job_accept': ('EconomyCog', 'job_accept'),
+                'job_status': ('EconomyCog', 'job_status'),
+                'job_complete': ('EconomyCog', 'job_complete'),
+                'job_abandon': ('EconomyCog', 'job_abandon'),
+                'federal_supply': ('EconomyCog', 'federal_supply_list'),
+                
+                # Ship Commands
+                'ship': ('ShipCog', 'ship_status'),
+                'repair': ('ShipCog', 'repair_ship'),
+                'refuel': ('ShipCog', 'refuel_ship'),
+                'ship_interior_enter': ('ShipCog', 'ship_interior_enter'),
+                'ship_interior_leave': ('ShipCog', 'ship_interior_leave'),
+                'ship_interior_board': ('ShipCog', 'ship_interior_board'),
+                'ship_customize': ('ShipCog', 'ship_customize'),
+                'ship_upgrade': ('ShipCog', 'ship_upgrade'),
+                'ship_shipyard': ('ShipCog', 'ship_shipyard'),
+                'ship_group_ship': ('ShipCog', 'ship_group_ship'),
+                
+                # Cargo Commands
+                'cargo': ('CargoCog', 'cargo_status'),
+                'load': ('CargoCog', 'cargo_load'),
+                'unload': ('CargoCog', 'cargo_unload'),
+                
+                # Medical Commands
+                'heal': ('MedicalCog', 'heal_character'),
+                
+                # Combat Commands
+                'attack': ('CombatCog', 'attack_npc'),
+                'attack_player': ('CombatCog', 'attack_player'),
+                'attack_fight': ('CombatCog', 'attack_fight'),
+                'attack_flee': ('CombatCog', 'attack_flee'),
+                'pvp_opt': ('CombatCog', 'pvp_opt_status'),
+                'rob': ('CombatCog', 'rob_npc'),
+                'rob_player': ('CombatCog', 'rob_player'),
+                
+                # Time Commands
+                'date': ('TimeCog', 'current_date'),
+                
+                # Area Commands
+                'area': ('AreaCog', 'area_list'),
+                'area_enter': ('AreaCog', 'area_enter'),
+                'area_leave': ('AreaCog', 'area_leave'),
+                
+                # Group Commands
+                'group': ('GroupsCog', 'group_create'),
+                'group_invite': ('GroupsCog', 'group_invite'),
+                'group_join': ('GroupsCog', 'group_join'),
+                'group_leave': ('GroupsCog', 'group_leave'),
+                'group_status': ('GroupsCog', 'group_status'),
+                'group_disband': ('GroupsCog', 'group_disband'),
+                
+                # NPC Commands
+                'npc': ('NPCCog', 'npc_interact'),
+                
+                # Radio Commands
+                'radio': ('RadioCog', 'radio_send'),
+                
+                # Reputation/Bounty Commands
+                'reputation': ('ReputationCog', 'view_reputation'),
+                'postbounty': ('BountyCog', 'post_bounty'),
+                'removebounty': ('BountyCog', 'remove_bounty'),
+                'removeallbounties': ('BountyCog', 'remove_all_bounties'),
+                'capture': ('BountyCog', 'capture_player'),
+                'bounty': ('BountyCog', 'capture_bounty'),
+                'bounties': ('BountyCog', 'list_bounties'),
+                'bounty_status': ('BountyCog', 'bounty_status'),
+                'paybounty': ('BountyCog', 'pay_bounty'),
+                
+                # Location Management Commands
+                'location_info': ('LocationCog', 'location_info'),
+                'purchase_location': ('LocationCog', 'purchase_location'),
+                'upgrade_location': ('LocationCog', 'upgrade_location'),
+                'logs': ('LogsCog', 'view_logs'),
+                'logs_add': ('LogsCog', 'add_log'),
+                
+                # Home Commands
+                'home': ('HomeCog', 'home_status'),
+                'home_purchase': ('HomeCog', 'home_purchase'),
+                'home_sell': ('HomeCog', 'home_sell'),
+                
+                # Help Commands
+                'help': ('HelpCog', 'help'),
+                'commands': ('HelpCog', 'commands_list'),
+                'tutorial': ('HelpCog', 'tutorial'),
+                
+                # Webmap Commands
+                'webmap': ('WebMapCog', 'webmap_status'),
             }
             
-            if command in command_mapping:
-                cog_name, method_name = command_mapping[command]
+            if compound_command in command_mapping:
+                cog_name, method_name = command_mapping[compound_command]
                 cog = self.bot.get_cog(cog_name)
                 
                 if cog:
-                    # Create a web context for command execution
+                    # Execute the command
                     result = await self._execute_web_command(
                         cog, method_name, user, location_id, args, character_name
                     )
@@ -2381,7 +2506,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if user_id in self.user_websockets:
                     await self.user_websockets[user_id].send_json({
                         "type": "error",
-                        "message": f"Unknown command: {command}"
+                        "message": f"Unknown command: {compound_command}"
                     })
                 
         except Exception as e:
@@ -2412,144 +2537,150 @@ document.addEventListener('DOMContentLoaded', () => {
         
         # Handle different commands
         try:
+            # Character Commands
             if method_name == 'status':
-                # FIXED: Using correct column names
                 char_data = self.db.execute_query(
                     """SELECT name, hp, max_hp, money, current_location,
-                       combat, engineering, navigation, medical
+                       combat, engineering, navigation, medical, location_status
                        FROM characters WHERE user_id = ?""",
                     (user.id,),
                     fetch='one'
                 )
                 
                 if char_data:
-                    name, hp, max_hp, money, loc_id, combat, engineering, navigation, medical = char_data
+                    name, hp, max_hp, money, loc, combat, eng, nav, med, location_status = char_data
                     
                     # Get location name
                     loc_name = self.db.execute_query(
                         "SELECT name FROM locations WHERE location_id = ?",
-                        (loc_id,),
+                        (loc,),
                         fetch='one'
-                    )
+                    )[0]
                     
-                    # Get reputation if needed (from separate table)
-                    reputation_data = self.db.execute_query(
-                        """SELECT SUM(reputation) FROM character_reputation 
-                           WHERE user_id = ?""",
-                        (user.id,),
-                        fetch='one'
-                    )
-                    total_reputation = reputation_data[0] if reputation_data and reputation_data[0] else 0
+                    dock_status = "🟢 Docked" if location_status == "docked" else "🟡 In Space"
                     
                     return {
                         "type": "command_response",
                         "embeds": [{
-                            "title": f"📊 {name}'s Status",
+                            "title": f"👤 {name}'s Status",
                             "fields": [
-                                {"name": "Health", "value": f"{hp}/{max_hp}", "inline": True},
-                                {"name": "Credits", "value": f"{money:,} cr", "inline": True},
-                                {"name": "Location", "value": loc_name[0] if loc_name else "Unknown", "inline": True},
-                                {"name": "Combat", "value": str(combat), "inline": True},
-                                {"name": "Engineering", "value": str(engineering), "inline": True},
-                                {"name": "Navigation", "value": str(navigation), "inline": True},
-                                {"name": "Medical", "value": str(medical), "inline": True},
-                                {"name": "Total Reputation", "value": str(total_reputation), "inline": True}
+                                {"name": "❤️ Health", "value": f"{hp}/{max_hp} HP", "inline": True},
+                                {"name": "💰 Credits", "value": f"{money:,}", "inline": True},
+                                {"name": "📍 Location", "value": f"{loc_name}\n{dock_status}", "inline": True},
+                                {"name": "⚔️ Combat", "value": str(combat), "inline": True},
+                                {"name": "🔧 Engineering", "value": str(eng), "inline": True},
+                                {"name": "🧭 Navigation", "value": str(nav), "inline": True},
+                                {"name": "🏥 Medical", "value": str(med), "inline": True}
                             ],
                             "color": 0x00ff00
                         }]
                     }
                     
-            elif method_name == 'here':
-                # Get location details - most columns don't exist, using basic query
-                location = self.db.execute_query(
-                    """SELECT name, description, location_type, wealth_level, population
-                       FROM locations WHERE location_id = ?""",
+            elif method_name == 'travel_status':
+                # Check if user is currently traveling
+                travel_session = self.db.execute_query(
+                    """SELECT destination_location, arrival_time, origin_location
+                       FROM travel_sessions 
+                       WHERE user_id = ? AND status = 'traveling'
+                       ORDER BY session_id DESC LIMIT 1""",
+                    (user.id,),
+                    fetch='one'
+                )
+                
+                if travel_session:
+                    dest_id, arrival_time, origin_id = travel_session
+                    
+                    # Get location names
+                    dest_name = self.db.execute_query(
+                        "SELECT name FROM locations WHERE location_id = ?",
+                        (dest_id,),
+                        fetch='one'
+                    )[0]
+                    
+                    # Calculate time remaining
+                    from datetime import datetime
+                    arrival_dt = datetime.fromisoformat(arrival_time)
+                    now = datetime.utcnow()
+                    remaining = (arrival_dt - now).total_seconds()
+                    
+                    if remaining > 0:
+                        mins_remaining = int(remaining / 60)
+                        return {
+                            "type": "command_response",
+                            "embeds": [{
+                                "title": "🚀 Travel Status",
+                                "description": f"En route to **{dest_name}**",
+                                "fields": [
+                                    {"name": "⏱️ Time Remaining", "value": f"{mins_remaining} minutes", "inline": True},
+                                    {"name": "📍 Destination", "value": dest_name, "inline": True}
+                                ],
+                                "color": 0x3498db
+                            }]
+                        }
+                
+                return {
+                    "type": "command_response",
+                    "embeds": [{
+                        "title": "🚀 Travel Status",
+                        "description": "You are not currently traveling.",
+                        "color": 0x95a5a6
+                    }]
+                }
+                    
+            elif method_name == 'here_shorthand':
+                # Get location info
+                loc_data = self.db.execute_query(
+                    """SELECT l.name, l.description, l.location_type, l.has_shops, 
+                       l.has_jobs, l.has_medical, l.has_repairs, l.has_fuel,
+                       (SELECT COUNT(*) FROM characters WHERE current_location = l.location_id AND is_logged_in = 1) as player_count
+                       FROM locations l WHERE l.location_id = ?""",
                     (location_id,),
                     fetch='one'
                 )
                 
-                if location:
-                    name, desc, loc_type, wealth, pop = location
+                if loc_data:
+                    name, desc, loc_type, shops, jobs, med, repair, fuel, players = loc_data
                     
-                    # Get players here
-                    players = self.db.execute_query(
-                        "SELECT name FROM characters WHERE current_location = ? AND is_logged_in = 1",
-                        (location_id,),
-                        fetch='all'
-                    )
-                    
-                    # Check for shops
-                    has_shops = self.db.execute_query(
-                        "SELECT COUNT(*) FROM shop_items WHERE location_id = ? AND stock > 0",
-                        (location_id,),
-                        fetch='one'
-                    )[0] > 0
-                    
-                    # Check for jobs
-                    has_jobs = self.db.execute_query(
-                        "SELECT COUNT(*) FROM jobs WHERE location_id = ? AND is_taken = 0",
-                        (location_id,),
-                        fetch='one'
-                    )[0] > 0
-                    
-                    # Build services list based on actual data
                     services = []
-                    if has_shops: services.append("🛒 Shopping")
-                    if has_jobs: services.append("💼 Jobs")
-                    # Medical/Repairs/Fuel aren't stored as location properties in your schema
-                    
-                    fields = [
-                        {"name": "Type", "value": loc_type.replace('_', ' ').title(), "inline": True},
-                        {"name": "Wealth", "value": f"{wealth}/10", "inline": True},
-                        {"name": "Population", "value": f"{pop:,}" if pop else "Unknown", "inline": True}
-                    ]
-                    
-                    if services:
-                        fields.append({"name": "Services", "value": "\n".join(services), "inline": False})
-                    
-                    if players:
-                        player_list = [p[0] for p in players]
-                        fields.append({"name": f"Players Here ({len(player_list)})", "value": ", ".join(player_list[:10]), "inline": False})
+                    if shops: services.append("🛒 Shop")
+                    if jobs: services.append("💼 Jobs")
+                    if med: services.append("🏥 Medical")
+                    if repair: services.append("🔧 Repairs")
+                    if fuel: services.append("⛽ Fuel")
                     
                     return {
                         "type": "command_response",
                         "embeds": [{
                             "title": f"📍 {name}",
-                            "description": desc or "No description available",
-                            "fields": fields,
-                            "color": 0x4169E1
+                            "description": desc or "A location in space.",
+                            "fields": [
+                                {"name": "Type", "value": loc_type.replace('_', ' ').title(), "inline": True},
+                                {"name": "Players Here", "value": str(players), "inline": True},
+                                {"name": "Services", "value": " | ".join(services) if services else "None", "inline": False}
+                            ],
+                            "color": 0x3498db
                         }]
                     }
                     
-            elif method_name == 'inventory':
-                # Get inventory items - fixed query for your schema
+            elif method_name == 'view_inventory':
                 items = self.db.execute_query(
-                    """SELECT item_name, quantity, item_type, value
-                       FROM inventory
-                       WHERE owner_id = ?
-                       ORDER BY item_type, item_name""",
+                    """SELECT item_name, quantity, description 
+                       FROM inventory WHERE owner_id = ? ORDER BY item_name""",
                     (user.id,),
                     fetch='all'
                 )
                 
                 if items:
-                    inventory_text = []
-                    current_type = None
-                    
-                    for name, qty, item_type, value in items:
-                        if item_type != current_type:
-                            if current_type:
-                                inventory_text.append("")
-                            inventory_text.append(f"**{item_type.title()}:**")
-                            current_type = item_type
-                        
-                        inventory_text.append(f"• {name} x{qty} ({value} cr each)")
+                    inventory_text = "\n".join([f"• **{name}** x{qty} - _{desc}_" for name, qty, desc in items[:10]])
+                    if len(items) > 10:
+                        inventory_text += f"\n_...and {len(items) - 10} more items_"
                     
                     return {
                         "type": "command_response",
                         "embeds": [{
                             "title": f"🎒 {character_name}'s Inventory",
-                            "description": "\n".join(inventory_text) if inventory_text else "Your inventory is empty.",
+                            "description": inventory_text,
+                            "footer": {"text": f"Total Items: {len(items)}"},
                             "color": 0x9370DB
                         }]
                     }
@@ -2563,8 +2694,297 @@ document.addEventListener('DOMContentLoaded', () => {
                         }]
                     }
                     
+            # Travel Commands
+            elif method_name == 'travel_go' and args:
+                destination = ' '.join(args)
+                
+                # Check if character is docked
+                location_status = self.db.execute_query(
+                    "SELECT location_status FROM characters WHERE user_id = ?",
+                    (user.id,),
+                    fetch='one'
+                )[0]
+                
+                if location_status != 'docked':
+                    return {
+                        "type": "error",
+                        "message": "You must be docked to travel. Use a location channel to dock."
+                    }
+                
+                # Find destination
+                dest_data = self.db.execute_query(
+                    """SELECT l.location_id, l.name, c.corridor_id, c.travel_time, c.fuel_cost
+                       FROM locations l
+                       JOIN corridors c ON c.destination_location = l.location_id
+                       WHERE c.origin_location = ? AND LOWER(l.name) LIKE LOWER(?)
+                       AND c.is_active = 1""",
+                    (location_id, f"%{destination}%"),
+                    fetch='one'
+                )
+                
+                if dest_data:
+                    dest_id, dest_name, corridor_id, travel_time, fuel_cost = dest_data
+                    
+                    # This would need more implementation for actual travel
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": "🚀 Travel Initiated",
+                            "description": f"Traveling to **{dest_name}**",
+                            "fields": [
+                                {"name": "Travel Time", "value": f"{travel_time // 60} minutes", "inline": True},
+                                {"name": "Fuel Cost", "value": f"{fuel_cost} units", "inline": True}
+                            ],
+                            "color": 0x00ff00
+                        }]
+                    }
+                else:
+                    return {
+                        "type": "error",
+                        "message": f"No route found to '{destination}' from your current location."
+                    }
+                    
+            elif method_name == 'travel_routes':
+                # Get available routes from current location
+                routes = self.db.execute_query(
+                    """SELECT c.corridor_id, c.name as corridor_name, l.name as dest_name, 
+                       c.travel_time, c.fuel_cost, l.location_type, c.danger_level
+                       FROM corridors c
+                       JOIN locations l ON c.destination_location = l.location_id
+                       WHERE c.origin_location = ? AND c.is_active = 1
+                       ORDER BY c.travel_time""",
+                    (location_id,),
+                    fetch='all'
+                )
+                
+                if routes:
+                    route_text = ""
+                    for corridor_id, corridor_name, dest_name, travel_time, fuel_cost, dest_type, danger in routes[:10]:
+                        emoji = {'colony': '🏭', 'space_station': '🛰️', 'outpost': '🛤️', 'gate': '🚪'}.get(dest_type, '📍')
+                        danger_stars = '⚠️' * min(danger, 5)
+                        time_mins = travel_time // 60
+                        route_text += f"{emoji} **{dest_name}** - {time_mins}min, {fuel_cost} fuel {danger_stars}\n"
+                    
+                    if len(routes) > 10:
+                        route_text += f"\n_...and {len(routes) - 10} more routes_"
+                    
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": "🚀 Available Routes",
+                            "description": route_text,
+                            "footer": {"text": f"Total routes: {len(routes)} | Use /travel <destination>"},
+                            "color": 0x00ff00
+                        }]
+                    }
+                else:
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": "🚀 Available Routes",
+                            "description": "No routes available from this location.",
+                            "color": 0xe74c3c
+                        }]
+                    }
+                    
+            # Shop Commands
+            elif method_name == 'shop_list':
+                items = self.db.execute_query(
+                    """SELECT item_name, price, stock, description 
+                       FROM shop_items 
+                       WHERE location_id = ? AND (stock > 0 OR stock = -1)
+                       ORDER BY price""",
+                    (location_id,),
+                    fetch='all'
+                )
+                
+                if items:
+                    shop_text = "\n".join([
+                        f"• **{name}** - {price:,} credits {'(∞)' if stock == -1 else f'({stock})'}\n  _{desc}_" 
+                        for name, price, stock, desc in items[:5]
+                    ])
+                    
+                    if len(items) > 5:
+                        shop_text += f"\n_...and {len(items) - 5} more items_"
+                    
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": "🛒 Shop Inventory",
+                            "description": shop_text,
+                            "footer": {"text": "Use /buy <item> to purchase"},
+                            "color": 0x2ecc71
+                        }]
+                    }
+                else:
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": "🛒 Shop Inventory",
+                            "description": "No items available at this location.",
+                            "color": 0xe74c3c
+                        }]
+                    }
+                    
+            # Job Commands
+            elif method_name == 'job_list':
+                jobs = self.db.execute_query(
+                    """SELECT job_id, title, description, reward_money, danger_level, duration_minutes
+                       FROM jobs
+                       WHERE location_id = ? AND is_taken = 0 AND expires_at > datetime('now')
+                       ORDER BY reward_money DESC""",
+                    (location_id,),
+                    fetch='all'
+                )
+                
+                if jobs:
+                    job_text = "\n".join([
+                        f"**[{jid}] {title}** - {reward:,} credits\n_{desc}_\nDanger: {'⚠️' * danger} | Duration: {duration}min\n"
+                        for jid, title, desc, reward, danger, duration in jobs[:5]
+                    ])
+                    
+                    if len(jobs) > 5:
+                        job_text += f"\n_...and {len(jobs) - 5} more jobs_"
+                    
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": "💼 Available Jobs",
+                            "description": job_text,
+                            "footer": {"text": "Use /job_accept <id> to accept a job"},
+                            "color": 0xf39c12
+                        }]
+                    }
+                else:
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": "💼 Available Jobs",
+                            "description": "No jobs available at this location.",
+                            "color": 0x95a5a6
+                        }]
+                    }
+                    
+            # Ship Commands
+            elif method_name == 'ship_status':
+                ship_data = self.db.execute_query(
+                    """SELECT ship_name, ship_type, hull_current, hull_max, 
+                       fuel_current, fuel_max, cargo_current, cargo_max
+                       FROM ships WHERE owner_id = ?""",
+                    (user.id,),
+                    fetch='one'
+                )
+                
+                if ship_data:
+                    name, s_type, hull, hull_max, fuel, fuel_max, cargo, cargo_max = ship_data
+                    
+                    hull_percent = (hull / hull_max) * 100
+                    fuel_percent = (fuel / fuel_max) * 100
+                    
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": f"🚀 {name}",
+                            "description": f"Type: {s_type}",
+                            "fields": [
+                                {"name": "🛡️ Hull", "value": f"{hull}/{hull_max} ({hull_percent:.0f}%)", "inline": True},
+                                {"name": "⛽ Fuel", "value": f"{fuel}/{fuel_max} ({fuel_percent:.0f}%)", "inline": True},
+                                {"name": "📦 Cargo", "value": f"{cargo}/{cargo_max}", "inline": True}
+                            ],
+                            "color": 0x3498db
+                        }]
+                    }
+                    
+            # Combat Commands
+            elif method_name == 'attack_npc' and not args:
+                # List NPCs at location
+                npcs = self.db.execute_query(
+                    """SELECT npc_id, name, hp, max_hp, is_hostile 
+                       FROM static_npcs 
+                       WHERE location_id = ? AND is_alive = 1""",
+                    (location_id,),
+                    fetch='all'
+                )
+                
+                if npcs:
+                    npc_text = "\n".join([
+                        f"**[{nid}] {name}** - {hp}/{max_hp} HP {'⚔️' if hostile else '😊'}"
+                        for nid, name, hp, max_hp, hostile in npcs
+                    ])
+                    
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": "👥 NPCs at this location",
+                            "description": npc_text,
+                            "footer": {"text": "Use /attack <npc_id> to attack"},
+                            "color": 0xe74c3c
+                        }]
+                    }
+                    
+            # Time Commands
+            elif method_name == 'current_date':
+                time_cog = self.bot.get_cog('TimeCog')
+                if time_cog and time_cog.time_system:
+                    current_time = time_cog.time_system.calculate_current_ingame_time()
+                    if current_time:
+                        formatted = time_cog.time_system.format_ingame_datetime(current_time)
+                        days_elapsed = time_cog.time_system.get_days_elapsed()
+                        
+                        return {
+                            "type": "command_response",
+                            "embeds": [{
+                                "title": "🕐 Inter-Solar Standard Time",
+                                "fields": [
+                                    {"name": "📅 Current Date & Time", "value": formatted, "inline": False},
+                                    {"name": "📊 Days Since Genesis", "value": f"{days_elapsed:,}", "inline": True}
+                                ],
+                                "color": 0x4169E1
+                            }]
+                        }
+                        
+            # Area Commands
+            elif method_name == 'area_list':
+                areas = self.db.execute_query(
+                    """SELECT area_type, area_name FROM location_areas 
+                       WHERE location_id = ? AND is_active = 1""",
+                    (location_id,),
+                    fetch='all'
+                )
+                
+                if areas:
+                    area_text = "\n".join([f"• **{name}** ({a_type})" for a_type, name in areas])
+                    
+                    return {
+                        "type": "command_response",
+                        "embeds": [{
+                            "title": "🏢 Available Areas",
+                            "description": area_text,
+                            "footer": {"text": "Use /area_enter <type> to enter"},
+                            "color": 0x9b59b6
+                        }]
+                    }
+                    
+            # Help Commands
+            elif method_name == 'help':
+                return {
+                    "type": "command_response",
+                    "embeds": [{
+                        "title": "🎮 Web Client Help",
+                        "description": "Welcome to the web interface!",
+                        "fields": [
+                            {"name": "Basic Commands", "value": "`status`, `here`, `inventory`", "inline": False},
+                            {"name": "Travel", "value": "`travel <destination>`, `travel_status`", "inline": False},
+                            {"name": "Economy", "value": "`shop`, `buy <item>`, `sell <item>`, `job`", "inline": False},
+                            {"name": "Ship", "value": "`ship`, `repair`, `refuel`", "inline": False}
+                        ],
+                        "footer": {"text": "Use /commands for full list"},
+                        "color": 0x3498db
+                    }]
+                }
+                
+            # Say command (for chat)
             elif method_name == 'say' and args:
-                # Handle say command
                 message = ' '.join(args)
                 
                 # Broadcast to other web clients at same location
@@ -2586,14 +3006,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     "message": f"You said: {message}"
                 }
                 
-            # Add more command implementations as needed
+            # Default response for unimplemented commands
             else:
-                # For commands not yet implemented, return a generic message
                 return {
                     "type": "command_response",
                     "embeds": [{
                         "title": f"Command: /{method_name}",
-                        "description": f"This command is being processed...",
+                        "description": f"This command is being processed...\nArgs: {' '.join(args) if args else 'None'}",
+                        "footer": {"text": "Full implementation pending"},
                         "color": 0xFFFF00
                     }]
                 }
