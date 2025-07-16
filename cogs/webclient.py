@@ -437,7 +437,35 @@ class WebClient(commands.Cog):
                 fetch='one'
             )
             
+    @tasks.loop(seconds=0.1)  # Process messages quickly
+    async def process_messages(self):
+        """Process messages from the message queue"""
+        try:
+            # Process up to 10 messages per iteration to prevent blocking
+            for _ in range(10):
+                try:
+                    # Non-blocking get with timeout
+                    data = await asyncio.wait_for(self.message_queue.get(), timeout=0.01)
+                    
+                    # Process based on message type
+                    if data['type'] == 'message':
+                        await self._process_message(data)
+                    elif data['type'] == 'command':
+                        await self._process_command(data)
+                        
+                except asyncio.TimeoutError:
+                    # No messages in queue, break the loop
+                    break
+                except Exception as e:
+                    print(f"Error processing message from queue: {e}")
+                    
+        except Exception as e:
+            print(f"Error in message processor: {e}")
     
+    @process_messages.before_loop
+    async def before_process_messages(self):
+        """Wait for bot to be ready before starting message processor"""
+        await self.bot.wait_until_ready()
     async def _process_command(self, data: dict):
         """Process a command from web client"""
         user_id = data['user_id']
