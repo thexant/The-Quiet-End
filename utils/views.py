@@ -1566,29 +1566,30 @@ class TravelConfirmView(discord.ui.View):
             return
         
         await interaction.response.send_message("Travel cancelled.", ephemeral=True)
+
 class PersistentLocationView(discord.ui.View):
     def __init__(self, bot, user_id: int):
-    super().__init__(timeout=None)  # No timeout for persistent view
-    self.bot = bot
-    self.user_id = user_id
-    
-    # Get current location and status
-    char_data = self.bot.db.execute_query(
-        "SELECT current_location, location_status FROM characters WHERE user_id = ?",
-        (user_id,),
-        fetch='one'
-    )
-    
-    if char_data:
-        self.current_location_id = char_data[0]
-        location_status = char_data[1]
-    else:
-        self.current_location_id = None
-        location_status = "docked"
-    
-    # Configure buttons based on dock status and location services
-    self._configure_buttons(location_status)
-    
+        super().__init__(timeout=None)  # No timeout for persistent view
+        self.bot = bot
+        self.user_id = user_id
+        
+        # Get current location and status
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            (user_id,),
+            fetch='one'
+        )
+        
+        if char_data:
+            self.current_location_id = char_data[0]
+            location_status = char_data[1]
+        else:
+            self.current_location_id = None
+            location_status = "docked"
+        
+        # Configure buttons based on dock status and location services
+        self._configure_buttons(location_status)
+        
     def _configure_buttons(self, location_status: str):
         """Configure button states based on dock status"""
         self.clear_items()
@@ -1854,80 +1855,80 @@ class PersistentLocationView(discord.ui.View):
             await self.refresh_view()
 class EphemeralLocationView(discord.ui.View):
     def __init__(self, bot, user_id: int):
-    super().__init__(timeout=600)  # 5 minute timeout for ephemeral views
-    self.bot = bot
-    self.user_id = user_id
-    
-    # Get current location and status
-    char_data = self.bot.db.execute_query(
-        "SELECT current_location, location_status FROM characters WHERE user_id = ?",
-        (user_id,),
-        fetch='one'
-    )
-    
-    if char_data:
-        self.current_location_id = char_data[0]
-        location_status = char_data[1]
-    else:
-        self.current_location_id = None
-        location_status = "docked"
-    
-    # Configure buttons based on dock status and location services
-    self._configure_buttons(location_status)
-    
-def _configure_buttons(self, location_status: str):
-    """Configure button states based on dock status and location services"""
-    self.clear_items()
-    
-    # Get current location services to determine which buttons to show
-    char_data = self.bot.db.execute_query(
-        "SELECT current_location FROM characters WHERE user_id = ?",
-        (self.user_id,),
-        fetch='one'
-    )
-    
-    has_federal_supplies = False
-    has_black_market = False
-    
-    if char_data and char_data[0]:
-        location_services = self.bot.db.execute_query(
-            "SELECT has_federal_supplies, has_black_market FROM locations WHERE location_id = ?",
-            (char_data[0],),
+        super().__init__(timeout=600)  # 5 minute timeout for ephemeral views
+        self.bot = bot
+        self.user_id = user_id
+        
+        # Get current location and status
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            (user_id,),
             fetch='one'
         )
-        if location_services:
-            has_federal_supplies, has_black_market = location_services
+        
+        if char_data:
+            self.current_location_id = char_data[0]
+            location_status = char_data[1]
+        else:
+            self.current_location_id = None
+            location_status = "docked"
+        
+        # Configure buttons based on dock status and location services
+        self._configure_buttons(location_status)
     
-    # Status-dependent buttons
-    if location_status == "docked":
-        # Standard location buttons
-        self.add_item(self.jobs_panel)
-        self.add_item(self.shop_management)
-        self.add_item(self.services)
+    def _configure_buttons(self, location_status: str):
+        """Configure button states based on dock status and location services"""
+        self.clear_items()
         
-        # Add Federal Depot button if location has federal supplies
-        if has_federal_supplies:
-            self.add_item(self.federal_depot)
+        # Get current location services to determine which buttons to show
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
         
-        # Add Black Market button if location has black market
-        if has_black_market:
-            self.add_item(self.black_market)
+        has_federal_supplies = False
+        has_black_market = False
         
-        # Continue with other docked buttons
-        self.add_item(self.sub_areas)
-        self.add_item(self.npc_interactions)
-        self.add_item(self.undock_button)
-        self.add_item(self.route_button)
+        if char_data and char_data[0]:
+            location_services = self.bot.db.execute_query(
+                "SELECT has_federal_supplies, has_black_market FROM locations WHERE location_id = ?",
+                (char_data[0],),
+                fetch='one'
+            )
+            if location_services:
+                has_federal_supplies, has_black_market = location_services
         
-        # Add location info button if it exists in your implementation
-        self.add_item(self.location_info_button)
+        # Status-dependent buttons
+        if location_status == "docked":
+            # Standard location buttons
+            self.add_item(self.jobs_panel)
+            self.add_item(self.shop_management)
+            self.add_item(self.services)
             
-    else:  # in_space
-        self.add_item(self.travel_button)
-        self.add_item(self.dock_button)
-        self.add_item(self.route_button)
-        self.add_item(self.plot_route_button)
-        self.add_item(self.location_info_button)
+            # Add Federal Depot button if location has federal supplies
+            if has_federal_supplies:
+                self.add_item(self.federal_depot)
+            
+            # Add Black Market button if location has black market
+            if has_black_market:
+                self.add_item(self.black_market)
+            
+            # Continue with other docked buttons
+            self.add_item(self.sub_areas)
+            self.add_item(self.npc_interactions)
+            self.add_item(self.undock_button)
+            self.add_item(self.route_button)
+            
+            # Add location info button if it exists in your implementation
+            self.add_item(self.location_info_button)
+                
+        else:  # in_space
+            self.add_item(self.travel_button)
+            self.add_item(self.dock_button)
+            self.add_item(self.route_button)
+            self.add_item(self.plot_route_button)
+            self.add_item(self.location_info_button)
     
     
     async def refresh_view(self, interaction: discord.Interaction):

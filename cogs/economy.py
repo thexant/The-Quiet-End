@@ -16,7 +16,7 @@ class EconomyCog(commands.Cog):
         
     shop_group = app_commands.Group(name="shop", description="Buy and sell items")
     job_group  = app_commands.Group(name="job",  description="Find and complete jobs")
-    
+  
     async def cog_load(self):
             """Called when the cog is loaded - safer place to start background tasks"""
             print("💰 Economy cog loaded, starting background tasks...")
@@ -391,7 +391,7 @@ class EconomyCog(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     # Add this to your cogs/economy.py file, in the EconomyCog class
 
-    @economy_group.command(name="federal_depot", description="Access Federal Supply Depot interactive interface")
+    @shop_group.command(name="depot", description="Access Federal Supply Depot interactive interface")
     async def federal_depot_interface(self, interaction: discord.Interaction):
         char_info = self.db.execute_query(
             "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
@@ -478,7 +478,7 @@ class EconomyCog(commands.Cog):
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @economy_group.command(name="black_market", description="Access Black Market interactive interface")
+    @shop_group.command(name="black_market", description="Access Black Market interactive interface")
     async def black_market_interface(self, interaction: discord.Interaction):
         char_info = self.db.execute_query(
             "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",

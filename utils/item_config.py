@@ -238,7 +238,7 @@ class ItemConfig:
             "effect_value": "max_hull:25",
             "single_use": True,
             "rarity": "rare"
-        }
+        },
         # Black Market Exclusive Items
         "Forged Transit Papers": {
             "type": "documents",
