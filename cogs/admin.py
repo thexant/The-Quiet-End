@@ -2469,6 +2469,97 @@ class AdminCog(commands.Cog):
         except Exception as e:
             print(f"❌ Error during comprehensive galaxy clearing: {e}")
             raise
+    
+    @app_commands.command(name="cleanup", description="Cleanup Unused Channels")
+    @app_commands.describe(
+        player="Player to log out"
+    )
+    async def afk_player(self, interaction: discord.Interaction, player: discord.Member):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        # Check if player has a character and is logged in
+        char_data = self.db.execute_query(
+            "SELECT name, is_logged_in, current_location, current_ship_id, group_id FROM characters WHERE user_id = ?",
+            (player.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.response.send_message(f"{player.mention} doesn't have a character.", ephemeral=True)
+            return
+        
+        char_name, is_logged_in, current_location, current_ship_id, group_id = char_data
+        
+        if not is_logged_in:
+            await interaction.response.send_message(f"**{char_name}** is not currently logged in.", ephemeral=True)
+            return
+        
+        # Cancel any active jobs
+        self.db.execute_query(
+            "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE taken_by = ?",
+            (player.id,)
+        )
+        
+        # Remove from job tracking
+        self.db.execute_query(
+            "DELETE FROM job_tracking WHERE user_id = ?",
+            (player.id,)
+        )
+        
+        # Clear nickname if auto-rename is enabled
+        if interaction.guild.me.guild_permissions.manage_nicknames:
+            auto_rename_setting = self.db.execute_query(
+                "SELECT auto_rename FROM characters WHERE user_id = ?",
+                (player.id,),
+                fetch='one'
+            )
+            if auto_rename_setting and auto_rename_setting[0] == 1 and player.nick == char_name:
+                try:
+                    await player.edit(nick=None, reason="Admin AFK logout")
+                except Exception as e:
+                    print(f"Failed to clear nickname on AFK logout for {player}: {e}")
+        
+        # Log out the character
+        self.db.execute_query(
+            "UPDATE characters SET is_logged_in = 0 WHERE user_id = ?",
+            (player.id,)
+        )
+        
+        # Remove access and cleanup
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        
+        if current_location:
+            await channel_manager.remove_user_location_access(player, current_location)
+            await channel_manager.immediate_logout_cleanup(interaction.guild, current_location)
+        elif current_ship_id:
+            await channel_manager.remove_user_ship_access(player, current_ship_id)
+            await channel_manager.immediate_logout_cleanup(interaction.guild, None, current_ship_id)
+        
+        # Clean up activity tracker
+        if hasattr(self.bot, 'activity_tracker'):
+            self.bot.activity_tracker.cleanup_user_tasks(player.id)
+        
+        # Send confirmation to admin
+        embed = discord.Embed(
+            title="✅ AFK Logout Complete",
+            description=f"**{char_name}** ({player.mention}) has been silently logged out.",
+            color=0x00ff00
+        )
+        embed.add_field(
+            name="Actions Taken",
+            value="• Character logged out\n• Active jobs cancelled\n• Channel access removed\n• Activity tracking cleared",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+        # Log the action
+        print(f"🚪 Admin AFK logout: {char_name} (ID: {player.id}) by {interaction.user} ({interaction.user.id})")
+    
+    
     @app_commands.command(name="create_game_panel", description="Create a game panel in the current channel")
     @app_commands.describe(channel="Channel to create the game panel in (optional - uses current channel if not specified)")
     async def create_game_panel(self, interaction: discord.Interaction, channel: discord.TextChannel = None):

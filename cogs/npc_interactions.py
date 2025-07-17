@@ -121,37 +121,37 @@ class NPCInteractionsCog(commands.Cog):
         # Job templates based on occupation
         job_templates = {
             "Farmer": [
-                ("Harvest Assistant Needed", "Help harvest crops during the busy season", 150, None, 0, 1, 15),       # Was 30
-                ("Livestock Care", "Tend to farm animals and ensure their health", 200, "medical", 5, 1, 20),         # Was 45
-                ("Equipment Maintenance", "Repair and maintain farming equipment", 250, "engineering", 8, 2, 25)      # Was 60
+                ("Harvest Assistant Needed", "Help harvest crops during the busy season", 150, None, 0, 0, 15),          # Safe routine work
+                ("Livestock Care", "Tend to farm animals and ensure their health", 200, "medical", 5, 0, 20),           # Safe animal care  
+                ("Equipment Maintenance", "Repair and maintain farming equipment", 250, "engineering", 8, 1, 25)        # Slightly risky with machinery
             ],
             "Engineer": [
-                ("System Diagnostics", "Run diagnostics on critical station systems", 300, "engineering", 10, 2, 20), # Was 45
-                ("Equipment Calibration", "Calibrate sensitive technical equipment", 400, "engineering", 15, 1, 25),   # Was 60
-                ("Emergency Repair", "Fix urgent system failures", 500, "engineering", 18, 3, 15)                     # Was 30
+                ("System Diagnostics", "Run diagnostics on critical station systems", 300, "engineering", 10, 0, 20),   # Safe computer work
+                ("Equipment Calibration", "Calibrate sensitive technical equipment", 400, "engineering", 15, 1, 25),    # Slightly risky precision work
+                ("Emergency Repair", "Fix urgent system failures", 500, "engineering", 18, 2, 15)                     # Actually dangerous emergency work
             ],
             "Medic": [
-                ("Medical Supply Inventory", "Organize and catalog medical supplies", 180, "medical", 5, 1, 15),       # Was 30
-                ("Health Screening", "Assist with routine health examinations", 220, "medical", 10, 1, 25),            # Was 60
-                ("Emergency Response", "Provide medical aid during emergencies", 400, "medical", 15, 2, 10)            # Was 20
+                ("Medical Supply Inventory", "Organize and catalog medical supplies", 180, "medical", 5, 0, 15),        # Safe clerical work
+                ("Health Screening", "Assist with routine health examinations", 220, "medical", 10, 0, 25),            # Safe routine checkups
+                ("Emergency Response", "Provide medical aid during emergencies", 400, "medical", 15, 2, 10)            # Actually dangerous emergency work
             ],
             "Merchant": [
-                ("Market Research", "Investigate trade opportunities", 200, "navigation", 8, 1, 20),                   # Was 60
-                ("Cargo Escort", "Provide security for valuable shipments", 350, "combat", 12, 3, 25),                # Was 90
-                ("Price Negotiation", "Help negotiate better trade deals", 300, "navigation", 10, 1, 15)              # Was 45
+                ("Market Research", "Investigate trade opportunities", 200, "navigation", 8, 0, 20),                   # Safe research work
+                ("Price Negotiation", "Help negotiate better trade deals", 300, "navigation", 10, 0, 15),             # Safe business meeting
+                ("Cargo Escort", "Provide security for valuable shipments", 350, "combat", 12, 2, 25)                # Actually dangerous security work
             ],
             "Security Guard": [
-                ("Patrol Duty", "Conduct security patrols of the facility", 180, "combat", 5, 2, 20),                 # Was 60
-                ("Equipment Check", "Inspect and maintain security equipment", 200, "engineering", 8, 1, 15),         # Was 30
-                ("Threat Assessment", "Evaluate security risks and vulnerabilities", 300, "combat", 15, 2, 20)        # Was 60
+                ("Equipment Check", "Inspect and maintain security equipment", 200, "engineering", 8, 0, 15),         # Safe equipment inspection
+                ("Patrol Duty", "Conduct security patrols of the facility", 180, "combat", 5, 1, 20),                 # Slightly risky patrol
+                ("Threat Assessment", "Evaluate security risks and vulnerabilities", 300, "combat", 15, 1, 20)        # Slightly risky assessment
             ]
         }
-        
-        # Default jobs for unknown occupations
+
+        # Default jobs for unknown occupations - mostly safe odd jobs
         default_jobs = [
-            ("General Labor", "Assist with various manual tasks", 100, None, 0, 1, 60),
-            ("Information Gathering", "Collect and organize local information", 150, "navigation", 5, 1, 90),
-            ("Equipment Testing", "Test functionality of various devices", 200, "engineering", 8, 1, 120)
+            ("General Labor", "Assist with various manual tasks", 100, None, 0, 0, 15),                               # Safe manual work
+            ("Information Gathering", "Collect and organize local information", 150, "navigation", 5, 0, 12),        # Safe clerical work  
+            ("Equipment Testing", "Test functionality of various devices", 200, "engineering", 8, 0, 20)             # Safe testing work
         ]
         
         # Get appropriate job templates

@@ -3875,6 +3875,7 @@ class GalaxyGeneratorCog(commands.Cog):
     @app_commands.describe(
         map_style="Style of the visual map",
         show_labels="Whether to show location names",
+        show_routes="Whether to show corridor routes",  # NEW PARAMETER
         highlight_player="Highlight a specific player's location"
     )
     @app_commands.choices(map_style=[
@@ -3887,12 +3888,14 @@ class GalaxyGeneratorCog(commands.Cog):
     async def visual_map(self, interaction: discord.Interaction, 
                         map_style: str = "standard", 
                         show_labels: bool = False,
+                        show_routes: bool = True,  # NEW PARAMETER with default True
                         highlight_player: discord.Member = None):
         
         await interaction.response.defer()
         
         try:
-            map_buffer = await self._generate_visual_map(map_style, show_labels, highlight_player)
+            # Pass the new parameter to map generation
+            map_buffer = await self._generate_visual_map(map_style, show_labels, show_routes, highlight_player)
             
             if map_buffer is None:
                 await interaction.followup.send("No locations found! Generate a galaxy first with `/galaxy generate`.")
@@ -3906,7 +3909,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 color=0x4169E1
             )
             
-            legend_text = self._get_legend_text(map_style)
+            legend_text = self._get_legend_text(map_style, show_routes)  # Updated to consider routes
             if legend_text:
                 embed.add_field(name="Legend", value=f"```\n{legend_text}\n```", inline=False)
             
@@ -3923,10 +3926,10 @@ class GalaxyGeneratorCog(commands.Cog):
             print(f"Visual map generation error: {traceback.format_exc()}")
             await interaction.followup.send(f"Error generating visual map: {str(e)}\nPlease check that the galaxy has been generated and try again.")
     
-    async def _generate_visual_map(self, map_style: str, show_labels: bool, highlight_player: discord.Member = None) -> io.BytesIO:
-        """Generate visual map with enhanced zoom, focus, and readability"""
+    async def _generate_visual_map(self, map_style: str, show_labels: bool, show_routes: bool, highlight_player: discord.Member = None) -> io.BytesIO:
+        """Generate visual map with enhanced theme matching landing page aesthetic"""
         
-        # Fetch locations and corridors
+        # Fetch locations
         locations = self.db.execute_query(
             "SELECT location_id, name, location_type, x_coord, y_coord, wealth_level FROM locations",
             fetch='all'
@@ -3934,16 +3937,90 @@ class GalaxyGeneratorCog(commands.Cog):
         if not locations:
             return None
         
-        corridors = self.db.execute_query(
-            '''SELECT c.origin_location, c.destination_location, c.danger_level,
-                      ol.x_coord as ox, ol.y_coord as oy,
-                      dl.x_coord as dx, dl.y_coord as dy, ol.location_type as origin_type
-               FROM corridors c
-               JOIN locations ol ON c.origin_location = ol.location_id
-               JOIN locations dl ON c.destination_location = dl.location_id
-               WHERE c.is_active = 1''',
-            fetch='all'
-        )
+        # Fetch corridors only if show_routes is True
+        corridors = []
+        if show_routes:
+            corridors = self.db.execute_query(
+                '''SELECT c.origin_location, c.destination_location, c.danger_level,
+                          ol.x_coord as ox, ol.y_coord as oy,
+                          dl.x_coord as dx, dl.y_coord as dy, ol.location_type as origin_type,
+                          c.name as corridor_name
+                   FROM corridors c
+                   JOIN locations ol ON c.origin_location = ol.location_id
+                   JOIN locations dl ON c.destination_location = dl.location_id
+                   WHERE c.is_active = 1''',
+                fetch='all'
+            )
+        
+        # Get galaxy theme based on galaxy name (matches web map)
+        from utils.time_system import TimeSystem
+        time_system = TimeSystem(self.bot)
+        galaxy_info = time_system.get_galaxy_info()
+        galaxy_name = galaxy_info[0] if galaxy_info else "Unknown Galaxy"
+
+        # CHANGED: Add debugging and ensure proper theme distribution
+        import hashlib
+        # Use full hash for better distribution
+        theme_hash = hashlib.md5(f"{galaxy_name}".encode()).hexdigest()
+        # Use more of the hash for better randomness
+        theme_value = int(theme_hash[:12], 16)
+        theme_index = theme_value % 5
+        themes = ['blue', 'amber', 'green', 'red', 'purple']
+        selected_theme = themes[theme_index]
+
+        # Debug print to verify theme selection
+        print(f"🎨 Galaxy '{galaxy_name}' using theme: {selected_theme} (index: {theme_index})")
+        
+        # Define theme colors matching landing page
+        theme_colors = {
+            'blue': {
+                'primary': '#00ffff',
+                'secondary': '#00cccc',
+                'accent': '#0088cc',
+                'glow': '#00ffff',
+                'bg_primary': '#000408',
+                'bg_secondary': '#0a0f1a',
+                'text': '#e0ffff'
+            },
+            'amber': {
+                'primary': '#ffaa00',
+                'secondary': '#cc8800',
+                'accent': '#ff6600',
+                'glow': '#ffaa00',
+                'bg_primary': '#080400',
+                'bg_secondary': '#1a0f0a',
+                'text': '#fff0e0'
+            },
+            'green': {
+                'primary': '#00ff88',
+                'secondary': '#00cc66',
+                'accent': '#00aa44',
+                'glow': '#00ff88',
+                'bg_primary': '#000804',
+                'bg_secondary': '#0a1a0f',
+                'text': '#e0ffe8'
+            },
+            'red': {
+                'primary': '#ff4444',
+                'secondary': '#cc2222',
+                'accent': '#aa0000',
+                'glow': '#ff4444',
+                'bg_primary': '#080004',
+                'bg_secondary': '#1a0a0a',
+                'text': '#ffe0e0'
+            },
+            'purple': {
+                'primary': '#cc66ff',
+                'secondary': '#9933cc',
+                'accent': '#6600aa',
+                'glow': '#cc66ff',
+                'bg_primary': '#040008',
+                'bg_secondary': '#0f0a1a',
+                'text': '#f0e0ff'
+            }
+        }
+        
+        theme = theme_colors[selected_theme]
         
         # Look up the player's current location
         player_location = None
@@ -3951,70 +4028,66 @@ class GalaxyGeneratorCog(commands.Cog):
         if highlight_player:
             result = self.db.execute_query(
                 "SELECT current_location FROM characters WHERE user_id = ?",
-                (highlight_player.id,),
-                fetch='one'
+                (highlight_player.id,), fetch='one'
             )
             if result:
                 player_location = result[0]
-                for loc_id, name, loc_type, x, y, wealth in locations:
-                    if loc_id == player_location:
-                        player_coords = (x, y)
-                        break
+                loc_data = self.db.execute_query(
+                    "SELECT x_coord, y_coord FROM locations WHERE location_id = ?",
+                    (player_location,), fetch='one'
+                )
+                if loc_data:
+                    player_coords = (loc_data[0], loc_data[1])
         
-        # Determine zoom level and focus area
-        zoom_level = "galaxy"  # Default to full galaxy view
+        # Determine zoom level and focus
+        zoom_level = "galaxy"
         focus_center = None
-        focus_radius = None
+        focus_radius = 50
         
         if player_coords:
             zoom_level = "regional"
             focus_center = player_coords
-            focus_radius = 40  # Regional view radius
+            focus_radius = 40
         
-        # Set up the figure with improved styling
-        plt.style.use('dark_background')
-        fig, ax = plt.subplots(figsize=(20, 16), dpi=120)
-        fig.patch.set_facecolor('#000011')
-        ax.set_facecolor('#000011')
-        
-        # Filter locations and corridors based on zoom
-        visible_locations = locations
-        visible_corridors = corridors
-        
+        # Filter visible locations based on zoom
+        visible_locations = []
         if zoom_level == "regional" and focus_center:
-            # Filter to nearby locations for regional view
             fx, fy = focus_center
-            visible_locations = []
-            visible_location_ids = set()
-            
             for loc in locations:
-                loc_id, name, loc_type, x, y, wealth = loc
-                distance = math.sqrt((x - fx)**2 + (y - fy)**2)
-                if distance <= focus_radius or loc_id == player_location:
+                lx, ly = loc[3], loc[4]
+                if abs(lx - fx) <= focus_radius and abs(ly - fy) <= focus_radius:
                     visible_locations.append(loc)
-                    visible_location_ids.add(loc_id)
-            
-            # Filter corridors to only those connecting visible locations
-            visible_corridors = []
+        else:
+            visible_locations = locations
+        
+        # Filter visible corridors
+        visible_location_ids = {loc[0] for loc in visible_locations}
+        visible_corridors = []
+        if corridors:
             for corridor in corridors:
                 origin_id, dest_id = corridor[0], corridor[1]
                 if origin_id in visible_location_ids and dest_id in visible_location_ids:
                     visible_corridors.append(corridor)
         
+        # Create figure with dark theme
+        fig = plt.figure(figsize=(14, 10), facecolor=theme['bg_primary'])
+        ax = fig.add_subplot(111, facecolor=theme['bg_primary'])
+        
         # Draw enhanced map elements
-        await self._draw_space_background(ax, zoom_level, focus_center, focus_radius)
-        await self._draw_corridors_enhanced(ax, visible_corridors, map_style, zoom_level)
-        await self._draw_locations_enhanced(ax, visible_locations, map_style, player_location, zoom_level)
+        if show_routes and corridors:
+            await self._draw_enhanced_corridors(ax, visible_corridors, map_style, theme, zoom_level) 
+        await self._draw_enhanced_locations(ax, visible_locations, map_style, theme, player_location, zoom_level)
+        await self._draw_enhanced_locations(ax, visible_locations, map_style, theme, player_location, zoom_level)
         
         if show_labels:
-            await self._add_smart_labels(ax, visible_locations, map_style, zoom_level, player_location)
+            await self._add_enhanced_labels(ax, visible_locations, theme, zoom_level, player_location)
         
-        # Add player context information
-        if player_location and zoom_level == "regional":
-            await self._add_player_context(ax, visible_locations, player_location, focus_center)
+        # Add enhanced UI elements
+        await self._add_enhanced_ui_elements(ax, theme, map_style, zoom_level, galaxy_name, player_location)
         
-        # Style and set view
-        await self._style_plot_enhanced(ax, map_style, highlight_player, zoom_level)
+        # Style the plot
+        ax.set_aspect('equal')
+        ax.axis('off')
         
         # Set view bounds
         if zoom_level == "regional" and focus_center:
@@ -4023,7 +4096,6 @@ class GalaxyGeneratorCog(commands.Cog):
             ax.set_xlim(fx - margin, fx + margin)
             ax.set_ylim(fy - margin, fy + margin)
         else:
-            # Auto-fit to all locations with padding
             if visible_locations:
                 x_coords = [loc[3] for loc in visible_locations]
                 y_coords = [loc[4] for loc in visible_locations]
@@ -4034,16 +4106,452 @@ class GalaxyGeneratorCog(commands.Cog):
                 ax.set_xlim(min(x_coords) - padding, max(x_coords) + padding)
                 ax.set_ylim(min(y_coords) - padding, max(y_coords) + padding)
         
-        # Add enhanced legend and info
-        await self._add_enhanced_legend(ax, map_style, zoom_level, visible_locations, visible_corridors)
-        
         # Save to buffer
         buffer = io.BytesIO()
-        plt.savefig(buffer, format='PNG', bbox_inches='tight',
-                    facecolor='#000011', edgecolor='none', dpi=150)
+        plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight', 
+                    facecolor=theme['bg_primary'], edgecolor='none')
         buffer.seek(0)
-        plt.close(fig)
+        plt.close()
+        
         return buffer
+        
+    async def _draw_enhanced_space_background(self, ax, theme, zoom_level, focus_center, focus_radius):
+        """Draw enhanced space background matching landing page aesthetic"""
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        
+        # Create gradient background
+        from matplotlib.patches import Rectangle
+        from matplotlib.collections import PatchCollection
+        
+        # Add subtle gradient overlay
+        gradient = Rectangle((xlim[0], ylim[0]), xlim[1]-xlim[0], ylim[1]-ylim[0])
+        gradient.set_facecolor(theme['bg_secondary'])
+        gradient.set_alpha(0.3)
+        ax.add_patch(gradient)
+        
+        # Enhanced starfield
+        num_stars = 300 if zoom_level == "galaxy" else 150
+        star_x = np.random.uniform(xlim[0], xlim[1], num_stars)
+        star_y = np.random.uniform(ylim[0], ylim[1], num_stars)
+        
+        # Varying star sizes and brightness
+        star_sizes = np.random.exponential(1.5, num_stars)
+        star_alphas = np.random.uniform(0.2, 0.8, num_stars)
+        
+        for i in range(num_stars):
+            ax.scatter(star_x[i], star_y[i], c=theme['text'], 
+                      s=star_sizes[i], alpha=star_alphas[i], 
+                      marker='*', zorder=0)
+        
+        # Add nebula clouds with theme colors
+        nebula_count = 5 if zoom_level == "galaxy" else 3
+        for _ in range(nebula_count):
+            center_x = random.uniform(xlim[0], xlim[1])
+            center_y = random.uniform(ylim[0], ylim[1])
+            width = random.uniform(30, 60)
+            height = random.uniform(25, 50)
+            
+            nebula = patches.Ellipse((center_x, center_y), width, height,
+                                   alpha=0.05, facecolor=theme['primary'],
+                                   zorder=0)
+            ax.add_patch(nebula)
+        
+        # Add grid for terminal feel
+        if zoom_level == "regional":
+            ax.grid(True, alpha=0.1, color=theme['primary'], 
+                    linestyle=':', linewidth=0.5)
+
+    async def _draw_enhanced_corridors(self, ax, corridors, map_style, theme, zoom_level):
+        """Draw corridors with enhanced visual style and clear type distinction"""
+        if not corridors:
+            return
+        
+        # Group corridors by type with more detailed categorization
+        corridor_groups = {
+            'local_space': [],      # Approach/Arrival segments
+            'gated_main': [],       # Main gated corridors
+            'ungated': []           # Dangerous ungated routes
+        }
+        
+        for corridor in corridors:
+            origin_id, dest_id, danger, ox, oy, dx, dy, origin_type, corridor_name = corridor
+            
+            if corridor_name:
+                name_lower = corridor_name.lower()
+                # Categorize by corridor name patterns
+                if any(term in name_lower for term in ['approach', 'arrival', 'departure']):
+                    corridor_groups['local_space'].append(corridor)
+                elif 'ungated' in name_lower:
+                    corridor_groups['ungated'].append(corridor)
+                else:
+                    # Check if it's between gates (main gated corridor)
+                    origin_is_gate = self.db.execute_query(
+                        "SELECT location_type FROM locations WHERE location_id = ?",
+                        (origin_id,), fetch='one'
+                    )
+                    dest_is_gate = self.db.execute_query(
+                        "SELECT location_type FROM locations WHERE location_id = ?",
+                        (dest_id,), fetch='one'
+                    )
+                    
+                    if origin_is_gate and dest_is_gate and origin_is_gate[0] == 'gate' and dest_is_gate[0] == 'gate':
+                        corridor_groups['gated_main'].append(corridor)
+                    else:
+                        corridor_groups['local_space'].append(corridor)
+            else:
+                corridor_groups['ungated'].append(corridor)
+        
+        # Draw corridors in specific order for proper layering
+        # Order: local_space first (bottom), then gated_main, then ungated (top)
+        for corridor_type, corridor_list in [('local_space', corridor_groups['local_space']),
+                                             ('gated_main', corridor_groups['gated_main']),
+                                             ('ungated', corridor_groups['ungated'])]:
+            for corridor in corridor_list:
+                origin_id, dest_id, danger, ox, oy, dx, dy, origin_type, corridor_name = corridor
+                
+                if corridor_type == 'local_space':
+                    # Local space travel - visible dotted lines with subtle glow
+                    # Use a lighter color for better visibility against dark background
+                    local_color = theme['primary'] if theme['primary'] != theme['secondary'] else theme['text']
+                    
+                    # Draw subtle glow for better visibility
+                    ax.plot([ox, dx], [oy, dy], 
+                           color=local_color, 
+                           linewidth=3.0,
+                           linestyle=':',
+                           alpha=0.2,
+                           zorder=1)
+                    # Main dotted line
+                    ax.plot([ox, dx], [oy, dy], 
+                           color=local_color, 
+                           linewidth=1.5,
+                           linestyle=':',
+                           alpha=0.7,
+                           zorder=1,
+                           label='Local Space' if corridor == corridor_list[0] else "")
+                           
+                elif corridor_type == 'gated_main':
+                    # Main gated corridors - prominent solid lines with glow
+                    # Draw glow effect
+                    ax.plot([ox, dx], [oy, dy], 
+                           color=theme['glow'], 
+                           linewidth=5.0,
+                           alpha=0.15,
+                           zorder=2)
+                    # Draw main line
+                    ax.plot([ox, dx], [oy, dy], 
+                           color=theme['primary'], 
+                           linewidth=2.0,
+                           linestyle='-',
+                           alpha=0.8,
+                           zorder=3,
+                           label='Gated Corridor' if corridor == corridor_list[0] else "")
+                           
+                else:  # ungated
+                    # Ungated corridors - dashed lines colored by danger
+                    danger_colors = {
+                        1: '#00ff00',
+                        2: '#88ff00', 
+                        3: '#ffaa00',
+                        4: '#ff6600',
+                        5: '#ff3333'
+                    }
+                    color = danger_colors.get(danger, '#ff6600')
+                    
+                    # More prominent dashing for dangerous routes
+                    if danger >= 4:
+                        dash_pattern = (5, 5)  # Longer dashes for very dangerous
+                    else:
+                        dash_pattern = (8, 4)  # Standard dashes
+                    
+                    ax.plot([ox, dx], [oy, dy], 
+                           color=color, 
+                           linewidth=1.5,
+                           linestyle='--',
+                           dashes=dash_pattern,
+                           alpha=0.7,
+                           zorder=4,
+                           label=f'Ungated (Danger {danger})' if corridor == corridor_list[0] else "")
+                           
+    async def _draw_enhanced_locations(self, ax, locations, map_style, theme, player_location=None, zoom_level="galaxy"):
+        """Draw locations with enhanced cyberpunk aesthetic - CORRECTED MARKERS"""
+        
+        # Enhanced location styles - FIXED TO MATCH WEB MAP
+        location_styles = {
+            'colony': {
+                'marker': 'o',  # Circle - CORRECT
+                'base_size': 200 if zoom_level == "regional" else 150,
+                'icon': '🏙️'
+            },
+            'space_station': {
+                'marker': '^',  # CHANGED FROM 's' TO '^' (Triangle)
+                'base_size': 250 if zoom_level == "regional" else 200,
+                'icon': '🛸'
+            },
+            'outpost': {
+                'marker': 's',  # CHANGED FROM '^' TO 's' (Square)
+                'base_size': 150 if zoom_level == "regional" else 100,
+                'icon': '📡'
+            },
+            'gate': {
+                'marker': 'D',  # Diamond - CORRECT
+                'base_size': 100 if zoom_level == "regional" else 60,
+                'icon': '🌀'
+            }
+        }
+        
+        # Draw locations with glow effects
+        for loc in locations:
+            loc_id, name, loc_type, x, y, wealth = loc
+            style = location_styles.get(loc_type, location_styles['outpost'])
+            
+            # Determine color based on map style
+            if map_style == 'wealth':
+                wealth_colors = {
+                    range(1, 5): '#ff4444',
+                    range(5, 8): '#ffaa00',
+                    range(8, 11): '#00ff88'
+                }
+                color = theme['secondary']
+                for wealth_range, wealth_color in wealth_colors.items():
+                    if wealth in wealth_range:
+                        color = wealth_color
+                        break
+            else:
+                # CHANGED: Make gates use a more subtle color
+                if loc_type == 'gate':
+                    color = theme['accent']  # More subtle than primary
+                else:
+                    color = theme['primary']
+            
+            # Special highlighting for player location
+            if player_location and loc_id == player_location:
+                # Draw pulse effect
+                for i in range(3):
+                    ax.scatter(x, y, 
+                              s=style['base_size'] * (2 - i*0.5),
+                              c=theme['glow'],
+                              marker=style['marker'],
+                              alpha=0.1 * (3-i),
+                              zorder=3)
+            
+            # CHANGED: Reduced glow effect for gates
+            if loc_type != 'gate':
+                # Draw glow effect for non-gates
+                ax.scatter(x, y, 
+                          s=style['base_size'] * 2,
+                          c=color,
+                          marker=style['marker'],
+                          alpha=0.2,
+                          zorder=4)
+            
+            # Draw main location
+            # CHANGED: Gates are more transparent
+            alpha = 0.6 if loc_type == 'gate' else 0.9
+            
+            ax.scatter(x, y, 
+                      s=style['base_size'],
+                      c=color,
+                      marker=style['marker'],
+                      edgecolor=theme['text'],
+                      linewidth=1 if loc_type != 'gate' else 0.5,
+                      alpha=alpha,
+                      zorder=5)
+
+    async def _add_enhanced_labels(self, ax, locations, theme, zoom_level, player_location):
+        """Add labels with enhanced readability and reduced gate clutter"""
+        
+        # Separate location types
+        gates = []
+        stations = []
+        colonies = []
+        outposts = []
+        
+        for loc in locations:
+            loc_id, name, loc_type, x, y, wealth = loc
+            if loc_type == 'gate':
+                gates.append(loc)
+            elif loc_type == 'space_station':
+                stations.append(loc)
+            elif loc_type == 'colony':
+                colonies.append(loc)
+            else:
+                outposts.append(loc)
+        
+        # CHANGED: Only label a subset of gates to reduce clutter
+        # For gates, only label the most important ones (wealthy or well-connected)
+        important_gates = []
+        if gates:
+            # Get connectivity data for gates
+            gate_connectivity = {}
+            for gate in gates:
+                connections = self.db.execute_query(
+                    "SELECT COUNT(*) FROM corridors WHERE origin_location = ? OR destination_location = ?",
+                    (gate[0], gate[0]), fetch='one'
+                )[0]
+                gate_connectivity[gate[0]] = connections
+            
+            # Sort gates by connectivity and wealth
+            gates_sorted = sorted(gates, 
+                                key=lambda g: (gate_connectivity.get(g[0], 0), g[5]), 
+                                reverse=True)
+            
+            # Only label top 20% of gates in galaxy view, 40% in regional view
+            if zoom_level == "galaxy":
+                max_gate_labels = max(1, len(gates_sorted) // 5)  # 20%
+            else:
+                max_gate_labels = max(2, len(gates_sorted) * 2 // 5)  # 40%
+            
+            important_gates = gates_sorted[:max_gate_labels]
+        
+        # CHANGED: Label order now prioritizes major locations over gates
+        # Order: stations first, then colonies, important gates, and finally outposts
+        labeled_locations = stations + colonies + important_gates
+        
+        # Only label outposts in regional view
+        if zoom_level == "regional":
+            labeled_locations += outposts
+        
+        # Add labels with backdrop
+        labeled_count = 0
+        max_labels = 30 if zoom_level == "regional" else 20  # Limit total labels
+        
+        for loc in labeled_locations:
+            if labeled_count >= max_labels:
+                break
+                
+            loc_id, name, loc_type, x, y, wealth = loc
+            
+            # Skip very long names in galaxy view
+            if zoom_level == "galaxy" and len(name) > 20:
+                name = name[:17] + "..."
+            
+            # Special handling for gate names - shorten them
+            if loc_type == 'gate' and zoom_level == "galaxy":
+                # Extract just the essential part of gate name
+                # e.g., "Earth-Delta Gate" -> "Delta Gate"
+                parts = name.split('-')
+                if len(parts) > 1:
+                    name = parts[-1].strip()
+                if len(name) > 15:
+                    name = name[:12] + "..."
+            
+            # Position label based on location type
+            offset_y = 8 if loc_type in ['colony', 'space_station'] else 6
+            
+            # Add text with background box
+            bbox_props = dict(boxstyle="round,pad=0.3", 
+                             facecolor=theme['bg_primary'], 
+                             edgecolor=theme['primary'],
+                             alpha=0.8,
+                             linewidth=0.5)
+            
+            # Make gate labels smaller and less prominent
+            if loc_type == 'gate':
+                fontsize = 7 if zoom_level == "regional" else 6
+                alpha = 0.6
+            else:
+                fontsize = 9 if zoom_level == "regional" else 8
+                alpha = 0.8
+            
+            ax.text(x, y + offset_y, name,
+                   fontsize=fontsize,
+                   color=theme['text'],
+                   ha='center',
+                   va='bottom',
+                   bbox=bbox_props,
+                   alpha=alpha,
+                   zorder=10)
+            
+            labeled_count += 1
+
+    async def _add_enhanced_ui_elements(self, ax, theme, map_style, zoom_level, galaxy_name, player_location):
+        """Add UI elements matching the terminal aesthetic"""
+        
+        # Add galaxy name and timestamp
+        from datetime import datetime
+        from utils.time_system import TimeSystem
+        time_system = TimeSystem(self.bot)
+        current_time = time_system.calculate_current_ingame_time()
+        formatted_time = time_system.format_ingame_datetime(current_time) if current_time else "Unknown"
+        
+        # Terminal-style header
+        header_text = f"[NAVIGATION SYSTEM v3.14]\n{galaxy_name.upper()} | {formatted_time}"
+        ax.text(0.02, 0.98, header_text,
+               transform=ax.transAxes,
+               fontsize=10,
+               color=theme['primary'],
+               va='top',
+               ha='left',
+               family='monospace',
+               bbox=dict(boxstyle="round,pad=0.5", 
+                        facecolor=theme['bg_secondary'], 
+                        edgecolor=theme['primary'],
+                        alpha=0.8))
+        
+        # Enhanced legend
+        legend_items = []
+        if map_style == 'standard':
+            legend_items = [
+                "LOCATION MARKERS:",
+                "◆ Transit Gates",
+                "■ Space Stations", 
+                "● Colonies",
+                "▲ Outposts"
+            ]
+        elif map_style == 'infrastructure':
+            legend_items = [
+                "INFRASTRUCTURE:",
+                "━━ Gated Routes",
+                "┅┅ Standard Routes",
+                "••• Approach Lanes",
+                "◆ Active Gates"
+            ]
+        elif map_style == 'wealth':
+            legend_items = [
+                "ECONOMIC STATUS:",
+                "● Wealthy (8-10)",
+                "● Moderate (5-7)",
+                "● Poor (1-4)"
+            ]
+        elif map_style == 'danger':
+            legend_items = [
+                "ROUTE DANGER:",
+                "━━ Safe (1-2)",
+                "┅┅ Moderate (3)",
+                "••• Dangerous (4-5)"
+            ]
+        
+        if legend_items:
+            legend_text = '\n'.join(legend_items)
+            ax.text(0.02, 0.82, legend_text,
+                   transform=ax.transAxes,
+                   fontsize=8,
+                   color=theme['text'],
+                   va='top',
+                   ha='left',
+                   family='monospace',
+                   bbox=dict(boxstyle="round,pad=0.5", 
+                            facecolor=theme['bg_secondary'], 
+                            edgecolor=theme['secondary'],
+                            alpha=0.8))
+        
+        # Status bar at bottom
+        status_items = []
+        status_items.append(f"View: {map_style.upper()}")
+        status_items.append(f"Scale: {zoom_level.upper()}")
+        if player_location:
+            status_items.append(f"Tracking: ACTIVE")
+        
+        status_text = " | ".join(status_items)
+        ax.text(0.98, 0.02, status_text,
+               transform=ax.transAxes,
+               fontsize=8,
+               color=theme['secondary'],
+               va='bottom',
+               ha='right',
+               family='monospace')
 
     async def _draw_space_background(self, ax, zoom_level: str, focus_center: tuple = None, focus_radius: float = None):
         """Draw enhanced space background with context-aware details"""
@@ -4679,33 +5187,48 @@ class GalaxyGeneratorCog(commands.Cog):
             ax.add_patch(nebula)
     
     def _get_map_description(self, map_style: str) -> str:
-        """Updated descriptions with galaxy context"""
-        
-        # Get galaxy name for context
+        """Get thematic descriptions for each map style"""
         from utils.time_system import TimeSystem
         time_system = TimeSystem(self.bot)
         galaxy_info = time_system.get_galaxy_info()
         galaxy_name = galaxy_info[0] if galaxy_info else "Unknown Galaxy"
         
         descriptions = {
-            'standard': f'Overview of all locations and major corridor connections in {galaxy_name}.',
-            'infrastructure': f'Transit infrastructure in {galaxy_name} showing gates (yellow diamonds) and route safety (green=gated, orange=ungated).',
-            'wealth': f'Economic analysis of {galaxy_name} showing location prosperity and resource distribution.',
-            'connections': f'Trade route network in {galaxy_name} displaying connectivity and traffic flow.',
-            'danger': f'Corridor danger assessment for {galaxy_name} showing radiation levels and structural integrity.'
+            'standard': f'Navigation display for {galaxy_name} showing all registered locations and primary transit routes.',
+            'infrastructure': f'Infrastructure analysis of {galaxy_name} highlighting gate networks and transit corridors.',
+            'wealth': f'Economic heat map of {galaxy_name} displaying wealth distribution across settlements.',
+            'connections': f'Trade network visualization for {galaxy_name} showing route connectivity and traffic density.',
+            'danger': f'Hazard assessment map for {galaxy_name} indicating corridor radiation levels and structural integrity.'
         }
-        return descriptions.get(map_style, f'Visual representation of {galaxy_name}.')
+        return descriptions.get(map_style, f'Tactical display of {galaxy_name}.')
     
-    def _get_legend_text(self, map_style: str) -> str:
-        """Updated legends with matplotlib-compatible symbols"""
-        legends = {
-            'standard': '●  Colonies\n■  Space Stations\n▲  Outposts\n◆  Transit Gates',
-            'infrastructure': '──  Gated Corridors (Inter-system)\n┈┈  Local Space (Intra-system)\n◆  Yellow Gates: Transit Infrastructure',
-            'wealth': 'Green: Wealthy (8-10)\nYellow: Moderate (5-7)\nRed: Poor (1-4)\nSize indicates economic power',
-            'connections': 'Brighter/Larger = More Connected\nBlue lines show active corridors',
-            'danger': 'Green: Safe (1-2)\nYellow: Moderate (3)\nOrange: Dangerous (4)\nRed: Extreme (5)'
-        }
-        return legends.get(map_style, '')
+    def _get_legend_text(self, map_style: str, show_routes: bool = True) -> str:
+        """Updated legends with route visibility and clearer type descriptions"""
+        
+        # Base location markers (always shown)
+        location_text = '● Colonies\n▲ Space Stations\n■ Outposts\n◆ Transit Gates'
+        
+        # Route descriptions (only if routes are shown)
+        route_text = ""
+        if show_routes:
+            if map_style == 'standard':
+                route_text = '\n\nROUTE TYPES:\n━━ Gated Corridors (Safe, Fast)\n┅┅ Ungated Routes (Dangerous)\n⋯⋯ Local Space (Short Hops)'
+            elif map_style == 'infrastructure':
+                route_text = '\n\nCORRIDOR NETWORK:\n━━ Inter-System (Gated)\n┅┅ Direct Routes (Ungated)\n⋯⋯ Station Access (Local)'
+            elif map_style == 'danger':
+                route_text = '\n\nDANGER LEVELS:\nGreen: Safe (1-2)\nYellow: Moderate (3)\nOrange: Dangerous (4)\nRed: Extreme (5)'
+        
+        # Combine based on map style
+        if map_style == 'wealth':
+            return 'ECONOMIC STATUS:\nGreen: Wealthy (8-10)\nYellow: Moderate (5-7)\nRed: Poor (1-4)\nSize = Economic Power'
+        elif map_style == 'connections':
+            base = 'CONNECTIVITY:\nBrighter/Larger = More Connected'
+            if show_routes:
+                base += '\nBlue lines = Active Routes'
+            return base
+        else:
+            return location_text + route_text
+            
     async def _add_enhanced_legend(self, ax, map_style: str, zoom_level: str, 
                                  locations: list, corridors: list):
         """Add enhanced legend with matplotlib-compatible symbols"""

@@ -426,10 +426,10 @@ class EconomyCog(commands.Cog):
 
         # Get federal supply items
         items = self.db.execute_query(
-            '''SELECT item_name, item_type, price, stock, description, required_reputation
+            '''SELECT item_name, item_type, price, stock, description, clearance_level
                FROM federal_supply_items 
-               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= required_reputation
-               ORDER BY required_reputation ASC, price ASC''',
+               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= clearance_level
+               ORDER BY clearance_level ASC, price ASC''',
             (current_location_id, current_reputation),
             fetch='all'
         )
@@ -447,7 +447,7 @@ class EconomyCog(commands.Cog):
         if items:
             # Show summary by category
             item_types = {}
-            for item_name, item_type, price, stock, description, req_rep in items:
+            for item_name, item_type, price, stock, description, clearance_level in items:
                 if item_type not in item_types:
                     item_types[item_type] = {'count': 0, 'min_rep': req_rep}
                 item_types[item_type]['count'] += 1
@@ -504,11 +504,13 @@ class EconomyCog(commands.Cog):
             return
 
         # Get black market items
+        # WITH THIS:
         items = self.db.execute_query(
-            '''SELECT item_name, item_type, price, stock, description
-               FROM black_market_items 
-               WHERE location_id = ? AND (stock > 0 OR stock = -1)
-               ORDER BY item_type, price''',
+            '''SELECT bmi.item_name, bmi.item_type, bmi.price, bmi.stock, bmi.description
+               FROM black_market_items bmi
+               JOIN black_markets bm ON bmi.market_id = bm.market_id
+               WHERE bm.location_id = ? AND (bmi.stock > 0 OR bmi.stock = -1)
+               ORDER BY bmi.item_type, bmi.price''',
             (current_location_id,),
             fetch='all'
         )
@@ -1050,32 +1052,57 @@ class EconomyCog(commands.Cog):
             await interaction.response.defer(ephemeral=True)
 
             # --- ENHANCED SKILL CHECK ---
-            base_success = max(20, 75 - (danger * 10))
-            
+            # Replace the existing skill check section in cogs/economy.py 
+            # This affects BOTH regular jobs AND NPC jobs since they use the same completion system
+
+            # --- ENHANCED SKILL CHECK (REBALANCED FOR NPC JOBS) ---
+            # Improved base success rates - ordinary jobs should succeed most of the time
+            if danger == 0:
+                base_success = 85  # Safe jobs should have high success rate
+            elif danger == 1:
+                base_success = 75  # Slightly risky jobs
+            elif danger == 2:
+                base_success = 60  # Moderately dangerous 
+            elif danger == 3:
+                base_success = 45  # Dangerous jobs
+            else:
+                base_success = 30  # Very dangerous jobs (danger 4+)
+
             # Get character skills
             char_skills = self.db.execute_query(
                 "SELECT engineering, navigation, combat, medical FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
                 fetch='one'
             )
-            
+
             skill_map = {
                 'engineering': char_skills[0] if char_skills else 0,
                 'navigation': char_skills[1] if char_skills else 0,
                 'combat': char_skills[2] if char_skills else 0,
                 'medical': char_skills[3] if char_skills else 0
             }
-            
+
             skill_bonus = 0
             if required_skill and required_skill in skill_map:
                 player_skill_level = skill_map[required_skill]
-                # More rewarding skill bonus: +3% per point above requirement
-                skill_bonus = (player_skill_level - min_skill_level) * 3
-            
+                
+                # Improved skill bonus calculation
+                skill_difference = player_skill_level - min_skill_level
+                
+                if skill_difference >= 0:
+                    # Meeting requirements gives good bonus, exceeding gives even more
+                    skill_bonus = min(15, skill_difference * 4)  # +4% per point above minimum, capped at +15%
+                else:
+                    # Below minimum should be rare due to job acceptance checks, but penalize if it happens
+                    skill_bonus = skill_difference * 5  # -5% per point below minimum
+
             # Final success chance calculation
-            success_chance = max(15, min(98, base_success + skill_bonus))
+            success_chance = max(10, min(95, base_success + skill_bonus))
             roll = random.randint(1, 100)
             success = roll <= success_chance
+
+            # Optional: Add debug logging to help you monitor the changes
+            print(f"Job success check - Base: {base_success}%, Skill bonus: {skill_bonus}%, Final: {success_chance}%, Roll: {roll}, Success: {success}")
 
             # Check if this is a group job
             group_id = self.db.execute_query(
@@ -1540,12 +1567,12 @@ class EconomyCog(commands.Cog):
         current_reputation = reputation_data[0] if reputation_data else 0
 
         # Fetch items from Federal Supply, checking reputation
-        items = self.db.execute_query(
-            '''SELECT item_name, item_type, price, stock, description, required_reputation
+        items = self.bot.db.execute_query(
+            '''SELECT item_name, item_type, price, stock, description, clearance_level
                FROM federal_supply_items 
-               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= required_reputation
-               ORDER BY required_reputation ASC, price ASC''',
-            (current_location_id, current_reputation),
+               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= clearance_level
+               ORDER BY clearance_level ASC, price ASC''',
+            (self.location_id, current_reputation),
             fetch='all'
         )
 
@@ -3036,13 +3063,12 @@ class InteractiveFederalDepotView(discord.ui.View):
         current_reputation = reputation_data[0] if reputation_data else 0
         
         # Get available items
-        items = self.bot.db.execute_query(
-            '''SELECT item_name, item_type, price, stock, description, required_reputation
+        item_info = self.bot.db.execute_query(
+            '''SELECT item_name, price, stock, description, item_type, clearance_level
                FROM federal_supply_items 
-               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= required_reputation
-               ORDER BY required_reputation ASC, price ASC''',
-            (self.location_id, current_reputation),
-            fetch='all'
+               WHERE location_id = ? AND item_name = ?''',
+            (self.location_id, item_name),
+            fetch='one'
         )
         
         if not items:
@@ -3075,10 +3101,11 @@ class InteractiveBlackMarketView(discord.ui.View):
         
         # Get available items
         items = self.bot.db.execute_query(
-            '''SELECT item_name, item_type, price, stock, description
-               FROM black_market_items 
-               WHERE location_id = ? AND (stock > 0 OR stock = -1)
-               ORDER BY item_type, price''',
+            '''SELECT bmi.item_name, bmi.item_type, bmi.price, bmi.stock, bmi.description
+               FROM black_market_items bmi
+               JOIN black_markets bm ON bmi.market_id = bm.market_id
+               WHERE bm.location_id = ? AND (bmi.stock > 0 OR bmi.stock = -1)
+               ORDER BY bmi.item_type, bmi.price''',
             (self.location_id,),
             fetch='all'
         )
@@ -3195,9 +3222,10 @@ class BlackMarketBuySelectView(discord.ui.View):
         
         # Get item details
         item_info = self.bot.db.execute_query(
-            '''SELECT item_name, price, stock, description, item_type
-               FROM black_market_items 
-               WHERE location_id = ? AND item_name = ?''',
+            '''SELECT bmi.item_name, bmi.price, bmi.stock, bmi.description, bmi.item_type
+               FROM black_market_items bmi
+               JOIN black_markets bm ON bmi.market_id = bm.market_id
+               WHERE bm.location_id = ? AND bmi.item_name = ?''',
             (self.location_id, item_name),
             fetch='one'
         )
