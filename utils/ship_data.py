@@ -919,3 +919,61 @@ def get_ship_class_bonuses(ship_type: str) -> dict:
     ship_class = ship_info.get('class', 'Standard')
     
     return class_bonuses.get(ship_class, {})
+    
+def get_random_starter_ship():
+    """Generate a random starter ship for new characters"""
+    # Get only Tier 1 ships (starter ships)
+    starter_ships = [
+        ship_type for ship_type, info in SHIP_TYPES.items() 
+        if info.get('tier', 1) == 1
+    ]
+    
+    # Randomly select a ship type
+    ship_type = random.choice(starter_ships)
+    
+    # Generate a random ship name
+    ship_name = generate_random_ship_name()
+    
+    # Create exterior description based on ship type
+    exterior_descriptions = {
+        "Hauler": [
+            "A sturdy, boxy vessel with reinforced cargo holds and heavy plating. Its utilitarian design prioritizes function over form.",
+            "This well-worn cargo ship bears the scars of countless trading runs. Its bulky frame and external cargo pods maximize storage capacity.",
+            "A reliable workhorse with a reinforced hull and multiple cargo bay access points. Built for durability rather than speed."
+        ],
+        "Scout": [
+            "A sleek, dart-shaped vessel with advanced sensor arrays and minimal profile. Built for speed and reconnaissance.",
+            "This nimble craft features swept-back wings and a streamlined hull. Its compact design allows for rapid maneuvering.",
+            "A lightweight explorer with enhanced thrusters and long-range scanning equipment. Perfect for surveying unknown territories."
+        ],
+        "Shuttle": [
+            "A versatile mid-sized transport with comfortable passenger accommodations and modest cargo space.",
+            "This multipurpose vessel balances passenger comfort with practical cargo capacity. A common sight in civilian spacelanes.",
+            "A dependable transport craft with reinforced viewports and dual-purpose cargo/passenger bays."
+        ]
+    }
+    
+    # Create interior description based on ship type
+    interior_descriptions = {
+        "Hauler": [
+            "The bridge is cramped but functional, with cargo manifest displays dominating the walls. The main corridor leads to expansive cargo holds.",
+            "Inside, every inch of space is optimized for storage. The living quarters are minimal, but the cargo management systems are top-notch.",
+            "The interior prioritizes cargo space over comfort. Basic amenities line the narrow corridors between massive storage bays."
+        ],
+        "Scout": [
+            "The cockpit features advanced navigation systems and sensor readouts. The compact living space is efficiently designed for long reconnaissance missions.",
+            "A high-tech bridge dominates the front section, while the rear houses minimal but comfortable crew quarters and a small cargo area.",
+            "The interior is filled with scanning equipment and navigation computers. Every surface serves a purpose in this efficiency-focused design."
+        ],
+        "Shuttle": [
+            "The interior offers a balance of passenger seating and cargo storage. The bridge provides good visibility for atmospheric and space operations.",
+            "Comfortable passenger seats line the main cabin, with overhead storage and a separate cargo compartment in the rear.",
+            "The versatile interior can be reconfigured for passengers or cargo. Standard amenities make it suitable for various missions."
+        ]
+    }
+    
+    # Select random descriptions
+    exterior_desc = random.choice(exterior_descriptions.get(ship_type, ["A standard vessel of its class."]))
+    interior_desc = random.choice(interior_descriptions.get(ship_type, ["A typical interior layout for this type of ship."]))
+    
+    return ship_type, ship_name, exterior_desc, interior_desc

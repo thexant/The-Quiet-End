@@ -1272,6 +1272,10 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_security_consult(interaction, char_name)
         elif service_type == "browse_archives":
             await self._handle_browse_archives(interaction, char_name)
+        elif service_type == "research_records":
+            await self._handle_research_records(interaction, char_name)
+        elif service_type == "study_figures":
+            await self._handle_study_figures(interaction, char_name)
         else:
             # Generic flavor response for unimplemented services
             await self._handle_generic_service(interaction, service_type, char_name)
@@ -2049,23 +2053,71 @@ class SubLocationServiceView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=False) 
     
     async def _handle_browse_archives(self, interaction, char_name: str):
-        """Handle browsing historical archives"""
+        """Handle browsing historical archives with enhanced functionality"""
         from utils.history_generator import HistoryGenerator
         
         # Get current location
-        location_id = None
-        char_data = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+        location_data = self.db.execute_query(
+            """SELECT l.location_id, l.name, l.location_type, l.wealth_level 
+               FROM characters c 
+               JOIN locations l ON c.current_location = l.location_id 
+               WHERE c.user_id = ?""",
             (interaction.user.id,),
             fetch='one'
         )
         
-        if char_data:
-            location_id = char_data[0]
+        if not location_data:
+            await interaction.response.send_message("Unable to determine your current location.", ephemeral=False)
+            return
         
-        # Get random historical event
+        location_id, location_name, location_type, wealth_level = location_data
+        
+        # First, check if there's any history at all
+        total_history = self.db.execute_query(
+            "SELECT COUNT(*) FROM galactic_history",
+            fetch='one'
+        )[0]
+        
+        if total_history == 0:
+            embed = discord.Embed(
+                title="📚 Archive Browse",
+                description=f"**{char_name}** searches through the archives but finds them completely empty. The galaxy's history has yet to be written.",
+                color=0x8b4513
+            )
+            embed.set_footer(text="💡 Tip: An administrator needs to generate galaxy history first.")
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Try to get a historical event - prioritize local events but fall back to general
         history_gen = HistoryGenerator(self.bot)
-        event = await history_gen.get_random_history_event(location_id)
+        
+        # First try: Get event specific to this location
+        event = self.db.execute_query(
+            '''SELECT event_title, event_description, historical_figure, event_date, event_type
+               FROM galactic_history 
+               WHERE location_id = ?
+               ORDER BY RANDOM() LIMIT 1''',
+            (location_id,),
+            fetch='one'
+        )
+        
+        # Second try: Get any event (local or general) if no location-specific event found
+        if not event:
+            event = self.db.execute_query(
+                '''SELECT gh.event_title, gh.event_description, gh.historical_figure, 
+                          gh.event_date, gh.event_type, l.name as event_location
+                   FROM galactic_history gh
+                   LEFT JOIN locations l ON gh.location_id = l.location_id
+                   ORDER BY RANDOM() LIMIT 1''',
+                fetch='one'
+            )
+            
+            if event and len(event) > 5:  # Has location name
+                event_location = event[5]
+            else:
+                event_location = None
+        else:
+            event_location = location_name
         
         if not event:
             embed = discord.Embed(
@@ -2076,47 +2128,259 @@ class SubLocationServiceView(discord.ui.View):
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
         
-        # Create historical record embed
+        # Parse event data
+        event_title = event[0]
+        event_description = event[1]
+        historical_figure = event[2]
+        event_date = event[3]
+        event_type = event[4]
+        
+        # Create immersive historical record embed
         embed = discord.Embed(
-            title="📚 Historical Archive",
-            description=f"**{char_name}** discovers an interesting historical record in the archives.",
+            title="📚 Historical Archive Discovery",
             color=0x4169e1
         )
         
+        # Add archive interaction description
+        archive_descriptions = [
+            f"**{char_name}** carefully activates an ancient data terminal, its holographic display flickering to life...",
+            f"**{char_name}** discovers a well-preserved memory crystal and inserts it into the archive reader...",
+            f"**{char_name}** browses through digital manuscripts, stopping at an intriguing entry...",
+            f"**{char_name}** accesses the neural archive interface, historical data flooding their consciousness...",
+            f"**{char_name}** finds a secured vault containing classified historical records..."
+        ]
+        
+        embed.description = random.choice(archive_descriptions)
+        
+        # Add the historical record with better formatting
         embed.add_field(
-            name="📖 Historical Record",
-            value=f"**{event['title']}**",
+            name=f"📜 {event_title}",
+            value=f"*Archive Classification: {event_type.title()}*",
             inline=False
         )
         
+        # Format the description with proper line breaks
+        formatted_description = event_description
+        if len(formatted_description) > 200:
+            # Add line breaks for readability
+            words = formatted_description.split()
+            lines = []
+            current_line = []
+            current_length = 0
+            
+            for word in words:
+                if current_length + len(word) > 80:
+                    lines.append(' '.join(current_line))
+                    current_line = [word]
+                    current_length = len(word)
+                else:
+                    current_line.append(word)
+                    current_length += len(word) + 1
+            
+            if current_line:
+                lines.append(' '.join(current_line))
+            
+            formatted_description = '\n'.join(lines)
+        
         embed.add_field(
-            name="📝 Event Description", 
-            value=event['description'],
+            name="📖 Historical Account",
+            value=f"```{formatted_description}```",
             inline=False
         )
         
-        if event['figure']:
+        # Add additional details in a clean format
+        details = []
+        
+        if historical_figure:
+            details.append(f"**Notable Figure:** {historical_figure}")
+        
+        if event_location:
+            details.append(f"**Location:** {event_location}")
+        
+        details.append(f"**Date:** {event_date}")
+        
+        if details:
             embed.add_field(
-                name="👤 Notable Figure",
-                value=event['figure'],
-                inline=True
+                name="📋 Archive Metadata",
+                value='\n'.join(details),
+                inline=False
+            )
+        
+        # Add some flavor text based on the archive's wealth level
+        if wealth_level >= 6:
+            footer_text = "This premium archive contains millions of meticulously preserved historical records."
+        elif wealth_level >= 4:
+            footer_text = "This well-maintained archive houses extensive historical documentation."
+        else:
+            footer_text = "This modest archive contains what historical records could be preserved."
+        
+        embed.set_footer(text=footer_text)
+        
+        # Add a timestamp
+        embed.timestamp = interaction.created_at
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+        
+        # Optional: Add a small chance to discover something special
+        if random.random() < 0.05:  # 5% chance
+            special_discovery = discord.Embed(
+                title="🌟 Rare Discovery!",
+                description=f"While browsing the archives, **{char_name}** notices a hidden compartment containing additional materials related to this historical event!",
+                color=0xffd700
+            )
+            
+            # Could add rewards here - credits, items, reputation, etc.
+            reward = random.randint(50, 200)
+            self.db.execute_query(
+                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                (reward, interaction.user.id)
+            )
+            
+            special_discovery.add_field(
+                name="💰 Archive Preservation Reward",
+                value=f"The archive's automated systems award {reward} credits for your careful handling of historical materials.",
+                inline=False
+            )
+            
+            await interaction.followup.send(embed=special_discovery)
+
+    # Additional method for "Study Historical Figures" feature
+    async def _handle_study_figures(self, interaction, char_name: str):
+        """Handle studying historical figures in the archives"""
+        # Get all unique historical figures
+        figures = self.db.execute_query(
+            '''SELECT DISTINCT historical_figure, COUNT(*) as event_count
+               FROM galactic_history 
+               WHERE historical_figure IS NOT NULL
+               GROUP BY historical_figure
+               ORDER BY event_count DESC
+               LIMIT 10''',
+            fetch='all'
+        )
+        
+        if not figures:
+            embed = discord.Embed(
+                title="👤 Historical Figures Database",
+                description=f"**{char_name}** searches the biographical archives but finds no records of notable figures.",
+                color=0x8b4513
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Pick a random figure from the top 10
+        figure_name, event_count = random.choice(figures)
+        
+        # Get all events related to this figure
+        figure_events = self.db.execute_query(
+            '''SELECT event_title, event_description, event_date, event_type, l.name as location_name
+               FROM galactic_history gh
+               LEFT JOIN locations l ON gh.location_id = l.location_id
+               WHERE historical_figure = ?
+               ORDER BY event_date ASC
+               LIMIT 3''',
+            (figure_name,),
+            fetch='all'
+        )
+        
+        embed = discord.Embed(
+            title=f"👤 Historical Figure: {figure_name}",
+            description=f"**{char_name}** accesses the biographical database and reviews the life and achievements of a notable historical figure.",
+            color=0x9370db
+        )
+        
+        # Add a biography summary
+        biography_intros = [
+            f"{figure_name} was a pivotal figure in galactic history, known for their significant contributions across multiple sectors.",
+            f"The legacy of {figure_name} continues to influence galactic civilization to this day.",
+            f"Historical records show that {figure_name} played a crucial role in shaping the modern galaxy.",
+            f"{figure_name}'s actions during their lifetime had far-reaching consequences that echo through history."
+        ]
+        
+        embed.add_field(
+            name="📜 Biography",
+            value=random.choice(biography_intros),
+            inline=False
+        )
+        
+        # Add their notable events
+        if figure_events:
+            timeline_text = []
+            for title, desc, date, event_type, location in figure_events:
+                location_text = f" at {location}" if location else ""
+                timeline_text.append(f"**{date}** - {title}{location_text}")
+            
+            embed.add_field(
+                name="🗓️ Historical Timeline",
+                value='\n'.join(timeline_text),
+                inline=False
             )
         
         embed.add_field(
-            name="📅 Date",
-            value=event['date'],
+            name="📊 Historical Impact",
+            value=f"Featured in {event_count} recorded historical events",
             inline=True
         )
         
-        embed.add_field(
-            name="🏷️ Event Type",
-            value=event['type'].title(),
-            inline=True
-        )
-        
-        embed.set_footer(text="Historical archives contain thousands of records spanning galactic history.")
+        embed.set_footer(text="The archive's biographical database contains records of thousands of influential figures.")
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # Additional helper method to get multiple history entries (for future "Research Records" feature)
+    async def _handle_research_records(self, interaction, char_name: str):
+        """Handle researching multiple historical records"""
+        # Get current location
+        location_data = self.db.execute_query(
+            """SELECT l.location_id, l.name 
+               FROM characters c 
+               JOIN locations l ON c.current_location = l.location_id 
+               WHERE c.user_id = ?""",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not location_data:
+            await interaction.response.send_message("Unable to determine your current location.", ephemeral=False)
+            return
+        
+        location_id, location_name = location_data
+        
+        # Get multiple historical events (3-5)
+        events = self.db.execute_query(
+            '''SELECT event_title, event_date, event_type, 
+                      CASE WHEN location_id = ? THEN 'Local' ELSE 'Galactic' END as scope
+               FROM galactic_history 
+               WHERE location_id = ? OR location_id IS NULL
+               ORDER BY RANDOM() LIMIT 5''',
+            (location_id, location_id),
+            fetch='all'
+        )
+        
+        if not events:
+            embed = discord.Embed(
+                title="📖 Research Records",
+                description=f"**{char_name}** attempts to access the research terminal, but finds no accessible records.",
+                color=0x8b4513
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        embed = discord.Embed(
+            title="📖 Historical Research Terminal",
+            description=f"**{char_name}** accesses the archive's research interface and discovers several historical records:",
+            color=0x4682b4
+        )
+        
+        for i, (title, date, event_type, scope) in enumerate(events, 1):
+            embed.add_field(
+                name=f"{i}. {title}",
+                value=f"*{event_type.title()} • {date} • {scope} History*",
+                inline=False
+            )
+        
+        embed.set_footer(text="Each record contains detailed information about significant galactic events.")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+        
     async def _handle_buy_medical(self, interaction: discord.Interaction, char_name: str, money: int):
         """Handle buying medical supplies"""
         medical_items = [

@@ -1246,10 +1246,10 @@ class GalaxyGeneratorCog(commands.Cog):
             loc['has_shops'] = False
         if loc_type == 'space_station' and random.random() < 0.05:
             loc['has_medical'] = False
-        if loc_type == 'space_station' and wealth >= 6:
-            loc['has_shipyard'] = random.random() < 0.4  # 40% chance for wealthy stations
-        elif loc_type == 'colony' and wealth >= 7:
-            loc['has_shipyard'] = random.random() < 0.3  # 30% chance for very wealthy colonies
+        if loc_type == 'space_station' and wealth >= 7:
+            loc['has_shipyard'] = random.random() < 0.45  # 45% chance for wealthy stations
+        elif loc_type == 'colony' and wealth >= 5:
+            loc['has_shipyard'] = random.random() < 0.45  # 45% chance for medium or higher wealth colonies
         else:
             loc['has_shipyard'] = False
         return loc

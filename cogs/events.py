@@ -87,7 +87,7 @@ class EventsCog(commands.Cog):
     def cog_unload(self):
         """Clean up tasks when cog is unloaded"""
         # Cancel all background tasks correctly
-        self.corridor_management_task.cancel()
+        self.corridor_management.cancel()
         self.cleanup_tasks.cancel()
         self.random_events.cancel()
         self.job_generation.cancel()
