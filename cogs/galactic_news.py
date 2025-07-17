@@ -163,13 +163,13 @@ class GalacticNewsCog(commands.Cog):
         """Format news delay in an immersive way"""
         if delay_hours < 1:
             minutes = int(delay_hours * 60)
-            return f"Signal Age: {minutes} minute{'s' if minutes != 1 else ''} ago"
+            return f"Signal Age: {minutes} minute{'s' if minutes != 1 else ''} old."
         elif delay_hours < 24:
             hours = int(delay_hours)
-            return f"Signal Age: {hours} hour{'s' if hours != 1 else ''} ago via deep-space relay"
+            return f"Signal Age: {hours} hour{'s' if hours != 1 else ''} old. Sent via deep-space relay"
         else:
             days = int(delay_hours / 24)
-            return f"Transmitted {days} day{'s' if days != 1 else ''} ago via deep-space relay"
+            return f"Transmitted {days} day{'s' if days != 1 else ''} old. Sent via deep-space relay"
 
     def calculate_news_delay(self, location_id: Optional[int]) -> float:
         """Calculate news delay based on distance from galactic center"""
