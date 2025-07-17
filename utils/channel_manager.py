@@ -244,106 +244,143 @@ class ChannelManager:
             (owner_id,),
             fetch='one'
         )[0]
-        from utils.home_activities import HomeActivityManager
-        # Update the home welcome message to include new features
+        
+        # Get home customizations
+        customizations = self.db.execute_query(
+            '''SELECT wall_color, floor_type, lighting_style, furniture_style, ambiance
+               FROM home_customizations WHERE home_id = ?''',
+            (home_id,),
+            fetch='one'
+        )
+        
+        # Set defaults if no customization exists
+        if not customizations:
+            customizations = ('Beige', 'Standard Tile', 'Standard', 'Basic', 'Cozy')
+        
+        wall_color, floor_type, lighting, furniture, ambiance = customizations
+        
+        # Generate dynamic interior description based on customizations
+        custom_desc = self._generate_custom_interior_description(
+            interior_desc, wall_color, floor_type, lighting, furniture, ambiance
+        )
+        
         embed = discord.Embed(
             title=f"🏠 Welcome to {home_name}",
-            description=interior_desc or "You are now inside your home.",
-            color=0x8B4513
+            description=custom_desc,
+            color=self._get_color_from_wall(wall_color)
         )
         
-        # Get storage info
-        storage_usage = self.db.execute_query(
-            '''SELECT COALESCE(SUM(quantity), 0), h.storage_capacity
-               FROM location_homes h
-               LEFT JOIN home_storage s ON h.home_id = s.home_id
-               WHERE h.home_id = ?
-               GROUP BY h.storage_capacity''',
-            (home_id,),
-            fetch='one'
-        )
-        
-        if storage_usage:
-            used, capacity = storage_usage
-            embed.add_field(
-                name="📦 Storage",
-                value=f"{used}/{capacity} items",
-                inline=True
-            )
-        
-        # Get income info
-        income_info = self.db.execute_query(
-            '''SELECT SUM(daily_income) as total_income
-               FROM home_upgrades WHERE home_id = ?''',
-            (home_id,),
-            fetch='one'
-        )
-        
-        if income_info and income_info[0]:
-            embed.add_field(
-                name="💰 Daily Income",
-                value=f"{income_info[0]} credits/day",
-                inline=True
-            )
-        
-        # Add health recovery info
+        # Add customization details field
         embed.add_field(
-            name="❤️ Health Recovery",
-            value="You recover 10 HP every 20 minutes spent at home",
-            inline=False
+            name="🎨 Current Theme",
+            value=(
+                f"**Walls:** {wall_color}\n"
+                f"**Flooring:** {floor_type}\n"
+                f"**Lighting:** {lighting}\n"
+                f"**Furniture:** {furniture}\n"
+                f"**Ambiance:** {ambiance}"
+            ),
+            inline=True
         )
         
-        # Get home activities
-        
-        activity_manager = HomeActivityManager(self.bot)
-        activities = activity_manager.get_home_activities(home_id)
-        
-        if activities:
-            activity_list = []
-            for activity in activities[:8]:
-                activity_list.append(f"{activity['icon']} {activity['name']}")
+        # Get home activities - Import here to avoid circular imports
+        try:
+            from utils.home_activities import HomeActivityManager
+            activity_manager = HomeActivityManager(self.bot)
+            activities = activity_manager.get_home_activities(home_id)
             
-            embed.add_field(
-                name="🎮 Home Facilities",
-                value="\n".join(activity_list),
-                inline=False
-            )
-            
+            if activities:
+                activity_list = []
+                for activity in activities[:8]:
+                    activity_list.append(f"{activity['icon']} {activity['name']}")
+                
+                embed.add_field(
+                    name="🎮 Home Facilities",
+                    value="\n".join(activity_list),
+                    inline=True
+                )
+        except ImportError:
+            # HomeActivityManager not available, skip activities
+            activities = None
+        
         embed.add_field(
             name="🎮 Available Actions",
             value=(
-                "• `/home storage` - Manage your storage\n"
-                "• `/home income` - View income options\n"
-                "• `/home customize` - Personalize your space\n"
+                "• Use the activity buttons below\n" if activities else ""
+                "• `/home customize theme` - View/change theme\n"
                 "• `/home interior leave` - Exit your home\n"
                 "• `/home interior invite` - Invite someone"
             ),
             inline=False
         )
         
-        embed.add_field(
-            name="ℹ️ Home Interior",
-            value="This is your private home. Other players can only enter if you invite them.",
-            inline=False
-        )
-        
         try:
             await channel.send(embed=embed)
             
-            # Send activity buttons
+            # Send activity buttons if available
             if activities:
-                from utils.home_activities import HomeActivityView
-                activity_view = HomeActivityView(self.bot, home_id, home_name, owner_name)
-                activity_embed = discord.Embed(
-                    title="🎯 Home Activities",
-                    description="Choose an activity:",
-                    color=0x00ff88
-                )
-                await channel.send(embed=activity_embed, view=activity_view)
-                
+                try:
+                    from utils.home_activities import HomeActivityView
+                    activity_view = HomeActivityView(self.bot, home_id, home_name, owner_name)
+                    activity_embed = discord.Embed(
+                        title="🎯 Home Activities",
+                        description="Choose an activity:",
+                        color=0x00ff88
+                    )
+                    await channel.send(embed=activity_embed, view=activity_view)
+                except ImportError:
+                    pass
+                    
         except Exception as e:
             print(f"❌ Failed to send home welcome message: {e}")
+    
+    
+    def _generate_custom_interior_description(self, base_desc, wall_color, floor_type, lighting, furniture, ambiance):
+        """Generate a dynamic description based on customizations"""
+        if base_desc:
+            desc = base_desc + "\n\n"
+        else:
+            desc = ""
+        
+        # Add atmospheric description based on customizations
+        atmosphere_map = {
+            ('Beige', 'Standard Tile', 'Standard', 'Basic', 'Cozy'): 
+                "The warm beige walls and standard tile flooring create a simple, comfortable atmosphere.",
+            ('Gray', 'Hardwood', 'Dim', 'Modern', 'Relaxing'): 
+                "Soft gray walls complement the hardwood floors, while dim lighting creates a relaxing modern sanctuary.",
+            ('Blue', 'Carpet', 'Bright', 'Luxury', 'Elegant'): 
+                "Deep navy walls paired with plush carpeting and bright lighting showcase the elegant luxury furnishings.",
+            ('Black', 'Marble', 'Neon', 'Industrial', 'Chaotic'): 
+                "Dramatic black walls and gleaming marble floors are accentuated by neon lighting, creating an energetic industrial vibe.",
+            ('Crimson', 'Stone', 'Candlelit', 'Federation', 'Calm'): 
+                "Rich crimson walls and ancient stone floors are bathed in flickering candlelight, highlighting the Federation style furnishings.",
+        }
+        
+        # Try to find exact match
+        key = (wall_color, floor_type, lighting, furniture, ambiance)
+        if key in atmosphere_map:
+            desc += atmosphere_map[key]
+        else:
+            # Generate dynamic description
+            desc += f"The {wall_color.lower()} walls are complemented by {floor_type.lower()} flooring. "
+            desc += f"{lighting} lighting illuminates the {furniture.lower()} furniture, creating a {ambiance.lower()} atmosphere."
+        
+        return desc
 
+    def _get_color_from_wall(self, wall_color):
+        """Get Discord embed color based on wall color"""
+        color_map = {
+            'Beige': 0xF5DEB3,
+            'Gray': 0x808080,
+            'White': 0xFFFFFF,
+            'Navy': 0x000080,
+            'Green': 0x228B22,
+            'Black': 0x000000,
+            'Crimson': 0xDC143C,
+            'Purple': 0x9370DB
+        }
+        return color_map.get(wall_color, 0x8B4513)  # Default brown
+    
     async def give_user_home_access(self, user: discord.Member, home_id: int) -> bool:
         """Give a user access to a home's channel"""
         home_channel = self.db.execute_query(

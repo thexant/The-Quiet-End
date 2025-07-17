@@ -208,7 +208,7 @@ class HomeActivityView(discord.ui.View):
             if storage_info:
                 unique_items, total_items, capacity = storage_info
                 response_text += f"\n\n📊 **Storage Status:** {total_items}/{capacity} items ({unique_items} unique types)"
-                response_text += "\n💡 *Use `/home storage view` to see details*"
+                response_text += "\n💡 *Use `/storage view` to see details*"
 
         await interaction.response.send_message(embed=embed)
 
@@ -223,9 +223,9 @@ class StorageButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_message(
             "**Storage Commands:**\n"
-            "• `/home storage view` - View your storage\n"
-            "• `/home storage store` - Store items\n"
-            "• `/home storage retrieve` - Get items back",
+            "• `/storage view` - View your storage\n"
+            "• `/storage store` - Store items\n"
+            "• `/storage retrieve` - Get items back",
             ephemeral=True
         )
 
@@ -256,13 +256,13 @@ class IncomeButton(discord.ui.Button):
                 f"**💰 Income Status**\n"
                 f"Daily Rate: {daily} credits/day\n"
                 f"Available to Collect: {accumulated or 0} credits\n\n"
-                f"Use `/home income collect` to collect!",
+                f"Use `/income collect` to collect!",
                 ephemeral=True
             )
         else:
             await interaction.response.send_message(
                 "Your home doesn't generate income yet!\n"
-                "Use `/home income upgrade` to purchase income-generating upgrades.",
+                "Use `/income upgrade` to purchase income-generating upgrades.",
                 ephemeral=True
             )
             

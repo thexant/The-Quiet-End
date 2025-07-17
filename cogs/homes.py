@@ -680,12 +680,24 @@ class HomesCog(commands.Cog):
             # Remove from location channel
             await channel_manager.remove_user_location_access(interaction.user, location_id)
             
+            # Get customizations for the response
+            customizations = self.db.execute_query(
+                '''SELECT wall_color, floor_type, lighting_style, furniture_style, ambiance
+                   FROM home_customizations WHERE home_id = ?''',
+                (home_id,),
+                fetch='one'
+            )
+            
+            if customizations:
+                wall_color, floor_type, lighting, furniture, ambiance = customizations
+                custom_msg = f"\n🎨 *Current theme: {ambiance} atmosphere with {wall_color.lower()} walls*"
+            else:
+                custom_msg = ""
+            
             await interaction.followup.send(
-                f"You've entered your home. Head to {home_channel.mention}",
+                f"You've entered your home. Head to {home_channel.mention}{custom_msg}",
                 ephemeral=True
             )
-        else:
-            await interaction.followup.send("Failed to create home interior!", ephemeral=True)
         
     
     @home_group.command(name="accept", description="Accept a home invitation")
@@ -1608,6 +1620,113 @@ class HomesCog(commands.Cog):
     # Customization Commands
     customize_group = app_commands.Group(name="home_customize", description="Home customization options")
     
+    @customize_group.command(name="floor", description="Change your home's flooring")
+    @app_commands.describe(floor="Choose a floor type")
+    @app_commands.choices(floor=[
+        app_commands.Choice(name="Standard Tile", value="Standard Tile"),
+        app_commands.Choice(name="Hardwood", value="Hardwood"),
+        app_commands.Choice(name="Plush Carpet", value="Carpet"),
+        app_commands.Choice(name="Marble", value="Marble"),
+        app_commands.Choice(name="Stone", value="Stone"),
+        app_commands.Choice(name="Metal", value="Metal")
+    ])
+    async def customize_floor(self, interaction: discord.Interaction, floor: str):
+        home_id = await self._check_home_ownership(interaction)
+        if not home_id:
+            return
+        
+        self.db.execute_query(
+            "UPDATE home_customizations SET floor_type = ? WHERE home_id = ?",
+            (floor, home_id)
+        )
+        
+        await self._update_home_channel_topic(home_id, interaction)
+        
+        await interaction.response.send_message(
+            f"✅ Floor type changed to **{floor}**!",
+            ephemeral=True
+        )
+
+    @customize_group.command(name="lighting", description="Adjust your home's lighting")
+    @app_commands.describe(lighting="Choose a lighting style")
+    @app_commands.choices(lighting=[
+        app_commands.Choice(name="Standard", value="Standard"),
+        app_commands.Choice(name="Dim Mood Lighting", value="Dim"),
+        app_commands.Choice(name="Bright", value="Bright"),
+        app_commands.Choice(name="Neon Accents", value="Neon"),
+        app_commands.Choice(name="Candlelit", value="Candlelit"),
+        app_commands.Choice(name="Natural Sunlight", value="Natural")
+    ])
+    async def customize_lighting(self, interaction: discord.Interaction, lighting: str):
+        home_id = await self._check_home_ownership(interaction)
+        if not home_id:
+            return
+        
+        self.db.execute_query(
+            "UPDATE home_customizations SET lighting_style = ? WHERE home_id = ?",
+            (lighting, home_id)
+        )
+        
+        await self._update_home_channel_topic(home_id, interaction)
+        
+        await interaction.response.send_message(
+            f"✅ Lighting changed to **{lighting}**!",
+            ephemeral=True
+        )
+
+    @customize_group.command(name="furniture", description="Change your home's furniture style")
+    @app_commands.describe(furniture="Choose a furniture style")
+    @app_commands.choices(furniture=[
+        app_commands.Choice(name="Basic", value="Basic"),
+        app_commands.Choice(name="Modern", value="Modern"),
+        app_commands.Choice(name="Luxury", value="Luxury"),
+        app_commands.Choice(name="Industrial", value="Industrial"),
+        app_commands.Choice(name="Earth Federation", value="Federation"),
+        app_commands.Choice(name="Outlaw", value="Outlaw")
+    ])
+    async def customize_furniture(self, interaction: discord.Interaction, furniture: str):
+        home_id = await self._check_home_ownership(interaction)
+        if not home_id:
+            return
+        
+        self.db.execute_query(
+            "UPDATE home_customizations SET furniture_style = ? WHERE home_id = ?",
+            (furniture, home_id)
+        )
+        
+        await self._update_home_channel_topic(home_id, interaction)
+        
+        await interaction.response.send_message(
+            f"✅ Furniture style changed to **{furniture}**!",
+            ephemeral=True
+        )
+
+    @customize_group.command(name="ambiance", description="Set your home's overall ambiance")
+    @app_commands.describe(ambiance="Choose an ambiance")
+    @app_commands.choices(ambiance=[
+        app_commands.Choice(name="Cozy", value="Cozy"),
+        app_commands.Choice(name="Relaxing", value="Relaxing"),
+        app_commands.Choice(name="Clean", value="Clean"),
+        app_commands.Choice(name="Chaotic", value="Chaotic"),
+        app_commands.Choice(name="Calm", value="Calm"),
+        app_commands.Choice(name="Professional", value="Professional")
+    ])
+    async def customize_ambiance(self, interaction: discord.Interaction, ambiance: str):
+        home_id = await self._check_home_ownership(interaction)
+        if not home_id:
+            return
+        
+        self.db.execute_query(
+            "UPDATE home_customizations SET ambiance = ? WHERE home_id = ?",
+            (ambiance, home_id)
+        )
+        
+        await self._update_home_channel_topic(home_id, interaction)
+        
+        await interaction.response.send_message(
+            f"✅ Ambiance changed to **{ambiance}**!",
+            ephemeral=True
+        )
     @customize_group.command(name="theme", description="Customize your home's appearance")
     async def customize_theme(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -1660,11 +1779,11 @@ class HomesCog(commands.Cog):
         embed.add_field(
             name="Available Commands",
             value=(
-                "`/home customize walls` - Change wall color\n"
-                "`/home customize floor` - Change flooring\n"
-                "`/home customize lighting` - Adjust lighting\n"
-                "`/home customize furniture` - Change furniture style\n"
-                "`/home customize ambiance` - Set overall ambiance"
+                "`/home_customize walls` - Change wall color\n"
+                "`/home_customize floor` - Change flooring\n"
+                "`/home_customize lighting` - Adjust lighting\n"
+                "`/home_customize furniture` - Change furniture style\n"
+                "`/home_customize ambiance` - Set overall ambiance"
             ),
             inline=False
         )
@@ -1677,10 +1796,10 @@ class HomesCog(commands.Cog):
         app_commands.Choice(name="Classic Beige", value="Beige"),
         app_commands.Choice(name="Modern Gray", value="Gray"),
         app_commands.Choice(name="Warm White", value="White"),
-        app_commands.Choice(name="Navy Blue", value="Navy"),
+        app_commands.Choice(name="Navy Blue", value="Blue"),
         app_commands.Choice(name="Forest Green", value="Green"),
         app_commands.Choice(name="Charcoal Black", value="Black"),
-        app_commands.Choice(name="Crimson Red", value="Crimson"),
+        app_commands.Choice(name="Crimson Red", value="Red"),
         app_commands.Choice(name="Royal Purple", value="Purple")
     ])
     async def customize_walls(self, interaction: discord.Interaction, color: str):
@@ -1693,7 +1812,7 @@ class HomesCog(commands.Cog):
             "UPDATE home_customizations SET wall_color = ? WHERE home_id = ?",
             (color, home_id)
         )
-        
+        await self._update_home_channel_topic(home_id, interaction)
         await interaction.response.send_message(
             f"✅ Wall color changed to **{color}**!",
             ephemeral=True
@@ -1725,7 +1844,168 @@ class HomesCog(commands.Cog):
         
         return home_data[0]
     
+    async def _update_home_channel_topic(self, home_id: int, interaction: discord.Interaction):
+        """Update home channel topic to reflect customizations"""
+        channel_info = self.db.execute_query(
+            "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+            (home_id,),
+            fetch='one'
+        )
+        
+        if not channel_info or not channel_info[0]:
+            return
+        
+        channel = interaction.guild.get_channel(channel_info[0])
+        if not channel:
+            return
+        
+        # Get home and customization info
+        home_info = self.db.execute_query(
+            "SELECT home_name, interior_description FROM location_homes WHERE home_id = ?",
+            (home_id,),
+            fetch='one'
+        )
+        
+        custom = self.db.execute_query(
+            '''SELECT wall_color, floor_type, lighting_style, furniture_style, ambiance
+               FROM home_customizations WHERE home_id = ?''',
+            (home_id,),
+            fetch='one'
+        )
+        
+        if home_info and custom:
+            home_name, base_desc = home_info
+            wall_color, floor_type, lighting, furniture, ambiance = custom
+            
+            topic = f"🏠 {home_name} | 🎨 {ambiance} theme with {wall_color} walls | {lighting} lighting"
+            
+            try:
+                await channel.edit(topic=topic[:1024])  # Discord topic limit
+            except:
+                pass
     
+    
+    @home_group.command(name="preview", description="Preview the interior of your home")
+    async def preview_home(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        # Check if user is in their own home
+        home_data = self.db.execute_query(
+            '''SELECT h.home_id, h.home_name, h.interior_description
+               FROM characters c
+               JOIN location_homes h ON c.current_home_id = h.home_id
+               WHERE c.user_id = ? AND h.owner_id = ?''',
+            (interaction.user.id, interaction.user.id),
+            fetch='one'
+        )
+        
+        if not home_data:
+            await interaction.followup.send("You must be inside your own home to preview it!", ephemeral=True)
+            return
+        
+        home_id, home_name, base_desc = home_data
+        
+        # Get customizations
+        custom = self.db.execute_query(
+            '''SELECT wall_color, floor_type, lighting_style, furniture_style, ambiance
+               FROM home_customizations WHERE home_id = ?''',
+            (home_id,),
+            fetch='one'
+        )
+        
+        if not custom:
+            custom = ('Beige', 'Standard Tile', 'Standard', 'Basic', 'Cozy')
+        
+        wall_color, floor_type, lighting, furniture, ambiance = custom
+        
+        # Create detailed preview embed
+        embed = discord.Embed(
+            title=f"🏠 {home_name} - Interior Preview",
+            color=self._get_embed_color(wall_color)
+        )
+        
+        # Generate room descriptions based on customizations
+        living_room = self._generate_room_description('living room', wall_color, floor_type, lighting, furniture, ambiance)
+        bedroom = self._generate_room_description('bedroom', wall_color, floor_type, lighting, furniture, ambiance)
+        
+        embed.add_field(
+            name="🛋️ Living Area",
+            value=living_room,
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🛏️ Bedroom",
+            value=bedroom,
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🎨 Current Theme Details",
+            value=(
+                f"**Wall Color:** {wall_color} {self._get_wall_emoji(wall_color)}\n"
+                f"**Flooring:** {floor_type} {self._get_floor_emoji(floor_type)}\n"
+                f"**Lighting:** {lighting} {self._get_lighting_emoji(lighting)}\n"
+                f"**Furniture:** {furniture} {self._get_furniture_emoji(furniture)}\n"
+                f"**Ambiance:** {ambiance} {self._get_ambiance_emoji(ambiance)}"
+            ),
+            inline=False
+        )
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    def _generate_room_description(self, room_type, wall_color, floor_type, lighting, furniture, ambiance):
+        """Generate room-specific descriptions based on customizations"""
+        if room_type == 'living room':
+            if furniture == 'Modern' and ambiance == 'Chaotic':
+                return f"The {wall_color.lower()} walls frame sleek modern furniture. {lighting} lighting energizes the {floor_type.lower()} space."
+            elif furniture == 'Luxury' and ambiance == 'Clean':
+                return f"Luxurious furnishings rest on {floor_type.lower()}, while {lighting.lower()} lighting highlights the elegant {wall_color.lower()} walls."
+            else:
+                return f"A {ambiance.lower()} living space with {furniture.lower()} furniture and {wall_color.lower()} walls."
+        
+        elif room_type == 'bedroom':
+            if ambiance == 'Relaxing':
+                return f"A peaceful retreat with {lighting.lower()} lighting and {furniture.lower()} furnishings against {wall_color.lower()} walls."
+            elif ambiance == 'Calm':
+                return f"An enigmatic chamber where {lighting.lower()} lighting casts shadows on {wall_color.lower()} walls."
+            else:
+                return f"A {ambiance.lower()} bedroom featuring {furniture.lower()} furniture and {floor_type.lower()} floors."
+
+    def _get_wall_emoji(self, wall_color):
+        emojis = {
+            'Beige': '🟫', 'Gray': '⬜', 'White': '⬜', 'Blue': '🟦',
+            'Green': '🟩', 'Black': '⬛', 'Red': '🟥', 'Purple': '🟪'
+        }
+        return emojis.get(wall_color, '🎨')
+
+    def _get_floor_emoji(self, floor_type):
+        emojis = {
+            'Standard Tile': '⬜', 'Hardwood': '🪵', 'Carpet': '🟦',
+            'Marble': '⬜', 'Stone': '🪨', 'Metal': '⚙️'
+        }
+        return emojis.get(floor_type, '🏠')
+
+    def _get_lighting_emoji(self, lighting):
+        emojis = {
+            'Standard': '💡', 'Dim': '🕯️', 'Bright': '☀️',
+            'Neon': '🌈', 'Candlelit': '🕯️', 'Natural': '🌞'
+        }
+        return emojis.get(lighting, '💡')
+
+    def _get_furniture_emoji(self, furniture):
+        emojis = {
+            'Basic': '🪑', 'Modern': '🛋️', 'Luxury': '👑',
+            'Industrial': '⚙️', 'Federation': '🌐', 'Outlaw': '☠️'
+        }
+        return emojis.get(furniture, '🪑')
+
+    def _get_ambiance_emoji(self, ambiance):
+        emojis = {
+            'Cozy': '🏡', 'Relaxing': '😌', 'Clean': '✨',
+            'Chaotic': '⚡', 'Calm': '🌙', 'Professional': '💼'
+        }
+        return emojis.get(ambiance, '🏠')
     @homes_group.command(name="view", description="View your owned homes or another player's homes")
     @app_commands.describe(player="The player whose homes to view (leave empty for your own)")
     async def view_homes(self, interaction: discord.Interaction, player: Optional[discord.Member] = None):
@@ -1769,6 +2049,14 @@ class HomesCog(commands.Cog):
             current_value = int(price * value_mod)
             total_value += current_value
             
+            # Get customizations
+            custom = self.db.execute_query(
+                '''SELECT wall_color, floor_type, lighting_style, furniture_style, ambiance
+                   FROM home_customizations WHERE home_id = ?''',
+                (home_id,),
+                fetch='one'
+            )
+            
             # Check if on market
             on_market = self.db.execute_query(
                 "SELECT asking_price FROM home_market_listings WHERE home_id = ? AND is_active = 1",
@@ -1778,9 +2066,14 @@ class HomesCog(commands.Cog):
             
             market_status = f" 🏷️ Listed for {on_market[0]:,}" if on_market else ""
             
+            # Add customization info
+            theme_info = ""
+            if custom:
+                theme_info = f"\n🎨 {custom[4]} theme"  # Show ambiance
+            
             embed.add_field(
                 name=f"{name}",
-                value=f"📍 {location}\n💰 Value: {current_value:,} credits{market_status}",
+                value=f"📍 {location}\n💰 Value: {current_value:,} credits{market_status}{theme_info}",
                 inline=True
             )
         
