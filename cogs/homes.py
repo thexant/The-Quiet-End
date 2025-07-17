@@ -68,7 +68,8 @@ class ConfirmPurchaseView(discord.ui.View):
         self.buyer_id = buyer_id
         self.bot = bot
         self.db = bot.db
-    
+        self.home_id = home_id
+        
     @discord.ui.button(label="Confirm Purchase", style=discord.ButtonStyle.success, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.buyer_id:
