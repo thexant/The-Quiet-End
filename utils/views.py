@@ -1568,26 +1568,26 @@ class TravelConfirmView(discord.ui.View):
         await interaction.response.send_message("Travel cancelled.", ephemeral=True)
 class PersistentLocationView(discord.ui.View):
     def __init__(self, bot, user_id: int):
-        super().__init__(timeout=None)  # No timeout for persistent view
-        self.bot = bot
-        self.user_id = user_id
-        
-        # Get current location and status
-        char_data = self.bot.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
-            (user_id,),
-            fetch='one'
-        )
-        
-        if char_data:
-            self.current_location_id = char_data[0]
-            location_status = char_data[1]
-        else:
-            self.current_location_id = None
-            location_status = "docked"
-        
-        # Configure buttons based on dock status
-        self._configure_buttons(location_status)
+    super().__init__(timeout=None)  # No timeout for persistent view
+    self.bot = bot
+    self.user_id = user_id
+    
+    # Get current location and status
+    char_data = self.bot.db.execute_query(
+        "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+        (user_id,),
+        fetch='one'
+    )
+    
+    if char_data:
+        self.current_location_id = char_data[0]
+        location_status = char_data[1]
+    else:
+        self.current_location_id = None
+        location_status = "docked"
+    
+    # Configure buttons based on dock status and location services
+    self._configure_buttons(location_status)
     
     def _configure_buttons(self, location_status: str):
         """Configure button states based on dock status"""
@@ -1854,47 +1854,81 @@ class PersistentLocationView(discord.ui.View):
             await self.refresh_view()
 class EphemeralLocationView(discord.ui.View):
     def __init__(self, bot, user_id: int):
-        super().__init__(timeout=300)  # 5 minute timeout for ephemeral views
-        self.bot = bot
-        self.user_id = user_id
-        
-        # Get current location and status
-        char_data = self.bot.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
-            (user_id,),
+    super().__init__(timeout=600)  # 5 minute timeout for ephemeral views
+    self.bot = bot
+    self.user_id = user_id
+    
+    # Get current location and status
+    char_data = self.bot.db.execute_query(
+        "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+        (user_id,),
+        fetch='one'
+    )
+    
+    if char_data:
+        self.current_location_id = char_data[0]
+        location_status = char_data[1]
+    else:
+        self.current_location_id = None
+        location_status = "docked"
+    
+    # Configure buttons based on dock status and location services
+    self._configure_buttons(location_status)
+    
+def _configure_buttons(self, location_status: str):
+    """Configure button states based on dock status and location services"""
+    self.clear_items()
+    
+    # Get current location services to determine which buttons to show
+    char_data = self.bot.db.execute_query(
+        "SELECT current_location FROM characters WHERE user_id = ?",
+        (self.user_id,),
+        fetch='one'
+    )
+    
+    has_federal_supplies = False
+    has_black_market = False
+    
+    if char_data and char_data[0]:
+        location_services = self.bot.db.execute_query(
+            "SELECT has_federal_supplies, has_black_market FROM locations WHERE location_id = ?",
+            (char_data[0],),
             fetch='one'
         )
-        
-        if char_data:
-            self.current_location_id = char_data[0]
-            location_status = char_data[1]
-        else:
-            self.current_location_id = None
-            location_status = "docked"
-        
-        # Configure buttons based on dock status
-        self._configure_buttons(location_status)
+        if location_services:
+            has_federal_supplies, has_black_market = location_services
     
-    def _configure_buttons(self, location_status: str):
-        """Configure button states based on dock status"""
-        self.clear_items()
+    # Status-dependent buttons
+    if location_status == "docked":
+        # Standard location buttons
+        self.add_item(self.jobs_panel)
+        self.add_item(self.shop_management)
+        self.add_item(self.services)
         
-        # Status-dependent buttons
-        if location_status == "docked":
-            self.add_item(self.jobs_panel)
-            self.add_item(self.shop_management)
-            self.add_item(self.services) 
-            self.add_item(self.sub_areas)
-            self.add_item(self.npc_interactions)
-            self.add_item(self.undock_button)
-            self.add_item(self.route_button)
-            self.add_item(self.location_info_button)
-        else:  # in_space
-            self.add_item(self.travel_button)
-            self.add_item(self.dock_button)
-            self.add_item(self.route_button)
-            self.add_item(self.plot_route_button)
-            self.add_item(self.location_info_button)
+        # Add Federal Depot button if location has federal supplies
+        if has_federal_supplies:
+            self.add_item(self.federal_depot)
+        
+        # Add Black Market button if location has black market
+        if has_black_market:
+            self.add_item(self.black_market)
+        
+        # Continue with other docked buttons
+        self.add_item(self.sub_areas)
+        self.add_item(self.npc_interactions)
+        self.add_item(self.undock_button)
+        self.add_item(self.route_button)
+        
+        # Add location info button if it exists in your implementation
+        self.add_item(self.location_info_button)
+            
+    else:  # in_space
+        self.add_item(self.travel_button)
+        self.add_item(self.dock_button)
+        self.add_item(self.route_button)
+        self.add_item(self.plot_route_button)
+        self.add_item(self.location_info_button)
+    
     
     async def refresh_view(self, interaction: discord.Interaction):
         """Refresh the view when dock status changes"""
@@ -2088,6 +2122,75 @@ class EphemeralLocationView(discord.ui.View):
         
         view = ServicesView(self.bot, interaction.user.id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Federal Depot", style=discord.ButtonStyle.primary, emoji="🏛️")
+    async def federal_depot(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This is not your panel!", ephemeral=True)
+
+        # Check if location has federal supplies
+        char_location = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_location:
+            return await interaction.response.send_message("Character not found!", ephemeral=True)
+        
+        location_info = self.bot.db.execute_query(
+            "SELECT has_federal_supplies FROM locations WHERE location_id = ?",
+            (char_location[0],),
+            fetch='one'
+        )
+        
+        if not location_info or not location_info[0]:
+            return await interaction.response.send_message("No Federal Depot available at this location.", ephemeral=True)
+
+        # Call the interactive federal depot command from EconomyCog
+        econ_cog = self.bot.get_cog('EconomyCog')
+        if not econ_cog:
+            return await interaction.response.send_message(
+                "❌ Federal depot system is unavailable right now.", ephemeral=True
+            )
+
+        # Forward the interaction to the federal_depot_interface handler
+        await econ_cog.federal_depot_interface.callback(econ_cog, interaction)
+
+    @discord.ui.button(label="Black Market", style=discord.ButtonStyle.danger, emoji="💀")
+    async def black_market(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This is not your panel!", ephemeral=True)
+
+        # Check if location has black market
+        char_location = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_location:
+            return await interaction.response.send_message("Character not found!", ephemeral=True)
+        
+        location_info = self.bot.db.execute_query(
+            "SELECT has_black_market FROM locations WHERE location_id = ?",
+            (char_location[0],),
+            fetch='one'
+        )
+        
+        if not location_info or not location_info[0]:
+            return await interaction.response.send_message("No black market available at this location.", ephemeral=True)
+
+        # Call the interactive black market command from EconomyCog
+        econ_cog = self.bot.get_cog('EconomyCog')
+        if not econ_cog:
+            return await interaction.response.send_message(
+                "❌ Black market system is unavailable right now.", ephemeral=True
+            )
+
+        # Forward the interaction to the black_market_interface handler
+        await econ_cog.black_market_interface.callback(econ_cog, interaction)
+    
     @discord.ui.button(label="Plot Route", style=discord.ButtonStyle.success, emoji="📐", row=1)
     async def plot_route_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Opens a modal to plot a travel route."""

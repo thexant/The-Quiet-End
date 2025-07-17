@@ -389,7 +389,176 @@ class EconomyCog(commands.Cog):
         )
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
+    # Add this to your cogs/economy.py file, in the EconomyCog class
+
+    @economy_group.command(name="federal_depot", description="Access Federal Supply Depot interactive interface")
+    async def federal_depot_interface(self, interaction: discord.Interaction):
+        char_info = self.db.execute_query(
+            "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info or not char_info[1]:
+            await interaction.response.send_message("You must be logged in first!", ephemeral=True)
+            return
+        
+        current_location_id = char_info[0]
+
+        # Check if the location has federal supplies
+        location_info = self.db.execute_query(
+            "SELECT has_federal_supplies, name FROM locations WHERE location_id = ?",
+            (current_location_id,),
+            fetch='one'
+        )
+
+        if not location_info or not location_info[0]:
+            await interaction.response.send_message("No Federal Supply Depot available at this location.", ephemeral=True)
+            return
+
+        # Get the character's reputation at this location
+        reputation_data = self.db.execute_query(
+            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            (interaction.user.id, current_location_id),
+            fetch='one'
+        )
+        current_reputation = reputation_data[0] if reputation_data else 0
+
+        # Get federal supply items
+        items = self.db.execute_query(
+            '''SELECT item_name, item_type, price, stock, description, required_reputation
+               FROM federal_supply_items 
+               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= required_reputation
+               ORDER BY required_reputation ASC, price ASC''',
+            (current_location_id, current_reputation),
+            fetch='all'
+        )
+
+        # Create interactive view
+        view = InteractiveFederalDepotView(self.bot, interaction.user.id, current_location_id, location_info[1])
+        
+        embed = discord.Embed(
+            title=f"🏛️ Federal Supply Depot - {location_info[1]}",
+            description="Official equipment and supplies for trusted allies.",
+            color=0x0066cc
+        )
+        embed.set_footer(text=f"Your Local Reputation: {current_reputation}")
+
+        if items:
+            # Show summary by category
+            item_types = {}
+            for item_name, item_type, price, stock, description, req_rep in items:
+                if item_type not in item_types:
+                    item_types[item_type] = {'count': 0, 'min_rep': req_rep}
+                item_types[item_type]['count'] += 1
+                item_types[item_type]['min_rep'] = min(item_types[item_type]['min_rep'], req_rep)
+            
+            summary = []
+            for item_type, data in item_types.items():
+                rep_text = f" (Rep {data['min_rep']}+)" if data['min_rep'] > 0 else ""
+                summary.append(f"**{item_type.replace('_', ' ').title()}**: {data['count']} items{rep_text}")
+            
+            embed.add_field(
+                name="📦 Available Categories",
+                value="\n".join(summary),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Access Denied", 
+                value="No items available. Improve your reputation with federal forces.",
+                inline=False
+            )
+        
+        embed.add_field(
+            name="💡 Federal Access",
+            value="• Higher reputation unlocks premium equipment\n• All sales support federal operations\n• Quality guaranteed by federal standards",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @economy_group.command(name="black_market", description="Access Black Market interactive interface")
+    async def black_market_interface(self, interaction: discord.Interaction):
+        char_info = self.db.execute_query(
+            "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info or not char_info[1]:
+            await interaction.response.send_message("You must be logged in first!", ephemeral=True)
+            return
+        
+        current_location_id = char_info[0]
+
+        # Check if the location has black market
+        location_info = self.db.execute_query(
+            "SELECT has_black_market, name FROM locations WHERE location_id = ?",
+            (current_location_id,),
+            fetch='one'
+        )
+
+        if not location_info or not location_info[0]:
+            await interaction.response.send_message("No black market available at this location.", ephemeral=True)
+            return
+
+        # Get black market items
+        items = self.db.execute_query(
+            '''SELECT item_name, item_type, price, stock, description
+               FROM black_market_items 
+               WHERE location_id = ? AND (stock > 0 OR stock = -1)
+               ORDER BY item_type, price''',
+            (current_location_id,),
+            fetch='all'
+        )
+
+        # Create interactive view
+        view = InteractiveBlackMarketView(self.bot, interaction.user.id, current_location_id, location_info[1])
+        
+        embed = discord.Embed(
+            title=f"💀 Black Market - {location_info[1]}",
+            description="Discretion advised. No questions asked, no warranties given.",
+            color=0x8b0000
+        )
+        embed.set_footer(text="⚠️ Trading in contraband carries significant risks")
+
+        if items:
+            # Show summary by category
+            item_types = {}
+            for item_name, item_type, price, stock, description in items:
+                if item_type not in item_types:
+                    item_types[item_type] = {'count': 0, 'price_range': []}
+                item_types[item_type]['count'] += 1
+                item_types[item_type]['price_range'].append(price)
+            
+            summary = []
+            for item_type, data in item_types.items():
+                min_price = min(data['price_range'])
+                max_price = max(data['price_range'])
+                price_text = f"{min_price:,}" if min_price == max_price else f"{min_price:,} - {max_price:,}"
+                summary.append(f"**{item_type.replace('_', ' ').title()}**: {data['count']} items ({price_text} credits)")
+            
+            embed.add_field(
+                name="📦 Available Contraband",
+                value="\n".join(summary),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Currently Closed", 
+                value="Check back later for new arrivals.",
+                inline=False
+            )
+        
+        embed.add_field(
+            name="💀 Black Market Rules",
+            value="• All sales final - no returns\n• Cash only, no credit traces\n• What you do with items is your business",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        
     @shop_group.command(name="buy", description="Purchase an item from the shop")
     @app_commands.describe(
         item_name="Name of the item to buy",
@@ -2841,3 +3010,514 @@ class JobDetailView(discord.ui.View):
             return
         
         await interaction.response.send_message("Job viewing cancelled.", ephemeral=True)
+        
+        
+        
+class InteractiveFederalDepotView(discord.ui.View):
+    def __init__(self, bot, user_id: int, location_id: int, location_name: str):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.location_name = location_name
+    
+    @discord.ui.button(label="Browse Equipment", style=discord.ButtonStyle.primary, emoji="🛒")
+    async def browse_items(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your federal depot interface!", ephemeral=True)
+            return
+        
+        # Get character reputation
+        reputation_data = self.bot.db.execute_query(
+            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            (self.user_id, self.location_id),
+            fetch='one'
+        )
+        current_reputation = reputation_data[0] if reputation_data else 0
+        
+        # Get available items
+        items = self.bot.db.execute_query(
+            '''SELECT item_name, item_type, price, stock, description, required_reputation
+               FROM federal_supply_items 
+               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= required_reputation
+               ORDER BY required_reputation ASC, price ASC''',
+            (self.location_id, current_reputation),
+            fetch='all'
+        )
+        
+        if not items:
+            await interaction.response.send_message("No federal equipment available with your current reputation level.", ephemeral=True)
+            return
+        
+        view = FederalDepotBuySelectView(self.bot, self.user_id, self.location_id, items)
+        
+        embed = discord.Embed(
+            title=f"🏛️ Federal Equipment Catalog - {self.location_name}",
+            description="Select federal equipment to purchase:",
+            color=0x0066cc
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class InteractiveBlackMarketView(discord.ui.View):
+    def __init__(self, bot, user_id: int, location_id: int, location_name: str):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.location_name = location_name
+    
+    @discord.ui.button(label="Browse Contraband", style=discord.ButtonStyle.danger, emoji="💀")
+    async def browse_items(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your black market interface!", ephemeral=True)
+            return
+        
+        # Get available items
+        items = self.bot.db.execute_query(
+            '''SELECT item_name, item_type, price, stock, description
+               FROM black_market_items 
+               WHERE location_id = ? AND (stock > 0 OR stock = -1)
+               ORDER BY item_type, price''',
+            (self.location_id,),
+            fetch='all'
+        )
+        
+        if not items:
+            await interaction.response.send_message("No contraband available at this time.", ephemeral=True)
+            return
+        
+        view = BlackMarketBuySelectView(self.bot, self.user_id, self.location_id, items)
+        
+        embed = discord.Embed(
+            title=f"💀 Contraband Catalog - {self.location_name}",
+            description="Select contraband to purchase (discretion advised):",
+            color=0x8b0000
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class FederalDepotBuySelectView(discord.ui.View):
+    def __init__(self, bot, user_id: int, location_id: int, items: list):
+        super().__init__(timeout=180)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        
+        if items:
+            options = []
+            for item_name, item_type, price, stock, description, req_rep in items[:25]:
+                stock_text = f"({stock} in stock)" if stock != -1 else "(Unlimited)"
+                rep_text = f" [Rep {req_rep}+]" if req_rep > 0 else ""
+                
+                options.append(
+                    discord.SelectOption(
+                        label=f"{item_name} - {price:,} credits",
+                        description=f"{description[:70]}{'...' if len(description) > 70 else ''} {stock_text}{rep_text}"[:100],
+                        value=item_name,
+                        emoji="🏛️"
+                    )
+                )
+            
+            if options:
+                select = discord.ui.Select(placeholder="Choose federal equipment to purchase...", options=options)
+                select.callback = self.item_selected
+                self.add_item(select)
+    
+    async def item_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your federal depot interface!", ephemeral=True)
+            return
+        
+        item_name = interaction.data['values'][0]
+        
+        # Get item details
+        item_info = self.bot.db.execute_query(
+            '''SELECT item_name, price, stock, description, item_type, required_reputation
+               FROM federal_supply_items 
+               WHERE location_id = ? AND item_name = ?''',
+            (self.location_id, item_name),
+            fetch='one'
+        )
+        
+        if not item_info:
+            await interaction.response.send_message("Item not found.", ephemeral=True)
+            return
+        
+        view = FederalDepotQuantityView(self.bot, self.user_id, self.location_id, item_info)
+        
+        embed = discord.Embed(
+            title=f"🏛️ Purchase: {item_name}",
+            description=f"**Federal Equipment**\n{item_info[3]}",
+            color=0x0066cc
+        )
+        
+        embed.add_field(name="Price per Item", value=f"{item_info[1]:,} credits", inline=True)
+        stock_text = f"{item_info[2]} available" if item_info[2] != -1 else "Unlimited stock"
+        embed.add_field(name="Stock", value=stock_text, inline=True)
+        if item_info[5] > 0:
+            embed.add_field(name="Required Reputation", value=f"{item_info[5]}+", inline=True)
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class BlackMarketBuySelectView(discord.ui.View):
+    def __init__(self, bot, user_id: int, location_id: int, items: list):
+        super().__init__(timeout=180)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        
+        if items:
+            options = []
+            for item_name, item_type, price, stock, description in items[:25]:
+                stock_text = f"({stock} available)" if stock != -1 else "(Unlimited)"
+                
+                options.append(
+                    discord.SelectOption(
+                        label=f"{item_name} - {price:,} credits",
+                        description=f"{description[:80]}{'...' if len(description) > 80 else ''} {stock_text}"[:100],
+                        value=item_name,
+                        emoji="💀"
+                    )
+                )
+            
+            if options:
+                select = discord.ui.Select(placeholder="Choose contraband to purchase...", options=options)
+                select.callback = self.item_selected
+                self.add_item(select)
+    
+    async def item_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your black market interface!", ephemeral=True)
+            return
+        
+        item_name = interaction.data['values'][0]
+        
+        # Get item details
+        item_info = self.bot.db.execute_query(
+            '''SELECT item_name, price, stock, description, item_type
+               FROM black_market_items 
+               WHERE location_id = ? AND item_name = ?''',
+            (self.location_id, item_name),
+            fetch='one'
+        )
+        
+        if not item_info:
+            await interaction.response.send_message("Item not found.", ephemeral=True)
+            return
+        
+        view = BlackMarketQuantityView(self.bot, self.user_id, self.location_id, item_info)
+        
+        embed = discord.Embed(
+            title=f"💀 Purchase: {item_name}",
+            description=f"**Contraband Item**\n{item_info[3]}",
+            color=0x8b0000
+        )
+        
+        embed.add_field(name="Price per Item", value=f"{item_info[1]:,} credits", inline=True)
+        stock_text = f"{item_info[2]} available" if item_info[2] != -1 else "Unlimited stock"
+        embed.add_field(name="Stock", value=stock_text, inline=True)
+        embed.add_field(name="⚠️ Risk", value="High", inline=True)
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class FederalDepotQuantityView(discord.ui.View):
+    def __init__(self, bot, user_id: int, location_id: int, item_info: tuple):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.item_name, self.price, self.stock, self.description, self.item_type, self.required_reputation = item_info
+        self.quantity = 1
+        self.max_quantity = self.stock if self.stock != -1 else 10
+        
+        self.update_buttons()
+    
+    def update_buttons(self):
+        self.clear_items()
+        
+        # Quantity controls
+        decrease_btn = discord.ui.Button(label="-", style=discord.ButtonStyle.secondary, disabled=(self.quantity <= 1))
+        decrease_btn.callback = self.decrease_quantity
+        self.add_item(decrease_btn)
+        
+        quantity_btn = discord.ui.Button(label=f"Qty: {self.quantity}", style=discord.ButtonStyle.primary, disabled=True)
+        self.add_item(quantity_btn)
+        
+        increase_btn = discord.ui.Button(label="+", style=discord.ButtonStyle.secondary, disabled=(self.quantity >= self.max_quantity))
+        increase_btn.callback = self.increase_quantity
+        self.add_item(increase_btn)
+        
+        # Purchase button
+        total_cost = self.price * self.quantity
+        buy_btn = discord.ui.Button(label=f"Purchase for {total_cost:,} credits", style=discord.ButtonStyle.success, emoji="🏛️")
+        buy_btn.callback = self.confirm_purchase
+        self.add_item(buy_btn)
+        
+        # Cancel button
+        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
+        cancel_btn.callback = self.cancel_purchase
+        self.add_item(cancel_btn)
+    
+    async def decrease_quantity(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interface!", ephemeral=True)
+            return
+        
+        self.quantity = max(1, self.quantity - 1)
+        self.update_buttons()
+        await interaction.response.edit_message(view=self)
+    
+    async def increase_quantity(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interface!", ephemeral=True)
+            return
+        
+        self.quantity = min(self.max_quantity, self.quantity + 1)
+        self.update_buttons()
+        await interaction.response.edit_message(view=self)
+    
+    async def confirm_purchase(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interface!", ephemeral=True)
+            return
+        
+        await self._execute_federal_purchase(interaction)
+    
+    async def cancel_purchase(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interface!", ephemeral=True)
+            return
+        
+        await interaction.response.send_message("Federal purchase cancelled.", ephemeral=True)
+    
+    async def _execute_federal_purchase(self, interaction: discord.Interaction):
+        """Execute federal depot purchase"""
+        await interaction.response.defer(ephemeral=True)
+        
+        # Check character funds and reputation
+        char_info = self.bot.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.followup.send("Character not found!", ephemeral=True)
+            return
+        
+        current_money = char_info[0]
+        total_cost = self.price * self.quantity
+        
+        if current_money < total_cost:
+            await interaction.followup.send(
+                f"Insufficient credits! Need {total_cost:,}, have {current_money:,}.",
+                ephemeral=True
+            )
+            return
+        
+        # Check reputation
+        reputation_data = self.bot.db.execute_query(
+            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            (interaction.user.id, self.location_id),
+            fetch='one'
+        )
+        current_reputation = reputation_data[0] if reputation_data else 0
+        
+        if current_reputation < self.required_reputation:
+            await interaction.followup.send(
+                f"Insufficient reputation! Need {self.required_reputation}, have {current_reputation}.",
+                ephemeral=True
+            )
+            return
+        
+        # Execute purchase
+        from item_config import ItemConfig
+        
+        # Deduct money
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (total_cost, interaction.user.id)
+        )
+        
+        # Add item to inventory
+        existing_item = self.bot.db.execute_query(
+            "SELECT quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+            (interaction.user.id, self.item_name),
+            fetch='one'
+        )
+        
+        item_data = ItemConfig.get_item_definition(self.item_name)
+        item_value = item_data.get("base_value", self.price) if item_data else self.price
+        
+        if existing_item:
+            self.bot.db.execute_query(
+                "UPDATE inventory SET quantity = quantity + ? WHERE owner_id = ? AND item_name = ?",
+                (self.quantity, interaction.user.id, self.item_name)
+            )
+        else:
+            self.bot.db.execute_query(
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, value, description)
+                   VALUES (?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, self.item_name, self.item_type, self.quantity, item_value, self.description)
+            )
+        
+        # Update stock if not unlimited
+        if self.stock != -1:
+            self.bot.db.execute_query(
+                "UPDATE federal_supply_items SET stock = stock - ? WHERE location_id = ? AND item_name = ?",
+                (self.quantity, self.location_id, self.item_name)
+            )
+        
+        embed = discord.Embed(
+            title="🏛️ Federal Purchase Complete",
+            description=f"Successfully purchased {self.quantity}x **{self.item_name}** for {total_cost:,} credits",
+            color=0x00ff00
+        )
+        embed.add_field(name="New Balance", value=f"{current_money - total_cost:,} credits", inline=True)
+        embed.add_field(name="Federal Status", value="Purchase logged in federal records", inline=True)
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+class BlackMarketQuantityView(discord.ui.View):
+    def __init__(self, bot, user_id: int, location_id: int, item_info: tuple):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.item_name, self.price, self.stock, self.description, self.item_type = item_info
+        self.quantity = 1
+        self.max_quantity = self.stock if self.stock != -1 else 10
+        
+        self.update_buttons()
+    
+    def update_buttons(self):
+        self.clear_items()
+        
+        # Quantity controls
+        decrease_btn = discord.ui.Button(label="-", style=discord.ButtonStyle.secondary, disabled=(self.quantity <= 1))
+        decrease_btn.callback = self.decrease_quantity
+        self.add_item(decrease_btn)
+        
+        quantity_btn = discord.ui.Button(label=f"Qty: {self.quantity}", style=discord.ButtonStyle.primary, disabled=True)
+        self.add_item(quantity_btn)
+        
+        increase_btn = discord.ui.Button(label="+", style=discord.ButtonStyle.secondary, disabled=(self.quantity >= self.max_quantity))
+        increase_btn.callback = self.increase_quantity
+        self.add_item(increase_btn)
+        
+        # Purchase button
+        total_cost = self.price * self.quantity
+        buy_btn = discord.ui.Button(label=f"Buy for {total_cost:,} credits", style=discord.ButtonStyle.danger, emoji="💀")
+        buy_btn.callback = self.confirm_purchase
+        self.add_item(buy_btn)
+        
+        # Cancel button
+        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+        cancel_btn.callback = self.cancel_purchase
+        self.add_item(cancel_btn)
+    
+    async def decrease_quantity(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interface!", ephemeral=True)
+            return
+        
+        self.quantity = max(1, self.quantity - 1)
+        self.update_buttons()
+        await interaction.response.edit_message(view=self)
+    
+    async def increase_quantity(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interface!", ephemeral=True)
+            return
+        
+        self.quantity = min(self.max_quantity, self.quantity + 1)
+        self.update_buttons()
+        await interaction.response.edit_message(view=self)
+    
+    async def confirm_purchase(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interface!", ephemeral=True)
+            return
+        
+        await self._execute_black_market_purchase(interaction)
+    
+    async def cancel_purchase(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interface!", ephemeral=True)
+            return
+        
+        await interaction.response.send_message("Black market deal cancelled.", ephemeral=True)
+    
+    async def _execute_black_market_purchase(self, interaction: discord.Interaction):
+        """Execute black market purchase"""
+        await interaction.response.defer(ephemeral=True)
+        
+        # Check character funds
+        char_info = self.bot.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.followup.send("Character not found!", ephemeral=True)
+            return
+        
+        current_money = char_info[0]
+        total_cost = self.price * self.quantity
+        
+        if current_money < total_cost:
+            await interaction.followup.send(
+                f"Insufficient credits! Need {total_cost:,}, have {current_money:,}.",
+                ephemeral=True
+            )
+            return
+        
+        # Execute purchase
+        from item_config import ItemConfig
+        
+        # Deduct money
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (total_cost, interaction.user.id)
+        )
+        
+        # Add item to inventory
+        existing_item = self.bot.db.execute_query(
+            "SELECT quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+            (interaction.user.id, self.item_name),
+            fetch='one'
+        )
+        
+        item_data = ItemConfig.get_item_definition(self.item_name)
+        item_value = item_data.get("base_value", self.price) if item_data else self.price
+        
+        if existing_item:
+            self.bot.db.execute_query(
+                "UPDATE inventory SET quantity = quantity + ? WHERE owner_id = ? AND item_name = ?",
+                (self.quantity, interaction.user.id, self.item_name)
+            )
+        else:
+            self.bot.db.execute_query(
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, value, description)
+                   VALUES (?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, self.item_name, self.item_type, self.quantity, item_value, self.description)
+            )
+        
+        # Update stock if not unlimited
+        if self.stock != -1:
+            self.bot.db.execute_query(
+                "UPDATE black_market_items SET stock = stock - ? WHERE location_id = ? AND item_name = ?",
+                (self.quantity, self.location_id, self.item_name)
+            )
+        
+        embed = discord.Embed(
+            title="💀 Black Market Deal Complete",
+            description=f"Successfully acquired {self.quantity}x **{self.item_name}** for {total_cost:,} credits",
+            color=0x8b0000
+        )
+        embed.add_field(name="New Balance", value=f"{current_money - total_cost:,} credits", inline=True)
+        embed.add_field(name="⚠️ Warning", value="Transaction untraceable", inline=True)
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
