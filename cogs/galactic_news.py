@@ -150,7 +150,7 @@ class GalacticNewsCog(commands.Cog):
         else:
             embed.add_field(
                 name="📡 Information Relay",
-                value="Real-time from Central Hub",
+                value="Real-time from Central News Hub",
                 inline=True
             )
         
@@ -163,10 +163,10 @@ class GalacticNewsCog(commands.Cog):
         """Format news delay in an immersive way"""
         if delay_hours < 1:
             minutes = int(delay_hours * 60)
-            return f"Transmitted {minutes} minute{'s' if minutes != 1 else ''} ago"
+            return f"Signal Age: {minutes} minute{'s' if minutes != 1 else ''} ago"
         elif delay_hours < 24:
             hours = int(delay_hours)
-            return f"Transmitted {hours} hour{'s' if hours != 1 else ''} ago"
+            return f"Signal Age: {hours} hour{'s' if hours != 1 else ''} ago via deep-space relay"
         else:
             days = int(delay_hours / 24)
             return f"Transmitted {days} day{'s' if days != 1 else ''} ago via deep-space relay"
