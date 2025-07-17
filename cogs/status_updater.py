@@ -93,7 +93,7 @@ class StatusUpdaterCog(commands.Cog):
                         raise e
                 
                 # Use the shortened name format
-                new_channel_name = f"🌐{date_str}|⌚{approx_time}"
+                new_channel_name = f"🌐{date_str}|⌚{approx_time}|🟢{active_players}"
                 
                 updated_count = 0
                 for guild_id, channel_id in servers_with_status:
