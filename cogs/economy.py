@@ -1102,7 +1102,11 @@ class EconomyCog(commands.Cog):
             success = roll <= success_chance
 
             # Optional: Add debug logging to help you monitor the changes
-            print(f"Job success check - Base: {base_success}%, Skill bonus: {skill_bonus}%, Final: {success_chance}%, Roll: {roll}, Success: {success}")
+            # With this clearer version:
+            if success:
+                print(f"Job success check - Target: ≤{success_chance}, Rolled: {roll} ✓ SUCCESS (Base: {base_success}% + Skill: {skill_bonus}%)")
+            else:
+                print(f"Job success check - Target: ≤{success_chance}, Rolled: {roll} ✗ FAILED by {roll - success_chance} (Base: {base_success}% + Skill: {skill_bonus}%)")
 
             # Check if this is a group job
             group_id = self.db.execute_query(
@@ -1290,18 +1294,19 @@ class EconomyCog(commands.Cog):
         
         # Send publicly in the current channel
         await interaction.response.send_message(embed=embed, ephemeral=False) # MODIFIED THIS LINE
-    async def _start_transport_unloading(self, interaction: discord.Interaction, job_id: int, title: str, reward: int):
-        """Start the unloading phase for transport jobs (1-3 minutes)"""
-        import random
         
-        # Mark job as awaiting finalization
+    async def _start_transport_unloading(self, interaction: discord.Interaction, job_id: int, title: str, reward: int):
+        """Start the unloading phase for transport jobs (2 minutes fixed)"""
+        
+        # Mark job as awaiting finalization with timestamp
+        current_time = datetime.now()
         self.db.execute_query(
-            "UPDATE jobs SET job_status = 'awaiting_finalization' WHERE job_id = ?",
-            (job_id,)
+            "UPDATE jobs SET job_status = 'awaiting_finalization', unloading_started_at = ? WHERE job_id = ?",
+            (current_time.strftime("%Y-%m-%d %H:%M:%S"), job_id)
         )
         
-        # Random unloading time (1-3 minutes)
-        unloading_minutes = random.randint(1, 3)
+        # Fixed 2-minute unloading time
+        unloading_seconds = 120
         
         embed = discord.Embed(
             title="🚛 Transport Job - Cargo Unloading",
@@ -1310,21 +1315,158 @@ class EconomyCog(commands.Cog):
         )
         
         embed.add_field(name="✅ Delivery Status", value="Successfully delivered to destination", inline=True)
-        embed.add_field(name="⏱️ Unloading Time", value=f"{unloading_minutes} minutes", inline=True)
+        embed.add_field(name="⏱️ Unloading Time", value="2 minutes", inline=True)
         embed.add_field(name="💰 Pending Reward", value=f"{reward:,} credits", inline=True)
         
+        # Initial progress bar
         embed.add_field(
-            name="📋 Next Steps",
-            value=f"• Cargo unloading in progress\n• Job will **auto-complete** in {unloading_minutes} minutes\n• Or use `/job complete` again to finalize immediately",
+            name="📊 Unloading Progress",
+            value="⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0%",
             inline=False
         )
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed.add_field(
+            name="📋 Options",
+            value="• Wait for automatic completion in 2 minutes\n• Check progress with `/job status`\n• Use `/job complete` to skip waiting (costs 10% of reward)",
+            inline=False
+        )
+        
+        # Send initial message and store it for updates
+        message = await interaction.response.send_message(embed=embed, ephemeral=False)
         
         # Schedule automatic completion
         import asyncio
-        asyncio.create_task(self._auto_complete_transport_job(interaction.user.id, job_id, title, reward, unloading_minutes))
-
+        asyncio.create_task(self._auto_complete_transport_job_with_updates(
+            interaction.user.id, job_id, title, reward, interaction.channel_id
+        ))
+        
+    async def _auto_complete_transport_job_with_updates(self, user_id: int, job_id: int, title: str, reward: int, channel_id: int):
+        """Auto-complete transport job after 2 minutes with progress updates"""
+        await asyncio.sleep(10)  # Wait 10 seconds before first update
+        
+        # Progress update loop (every 30 seconds)
+        for i in range(3):  # Updates at 10s, 40s, 70s
+            # Check if job still exists and is awaiting finalization
+            job_check = self.db.execute_query(
+                "SELECT job_status, unloading_started_at FROM jobs WHERE job_id = ? AND taken_by = ?",
+                (job_id, user_id),
+                fetch='one'
+            )
+            
+            if not job_check or job_check[0] != 'awaiting_finalization':
+                return  # Job was completed manually or deleted
+            
+            # Calculate progress
+            unloading_start = datetime.fromisoformat(job_check[1])
+            elapsed = (datetime.now() - unloading_start).total_seconds()
+            progress_pct = min(100, (elapsed / 120) * 100)
+            
+            # Send progress update in channel
+            channel = self.bot.get_channel(channel_id)
+            if channel:
+                bars = int(progress_pct // 10)
+                progress_bar = "🟩" * bars + "⬜" * (10 - bars)
+                
+                user = self.bot.get_user(user_id)
+                await channel.send(
+                    f"{user.mention} - Unloading progress: {progress_bar} {progress_pct:.0f}%",
+                    delete_after=30  # Delete after 30 seconds to reduce spam
+                )
+            
+            if i < 2:  # Don't sleep after last update
+                await asyncio.sleep(30)
+        
+        # Wait for remaining time (total 2 minutes)
+        await asyncio.sleep(50)  # 120 - 70 = 50 seconds
+        
+        # Final completion (same as before)
+        job_check = self.db.execute_query(
+            "SELECT job_status FROM jobs WHERE job_id = ? AND taken_by = ?",
+            (job_id, user_id),
+            fetch='one'
+        )
+        
+        if job_check and job_check[0] == 'awaiting_finalization':
+            # Complete the job
+            self.db.execute_query(
+                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                (reward, user_id)
+            )
+            
+            exp_gain = random.randint(20, 40)
+            self.db.execute_query(
+                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                (exp_gain, user_id)
+            )
+            
+            # Clean up job
+            self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+            self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, user_id))
+            
+            # Send completion notification
+            user = self.bot.get_user(user_id)
+            if user and channel:
+                embed = discord.Embed(
+                    title="✅ Transport Job Auto-Completed",
+                    description=f"**{title}** has been automatically finalized!",
+                    color=0x00ff00
+                )
+                embed.add_field(name="💰 Reward Received", value=f"{reward:,} credits", inline=True)
+                embed.add_field(name="⭐ Experience Gained", value=f"+{exp_gain} EXP", inline=True)
+                embed.add_field(name="📦 Status", value="Cargo unloading completed", inline=True)
+                
+                await channel.send(f"{user.mention}", embed=embed)
+                
+    async def _finalize_transport_job(self, interaction: discord.Interaction, job_id: int, title: str, reward: int):
+        """Finalize a transport job that's in the unloading phase"""
+        
+        # Check how long they've been unloading
+        unloading_info = self.db.execute_query(
+            "SELECT unloading_started_at FROM jobs WHERE job_id = ?",
+            (job_id,),
+            fetch='one'
+        )
+        
+        penalty = 0
+        if unloading_info and unloading_info[0]:
+            unloading_start = datetime.fromisoformat(unloading_info[0])
+            elapsed = (datetime.now() - unloading_start).total_seconds()
+            
+            if elapsed < 120:  # Less than 2 minutes
+                # Apply 10% penalty for rushing
+                penalty = int(reward * 0.1)
+                reward = reward - penalty
+        
+        # Give reward
+        self.db.execute_query(
+            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            (reward, interaction.user.id)
+        )
+        
+        exp_gain = random.randint(20, 40)
+        self.db.execute_query(
+            "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+            (exp_gain, interaction.user.id)
+        )
+        
+        # Clean up
+        self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, interaction.user.id))
+        
+        embed = discord.Embed(
+            title="✅ Transport Job Completed!",
+            description=f"**{title}** has been finalized!",
+            color=0x00ff00
+        )
+        
+        embed.add_field(name="💰 Reward Received", value=f"{reward:,} credits", inline=True)
+        if penalty > 0:
+            embed.add_field(name="⚡ Rush Penalty", value=f"-{penalty:,} credits", inline=True)
+        embed.add_field(name="⭐ Experience Gained", value=f"+{exp_gain} EXP", inline=True)
+        embed.add_field(name="📦 Finalization", value="Cargo unloading completed", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)            
+                
     async def _complete_job_immediately(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int, job_type: str):
         """Complete a job immediately with full reward, experience, skill, and karma effects."""
         # Give full reward
@@ -1347,7 +1489,17 @@ class EconomyCog(commands.Cog):
             color=0x00ff00
         )
         
-        embed.add_field(name="✅ Success Roll", value=f"{roll}/{success_chance} - Success!", inline=True)
+        # Convert to intuitive display (invert the roll display)
+        # Internal: roll <= success_chance means success
+        # Display: show it as if they needed to roll above a failure threshold
+        failure_threshold = 100 - success_chance
+        displayed_roll = 100 - roll + 1  # Invert the roll for display
+        
+        embed.add_field(
+            name="🎲 Success Roll", 
+            value=f"Rolled **{displayed_roll}** (needed {failure_threshold+1}+)", 
+            inline=True
+        )
         embed.add_field(name="💰 Reward", value=f"{reward:,} credits", inline=True)
         embed.add_field(name="⭐ Experience", value=f"+{exp_gain} EXP", inline=True)
         embed.add_field(name="📋 Job Type", value=job_type.title(), inline=True)
@@ -1388,6 +1540,7 @@ class EconomyCog(commands.Cog):
         
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+
     async def _complete_job_failed(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int):
         """Complete a failed job with partial reward"""
         partial = reward // 3
@@ -1413,7 +1566,15 @@ class EconomyCog(commands.Cog):
             color=0xff4444
         )
         
-        embed.add_field(name="❌ Failure Roll", value=f"{roll}/{success_chance} - Failed", inline=True)
+        # Convert to intuitive display
+        failure_threshold = 100 - success_chance
+        displayed_roll = 100 - roll + 1  # Invert the roll for display
+        
+        embed.add_field(
+            name="🎲 Failure Roll", 
+            value=f"Rolled **{displayed_roll}** (needed {failure_threshold+1}+ to succeed)", 
+            inline=True
+        )
         embed.add_field(name="💰 Partial Payment", value=f"{partial:,} credits", inline=True)
         embed.add_field(name="⭐ Experience", value=f"+{exp_gain} EXP", inline=True)
         
@@ -1424,6 +1585,7 @@ class EconomyCog(commands.Cog):
         )
         
         await interaction.followup.send(embed=embed, ephemeral=True)
+    
     async def _complete_group_job(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int, success: bool):
         """Complete a job for all group members"""
         # Get the user's group ID first
@@ -1502,14 +1664,22 @@ class EconomyCog(commands.Cog):
         self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
         self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ?", (job_id,))
         
-        # Create completion embed
         if success:
             embed = discord.Embed(
                 title="✅ Group Job Completed Successfully!",
                 description=f"**{title}** has been completed by the group!",
                 color=0x00ff00
             )
-            embed.add_field(name="✅ Success Roll", value=f"{roll}/{success_chance} - Success!", inline=True)
+            
+            # Convert to intuitive display
+            failure_threshold = 100 - success_chance
+            displayed_roll = 100 - roll + 1
+            
+            embed.add_field(
+                name="🎲 Success Roll", 
+                value=f"Rolled **{displayed_roll}** (needed {failure_threshold+1}+)", 
+                inline=True
+            )
             embed.add_field(name="💰 Reward Each", value=f"{reward:,} credits", inline=True)
             embed.add_field(name="👥 Group Members", value=str(len(group_members)), inline=True)
         else:
@@ -1518,9 +1688,20 @@ class EconomyCog(commands.Cog):
                 description=f"**{title}** was not completed successfully",
                 color=0xff4444
             )
-            embed.add_field(name="❌ Failure Roll", value=f"{roll}/{success_chance} - Failed", inline=True)
+            
+            # Convert to intuitive display
+            failure_threshold = 100 - success_chance
+            displayed_roll = 100 - roll + 1
+            
+            embed.add_field(
+                name="🎲 Failure Roll", 
+                value=f"Rolled **{displayed_roll}** (needed {failure_threshold+1}+ to succeed)", 
+                inline=True
+            )
             embed.add_field(name="💰 Partial Payment Each", value=f"{reward // 3:,} credits", inline=True)
             embed.add_field(name="👥 Group Members", value=str(len(group_members)), inline=True)
+
+
         
         # List all group members who received rewards
         member_names = [name for _, name in group_members]
@@ -1996,27 +2177,32 @@ class EconomyCog(commands.Cog):
     async def job_status(self, interaction: discord.Interaction):
         # FORCE a manual update first
         await self._manual_job_update(interaction.user.id)
-        # Fetch active job with status - ADD job_id to the SELECT
+        
+        # Fetch active job with status - INCLUDE destination_location_id and unloading_started_at
         job_info = self.db.execute_query(
             '''SELECT j.job_id, j.title, j.description, j.reward_money, j.taken_at, j.duration_minutes,
-                      j.danger_level, l.name as location_name, j.job_status
+                      j.danger_level, l.name as location_name, j.job_status, j.location_id, 
+                      j.destination_location_id, j.unloading_started_at
                FROM jobs j
                JOIN locations l ON j.location_id = l.location_id
                WHERE j.taken_by = ? AND j.is_taken = 1''',
             (interaction.user.id,),
             fetch='one'
         )
+        
         if not job_info:
             await interaction.response.send_message("You don't have any active jobs.", ephemeral=True)
             return
-
-        # UPDATE unpacking to include job_id
-        job_id, title, description, reward, taken_at, duration_minutes, danger, location_name, job_status = job_info
-
-        # Determine job type - check destination_location_id first for definitive classification
+        
+        # Unpack all values including destination_location_id and unloading_started_at
+        (job_id, title, desc, reward, taken_at, duration, danger, 
+         location_name, job_status, job_location_id, destination_location_id, unloading_started_at) = job_info
+        
+        # Now we can safely use destination_location_id
         title_lower = title.lower()
-        desc_lower = description.lower()
-
+        desc_lower = desc.lower()
+        
+        # Determine job type - check destination_location_id first for definitive classification
         if destination_location_id and destination_location_id != job_location_id:
             # Has a different destination location = definitely a transport job
             is_transport_job = True
@@ -2033,7 +2219,7 @@ class EconomyCog(commands.Cog):
         elapsed_minutes = (current_time - taken_time).total_seconds() / 60
 
         # TRUNCATE description to prevent Discord limit issues
-        truncated_description = description[:800] + "..." if len(description) > 800 else description
+        truncated_description = desc[:800] + "..." if len(desc) > 800 else desc
         
         embed = discord.Embed(
             title="💼 Current Job Status",
@@ -2043,23 +2229,83 @@ class EconomyCog(commands.Cog):
 
         # Status based on job type and current state
         if job_status == 'awaiting_finalization':
-            status_text = "🚛 **Unloading cargo** - Use `/job complete` to finalize immediately"
-            progress_text = "✅ Transport completed, finalizing delivery..."
+            # Enhanced unloading phase display
+            if unloading_started_at:
+                unloading_time = datetime.fromisoformat(unloading_started_at)
+                unloading_elapsed = (current_time - unloading_time).total_seconds()
+                unloading_duration = 120  # 2 minutes in seconds
+                unloading_remaining = max(0, unloading_duration - unloading_elapsed)
+                
+                status_text = f"🚛 **Unloading Cargo** - {unloading_remaining:.0f}s remaining"
+                progress_pct = min(100, (unloading_elapsed / unloading_duration) * 100)
+                bars = int(progress_pct // 10)
+                progress_text = "🟩" * bars + "⬜" * (10 - bars) + f" {progress_pct:.0f}%"
+                
+                if unloading_remaining > 0:
+                    status_text += "\n💡 Use `/job complete` to rush (10% penalty)"
+            else:
+                status_text = "🚛 **Unloading cargo** - Starting..."
+                progress_text = "⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0%"
         elif job_status == 'completed':
             status_text = "✅ **Completed** - Job finished!"
             progress_text = "Job has been completed successfully"
         elif is_transport_job:
-            if elapsed_minutes >= duration_minutes:
-                status_text = "✅ **Ready for completion** - Use `/job complete`"
-                progress_text = "Minimum travel time completed"
+            # Enhanced transport job display
+            if destination_location_id:
+                # Get destination name
+                dest_name = self.db.execute_query(
+                    "SELECT name FROM locations WHERE location_id = ?",
+                    (destination_location_id,),
+                    fetch='one'
+                )
+                dest_name = dest_name[0] if dest_name else "Unknown Location"
+                
+                # Check if player is at destination
+                player_location = self.db.execute_query(
+                    "SELECT current_location FROM characters WHERE user_id = ?",
+                    (interaction.user.id,),
+                    fetch='one'
+                )[0]
+                
+                if player_location == destination_location_id:
+                    status_text = f"📍 **At Destination** - {dest_name}\n✅ Use `/job complete` to start unloading"
+                    progress_text = "Ready to unload cargo"
+                else:
+                    status_text = f"📦 **In Transit** to {dest_name}"
+                    # Show expiry time instead of completion time
+                    remaining_minutes = duration - elapsed_minutes
+                    if remaining_minutes > 0:
+                        progress_text = f"⏱️ Expires in {remaining_minutes:.1f} minutes"
+                    else:
+                        progress_text = "❌ EXPIRED - Complete before auto-cancellation!"
             else:
-                remaining_minutes = duration_minutes - elapsed_minutes
-                status_text = f"⏳ **In Transit** - {remaining_minutes:.1f} minutes remaining"
-                progress_pct = (elapsed_minutes / duration_minutes) * 100
-                bars = int(progress_pct // 10)
-                progress_text = "🟩" * bars + "⬜" * (10 - bars) + f" {progress_pct:.0f}%"
+                # NPC transport job without specific destination
+                if elapsed_minutes >= duration:
+                    status_text = "✅ **Ready for delivery** - Use `/job complete` at any location"
+                    progress_text = "Minimum travel time completed"
+                else:
+                    remaining_minutes = duration - elapsed_minutes
+                    status_text = f"📦 **In Transit** - General delivery"
+                    progress_text = f"⏱️ Travel for {remaining_minutes:.1f} more minutes"
+            
+            # Add fields specific to transport jobs
+            embed.add_field(name="💰 Reward", value=f"{reward:,} credits", inline=True)
+            embed.add_field(name="⚠️ Danger", value="⚠️" * danger if danger > 0 else "Safe", inline=True)
+            
+            if destination_location_id:
+                embed.add_field(name="🎯 Destination", value=dest_name[:1020], inline=True)
+            else:
+                embed.add_field(name="📍 Origin", value=location_name[:1020], inline=True)
+                
+            embed.add_field(name="Status", value=status_text[:1020], inline=False)
+            embed.add_field(name="Progress", value=progress_text[:1020], inline=False)
+            
+            # Skip the default fields since we added them above
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+            
         else:
-            # Stationary job - check tracking - FIX: use job_id instead of job_info
+            # Stationary job - check tracking
             tracking = self.db.execute_query(
                 "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
                 (job_id, interaction.user.id),
@@ -2085,15 +2331,12 @@ class EconomyCog(commands.Cog):
                 status_text = "📍 **Needs location tracking** - Use `/job complete` to start"
                 progress_text = "Location-based work not yet started"
 
-        # TRUNCATE field values to stay under Discord's 1024 character limit
-        status_text = status_text[:1020] + "..." if len(status_text) > 1020 else status_text
-        progress_text = progress_text[:1020] + "..." if len(progress_text) > 1020 else progress_text
-
-        embed.add_field(name="Status", value=status_text, inline=False)
-        embed.add_field(name="Progress", value=progress_text, inline=False)
-        embed.add_field(name="Reward", value=f"{reward:,} credits", inline=True)
-        embed.add_field(name="Danger", value="⚠️" * danger if danger > 0 else "Safe", inline=True)
-        embed.add_field(name="Location", value=location_name[:1020] if len(location_name) > 1020 else location_name, inline=True)
+        # Default field layout for non-transport jobs
+        embed.add_field(name="Status", value=status_text[:1020], inline=False)
+        embed.add_field(name="Progress", value=progress_text[:1020], inline=False)
+        embed.add_field(name="💰 Reward", value=f"{reward:,} credits", inline=True)
+        embed.add_field(name="⚠️ Danger", value="⚠️" * danger if danger > 0 else "Safe", inline=True)
+        embed.add_field(name="📍 Location", value=location_name[:1020], inline=True)
 
         await interaction.response.send_message(embed=embed, ephemeral=False)
 

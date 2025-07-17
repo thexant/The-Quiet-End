@@ -985,19 +985,50 @@ class ChannelManager:
             # Send personalized location status to the user
             await self.send_location_arrival(channel, user, location_id)
             
+            # Check if user has a transport job to this location
+            transport_job = self.db.execute_query(
+                '''SELECT j.job_id, j.title, j.reward_money 
+                   FROM jobs j
+                   WHERE j.taken_by = ? 
+                   AND j.is_taken = 1 
+                   AND j.destination_location_id = ?
+                   AND j.job_status != 'completed' ''',
+                (user.id, location_id),
+                fetch='one'
+            )
+            
+            if transport_job:
+                job_id, job_title, reward = transport_job
+                
+                # Send transport job arrival notification
+                embed = discord.Embed(
+                    title="📦 Transport Job - Destination Reached!",
+                    description=f"You've arrived at the destination for **{job_title}**",
+                    color=0x00ff00
+                )
+                embed.add_field(
+                    name="✅ Ready to Complete",
+                    value=f"Use `/job complete` to unload cargo and receive your reward of **{reward:,} credits**",
+                    inline=False
+                )
+                
+                try:
+                    # Try ephemeral first by creating a webhook-style message
+                    await channel.send(
+                        content=f"{user.mention}",
+                        embed=embed,
+                        delete_after=60  # Auto-delete after 1 minute
+                    )
+                except Exception as e:
+                    print(f"Failed to send transport job notification: {e}")
+            
             print(f"✅ Successfully gave {user.name} access to location {location_id}")
             return True
             
-        except discord.Forbidden:
-            print(f"❌ Permission denied: Cannot give {user.name} access to location {location_id}")
-            return False
-        except discord.HTTPException as e:
-            print(f"❌ Discord HTTP error giving {user.name} access to location {location_id}: {e}")
-            return False
         except Exception as e:
-            print(f"❌ Unexpected error giving {user.name} access to location {location_id}: {e}")
+            print(f"❌ Error giving {user.name} access to location {location_id}: {e}")
             return False
-
+            
     async def remove_user_location_access(self, user: discord.Member, location_id: int) -> bool:
         """
         Remove a user's access to a location channel and clean up their messages

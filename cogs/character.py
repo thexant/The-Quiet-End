@@ -232,7 +232,7 @@ class CharacterCog(commands.Cog):
         # send publicly in the channel
         await interaction.response.send_message(f"{char_name} *{action}*")
         
-                # Optional: Send a follow-up message if XP was awarded
+        xp_awarded = await self.try_award_passive_xp(interaction.user.id, "act")
         if xp_awarded:
             try:
                 await interaction.followup.send("✨ *You feel slightly more experienced from that action.* (+5 XP)", ephemeral=True)
@@ -2467,12 +2467,13 @@ class CharacterPanelView(discord.ui.View):
         # Check for active job and add job button if needed
         self._add_job_button_if_needed()
     
-    def _check_job_status(self):
+    def check_job_status(self):
         """Check if user has active job and if it's ready for completion"""
-        # Get active job info
+        # Get active job info - UPDATED to include destination_location_id and job location
         job_info = self.bot.db.execute_query(
             '''SELECT j.job_id, j.title, j.description, j.reward_money, j.taken_at, j.duration_minutes,
-                      j.danger_level, l.name as location_name, j.job_status
+                      j.danger_level, l.name as location_name, j.job_status, j.location_id, 
+                      j.destination_location_id
                FROM jobs j
                JOIN locations l ON j.location_id = l.location_id
                WHERE j.taken_by = ? AND j.is_taken = 1''',
@@ -2483,7 +2484,9 @@ class CharacterPanelView(discord.ui.View):
         if not job_info:
             return None, False  # No active job
         
-        job_id, title, description, reward, taken_at, duration_minutes, danger, location_name, job_status = job_info
+        # Unpack with new fields
+        (job_id, title, description, reward, taken_at, duration_minutes, danger, 
+         location_name, job_status, job_location_id, destination_location_id) = job_info
         
         # Check if job is ready for completion
         is_ready = False
@@ -2492,19 +2495,43 @@ class CharacterPanelView(discord.ui.View):
         if job_status == 'awaiting_finalization':
             is_ready = True
         else:
-            # Determine if this is a transport job
+            # Determine if this is a transport job using the new logic
             title_lower = title.lower()
             desc_lower = description.lower()
-            is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
-                              any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
+            
+            # Check destination_location_id first for definitive classification
+            if destination_location_id and destination_location_id != job_location_id:
+                # Has a different destination location = definitely a transport job
+                is_transport_job = True
+            elif destination_location_id is None:
+                # No destination set - check keywords to determine if it's a transport job (NPC-style)
+                is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
+                                  any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
+            else:
+                # destination_location_id == job_location_id = stationary job
+                is_transport_job = False
             
             if is_transport_job:
-                # For transport jobs, check elapsed time
-                from datetime import datetime
-                taken_time = datetime.fromisoformat(taken_at)
-                current_time = datetime.utcnow()
-                elapsed_minutes = (current_time - taken_time).total_seconds() / 60
-                is_ready = elapsed_minutes >= duration_minutes
+                # For transport jobs with specific destinations, check if at correct location
+                if destination_location_id:
+                    # Get player's current location
+                    player_location = self.bot.db.execute_query(
+                        "SELECT current_location FROM characters WHERE user_id = ?",
+                        (self.user_id,),
+                        fetch='one'
+                    )
+                    
+                    if player_location and player_location[0] == destination_location_id:
+                        is_ready = True  # At correct destination
+                    else:
+                        is_ready = False  # Not at destination yet
+                else:
+                    # NPC transport job - check elapsed time
+                    from datetime import datetime
+                    taken_time = datetime.fromisoformat(taken_at)
+                    current_time = datetime.utcnow()
+                    elapsed_minutes = (current_time - taken_time).total_seconds() / 60
+                    is_ready = elapsed_minutes >= duration_minutes
             else:
                 # For stationary jobs, check location tracking
                 tracking = self.bot.db.execute_query(
@@ -2523,7 +2550,7 @@ class CharacterPanelView(discord.ui.View):
     
     def _add_job_button_if_needed(self):
         """Add job button if user has an active job"""
-        job_info, is_ready = self._check_job_status()
+        job_info, is_ready = self.check_job_status()
         
         if job_info:
             # User has an active job, add the appropriate button

@@ -1262,7 +1262,7 @@ class Database:
             '''ALTER TABLE black_market_items ADD COLUMN stock INTEGER DEFAULT 1''',
 
             '''ALTER TABLE shop_items ADD COLUMN metadata TEXT DEFAULT NULL''',
-
+            '''ALTER TABLE jobs ADD COLUMN unloading_started_at DATETIME;''',
             '''CREATE TABLE IF NOT EXISTS federal_supply_items (
                 supply_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 location_id INTEGER NOT NULL,

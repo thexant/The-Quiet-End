@@ -2472,176 +2472,7 @@ class EnhancedEventsCog(commands.Cog):
             )[0]
             
             await self._execute_reputation_event(channel, target_event, player_ids, location_id, location_name)
-class PirateEncounterView(discord.ui.View):
-    def __init__(self, bot, encounter_id, players, pirate_ships):
-        super().__init__(timeout=300)
-        self.bot = bot
-        self.encounter_id = encounter_id
-        self.players = players
-        self.pirate_ships = pirate_ships
-        self.player_choices = {}
     
-    @discord.ui.button(label="Engage in Combat", style=discord.ButtonStyle.danger, emoji="⚔️")
-    async def engage_combat(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_choice(interaction, "combat", "chose to fight the pirates!")
-    
-    @discord.ui.button(label="Attempt to Flee", style=discord.ButtonStyle.secondary, emoji="🏃")
-    async def attempt_flee(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_choice(interaction, "flee", "attempts to escape!")
-    
-    @discord.ui.button(label="Negotiate", style=discord.ButtonStyle.primary, emoji="🤝")
-    async def negotiate(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_choice(interaction, "negotiate", "tries to negotiate with the pirates!")
-    
-    @discord.ui.button(label="Pay Tribute", style=discord.ButtonStyle.success, emoji="💰")
-    async def pay_tribute(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_choice(interaction, "tribute", "offers to pay tribute!")
-    
-    async def _handle_choice(self, interaction, choice, flavor_text):
-        if interaction.user.id not in self.players:
-            await interaction.response.send_message("You're not part of this encounter!", ephemeral=True)
-            return
-        
-        self.player_choices[interaction.user.id] = choice
-        
-        await interaction.response.send_message(f"🎯 {interaction.user.display_name} {flavor_text}", ephemeral=True)
-        
-        # Check if all players have chosen
-        if len(self.player_choices) >= len(self.players):
-            await self._resolve_encounter(interaction.channel)
-    
-    async def _resolve_encounter(self, channel):
-        """Resolve the pirate encounter based on player choices"""
-        
-        choices = list(self.player_choices.values())
-        
-        # Majority decision logic
-        combat_votes = choices.count("combat")
-        flee_votes = choices.count("flee")
-        negotiate_votes = choices.count("negotiate")
-        tribute_votes = choices.count("tribute")
-        
-        embed = discord.Embed(title="💀 Pirate Encounter Resolution", color=0x8b0000)
-        
-        if combat_votes >= len(self.players) // 2 + 1:
-            # Combat chosen
-            embed.description = "⚔️ **Combat Initiated!**\nThe fleet engages the pirates in battle!"
-            
-            # Start combat encounter
-            combat_cog = self.bot.get_cog('CombatCog')
-            if combat_cog:
-                await combat_cog.start_pirate_combat(channel, self.players, self.pirate_ships)
-        
-        elif flee_votes >= len(self.players) // 2 + 1:
-            # Flee attempt
-            success_chance = 0.6  # Base 60% chance
-            if random.random() < success_chance:
-                embed.description = "🏃 **Escape Successful!**\nYour ships manage to evade the pirates!"
-                embed.color = 0x00ff00
-            else:
-                embed.description = "💥 **Escape Failed!**\nThe pirates catch up and force a fight!"
-                combat_cog = self.bot.get_cog('CombatCog')
-                if combat_cog:
-                    await combat_cog.start_pirate_combat(channel, self.players, self.pirate_ships)
-        
-        elif tribute_votes >= len(self.players) // 2 + 1:
-            # Pay tribute
-            tribute_amount = 200 * self.pirate_ships  # Cost based on pirate fleet size
-            
-            for player_id in self.players:
-                player_money = self.bot.db.execute_query(
-                    "SELECT money FROM characters WHERE user_id = ?", (player_id,), fetch='one'
-                )[0]
-                
-                if player_money >= tribute_amount:
-                    self.bot.db.execute_query(
-                        "UPDATE characters SET money = money - ? WHERE user_id = ?",
-                        (tribute_amount, player_id)
-                    )
-            
-            embed.description = f"💰 **Tribute Paid!**\nThe pirates accept {tribute_amount} credits and leave you in peace."
-            embed.color = 0xffd700
-        
-        else:
-            # Negotiate attempt
-            negotiate_success = random.random() < 0.4  # 40% success chance
-            
-            if negotiate_success:
-                embed.description = "🤝 **Negotiation Successful!**\nThe pirates agree to let you pass unharmed."
-                embed.color = 0x00ff00
-            else:
-                embed.description = "💥 **Negotiation Failed!**\nThe pirates attack without warning!"
-                combat_cog = self.bot.get_cog('CombatCog')
-                if combat_cog:
-                    await combat_cog.start_pirate_combat(channel, self.players, self.pirate_ships)
-        
-        await channel.send(embed=embed)
-
-
-class AsteroidFieldView(discord.ui.View):
-    def __init__(self, bot, players):
-        super().__init__(timeout=180)
-        self.bot = bot
-        self.players = players
-        self.player_choices = {}
-    
-    @discord.ui.button(label="Aggressive Evasion", style=discord.ButtonStyle.danger, emoji="⚡")
-    async def aggressive_evasion(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_evasion(interaction, "aggressive", 0.8, 20)  # High success, high damage if fail
-    
-    @discord.ui.button(label="Careful Navigation", style=discord.ButtonStyle.primary, emoji="🎯")
-    async def careful_navigation(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_evasion(interaction, "careful", 0.6, 10)  # Medium success, medium damage
-    
-    @discord.ui.button(label="Emergency Shields", style=discord.ButtonStyle.secondary, emoji="🛡️")
-    async def emergency_shields(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_evasion(interaction, "shields", 0.4, 5)  # Low success, low damage
-    
-    async def _handle_evasion(self, interaction, strategy, success_chance, damage_if_fail):
-        if interaction.user.id not in self.players:
-            await interaction.response.send_message("You're not part of this encounter!", ephemeral=True)
-            return
-        
-        success = random.random() < success_chance
-        self.player_choices[interaction.user.id] = (strategy, success, damage_if_fail)
-        
-        if success:
-            await interaction.response.send_message(f"✅ {interaction.user.display_name} successfully navigates the asteroid field!", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"💥 {interaction.user.display_name} takes asteroid damage!", ephemeral=True)
-            
-            # Apply damage
-            self.bot.db.execute_query(
-                "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                (damage_if_fail, interaction.user.id)
-            )
-        
-        # Check if all players have chosen
-        if len(self.player_choices) >= len(self.players):
-            await self._resolve_asteroid_field(interaction.channel)
-    
-    async def _resolve_asteroid_field(self, channel):
-        """Resolve the asteroid field challenge"""
-        
-        embed = discord.Embed(
-            title="☄️ Asteroid Field Navigation Complete",
-            description="All ships have attempted to navigate through the dangerous asteroid field.",
-            color=0x8b4513
-        )
-        
-        results = []
-        for player_id in self.players:
-            if player_id in self.player_choices:
-                strategy, success, damage = self.player_choices[player_id]
-                member = channel.guild.get_member(player_id)
-                if member:
-                    if success:
-                        results.append(f"✅ {member.display_name}: {strategy.title()} - Success!")
-                    else:
-                        results.append(f"💥 {member.display_name}: {strategy.title()} - {damage} hull damage")
-        
-        await channel.send(embed=embed)
-
     async def _handle_corporate_inspection(self, channel, players, event_data):
         """Handle corporate inspection event"""
         embed = discord.Embed(
@@ -4559,6 +4390,178 @@ class AsteroidFieldView(discord.ui.View):
                 return
             
             char_name, nav_skill = char_data
+            
+class PirateEncounterView(discord.ui.View):
+    def __init__(self, bot, encounter_id, players, pirate_ships):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.encounter_id = encounter_id
+        self.players = players
+        self.pirate_ships = pirate_ships
+        self.player_choices = {}
+    
+    @discord.ui.button(label="Engage in Combat", style=discord.ButtonStyle.danger, emoji="⚔️")
+    async def engage_combat(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_choice(interaction, "combat", "chose to fight the pirates!")
+    
+    @discord.ui.button(label="Attempt to Flee", style=discord.ButtonStyle.secondary, emoji="🏃")
+    async def attempt_flee(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_choice(interaction, "flee", "attempts to escape!")
+    
+    @discord.ui.button(label="Negotiate", style=discord.ButtonStyle.primary, emoji="🤝")
+    async def negotiate(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_choice(interaction, "negotiate", "tries to negotiate with the pirates!")
+    
+    @discord.ui.button(label="Pay Tribute", style=discord.ButtonStyle.success, emoji="💰")
+    async def pay_tribute(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_choice(interaction, "tribute", "offers to pay tribute!")
+    
+    async def _handle_choice(self, interaction, choice, flavor_text):
+        if interaction.user.id not in self.players:
+            await interaction.response.send_message("You're not part of this encounter!", ephemeral=True)
+            return
+        
+        self.player_choices[interaction.user.id] = choice
+        
+        await interaction.response.send_message(f"🎯 {interaction.user.display_name} {flavor_text}", ephemeral=True)
+        
+        # Check if all players have chosen
+        if len(self.player_choices) >= len(self.players):
+            await self._resolve_encounter(interaction.channel)
+    
+    async def _resolve_encounter(self, channel):
+        """Resolve the pirate encounter based on player choices"""
+        
+        choices = list(self.player_choices.values())
+        
+        # Majority decision logic
+        combat_votes = choices.count("combat")
+        flee_votes = choices.count("flee")
+        negotiate_votes = choices.count("negotiate")
+        tribute_votes = choices.count("tribute")
+        
+        embed = discord.Embed(title="💀 Pirate Encounter Resolution", color=0x8b0000)
+        
+        if combat_votes >= len(self.players) // 2 + 1:
+            # Combat chosen
+            embed.description = "⚔️ **Combat Initiated!**\nThe fleet engages the pirates in battle!"
+            
+            # Start combat encounter
+            combat_cog = self.bot.get_cog('CombatCog')
+            if combat_cog:
+                await combat_cog.start_pirate_combat(channel, self.players, self.pirate_ships)
+        
+        elif flee_votes >= len(self.players) // 2 + 1:
+            # Flee attempt
+            success_chance = 0.6  # Base 60% chance
+            if random.random() < success_chance:
+                embed.description = "🏃 **Escape Successful!**\nYour ships manage to evade the pirates!"
+                embed.color = 0x00ff00
+            else:
+                embed.description = "💥 **Escape Failed!**\nThe pirates catch up and force a fight!"
+                combat_cog = self.bot.get_cog('CombatCog')
+                if combat_cog:
+                    await combat_cog.start_pirate_combat(channel, self.players, self.pirate_ships)
+        
+        elif tribute_votes >= len(self.players) // 2 + 1:
+            # Pay tribute
+            tribute_amount = 200 * self.pirate_ships  # Cost based on pirate fleet size
+            
+            for player_id in self.players:
+                player_money = self.bot.db.execute_query(
+                    "SELECT money FROM characters WHERE user_id = ?", (player_id,), fetch='one'
+                )[0]
+                
+                if player_money >= tribute_amount:
+                    self.bot.db.execute_query(
+                        "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                        (tribute_amount, player_id)
+                    )
+            
+            embed.description = f"💰 **Tribute Paid!**\nThe pirates accept {tribute_amount} credits and leave you in peace."
+            embed.color = 0xffd700
+        
+        else:
+            # Negotiate attempt
+            negotiate_success = random.random() < 0.4  # 40% success chance
+            
+            if negotiate_success:
+                embed.description = "🤝 **Negotiation Successful!**\nThe pirates agree to let you pass unharmed."
+                embed.color = 0x00ff00
+            else:
+                embed.description = "💥 **Negotiation Failed!**\nThe pirates attack without warning!"
+                combat_cog = self.bot.get_cog('CombatCog')
+                if combat_cog:
+                    await combat_cog.start_pirate_combat(channel, self.players, self.pirate_ships)
+        
+        await channel.send(embed=embed)
+
+
+class AsteroidFieldView(discord.ui.View):
+    def __init__(self, bot, players):
+        super().__init__(timeout=180)
+        self.bot = bot
+        self.players = players
+        self.player_choices = {}
+    
+    @discord.ui.button(label="Aggressive Evasion", style=discord.ButtonStyle.danger, emoji="⚡")
+    async def aggressive_evasion(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_evasion(interaction, "aggressive", 0.8, 20)  # High success, high damage if fail
+    
+    @discord.ui.button(label="Careful Navigation", style=discord.ButtonStyle.primary, emoji="🎯")
+    async def careful_navigation(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_evasion(interaction, "careful", 0.6, 10)  # Medium success, medium damage
+    
+    @discord.ui.button(label="Emergency Shields", style=discord.ButtonStyle.secondary, emoji="🛡️")
+    async def emergency_shields(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_evasion(interaction, "shields", 0.4, 5)  # Low success, low damage
+    
+    async def _handle_evasion(self, interaction, strategy, success_chance, damage_if_fail):
+        if interaction.user.id not in self.players:
+            await interaction.response.send_message("You're not part of this encounter!", ephemeral=True)
+            return
+        
+        success = random.random() < success_chance
+        self.player_choices[interaction.user.id] = (strategy, success, damage_if_fail)
+        
+        if success:
+            await interaction.response.send_message(f"✅ {interaction.user.display_name} successfully navigates the asteroid field!", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"💥 {interaction.user.display_name} takes asteroid damage!", ephemeral=True)
+            
+            # Apply damage
+            self.bot.db.execute_query(
+                "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
+                (damage_if_fail, interaction.user.id)
+            )
+        
+        # Check if all players have chosen
+        if len(self.player_choices) >= len(self.players):
+            await self._resolve_asteroid_field(interaction.channel)
+    
+    async def _resolve_asteroid_field(self, channel):
+        """Resolve the asteroid field challenge"""
+        
+        embed = discord.Embed(
+            title="☄️ Asteroid Field Navigation Complete",
+            description="All ships have attempted to navigate through the dangerous asteroid field.",
+            color=0x8b4513
+        )
+        
+        results = []
+        for player_id in self.players:
+            if player_id in self.player_choices:
+                strategy, success, damage = self.player_choices[player_id]
+                member = channel.guild.get_member(player_id)
+                if member:
+                    if success:
+                        results.append(f"✅ {member.display_name}: {strategy.title()} - Success!")
+                    else:
+                        results.append(f"💥 {member.display_name}: {strategy.title()} - {damage} hull damage")
+        
+        await channel.send(embed=embed)
+
+
 
 
 
