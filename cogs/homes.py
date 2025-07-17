@@ -68,7 +68,7 @@ class ConfirmPurchaseView(discord.ui.View):
         self.buyer_id = buyer_id
         self.bot = bot
         self.db = bot.db
-        self.home_id = home_id
+        self.home_id = home['home_id']
         
     @discord.ui.button(label="Confirm Purchase", style=discord.ButtonStyle.success, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -115,7 +115,7 @@ class ConfirmPurchaseView(discord.ui.View):
             value="• Use `/home interior enter` to enter your home\n• Use `/homes view` to see all your properties",
             inline=False
         )
-        await self.initialize_home_features(home_id, home_type)
+        await self.initialize_home_features(self.home['home_id'], self.home['home_type'])
         await interaction.response.edit_message(embed=embed, view=None)
     
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
@@ -605,10 +605,10 @@ class HomesCog(commands.Cog):
     async def before_health_recovery(self):
         await self.bot.wait_until_ready()
     
-    interior_group = app_commands.Group(name="interior", description="Home interior commands")
     homes_group = app_commands.Group(name="homes", description="View homes information")
     home_group = app_commands.Group(name="home", description="Home management commands")
-    @interior_group.command(name="enter", description="Enter your home at this location")
+    
+    @home_group.command(name="enter", description="Enter your home at this location")
     async def enter_home(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
@@ -688,7 +688,7 @@ class HomesCog(commands.Cog):
             await interaction.followup.send("Failed to create home interior!", ephemeral=True)
         
     
-    @interior_group.command(name="accept", description="Accept a home invitation")
+    @home_group.command(name="accept", description="Accept a home invitation")
     async def accept_home_invitation(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
@@ -784,7 +784,7 @@ class HomesCog(commands.Cog):
     
     
     
-    @interior_group.command(name="invite", description="Invite someone to your home")
+    @home_group.command(name="invite", description="Invite someone to your home")
     @app_commands.describe(player="The player to invite to your home")
     async def invite_to_home(self, interaction: discord.Interaction, player: discord.Member):
         if player.id == interaction.user.id:
@@ -839,7 +839,7 @@ class HomesCog(commands.Cog):
         except:
             pass
 
-    @interior_group.command(name="leave", description="Leave your home interior")
+    @home_group.command(name="leave", description="Leave your home interior")
     async def leave_home(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
