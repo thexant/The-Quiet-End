@@ -1703,22 +1703,12 @@ class CharacterCog(commands.Cog):
         if user:
             embed = discord.Embed(
                 title="😴 Automatic Logout",
-                description=f"**{char_name}** has been automatically logged out due to inactivity.",
+                description=f"**{char_name}** has been logged out due to inactivity.",
                 color=0xff9900
             )
             embed.add_field(
-                name="Reason",
-                value=reason,
-                inline=True
-            )
-            embed.add_field(
-                name="💾 Data Saved",
-                value="Your progress has been preserved.",
-                inline=True
-            )
-            embed.add_field(
-                name="🔄 Return",
-                value="Use `/character login` when you're ready to continue.",
+                name="🔄 Log Back In",
+                value="You can log back in with the login button or `/character login`",
                 inline=False
             )
             
@@ -1730,6 +1720,8 @@ class CharacterCog(commands.Cog):
         print(f"🚪 Auto-logout: {char_name} (ID: {user_id}) - {reason}")
         
         print(f"🚪 Auto-logout: {char_name} (ID: {user_id}) - {reason}")
+        
+    
     @character_group.command(name="drop", description="Drop an item at your current location")
     @app_commands.describe(
         item_name="Name of the item to drop",

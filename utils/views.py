@@ -1601,11 +1601,13 @@ class PersistentLocationView(discord.ui.View):
             self.add_item(self.npc_interactions)
             self.add_item(self.undock_button)
             self.add_item(self.route_button)
+            
         else:  # in_space
             self.add_item(self.travel_button)
             self.add_item(self.dock_button)
             self.add_item(self.route_button)
             self.add_item(self.plot_route_button)
+
     from cogs.travel import TravelCog
     async def refresh_view(self, interaction: discord.Interaction = None):
         """Refresh the view when dock status changes"""
@@ -1886,11 +1888,13 @@ class EphemeralLocationView(discord.ui.View):
             self.add_item(self.npc_interactions)
             self.add_item(self.undock_button)
             self.add_item(self.route_button)
+            self.add_item(self.location_info_button)
         else:  # in_space
             self.add_item(self.travel_button)
             self.add_item(self.dock_button)
             self.add_item(self.route_button)
             self.add_item(self.plot_route_button)
+            self.add_item(self.location_info_button)
     
     async def refresh_view(self, interaction: discord.Interaction):
         """Refresh the view when dock status changes"""
@@ -2161,7 +2165,7 @@ class EphemeralLocationView(discord.ui.View):
             )
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
+    
     @discord.ui.button(label="Travel", style=discord.ButtonStyle.primary, emoji="🚀")
     async def travel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
@@ -2333,6 +2337,269 @@ class EphemeralLocationView(discord.ui.View):
             await self.refresh_view(interaction)
         else:
             await interaction.followup.send("Character system unavailable.", ephemeral=True)
+        
+    @discord.ui.button(label="Info", style=discord.ButtonStyle.secondary, emoji="ℹ️", row=2)
+    async def location_info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get current location
+        char_location = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_location or not char_location[0]:
+            await interaction.response.send_message("You must be at a location to view info!", ephemeral=True)
+            return
+        
+        location_id = char_location[0]
+        
+        # Get location info
+        location_info = self.bot.db.execute_query(
+            '''SELECT location_id, channel_id, name, location_type, description, wealth_level,
+                      population, has_jobs, has_shops, has_medical, has_repairs, has_fuel, 
+                      has_upgrades, has_federal_supplies, has_black_market
+               FROM locations WHERE location_id = ?''',
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_info:
+            await interaction.response.send_message("Location information not found!", ephemeral=True)
+            return
+        
+        (loc_id, channel_id, name, loc_type, description, wealth, population, 
+         has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades,
+         has_federal_supplies, has_black_market) = location_info
+        
+        # Create the same embed as the welcome message
+        # Determine location status and enhance description
+        location_status = None
+        status_emoji = ""
+        enhanced_description = description
+        embed_color = 0x4169E1  # Default blue
+        
+        if has_federal_supplies:
+            location_status = "Loyal"
+            status_emoji = "🏛️"
+            embed_color = 0x0066cc  # Federal blue
+            # Add federal flair to description
+            if enhanced_description:
+                enhanced_description += "\n\n🏛️ **Federal Territory:** This location operates under direct federal oversight with enhanced security protocols and premium government-grade supplies."
+            else:
+                enhanced_description = "🏛️ **Federal Territory:** This location operates under direct federal oversight with enhanced security protocols and premium government-grade supplies."
+        elif has_black_market:
+            location_status = "Bandit"
+            status_emoji = "💀"
+            embed_color = 0x8b0000  # Dark red
+            # Add bandit flair to description
+            if enhanced_description:
+                enhanced_description += "\n\n💀 **Outlaw Haven:** This location operates outside federal jurisdiction. Discretion is advised, and contraband trade flourishes in the shadows."
+            else:
+                enhanced_description = "💀 **Outlaw Haven:** This location operates outside federal jurisdiction. Discretion is advised, and contraband trade flourishes in the shadows."
+        
+        # Create info embed with status-aware styling
+        title_with_status = f"📍 {name} - Location Info"
+        if location_status:
+            title_with_status = f"{status_emoji} {name} - Location Info"
+        
+        embed = discord.Embed(
+            title=title_with_status,
+            description=enhanced_description,
+            color=embed_color
+        )
+        
+        # Location details
+        type_emoji = {
+            'colony': '🏭',
+            'space_station': '🛰️',
+            'outpost': '🛤️',
+            'gate': '🚪'
+        }.get(loc_type, '📍')
+        
+        embed.add_field(
+            name="Location Type",
+            value=f"{type_emoji} {loc_type.replace('_', ' ').title()}",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="Population",
+            value=f"{population:,}",
+            inline=True
+        )
+        
+        # Add status field if location has special alignment
+        if location_status:
+            embed.add_field(
+                name="Status",
+                value=f"{status_emoji} **{location_status}**",
+                inline=True
+            )
+        else:
+            # Keep the wealth field in the same position for normal locations
+            wealth_text = "⭐" * min(wealth // 2, 5) if wealth > 0 else "💸"
+            embed.add_field(
+                name="Wealth Level",
+                value=f"{wealth_text} {wealth}/10",
+                inline=True
+            )
+        
+        # For aligned locations, show wealth in a separate row for better formatting
+        if location_status:
+            wealth_text = "⭐" * min(wealth // 2, 5) if wealth > 0 else "💸"
+            embed.add_field(
+                name="Wealth Level",
+                value=f"{wealth_text} {wealth}/10",
+                inline=True
+            )
+            # Add empty field for better formatting
+            embed.add_field(name="", value="", inline=True)
+        
+        # Available services with status-aware enhancements
+        services = []
+        if has_jobs:   services.append("💼 Jobs")
+        if has_shops:  services.append("🛒 Shopping")
+        if has_medical:services.append("⚕️ Medical")
+        if has_repairs:services.append("🔨 Repairs")
+        if has_fuel:   services.append("⛽ Fuel")
+        if has_upgrades:services.append("⬆️ Upgrades")
+        
+        # Add special services based on status
+        if has_federal_supplies:
+            services.append("🏛️ Federal Supplies")
+        if has_black_market:
+            services.append("💀 Black Market")
+
+        if services:
+            embed.add_field(
+                name="Available Services",
+                value=" • ".join(services),
+                inline=False
+            )
+        
+        # Get available homes info
+        homes_info = self.bot.db.execute_query(
+            '''SELECT COUNT(*), MIN(price), MAX(price), home_type
+               FROM location_homes 
+               WHERE location_id = ? AND is_available = 1
+               GROUP BY home_type''',
+            (location_id,),
+            fetch='all'
+        )
+        
+        if homes_info:
+            homes_text = []
+            for count, min_price, max_price, home_type in homes_info:
+                if count == 1:
+                    homes_text.append(f"• **{count} {home_type}** - {min_price:,} credits")
+                else:
+                    homes_text.append(f"• **{count} {home_type}s** - {min_price:,}-{max_price:,} credits")
+            
+            embed.add_field(
+                name="🏠 Available Homes",
+                value="\n".join(homes_text),
+                inline=True
+            )
+        
+        # STATIC NPCS
+        npc_cog = self.bot.get_cog('NPCCog')
+        if npc_cog:
+            static_npcs = npc_cog.get_static_npcs_for_location(loc_id)
+            if static_npcs:
+                npc_list = [f"{name} - {age}" for name, age in static_npcs[:5]]  # Limit to 5 for space
+                if len(static_npcs) > 5:
+                    npc_list.append(f"...and {len(static_npcs) - 5} more")
+                
+                npc_field_name = "Notable NPCs"
+                if location_status == "Loyal":
+                    npc_field_name = "🏛️ Federal Personnel"
+                elif location_status == "Bandit":
+                    npc_field_name = "💀 Local Contacts"
+                
+                embed.add_field(
+                    name=npc_field_name,
+                    value="\n".join(npc_list),
+                    inline=False
+                )
+        
+        # LOGBOOK PRESENCE
+        log_count = self.bot.db.execute_query(
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            (loc_id,),
+            fetch='one'
+        )[0]
+        embed.add_field(
+            name="📓 Logbook",
+            value="Available" if log_count > 0 else "None",
+            inline=True
+        )
+
+        # Get available routes and display them
+        routes = self.bot.db.execute_query(
+            '''SELECT c.name, l.name as dest_name, l.location_type as dest_type, c.travel_time, c.danger_level
+               FROM corridors c
+               JOIN locations l ON c.destination_location = l.location_id
+               WHERE c.origin_location = ? AND c.is_active = 1
+               ORDER BY c.travel_time
+               LIMIT 8''',
+            (loc_id,),
+            fetch='all'
+        )
+        
+        if routes:
+            route_lines = []
+            for corridor_name, dest_name, dest_type, travel_time, danger in routes:
+                # Determine route type and emoji
+                if "Approach" in corridor_name:
+                    route_emoji = "🌌"  # Local space
+                elif "Ungated" in corridor_name:
+                    route_emoji = "⭕️"  # Dangerous ungated
+                else:
+                    route_emoji = "🔵"  # Safe gated
+                
+                dest_emoji = {
+                    'colony': '🏭',
+                    'space_station': '🛰️',
+                    'outpost': '🛤️',
+                    'gate': '🚪'
+                }.get(dest_type, '📍')
+                
+                # Format time
+                mins = travel_time // 60
+                secs = travel_time % 60
+                if mins > 60:
+                    hours = mins // 60
+                    mins = mins % 60
+                    time_text = f"{hours}h{mins}m"
+                elif mins > 0:
+                    time_text = f"{mins}m{secs}s" if secs > 0 else f"{mins}m"
+                else:
+                    time_text = f"{secs}s"
+                
+                danger_text = "⚠️" * danger if danger > 0 else ""
+                # Clear departure → destination format
+                route_lines.append(f"{route_emoji} **{name} → {dest_emoji} {dest_name}** · {time_text} {danger_text}")
+            
+            embed.add_field(
+                name="🗺️ Available Routes",
+                value="\n".join(route_lines),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="🗺️ Available Routes",
+                value="*No active routes from this location*",
+                inline=False
+            )
+        
+        embed.set_footer(text="Use the other buttons to interact with this location")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
 class JobSelectView(discord.ui.View):
     def __init__(self, bot, user_id: int, jobs: List[Tuple], location_name: str):
         super().__init__(timeout=60)

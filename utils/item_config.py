@@ -239,6 +239,159 @@ class ItemConfig:
             "single_use": True,
             "rarity": "rare"
         }
+        # Black Market Exclusive Items
+        "Forged Transit Papers": {
+            "type": "documents",
+            "description": "Fake identification documents that can bypass some security checks",
+            "base_value": 2500,
+            "usage_type": "bypass_security",
+            "effect_value": 1,
+            "single_use": True,
+            "rarity": "rare"
+        },
+
+        "Identity Scrubber": {
+            "type": "service", 
+            "description": "Illegal device that erases identity records from databases",
+            "base_value": 8000,
+            "usage_type": "scrub_identity",
+            "effect_value": 1,
+            "single_use": True,
+            "rarity": "legendary"
+        },
+
+        "Stolen Data Chips": {
+            "type": "data",
+            "description": "Information of questionable origin, potentially valuable",
+            "base_value": 1800,
+            "usage_type": "narrative",
+            "effect_value": "stolen_information",
+            "single_use": False,
+            "rarity": "uncommon"
+        },
+
+        "Unmarked Credits": {
+            "type": "currency",
+            "description": "Untraceable digital currency for discrete transactions", 
+            "base_value": 2000,
+            "usage_type": "add_credits",
+            "effect_value": 1500,
+            "single_use": True,
+            "rarity": "rare"
+        },
+
+        "Weapon System Override": {
+            "type": "software",
+            "description": "Bypasses weapon safety protocols - highly illegal",
+            "base_value": 6000,
+            "usage_type": "upgrade_ship",
+            "effect_value": "weapon_override:1",
+            "single_use": True,
+            "rarity": "legendary"
+        },
+
+        "Neural Interface Hack": {
+            "type": "software",
+            "description": "Illegal consciousness enhancement technology",
+            "base_value": 4500,
+            "usage_type": "temp_boost",
+            "effect_value": 15,
+            "effect_duration": 7200,  # 2 hours
+            "single_use": True,
+            "rarity": "rare"
+        },
+
+        # Federal Depot Exclusive Items
+        "Federal ID Card": {
+            "type": "documents",
+            "description": "Official federal identification providing access to restricted areas",
+            "base_value": 1200,
+            "usage_type": "federal_access",
+            "effect_value": 1,
+            "single_use": False,
+            "rarity": "uncommon"
+        },
+
+        "Military Rations": {
+            "type": "consumable",
+            "description": "High-quality preserved food with extended shelf life",
+            "base_value": 35,
+            "usage_type": "restore_energy",
+            "effect_value": 25,
+            "single_use": True,
+            "rarity": "uncommon"
+        },
+
+        "Federal Comm Codes": {
+            "type": "data",
+            "description": "Access codes for federal communication networks",
+            "base_value": 3000,
+            "usage_type": "comm_access",
+            "effect_value": "federal_channels",
+            "single_use": False,
+            "rarity": "rare"
+        },
+
+        "Loyalty Certification": {
+            "type": "documents", 
+            "description": "Official proof of federal allegiance and good standing",
+            "base_value": 800,
+            "usage_type": "reputation_boost",
+            "effect_value": "federal:5",
+            "single_use": True,
+            "rarity": "uncommon"
+        },
+
+        "Federal Permit": {
+            "type": "documents",
+            "description": "Authorization for restricted activities in federal space",
+            "base_value": 1500,
+            "usage_type": "permit_access", 
+            "effect_value": "restricted_zones",
+            "single_use": False,
+            "rarity": "rare"
+        },
+
+        "Military Scanner Array": {
+            "type": "equipment",
+            "description": "Advanced military-grade scanning equipment",
+            "base_value": 2500,
+            "usage_type": "search_boost",
+            "effect_value": 40,  # +40% search success rate
+            "uses_remaining": 15,
+            "rarity": "rare"
+        },
+
+        "Federal Security Override": {
+            "type": "software",
+            "description": "Authorized security bypass codes for federal personnel",
+            "base_value": 5000,
+            "usage_type": "security_override",
+            "effect_value": "federal_bypass",
+            "uses_remaining": 3,
+            "rarity": "legendary"
+        },
+
+        "Combat Stim Injector": {
+            "type": "medical",
+            "description": "Military-grade combat enhancement drugs",
+            "base_value": 400,
+            "usage_type": "combat_boost",
+            "effect_value": 20,
+            "effect_duration": 1800,  # 30 minutes
+            "single_use": True,
+            "rarity": "rare"
+        },
+
+        "Emergency Medical Pod": {
+            "type": "medical",
+            "description": "Automated medical treatment system for critical injuries",
+            "base_value": 800,
+            "usage_type": "heal_hp",
+            "effect_value": 100,  # Full heal
+            "single_use": True,
+            "rarity": "legendary"
+        }
     }
     
     # Rarity weights for search results

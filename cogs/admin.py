@@ -16,6 +16,70 @@ class AdminCog(commands.Cog):
     
     admin_group = app_commands.Group(name="admin", description="Administrative commands")
     
+    @admin_group.command(name="afk", description="Trigger AFK warning for a player")
+    @app_commands.describe(player="Player to send AFK warning to")
+    async def admin_afk_warning(self, interaction: discord.Interaction, player: discord.Member):
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        # Check if player has a character and is logged in
+        char_info = self.db.execute_query(
+            "SELECT name, is_logged_in FROM characters WHERE user_id = ?",
+            (player.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message(f"{player.mention} doesn't have a character.", ephemeral=True)
+            return
+        
+        char_name, is_logged_in = char_info
+        
+        if not is_logged_in:
+            await interaction.response.send_message(f"**{char_name}** is not currently logged in.", ephemeral=True)
+            return
+        
+        # Check if player already has an active AFK warning
+        existing_warning = self.db.execute_query(
+            "SELECT warning_id FROM afk_warnings WHERE user_id = ? AND is_active = 1",
+            (player.id,),
+            fetch='one'
+        )
+        
+        if existing_warning:
+            await interaction.response.send_message(f"**{char_name}** already has an active AFK warning.", ephemeral=True)
+            return
+        
+        # Get the activity tracker and start AFK warning process
+        if hasattr(self.bot, 'activity_tracker'):
+            # Import here to avoid circular imports
+            import asyncio
+            
+            # Start the AFK warning process (same as automatic system)
+            warning_task = asyncio.create_task(
+                self.bot.activity_tracker._start_afk_warning(player.id, char_name)
+            )
+            
+            # Store the task in the activity tracker
+            self.bot.activity_tracker.warning_tasks[player.id] = warning_task
+            
+            embed = discord.Embed(
+                title="⚠️ AFK Warning Sent",
+                description=f"AFK warning sent to **{char_name}**.",
+                color=0xff9900
+            )
+            embed.add_field(name="Player", value=player.mention, inline=True)
+            embed.add_field(name="Admin", value=interaction.user.mention, inline=True)
+            embed.add_field(name="Status", value="Player has 10 minutes to respond", inline=False)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+            print(f"⚠️ Admin AFK warning: {char_name} ({player.id}) warned by {interaction.user.name}")
+        else:
+            await interaction.response.send_message("Activity tracker not found. Please try again.", ephemeral=True)
+            
     @admin_group.command(name="setup", description="Initial server setup and configuration")
     async def setup_server(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:

@@ -154,11 +154,17 @@ class RadioCog(commands.Cog):
         dest_x, dest_y, dest_system = dest_loc_info
         
         # Calculate propagation from both ends of the corridor, applying specific corridor degradation
+        if is_ungated:
+            # Apply heavy degradation to outgoing message from ungated corridor
+            pre_degraded_message = self._degrade_message(message, 12, "ungated")  # Simulate 12 systems of ungated interference
+        else:
+            pre_degraded_message = message
+
         recipients_from_origin = await self._calculate_radio_propagation(
-            origin_x, origin_y, origin_system, message, interaction.guild.id, sender_corridor_type=corridor_propagation_type
+            origin_x, origin_y, origin_system, pre_degraded_message, interaction.guild.id, sender_corridor_type=corridor_propagation_type
         )
         recipients_from_dest = await self._calculate_radio_propagation(
-            dest_x, dest_y, dest_system, message, interaction.guild.id, sender_corridor_type=corridor_propagation_type
+            dest_x, dest_y, dest_system, pre_degraded_message, interaction.guild.id, sender_corridor_type=corridor_propagation_type
         )
         
         # Combine and deduplicate recipients, prioritizing stronger signals
@@ -193,7 +199,7 @@ class RadioCog(commands.Cog):
         
         if not recipients:
             await interaction.response.send_message(
-                f"📡 **Signal relayed through corridor {corridor_display_type}**\n\nTransmission attempted from **{origin_name}** and **{dest_name}** ends, but no players are in range to receive it.",
+                f"📡 **Transmission relayed through corridor {corridor_display_type}**\n\nYour message has been broadcast from the **{origin_name}** and **{dest_name}** corridor ends.",
                 ephemeral=True
             )
             return
@@ -206,7 +212,7 @@ class RadioCog(commands.Cog):
         
         # Confirmation message for the sender
         await interaction.response.send_message(
-            f"📡 **Transmission relayed through corridor {corridor_display_type}**\n\nYour message has been broadcast from the **{origin_name}** and **{dest_name}** corridor ends. Signal reached {len(recipients)} recipient(s) across {len(set(r['location_id'] for r in recipients))} location(s).",
+            f"📡 **Transmission relayed through corridor {corridor_display_type}**\n\nYour message has been broadcast from the **{origin_name}** and **{dest_name}** corridor ends.",
             ephemeral=True
         )
 
@@ -241,7 +247,7 @@ class RadioCog(commands.Cog):
                 distance = math.sqrt((x - sender_x) ** 2 + (y - sender_y) ** 2)
                 system_distance = int(distance / 10)  # Convert to "systems" (rough approximation)
                 
-                if system_distance <= 10:  # Within max range (10 systems default for direct)
+                if system_distance <= 3:  # Within max range (10 systems default for direct)
                     # Apply message degradation based on distance AND sender's corridor type
                     degraded_message = self._degrade_message(message, system_distance, sender_corridor_type)
                     
@@ -254,7 +260,7 @@ class RadioCog(commands.Cog):
                         'system': system,
                         'distance': system_distance,
                         'message': degraded_message,
-                        'signal_strength': max(0, 100 - (system_distance * 10)),
+                        'signal_strength': max(0, 100 - (system_distance * 20)),
                         'relay_path': []
                     })
         
@@ -296,7 +302,7 @@ class RadioCog(commands.Cog):
             origin_distance = math.sqrt((origin_x - sender_x) ** 2 + (origin_y - sender_y) ** 2)
             origin_system_distance = int(origin_distance / 10)
             
-            if origin_system_distance <= 10:  # Within range
+            if origin_system_distance <= 3:  # Within range
                 # Calculate degradation: sender's corridor type + receiver's corridor type + distance
                 total_degradation_distance = origin_system_distance
                 
@@ -323,7 +329,7 @@ class RadioCog(commands.Cog):
             dest_distance = math.sqrt((dest_x - sender_x) ** 2 + (dest_y - sender_y) ** 2)
             dest_system_distance = int(dest_distance / 10)
             
-            if dest_system_distance <= 10:  # Within range
+            if dest_system_distance <= 3:  # Within range
                 # Calculate degradation: sender's corridor type + receiver's corridor type + distance
                 total_degradation_distance = dest_system_distance
                 
@@ -408,7 +414,7 @@ class RadioCog(commands.Cog):
             'y': sender_y,
             'message': original_message, # This is the original, undegraded message
             'total_degradation_distance': 0, # Total "distance" of degradation applied so far
-            'range': 10, # Default range for direct transmission
+            'range': 3, # Default range for direct transmission
             'name': 'Origin',
             'sender_corridor_type': sender_corridor_type # Propagate sender's original corridor type
         })
@@ -495,38 +501,49 @@ class RadioCog(commands.Cog):
     
     # Modify _degrade_message to accept sender_corridor_type.
     # Find the existing _degrade_message method and modify its signature and content.
-    def _degrade_message(self, message: str, system_distance: int, sender_corridor_type: str = "normal") -> str: # Added sender_corridor_type
+    def _degrade_message(self, message: str, system_distance: int, sender_corridor_type: str = "normal") -> str:
         """Apply signal degradation to message based on distance and corridor type"""
         
-        # Base degradation starts after 5 systems
-        degradation_start_threshold = 5
+        # REPLACE THE ENTIRE METHOD WITH THIS:
+        
+        # More aggressive degradation for galactic distances
+        degradation_start_threshold = 2  # Start degrading after just 2 systems
         
         # Apply additional fixed degradation for ungated corridors
         additional_ungated_degradation = 0
         if sender_corridor_type == "ungated":
-            additional_ungated_degradation = 10 # Equivalent to an extra 10 systems distance in degradation
+            additional_ungated_degradation = 15  # Increased from 10 to 15 for heavier ungated penalty
 
         # Calculate total effective system distance for degradation
         total_effective_distance = system_distance + additional_ungated_degradation
 
         if total_effective_distance <= degradation_start_threshold:
-            return message  # Clear transmission or minimal degradation
+            return message  # Clear transmission only within 2 systems
 
-        # Calculate degradation percentage
+        # More aggressive degradation percentage for galactic realism
         degradation_factor_distance = total_effective_distance - degradation_start_threshold
-        degradation_percent = min(80, degradation_factor_distance * 15) # 15% per system beyond threshold, max 80%
+        degradation_percent = min(95, degradation_factor_distance * 25)  # 25% per system beyond threshold, max 95%
         
         if degradation_percent <= 0:
             return message
         
-        # Apply character-level corruption
-        corruption_chars = ['_', '-', '~', '#', '*', ' ', '%', '$', '@'] # Added more corruption chars
+        # Enhanced corruption characters for more realistic interference
+        corruption_chars = ['_', '-', '~', '#', '*', ' ', '%', '$', '@', '?', '!', '&', '^']
         result = list(message)
         
+        # Add "scattering" effect - random bursts of interference
+        scatter_chance = min(0.3, degradation_percent / 200)  # Up to 30% chance of scatter effects
+        
         for i, char in enumerate(result):
-            if char.isalnum():  # Only corrupt letters and numbers
-                if random.random() * 100 < degradation_percent:
-                    result[i] = random.choice(corruption_chars)
+            if char.isalnum() or char in [' ', '.', ',', '!', '?']:
+                if random.random() < (degradation_percent / 100):
+                    # Apply scattering - sometimes replace with multiple interference chars
+                    if random.random() < scatter_chance:
+                        # Scatter effect: replace single char with 2-3 interference chars
+                        result[i] = ''.join(random.choices(corruption_chars, k=random.randint(2, 3)))
+                    else:
+                        # Normal single-character corruption
+                        result[i] = random.choice(corruption_chars)
         
         return ''.join(result)
 
@@ -594,73 +611,45 @@ class RadioCog(commands.Cog):
         # Get corridor name for display
         corridor_name = recipients[0]['location'].replace('In Transit (', '').replace(')', '') if recipients else "Unknown Corridor"
         
-        # Group recipients by signal quality
-        clear_receivers = []
-        degraded_receivers = []
-        
-        for recipient in recipients:
-            if recipient['signal_strength'] >= 70:
-                clear_receivers.append(recipient)
-            else:
-                degraded_receivers.append(recipient)
-        
-        # Create radio message embed for transit
+        first_recipient = recipients[0] if recipients else None
+        signal_strength = first_recipient['signal_strength'] if first_recipient else 0
+        corridor_type = first_recipient.get('corridor_type', 'gated') if first_recipient else 'gated'
+
+        # Create simplified radio message embed for transit
         embed = discord.Embed(
             title="📻 Incoming Radio Transmission",
             color=0x800080  # Purple for transit
         )
-        
-        # Determine corridor type for visual styling
-        corridor_type = recipients[0].get('corridor_type', 'gated') if recipients else 'gated'
+
+        # Style based on corridor type and signal quality
         if corridor_type == "ungated":
             embed.color = 0xff4444  # Red for dangerous ungated corridors
             embed.title = "📻⚠️ Degraded Radio Transmission"
-        
-        # Add transmission header
+
+        # Add transmission header with signal quality
+        signal_indicator = "🟢" if signal_strength >= 70 else ("📶" if signal_strength >= 30 else "📵")
         embed.add_field(
-            name="📡 Signal Origin", 
+            name=f"📡 Signal Origin {signal_indicator}", 
             value=f"[{sender_callsign}]\n📍 Broadcasting from {sender_location}, {sender_system}",
             inline=False
         )
-        
-        # Show who receives what quality in the corridor
-        if clear_receivers:
-            clear_names = [f"**{r['char_name']}** [{r['callsign']}]" for r in clear_receivers]
-            embed.add_field(
-                name="🟢 Clear Reception (In Corridor)",
-                value="\n".join(clear_names),
-                inline=True
-            )
-            
-            # Show clear message
+
+        # Show appropriate message version
+        if signal_strength >= 70:
             embed.add_field(
                 name="📝 Transmission Content",
                 value=f'"{original_message}"',
                 inline=False
             )
-        
-        if degraded_receivers:
-            degraded_names = []
-            for r in degraded_receivers:
-                signal_bars = "📶" if r['signal_strength'] >= 30 else "📵"
-                relay_info = f" (via {', '.join(r['relay_path'])})" if r['relay_path'] else ""
-                degraded_names.append(f"{signal_bars} **{r['char_name']}** [{r['callsign']}]{relay_info}")
-            
+        else:
+            # Show degraded message
+            degraded_message = first_recipient['message'] if first_recipient else original_message
             embed.add_field(
-                name="📡 Weak Reception", 
-                value="\n".join(degraded_names),
-                inline=True
+                name="📊 Received (Signal Degraded)",
+                value=f'"{degraded_message}"',
+                inline=False
             )
-            
-            # Show degraded message if no clear message shown
-            if not clear_receivers:
-                worst_signal = min(degraded_receivers, key=lambda x: x['signal_strength'])
-                embed.add_field(
-                    name="📊 Received (Heavily Degraded)",
-                    value=f'"{worst_signal["message"]}"',
-                    inline=False
-                )
-        
+
         # Add corridor-specific warnings
         if corridor_type == "ungated":
             embed.add_field(
@@ -720,76 +709,57 @@ class RadioCog(commands.Cog):
         )
         location_name = location_info[0] if location_info else "Unknown Location"
         
-        # Group recipients by signal quality FIRST
-        clear_receivers = []
-        degraded_receivers = []
-        
-        for recipient in recipients:
-            if recipient['signal_strength'] >= 70:
-                clear_receivers.append(recipient)
-            else:
-                degraded_receivers.append(recipient)
-        
-        # Create immersive radio message embed
+        # Determine signal quality from first recipient (all at same location have same quality)
+        first_recipient = recipients[0] if recipients else None
+        signal_strength = first_recipient['signal_strength'] if first_recipient else 0
+        is_clear_signal = signal_strength >= 70
+
+        # Create simplified radio message embed
         embed = discord.Embed(
             title="📻 Incoming Radio Transmission",
-            color=0x00aaff
+            color=0x00aaff if is_clear_signal else 0xff8800  # Blue for clear, orange for degraded
         )
-        
-        # Determine if location should be shown based on signal quality
+
+        # Determine location display based on signal quality
         location_display = sender_location
         system_display = f", {sender_system}"
 
-        # If no clear receivers and only degraded, or if it's explicitly from transit where full location is ambiguous
-        if (not clear_receivers and degraded_receivers) or ("Corridor Relay" in sender_location):
+        # Hide location details for heavily degraded signals
+        if signal_strength < 30 or ("Corridor Relay" in sender_location):
             location_display = "[UNKNOWN LOCATION]"
             system_display = ""
 
-
-        # Add transmission header
+        # Add transmission header with signal quality indicator
+        signal_indicator = "🟢" if is_clear_signal else ("📶" if signal_strength >= 30 else "📵")
         embed.add_field(
-            name="📡 Signal Origin", 
+            name=f"📡 Signal Origin {signal_indicator}", 
             value=f"[{sender_callsign}]\n📍 Broadcasting from {location_display}{system_display}",
             inline=False
         )
-        
-        # Show who receives what quality
-        if clear_receivers:
-            clear_names = [f"**{r['char_name']}** [{r['callsign']}]" for r in clear_receivers]
-            embed.add_field(
-                name="🟢 Clear Reception",
-                value="\n".join(clear_names[:5]) + (f"\n*...and {len(clear_names)-5} more*" if len(clear_names) > 5 else ""),
-                inline=True
-            )
-            
-            # Show clear message
+
+        # Show the appropriate message version
+        if is_clear_signal:
             embed.add_field(
                 name="📝 Transmission Content",
                 value=f'"{original_message}"',
                 inline=False
             )
-        
-        if degraded_receivers:
-            degraded_names = []
-            for r in degraded_receivers:
-                signal_bars = "📶" if r['signal_strength'] >= 50 else "📵"
-                relay_info = f" (via {', '.join(r['relay_path'])})" if r['relay_path'] else ""
-                degraded_names.append(f"{signal_bars} **{r['char_name']}** [{r['callsign']}]{relay_info}")
-            
+        else:
+            # Show degraded message
+            degraded_message = first_recipient['message'] if first_recipient else original_message
             embed.add_field(
-                name="📡 Weak Reception", 
-                value="\n".join(degraded_names[:5]) + (f"\n*...and {len(degraded_names)-5} more*" if len(degraded_names) > 5 else ""),
-                inline=True
+                name="📊 Received (Signal Degraded)",
+                value=f'"{degraded_message}"',
+                inline=False
             )
-            
-            # Show degraded message example
-            if not clear_receivers:  # Only show if no clear message already shown
-                worst_signal = min(degraded_receivers, key=lambda x: x['signal_strength'])
-                embed.add_field(
-                    name="📊 Received (Degraded)",
-                    value=f'"{worst_signal["message"]}"',
-                    inline=False
-                )
+
+        # Add relay information if applicable
+        if first_recipient and first_recipient.get('relay_path'):
+            embed.add_field(
+                name="📡 Signal Path",
+                value=" → ".join(first_recipient['relay_path']),
+                inline=False
+            )
         
         # Add atmospheric footer
         embed.set_footer(

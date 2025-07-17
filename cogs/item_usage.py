@@ -6,18 +6,26 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import uuid
+import random
 
 class ItemUsageCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
     
+    def get_narrative_usage_message(self, character_name, item_name):
+        """Generate varied narrative usage messages"""
+        messages = [
+            f"**{character_name}** uses **{item_name}**."
+        ]
+        return random.choice(messages)
+        
     @app_commands.command(name="use", description="Use an item from your inventory")
     @app_commands.describe(item_name="Name of the item to use")
     async def use_item(self, interaction: discord.Interaction, item_name: str):
-        # Check if user has character
+        # MODIFY THIS QUERY TO INCLUDE CHARACTER NAME
         char_data = self.db.execute_query(
-            "SELECT user_id, current_location, hp, max_hp FROM characters WHERE user_id = ?",
+            "SELECT user_id, current_location, hp, max_hp, name FROM characters WHERE user_id = ?",
             (interaction.user.id,),
             fetch='one'
         )
@@ -26,7 +34,8 @@ class ItemUsageCog(commands.Cog):
             await interaction.response.send_message("You don't have a character!", ephemeral=True)
             return
         
-        user_id, current_location, current_hp, max_hp = char_data
+        # UPDATE THIS LINE TO INCLUDE CHARACTER NAME
+        user_id, current_location, current_hp, max_hp, character_name = char_data
         
         # Find item in inventory
         item_data = self.db.execute_query(
@@ -50,14 +59,79 @@ class ItemUsageCog(commands.Cog):
             metadata = {}
         
         usage_type = metadata.get("usage_type")
+        
+        # REPLACE THE EXISTING NARRATIVE ITEM HANDLING WITH THIS
         if not usage_type or usage_type == "narrative":
             if usage_type == "narrative":
+                # Get uses_remaining for narrative items
+                uses_remaining = metadata.get("uses_remaining")
+                single_use = metadata.get("single_use", False)
+                
+                # Check if item has uses remaining
+                if uses_remaining is not None and uses_remaining <= 0:
+                    embed = discord.Embed(
+                        title="❌ Item Depleted",
+                        description=f"**{actual_name}** has no uses remaining.",
+                        color=0xff4444
+                    )
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
+                    return
+                
+                # Generate narrative usage message with character name
+                usage_message = self.get_narrative_usage_message(character_name, actual_name)
+                
                 embed = discord.Embed(
-                    title="📖 Item Examined",
-                    description=f"You examine the **{actual_name}**.\n\n*{description}*",
+                    title="📖 Narrative Item Used",
+                    description=f"{usage_message}\n\n*{description}*",
                     color=0x4169E1
                 )
-                embed.add_field(name="Usage", value="This item is primarily for roleplay and trading.", inline=False)
+                
+                # Handle uses system for narrative items
+                item_consumed = False
+                uses_text = ""
+                
+                if single_use or uses_remaining == 1:
+                    # Remove item completely
+                    if quantity == 1:
+                        self.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (item_id,))
+                    else:
+                        self.db.execute_query(
+                            "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = ?",
+                            (item_id,)
+                        )
+                    item_consumed = True
+                    uses_text = "This item has been consumed."
+                    
+                elif uses_remaining is not None and uses_remaining > 1:
+                    # Decrease uses remaining
+                    new_uses = uses_remaining - 1
+                    metadata["uses_remaining"] = new_uses
+                    new_metadata = json.dumps(metadata)
+                    
+                    self.db.execute_query(
+                        "UPDATE inventory SET metadata = ? WHERE item_id = ?",
+                        (new_metadata, item_id)
+                    )
+                    
+                    if new_uses == 1:
+                        uses_text = f"**1 use remaining** - this item will be consumed on next use."
+                    else:
+                        uses_text = f"**{new_uses} uses remaining**"
+                        
+                elif uses_remaining is None:
+                    # Unlimited uses
+                    uses_text = "This item can be used repeatedly."
+                
+                if uses_text:
+                    embed.add_field(name="Usage", value=uses_text, inline=False)
+                
+                # Add flavor text about roleplay usage
+                embed.add_field(
+                    name="Effect", 
+                    value="The narrative effects of using this item are determined through roleplay.", 
+                    inline=False
+                )
+                
             else:
                 embed = discord.Embed(
                     title="❌ Cannot Use Item",
@@ -67,6 +141,7 @@ class ItemUsageCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
         
+        # REST OF THE METHOD REMAINS THE SAME
         # Check if item has uses remaining
         uses_remaining = metadata.get("uses_remaining")
         if uses_remaining is not None and uses_remaining <= 0:

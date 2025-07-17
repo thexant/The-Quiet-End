@@ -986,57 +986,133 @@ class GalaxyGeneratorCog(commands.Cog):
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
             self.db.executemany_in_transaction(conn, query, npcs_to_insert)
             print(f"🤖 Created {len(npcs_to_insert)} static NPCs (final batch).")
+    
     async def _generate_black_markets(self, conn, major_locations: List[Dict]) -> int:
         """
-        Generates rare black markets and their items, optimized to run within a single transaction.
+        Enhanced black market generation using the proper item system from item_config.py
         """
-        black_markets_created = 0
+        from item_config import ItemConfig
         
-        # Prepare lists to hold data for bulk operations at the end
+        black_markets_created = 0
         locations_to_flag = []
         items_to_insert = []
 
-        # This list defines the potential items for any black market
-        black_market_item_pool = [
-            ("Forged Transit Papers", "documents", 5000, "Fake identification documents"),
-            ("Illegal Ship Mods", "upgrade", 8000, "Unlicensed ship modifications"),
-            ("Contraband Medicine", "medical", 3000, "Restricted medical supplies"),
-            ("Identity Scrubber", "service", 15000, "Erases your identity records"),
-            ("Radiation Shielding", "equipment", 4000, "Military-grade radiation protection"),
-            ("Black Market Intel", "information", 2000, "Valuable location intelligence")
-        ]
+        # Get black market appropriate items from the proper item system
+        def get_black_market_items():
+            """Get items appropriate for black markets"""
+            black_market_items = []
+            
+            # Medical items (illegal/unregulated)
+            medical_items = ItemConfig.get_items_by_type("medical")
+            for item in medical_items:
+                item_data = ItemConfig.get_item_definition(item)
+                if item_data.get("rarity") in ["uncommon", "rare"]:  # Harder to get legally
+                    black_market_items.append((item, "medical", "Unregulated medical supplies"))
+            
+            # Equipment items (illegal/modified)
+            equipment_items = ItemConfig.get_items_by_type("equipment")
+            for item in equipment_items:
+                item_data = ItemConfig.get_item_definition(item)
+                if item_data.get("rarity") in ["rare", "legendary"]:  # Military/restricted
+                    black_market_items.append((item, "equipment", "Military surplus or stolen equipment"))
+            
+            # Upgrade items (illegal modifications)
+            upgrade_items = ItemConfig.get_items_by_type("upgrade")
+            for item in upgrade_items:
+                black_market_items.append((item, "upgrade", "Unlicensed ship modifications"))
+            
+            # Special black market exclusives (add to ItemConfig.py)
+            exclusive_items = [
+                ("Forged Transit Papers", "documents", "Fake identification documents"),
+                ("Identity Scrubber", "service", "Erases identity records - illegal but effective"),
+                ("Stolen Data Chips", "data", "Information of questionable origin"),
+                ("Unmarked Credits", "currency", "Untraceable digital currency"),
+                ("Weapon System Override", "software", "Bypasses weapon safety protocols"),
+                ("Neural Interface Hack", "software", "Illegal consciousness enhancement"),
+            ]
+            black_market_items.extend(exclusive_items)
+            
+            return black_market_items
+
+        black_market_item_pool = get_black_market_items()
 
         for location in major_locations:
-            # Determine if a black market should be created
-            if location['wealth_level'] <= 3 and random.random() < 0.10:
+            black_market_chance = 0.0
+            
+            # Enhanced spawn logic (as before)
+            if location['wealth_level'] <= 2:
+                black_market_chance = 0.35
+            elif location['wealth_level'] <= 3:
+                black_market_chance = 0.25
+            elif location['wealth_level'] <= 4:
+                black_market_chance = 0.15
+            elif location['wealth_level'] == 5:
+                black_market_chance = 0.08
+            elif location['wealth_level'] == 6:
+                black_market_chance = 0.03
+            
+            # Location type modifiers
+            if location['type'] == 'outpost':
+                black_market_chance *= 1.5
+            elif location['type'] == 'space_station':
+                black_market_chance *= 0.7
+            elif location['type'] == 'colony':
+                black_market_chance *= 1.0
+            
+            # Population modifiers
+            if location['population'] < 100:
+                black_market_chance *= 1.3
+            elif location['population'] > 1000:
+                black_market_chance *= 0.8
                 
-                # Step 1: Create the black market record and get its ID immediately.
-                # This avoids a separate SELECT query and is a key optimization.
+            if location.get('is_derelict', False):
+                black_market_chance = 0.60
+            
+            black_market_chance = min(black_market_chance, 0.60)
+            
+            if black_market_chance > 0 and random.random() < black_market_chance:
+                
+                market_type = 'underground' if location['wealth_level'] <= 2 else 'discrete'
+                reputation_required = random.randint(0, 2) if location['wealth_level'] <= 2 else random.randint(1, 4)
+                
                 market_id = self.db.execute_in_transaction(
                     conn,
                     '''INSERT INTO black_markets (location_id, market_type, reputation_required, is_hidden)
                        VALUES (?, ?, ?, 1)''',
-                    (location['id'], 'underground', random.randint(0, 3)),
+                    (location['id'], market_type, reputation_required),
                     fetch='lastrowid'
                 )
                 
-                # If a market was successfully created, prepare related data for bulk insertion
                 if market_id:
                     black_markets_created += 1
-                    
-                    # Step 2: Add the location to a list to be updated in bulk later.
                     locations_to_flag.append((location['id'],))
                     
-                    # Step 3: Prepare the items for this specific market.
-                    # Sample 2 to 4 items from the pool.
-                    for item_name, item_type, price, description in random.sample(black_market_item_pool, random.randint(2, 4)):
+                    # Generate items using proper item system
+                    item_count = random.randint(3, 6)
+                    selected_items = random.sample(black_market_item_pool, min(item_count, len(black_market_item_pool)))
+                    
+                    for item_name, item_type, description in selected_items:
+                        # Get proper item data if it exists in ItemConfig
+                        item_data = ItemConfig.get_item_definition(item_name)
+                        
+                        if item_data:
+                            # Use ItemConfig pricing with black market markup
+                            base_price = item_data.get("base_value", 100)
+                            markup_multiplier = random.uniform(1.5, 3.0)  # 50-200% markup
+                            final_price = int(base_price * markup_multiplier)
+                            stock = 1 if item_data.get("rarity") in ["rare", "legendary"] else random.randint(1, 3)
+                        else:
+                            # Fallback for exclusive items
+                            final_price = random.randint(1000, 5000)
+                            stock = random.randint(1, 2)
+                        
                         items_to_insert.append(
-                            (market_id, item_name, item_type, price, description)
+                            (market_id, item_name, item_type, final_price, description, stock)
                         )
                     
-                    print(f"🕴️  Prepared black market for {location['name']}")
+                    print(f"🕴️  Created {market_type} black market at {location['name']}")
 
-        # Step 4: Perform the bulk database operations after the loop.
+        # Bulk database operations
         if locations_to_flag:
             self.db.executemany_in_transaction(
                 conn,
@@ -1045,10 +1121,11 @@ class GalaxyGeneratorCog(commands.Cog):
             )
         
         if items_to_insert:
+            # Update the black_market_items table to include stock
             self.db.executemany_in_transaction(
                 conn,
-                '''INSERT INTO black_market_items (market_id, item_name, item_type, price, description)
-                   VALUES (?, ?, ?, ?, ?)''',
+                '''INSERT INTO black_market_items (market_id, item_name, item_type, price, description, stock)
+                   VALUES (?, ?, ?, ?, ?, ?)''',
                 items_to_insert
             )
             
@@ -1549,27 +1626,137 @@ class GalaxyGeneratorCog(commands.Cog):
             (location['name'],),
             fetch='one'
         )[0]
+        
     async def _assign_federal_supplies(self, conn, major_locations: List[Dict]) -> int:
-        """Assigns federal supplies to high-wealth locations in bulk."""
+        """
+        Enhanced federal supply depot assignment with actual item implementation
+        """
+        from item_config import ItemConfig
+        
         locations_to_update = []
+        federal_items_to_insert = []
         
+        # Define what federal depots actually offer
+        def get_federal_supply_items():
+            """Get items that federal depots should stock"""
+            federal_items = []
+            
+            # High-quality medical supplies
+            medical_items = ItemConfig.get_items_by_type("medical")
+            for item in medical_items:
+                federal_items.append((item, "medical", "Federal medical supplies"))
+            
+            # Military-grade equipment
+            equipment_items = ItemConfig.get_items_by_type("equipment") 
+            for item in equipment_items:
+                item_data = ItemConfig.get_item_definition(item)
+                if item_data.get("rarity") in ["uncommon", "rare"]:
+                    federal_items.append((item, "equipment", "Military surplus equipment"))
+            
+            # Premium fuel
+            fuel_items = ItemConfig.get_items_by_type("fuel")
+            for item in fuel_items:
+                federal_items.append((item, "fuel", "Federal fuel reserves"))
+            
+            # Authorized upgrades
+            upgrade_items = ItemConfig.get_items_by_type("upgrade")
+            for item in upgrade_items:
+                federal_items.append((item, "upgrade", "Authorized ship modifications"))
+            
+            # Federal exclusives
+            exclusive_items = [
+                ("Federal ID Card", "documents", "Official federal identification"),
+                ("Military Rations", "consumable", "High-quality preserved food"),
+                ("Federal Comm Codes", "data", "Access to federal communication networks"),
+                ("Loyalty Certification", "documents", "Proof of federal allegiance"),
+                ("Federal Permit", "documents", "Authorization for restricted activities"),
+            ]
+            federal_items.extend(exclusive_items)
+            
+            return federal_items
+
+        federal_item_pool = get_federal_supply_items()
+
         for location in major_locations:
-            # Federal supplies appear at wealthy locations, inverse of black markets
-            if location['wealth_level'] >= 7:
-                # Flat 10% chance for wealth level 7 or higher (inverse of black markets)
-                federal_chance = 0.10
+            federal_chance = 0.0
+            
+            # Enhanced spawn logic (as before)
+            if location['wealth_level'] >= 9:
+                federal_chance = 0.40
+            elif location['wealth_level'] >= 8:
+                federal_chance = 0.30
+            elif location['wealth_level'] >= 7:
+                federal_chance = 0.20
+            elif location['wealth_level'] == 6:
+                federal_chance = 0.12
+            elif location['wealth_level'] == 5:
+                federal_chance = 0.05
+            
+            # Location type modifiers
+            if location['type'] == 'space_station':
+                federal_chance *= 1.4
+            elif location['type'] == 'colony':
+                federal_chance *= 1.0
+            elif location['type'] == 'outpost':
+                federal_chance *= 0.6
+                
+            # Population modifiers
+            if location['population'] > 2000:
+                federal_chance *= 1.3
+            elif location['population'] > 1000:
+                federal_chance *= 1.1
+            elif location['population'] < 200:
+                federal_chance *= 0.7
+                
+            # Special cases
+            if location['name'] == 'Earth':
+                federal_chance = 1.0
+                
+            if location.get('has_black_market', False) or location.get('is_derelict', False):
+                federal_chance = 0.0
+            
+            if location['name'] != 'Earth':
+                federal_chance = min(federal_chance, 0.50)
+            
+            if federal_chance > 0 and random.random() < federal_chance:
+                gets_shipyard = location.get('has_shipyard', False)
+                if not gets_shipyard and location['wealth_level'] >= 8:
+                    gets_shipyard = random.random() < 0.8
+                elif not gets_shipyard and location['wealth_level'] >= 6:
+                    gets_shipyard = random.random() < 0.5
                     
-                if random.random() < federal_chance:
-                    # Prepare a tuple for the executemany call.
-                    # This updates all necessary flags for a federal depot in one go.
-                    locations_to_update.append((
-                        True,  # has_federal_supplies
-                        True,  # has_upgrades
-                        # 70% chance of getting a shipyard if it doesn't have one
-                        True if not location.get('has_shipyard', False) and random.random() < 0.7 else location.get('has_shipyard', False),
-                        location['id']
-                    ))
+                locations_to_update.append((
+                    True,  # has_federal_supplies
+                    True,  # has_upgrades
+                    gets_shipyard,  # has_shipyard
+                    location['id']
+                ))
+                
+                # Generate federal supply items
+                item_count = random.randint(4, 8)  # Federal depots are well-stocked
+                selected_items = random.sample(federal_item_pool, min(item_count, len(federal_item_pool)))
+                
+                for item_name, item_type, description in selected_items:
+                    item_data = ItemConfig.get_item_definition(item_name)
+                    
+                    if item_data:
+                        # Federal pricing - slight discount from base value
+                        base_price = item_data.get("base_value", 100)
+                        federal_discount = random.uniform(0.8, 0.9)  # 10-20% discount
+                        final_price = int(base_price * federal_discount)
+                        stock = random.randint(3, 8)  # Well-stocked
+                    else:
+                        # Exclusive items
+                        final_price = random.randint(500, 2000)
+                        stock = random.randint(2, 5)
+                    
+                    federal_items_to_insert.append(
+                        (location['id'], item_name, item_type, final_price, description, stock, "federal")
+                    )
+                
+                print(f"🏛️  Created federal depot at {location['name']}")
         
+        # Database operations
         if locations_to_update:
             update_query = """UPDATE locations SET 
                                 has_federal_supplies = ?, 
@@ -1577,7 +1764,15 @@ class GalaxyGeneratorCog(commands.Cog):
                                 has_shipyard = ? 
                               WHERE location_id = ?"""
             self.db.executemany_in_transaction(conn, update_query, locations_to_update)
-            print(f"🏛️  Assigned federal supplies to {len(locations_to_update)} locations.")
+        
+        # Insert federal supply items into shop_items table with federal tag
+        if federal_items_to_insert:
+            self.db.executemany_in_transaction(
+                conn,
+                '''INSERT INTO shop_items (location_id, item_name, item_type, price, description, stock, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                federal_items_to_insert
+            )
             
         return len(locations_to_update)
         

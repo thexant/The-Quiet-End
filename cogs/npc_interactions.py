@@ -211,19 +211,20 @@ class NPCInteractionsCog(commands.Cog):
 
         # Generate conversation snippet
         greetings = [
-            f"{npc_name} nods at you. ",
-            f"{npc_name} looks up as you approach. ",
-            f"You catch {npc_name}'s eye. ",
-            f"{npc_name} offers a brief smile. "
+            f"{npc_name} nods at {char_name}. ",
+            f"{npc_name} looks up as {char_name} approaches. ",
+            f"{char_name} catches {npc_name}'s eye. ",
+            f"{npc_name} offers a brief smile. ",
+            f"{npc_name} gently waves at {char_name}. "
         ]
         
         openers_by_personality = {
             "Friendly and talkative": [
                 f"'Good to see a new face around here! What brings you to this part of the galaxy?'",
                 f"'Welcome! Anything I can help you with today?'",
-                f"'Hey there, traveler! Pull up a seat, unless you're in a hurry to get back to the void.'",
+                f"'Hey there, {char_name}! Pull up a seat, unless you're in a hurry to get back to the void.'",
                 f"'Always good to meet someone new. The silence out here can get to you, you know?'",
-                f"'Another soul braving the corridors, eh? Stay safe out there, friend.'",
+                f"'Another soul braving the corridors, eh? Stay safe out there, {char_name}.'",
                 f"'Come on in, the air's mostly clean in here! What's your story?'",
                 f"'Don't mind me, just happy to have a new voice. Been too quiet lately.'",
                 f"'If you need anything, just ask! We look out for each other out here, or try to.'",
@@ -235,7 +236,7 @@ class NPCInteractionsCog(commands.Cog):
                 f"'Yes?' they ask quietly.",
                 f"'Can I help you?' their voice barely a whisper.",
                 f"'What do you need?' their gaze distant.",
-                f"'State your business.' their eyes briefly meet yours before looking away.",
+                f"'State your business.' their eyes briefly meet {char_name}'s before looking away.",
                 f"'Don't expect much conversation.' they mumble, looking at the floor.",
                 f"'Speak. I don't have all day.'",
                 f"'Is there something you require?' they ask, almost shyly.",

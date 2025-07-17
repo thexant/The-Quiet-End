@@ -411,21 +411,14 @@ class BeaconSystemCog(commands.Cog):
         clear_receivers = [r for r in recipients if r['signal_strength'] >= 70]
         degraded_receivers = [r for r in recipients if r['signal_strength'] < 70]
         
-        if clear_receivers:
-            clear_names = [f"**{r['char_name']}** [{r['callsign']}]" for r in clear_receivers]
-            embed.add_field(
-                name="🟢 Clear Reception",
-                value="\n".join(clear_names[:5]),
-                inline=True
-            )
-        
-        if degraded_receivers:
-            degraded_names = [f"📵 **{r['char_name']}** [{r['callsign']}]" for r in degraded_receivers]
-            embed.add_field(
-                name="📡 Weak Reception",
-                value="\n".join(degraded_names[:5]),
-                inline=True
-            )
+        signal_strength = clear_receivers[0]['signal_strength'] if clear_receivers else (degraded_receivers[0]['signal_strength'] if degraded_receivers else 0)
+        signal_indicator = "🟢" if signal_strength >= 70 else ("📶" if signal_strength >= 30 else "📵")
+
+        embed.add_field(
+            name=f"📡 Emergency Signal {signal_indicator}",
+            value=f"Beacon transmission received at this location\nSignal strength: {signal_strength}%",
+            inline=False
+        )
         
         # Show message (use clear version if available, otherwise degraded)
         display_message = message if clear_receivers else (degraded_receivers[0]['message'] if degraded_receivers else message)
