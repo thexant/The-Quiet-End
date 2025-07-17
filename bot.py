@@ -41,7 +41,7 @@ class RPGBot(commands.Bot):
         self.activity_tracker = None
         self.income_task = None
         self._background_tasks = []
-        
+            
     def start_background_tasks(self):
         """Starts the background tasks if they are not already running."""
         if self._closing:
@@ -61,6 +61,17 @@ class RPGBot(commands.Bot):
         galaxy_cog = self.get_cog('GalaxyGeneratorCog')
         if galaxy_cog:
             galaxy_cog.start_auto_shift_task()
+        
+        # Start activity monitoring and resume AFK warnings
+        if hasattr(self, 'activity_tracker') and self.activity_tracker:
+            # Start the monitoring task
+            monitoring_task = self.activity_tracker.start_activity_monitoring()
+            if monitoring_task:
+                self._background_tasks.append(monitoring_task)
+            
+            # Resume any AFK warnings that were active before restart
+            resume_task = self.loop.create_task(self.activity_tracker.resume_afk_warnings_on_startup())
+            self._background_tasks.append(resume_task)
             
         print("✅ Background tasks started.")
 
@@ -68,6 +79,10 @@ class RPGBot(commands.Bot):
         """Stops/Cancels the background tasks."""
         print("⏸️ Stopping background tasks...")
         self._cancel_background_tasks()
+        
+        # Cancel activity tracker tasks
+        if hasattr(self, 'activity_tracker') and self.activity_tracker:
+            self.activity_tracker.cancel_all_tasks()
         
         galaxy_cog = self.get_cog('GalaxyGeneratorCog')
         if galaxy_cog:

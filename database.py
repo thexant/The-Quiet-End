@@ -1259,6 +1259,54 @@ class Database:
                 FOREIGN KEY (ship_id) REFERENCES ships (ship_id)
             )''',
             '''ALTER TABLE characters ADD COLUMN auto_rename INTEGER DEFAULT 0 NOT NULL''',
+            '''ALTER TABLE black_market_items ADD COLUMN stock INTEGER DEFAULT 1''',
+
+            '''ALTER TABLE shop_items ADD COLUMN metadata TEXT DEFAULT NULL''',
+
+            '''CREATE TABLE IF NOT EXISTS federal_supply_items (
+                supply_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id INTEGER NOT NULL,
+                item_name TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                price INTEGER NOT NULL,
+                stock INTEGER DEFAULT -1,
+                description TEXT,
+                clearance_level INTEGER DEFAULT 1,
+                requires_id BOOLEAN DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS federal_access (
+                access_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                access_level INTEGER DEFAULT 1,
+                granted_by INTEGER,
+                granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                FOREIGN KEY (granted_by) REFERENCES characters (user_id)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS federal_reputation (
+                user_id INTEGER PRIMARY KEY,
+                reputation_points INTEGER DEFAULT 0,
+                loyalty_level TEXT DEFAULT 'neutral' CHECK(loyalty_level IN ('traitor', 'suspect', 'neutral', 'trusted', 'exemplary')),
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS federal_services (
+                service_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id INTEGER NOT NULL,
+                service_type TEXT NOT NULL CHECK(service_type IN ('id_verification', 'permit_issuance', 'loyalty_certification', 'security_clearance', 'military_contracts')),
+                service_name TEXT NOT NULL,
+                cost INTEGER NOT NULL,
+                requirements TEXT,
+                is_available BOOLEAN DEFAULT 1,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )'''
         ]
         
         for q in queries:
