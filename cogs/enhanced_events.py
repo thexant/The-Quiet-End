@@ -41,7 +41,7 @@ class EnhancedEventsCog(commands.Cog):
             if last_event and last_event[0]:
                 from datetime import datetime, timedelta
                 last_time = datetime.fromisoformat(last_event[0])
-                if datetime.now() - last_time < timedelta(minutes=30):
+                if datetime.now() - last_time < timedelta(minutes=8):
                     continue  # Too recent
             
             # Random chance based on location activity and type
@@ -245,7 +245,464 @@ class EnhancedEventsCog(commands.Cog):
         
         view = PirateEncounterView(self.bot, encounter_id, players, pirate_ships)
         await channel.send(embed=embed, view=view)
-
+        
+    async def _handle_scavenger_encounter(self, location_id, players, location_name, event_name, description, color):
+        """Handle scavenger drone encounter during travel"""
+        
+        channel = await self._get_location_channel(location_id)
+        if not channel:
+            return
+        
+        embed = discord.Embed(
+            title=f"🤖 {event_name}",
+            description=f"{description}\n\n**Location:** {location_name}",
+            color=color
+        )
+        
+        # Determine drone swarm strength
+        drone_count = min(5, max(2, len(players) + random.randint(0, 2)))
+        
+        embed.add_field(
+            name="🔧 Hostile Drones",
+            value=f"{drone_count} scavenger drone{'s' if drone_count > 1 else ''} detected",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="⚡ Options",
+            value="• Deploy countermeasures\n• Attempt evasion\n• Sacrifice cargo\n• Fight them off",
+            inline=True
+        )
+        
+        # Select a random player for the encounter
+        if players:
+            user_id = random.choice(players)[0]
+            
+            view = discord.ui.View(timeout=300)
+            
+            countermeasures_button = discord.ui.Button(
+                label="Deploy Countermeasures",
+                style=discord.ButtonStyle.primary,
+                emoji="🛡️"
+            )
+            
+            evade_button = discord.ui.Button(
+                label="Evasive Maneuvers",
+                style=discord.ButtonStyle.secondary,
+                emoji="🚀"
+            )
+            
+            sacrifice_button = discord.ui.Button(
+                label="Jettison Cargo",
+                style=discord.ButtonStyle.success,
+                emoji="📦"
+            )
+            
+            fight_button = discord.ui.Button(
+                label="Fight Drones",
+                style=discord.ButtonStyle.danger,
+                emoji="⚔️"
+            )
+            
+            async def countermeasures_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                char_data = self.bot.db.execute_query(
+                    "SELECT name, tech FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if not char_data:
+                    await interaction.response.send_message("Character not found!", ephemeral=True)
+                    return
+                
+                char_name, tech_skill = char_data
+                
+                if tech_skill >= 10:
+                    await interaction.response.send_message(
+                        f"🛡️ **{char_name}** successfully deploys electronic countermeasures! The drones' systems are scrambled and they drift away harmlessly.",
+                        ephemeral=False
+                    )
+                else:
+                    damage = random.randint(10, 20)
+                    self.bot.db.execute_query(
+                        "UPDATE ships SET hull_integrity = GREATEST(0, hull_integrity - ?) WHERE owner_id = ?",
+                        (damage, user_id)
+                    )
+                    
+                    await interaction.response.send_message(
+                        f"⚡ **{char_name}** deploys countermeasures but they're only partially effective! Ship takes {damage} hull damage from drone attacks.",
+                        ephemeral=False
+                    )
+            
+            async def evade_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                char_data = self.bot.db.execute_query(
+                    "SELECT name, navigation FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if not char_data:
+                    await interaction.response.send_message("Character not found!", ephemeral=True)
+                    return
+                
+                char_name, nav_skill = char_data
+                
+                if nav_skill >= 12:
+                    await interaction.response.send_message(
+                        f"🚀 **{char_name}** executes brilliant evasive maneuvers! The drones can't keep up and fall behind.",
+                        ephemeral=False
+                    )
+                else:
+                    fuel_lost = random.randint(20, 40)
+                    self.bot.db.execute_query(
+                        "UPDATE ships SET current_fuel = GREATEST(0, current_fuel - ?) WHERE owner_id = ?",
+                        (fuel_lost, user_id)
+                    )
+                    
+                    await interaction.response.send_message(
+                        f"💨 **{char_name}** burns {fuel_lost} fuel in desperate evasive maneuvers to escape the persistent drones!",
+                        ephemeral=False
+                    )
+            
+            async def sacrifice_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                char_data = self.bot.db.execute_query(
+                    "SELECT name, money FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if not char_data:
+                    await interaction.response.send_message("Character not found!", ephemeral=True)
+                    return
+                
+                char_name, current_money = char_data
+                cargo_value = random.randint(100, 300)
+                
+                if current_money >= cargo_value:
+                    self.bot.db.execute_query(
+                        "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                        (cargo_value, user_id)
+                    )
+                    
+                    await interaction.response.send_message(
+                        f"📦 **{char_name}** jettisons {cargo_value} credits worth of cargo! The drones stop to collect it, allowing safe passage.",
+                        ephemeral=False
+                    )
+                else:
+                    await interaction.response.send_message(
+                        f"📦 **{char_name}** has nothing valuable to jettison! The drones continue their approach.",
+                        ephemeral=False
+                    )
+            
+            async def fight_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                char_data = self.bot.db.execute_query(
+                    "SELECT name, combat FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if not char_data:
+                    await interaction.response.send_message("Character not found!", ephemeral=True)
+                    return
+                
+                char_name, combat_skill = char_data
+                
+                if random.random() < (0.4 + combat_skill * 0.02):
+                    salvage = random.randint(150, 400)
+                    self.bot.db.execute_query(
+                        "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                        (salvage, user_id)
+                    )
+                    
+                    await interaction.response.send_message(
+                        f"⚔️ **{char_name}** destroys the scavenger drones! Salvaged {salvage} credits worth of components from the wreckage.",
+                        ephemeral=False
+                    )
+                else:
+                    damage = random.randint(20, 40)
+                    self.bot.db.execute_query(
+                        "UPDATE ships SET hull_integrity = GREATEST(0, hull_integrity - ?) WHERE owner_id = ?",
+                        (damage, user_id)
+                    )
+                    
+                    await interaction.response.send_message(
+                        f"💥 **{char_name}** fights valiantly but the drones overwhelm the ship's defenses! Hull takes {damage} damage.",
+                        ephemeral=False
+                    )
+            
+            countermeasures_button.callback = countermeasures_callback
+            evade_button.callback = evade_callback
+            sacrifice_button.callback = sacrifice_callback
+            fight_button.callback = fight_callback
+            
+            view.add_item(countermeasures_button)
+            view.add_item(evade_button)
+            view.add_item(sacrifice_button)
+            view.add_item(fight_button)
+            
+            await channel.send(embed=embed, view=view)
+            
+    async def _handle_security_encounter(self, location_id, players, location_name, event_name, description, color):
+        """Handle corporate security patrol encounter during travel"""
+        
+        channel = await self._get_location_channel(location_id)
+        if not channel:
+            return
+        
+        embed = discord.Embed(
+            title=f"🚔 {event_name}",
+            description=f"{description}\n\n**Location:** {location_name}",
+            color=color
+        )
+        
+        # Determine security force strength
+        security_ships = min(2, max(1, len(players) // 3 + random.randint(0, 1)))
+        
+        embed.add_field(
+            name="🏢 Corporate Forces",
+            value=f"{security_ships} security vessel{'s' if security_ships > 1 else ''} approaching",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="📋 Options",
+            value="• Submit to inspection\n• Offer bribe\n• Show credentials\n• Resist inspection",
+            inline=True
+        )
+        
+        # Select a random player for the encounter
+        if players:
+            user_id = random.choice(players)[0]
+            
+            view = discord.ui.View(timeout=300)
+            
+            submit_button = discord.ui.Button(
+                label="Submit to Inspection",
+                style=discord.ButtonStyle.secondary,
+                emoji="📋"
+            )
+            
+            bribe_button = discord.ui.Button(
+                label="Offer Bribe",
+                style=discord.ButtonStyle.success,
+                emoji="💰"
+            )
+            
+            credentials_button = discord.ui.Button(
+                label="Show Credentials",
+                style=discord.ButtonStyle.primary,
+                emoji="🆔"
+            )
+            
+            resist_button = discord.ui.Button(
+                label="Resist Inspection",
+                style=discord.ButtonStyle.danger,
+                emoji="⚔️"
+            )
+            
+            async def submit_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                char_data = self.bot.db.execute_query(
+                    "SELECT name FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if not char_data:
+                    await interaction.response.send_message("Character not found!", ephemeral=True)
+                    return
+                
+                char_name = char_data[0]
+                
+                # Random outcome - might find "contraband"
+                if random.random() < 0.25:
+                    fine = random.randint(200, 500)
+                    self.bot.db.execute_query(
+                        "UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?",
+                        (fine, user_id)
+                    )
+                    
+                    await interaction.response.send_message(
+                        f"📋 **{char_name}** submits to inspection. Security claims to find 'irregularities' but says they'll look the other way if you pay {fine} ",
+                        ephemeral=False
+                    )
+                else:
+                    await interaction.response.send_message(
+                        f"✅ **{char_name}** submits to inspection. After a thorough search, security finds nothing and allows passage.",
+                        ephemeral=False
+                    )
+            
+            async def bribe_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                char_data = self.bot.db.execute_query(
+                    "SELECT name, money, diplomacy FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if not char_data:
+                    await interaction.response.send_message("Character not found!", ephemeral=True)
+                    return
+                
+                char_name, current_money, diplomacy_skill = char_data
+                bribe_amount = random.randint(150, 350)
+                
+                if current_money >= bribe_amount:
+                    success_chance = 0.5 + (diplomacy_skill * 0.03)
+                    
+                    if random.random() < success_chance:
+                        self.bot.db.execute_query(
+                            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                            (bribe_amount, user_id)
+                        )
+                        
+                        await interaction.response.send_message(
+                            f"💰 **{char_name}** slips {bribe_amount} credits to the security captain. The patrol waves them through without inspection.",
+                            ephemeral=False
+                        )
+                    else:
+                        fine = bribe_amount * 2
+                        self.bot.db.execute_query(
+                            "UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?",
+                            (fine, user_id)
+                        )
+                        
+                        await interaction.response.send_message(
+                            f"🚨 **{char_name}**'s bribe attempt is rejected! Security issues a {fine} credit fine for attempted corruption.",
+                            ephemeral=False
+                        )
+                else:
+                    await interaction.response.send_message(
+                        f"💸 **{char_name}** doesn't have enough credits to offer a meaningful bribe.",
+                        ephemeral=False
+                    )
+            
+            async def credentials_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                char_data = self.bot.db.execute_query(
+                    "SELECT name FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if not char_data:
+                    await interaction.response.send_message("Character not found!", ephemeral=True)
+                    return
+                
+                char_name = char_data[0]
+                
+                # Check for any corporate reputation or connections
+                rep_cog = self.bot.get_cog('ReputationCog')
+                if rep_cog:
+                    # Get average reputation
+                    reputations = self.bot.db.execute_query(
+                        "SELECT AVG(reputation_value) FROM reputation WHERE character_id = ?",
+                        (user_id,),
+                        fetch='one'
+                    )
+                    
+                    avg_rep = reputations[0] if reputations[0] else 0
+                    
+                    if avg_rep >= 50:
+                        await interaction.response.send_message(
+                            f"🆔 **{char_name}** presents credentials showing good standing. Security respectfully waves them through.",
+                            ephemeral=False
+                        )
+                        return
+                
+                await interaction.response.send_message(
+                    f"🆔 **{char_name}** shows credentials, but security remains unimpressed and insists on a full inspection.",
+                    ephemeral=False
+                )
+            
+            async def resist_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                char_data = self.bot.db.execute_query(
+                    "SELECT name, combat, navigation FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if not char_data:
+                    await interaction.response.send_message("Character not found!", ephemeral=True)
+                    return
+                
+                char_name, combat_skill, nav_skill = char_data
+                
+                # Higher chance to escape than win fight
+                escape_chance = 0.4 + (nav_skill * 0.03)
+                
+                if random.random() < escape_chance:
+                    fuel_cost = random.randint(30, 60)
+                    self.bot.db.execute_query(
+                        "UPDATE ships SET current_fuel = GREATEST(0, current_fuel - ?) WHERE owner_id = ?",
+                        (fuel_cost, user_id)
+                    )
+                    
+                    await interaction.response.send_message(
+                        f"🚀 **{char_name}** makes a run for it! Burns {fuel_cost} fuel but successfully evades corporate security.",
+                        ephemeral=False
+                    )
+                else:
+                    damage = random.randint(25, 50)
+                    fine = random.randint(500, 1000)
+                    
+                    self.bot.db.execute_query(
+                        "UPDATE ships SET hull_integrity = GREATEST(0, hull_integrity - ?) WHERE owner_id = ?",
+                        (damage, user_id)
+                    )
+                    
+                    self.bot.db.execute_query(
+                        "UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?",
+                        (fine, user_id)
+                    )
+                    
+                    await interaction.response.send_message(
+                        f"💥 **{char_name}** tries to escape but is disabled by security! Ship takes {damage} damage and receives a {fine} credit fine.",
+                        ephemeral=False
+                    )
+            
+            submit_button.callback = submit_callback
+            bribe_button.callback = bribe_callback
+            credentials_button.callback = credentials_callback
+            resist_button.callback = resist_callback
+            
+            view.add_item(submit_button)
+            view.add_item(bribe_button)
+            view.add_item(credentials_button)
+            view.add_item(resist_button)
+            
+            await channel.send(embed=embed, view=view)
+            
+            
     # Add these methods to the EnhancedEventsCog class in cogs/enhanced_events.py
     async def generate_location_event(self, location_id: int, location_type: str, wealth: int, population: int):
         """Generate enhanced location-specific events"""

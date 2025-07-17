@@ -388,8 +388,8 @@ class CorridorEventsCog(commands.Cog):
     
     async def _calculate_event_damage(self, event_type: str, severity: int, response: str) -> Dict:
         """Calculate damage based on event type, severity, and player response"""
-        base_hp_damage = severity * 5
-        base_ship_damage = severity * 8
+        base_hp_damage = severity * 10
+        base_ship_damage = severity * 12
         
         # Response effectiveness
         if response == 'emergency_protocols':
@@ -406,11 +406,11 @@ class CorridorEventsCog(commands.Cog):
             hp_modifier = 1.5  # More HP damage
             ship_modifier = 0.8
         elif event_type == "static_fog":
-            hp_modifier = 0.5
+            hp_modifier = 0.7
             ship_modifier = 2.0  # More ship damage
         elif event_type == "vacuum_bloom":
-            hp_modifier = 1.2
-            ship_modifier = 1.2
+            hp_modifier = 1.35
+            ship_modifier = 1.5
         else:
             hp_modifier = 1.0
             ship_modifier = 1.0
