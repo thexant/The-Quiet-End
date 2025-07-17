@@ -413,7 +413,7 @@ class GalaxyGeneratorCog(commands.Cog):
         
         if fixes_applied > 0:
             print(f"🔧 Applied {fixes_applied} connectivity fixes")
-    @galaxy_group.command(name="generate", description="Generate a new galaxy - this marks the beginning of galactic history")
+    @galaxy_group.command(name="generate", description="Generate a new galaxy - THIS CAN TAKE A WHILE")
     @app_commands.describe(
         num_locations="Number of major locations to generate (10-500, random if not specified)",
         clear_existing="Whether to clear existing generated locations first",
@@ -430,7 +430,7 @@ class GalaxyGeneratorCog(commands.Cog):
         corridor_routes = []  # Make sure this is accessible                     
         # Generate random values for unspecified parameters
         if num_locations is None:
-            num_locations = random.randint(50, 150)
+            num_locations = random.randint(75, 150)
             print(f"🎲 Randomly selected {num_locations} locations to generate")
 
         if galaxy_name is None:

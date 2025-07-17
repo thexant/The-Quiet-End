@@ -810,7 +810,7 @@ class LocationView(discord.ui.View):
         )
         
         location_services = self.bot.db.execute_query(
-            '''SELECT name, has_medical, has_repairs, has_fuel, has_upgrades, wealth_level
+            '''SELECT name, has_medical, has_repairs, has_fuel, has_upgrades, wealth_level, has_shipyard
                FROM locations WHERE location_id = ?''',
             (char_location[0],),
             fetch='one'
@@ -820,7 +820,8 @@ class LocationView(discord.ui.View):
             await interaction.response.send_message("Location information not found!", ephemeral=True)
             return
         
-        name, has_medical, has_repairs, has_fuel, has_upgrades, wealth = location_services
+        
+        name, has_medical, has_repairs, has_fuel, has_upgrades, wealth, has_shipyard = location_services
         
         embed = discord.Embed(
             title=f"Services - {name}",
@@ -849,7 +850,10 @@ class LocationView(discord.ui.View):
             (char_location[0],),
             fetch='one'
         )[0] > 0
-
+        
+        if has_shipyard:  # Add this block
+            shipyard_quality = "Advanced" if wealth >= 8 else "Standard" if wealth >= 5 else "Basic"
+            services.append(f"🏗️ **Shipyard** - {shipyard_quality} ship trading and management")
         if has_logbook:
             services.append(f"📜 **Logbook Access** - View and add entries")
         if services:

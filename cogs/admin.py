@@ -191,7 +191,7 @@ class AdminCog(commands.Cog):
                     created_categories.append(f"❌ Failed to create news channel: {e}")
             
             status_voice_channel = None
-            status_channel_name = f"🌐 INITIALIZING..."
+            status_channel_name = f"🌐| INITIALIZING..."
 
             # First check database for existing configured channel
             existing_status_config = self.db.execute_query(
@@ -209,7 +209,7 @@ class AdminCog(commands.Cog):
             # If no configured channel found, look for one in the main category
             if not status_voice_channel:
                 for channel in main_galaxy_category.voice_channels:
-                    if channel.name.startswith("🌐 "):
+                    if channel.name.startswith("🌐|"):
                         status_voice_channel = channel
                         created_categories.append(f"✅ Found existing status channel")
                         print(f"Found existing status voice channel in category: {status_voice_channel.id}")

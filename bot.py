@@ -7,7 +7,7 @@ from database import Database
 import logging
 from utils.activity_tracker import ActivityTracker
 import random
-
+from utils.income_calculator import HomeIncomeCalculator
 
 # Try to load configuration
 try:
@@ -196,7 +196,9 @@ class RPGBot(commands.Bot):
             print(f"✅ Synced {len(synced)} command(s)")
         except Exception as e:
             print(f"❌ Failed to sync commands: {e}")    
-
+        income_calculator = HomeIncomeCalculator(bot)
+        await income_calculator.start()
+        
     async def on_command_error(self, ctx, error):
         """Handle command errors gracefully"""
         if isinstance(error, commands.CommandNotFound):

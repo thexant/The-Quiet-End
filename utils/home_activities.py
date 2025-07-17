@@ -60,7 +60,13 @@ class HomeActivityManager:
                 'description': 'Enjoy views of the location',
                 'icon': '🌆',
                 'actions': ['enjoy_view', 'have_drink', 'stargaze']
-            }
+            },
+            'storage': {
+                'name': 'Storage Room',
+                'description': 'Access your home storage',
+                'icon': '📦',
+                'actions': ['check_storage', 'organize_items', 'inventory_review']
+            },
         }
     
     def generate_random_activities(self, count: int) -> List[str]:
@@ -107,6 +113,8 @@ class HomeActivityView(discord.ui.View):
         # Get home activities and create buttons
         manager = HomeActivityManager(bot)
         activities = manager.get_home_activities(home_id)
+        self.add_item(StorageButton())
+        self.add_item(IncomeButton())
         
         for activity in activities[:25]:  # Discord limit
             button = HomeActivityButton(
@@ -170,7 +178,12 @@ class HomeActivityView(discord.ui.View):
                 'enjoy_view': f"*{self.char_name} enjoys the view from their balcony.*",
                 'have_drink': f"*{self.char_name} relaxes with a drink on the balcony.*",
                 'stargaze': f"*{self.char_name} gazes at the stars through the viewport.*"
-            }
+            },
+            'storage': {
+                'check_storage': f"*{self.char_name} checks their storage room inventory.*",
+                'organize_items': f"*{self.char_name} spends time organizing their stored items.*",
+                'inventory_review': f"*{self.char_name} reviews what they have in storage.*"
+            },
         }
         
         response_text = responses.get(activity_type, {}).get(action, f"*{self.char_name} uses the {activity_data['name']}.*")
@@ -180,10 +193,79 @@ class HomeActivityView(discord.ui.View):
             description=response_text,
             color=0x2F4F4F
         )
-        
+        if activity_type == 'storage':
+            # Show storage summary
+            storage_info = self.db.execute_query(
+                '''SELECT COUNT(DISTINCT item_name), COALESCE(SUM(quantity), 0), h.storage_capacity
+                   FROM location_homes h
+                   LEFT JOIN home_storage s ON h.home_id = s.home_id
+                   WHERE h.home_id = ?
+                   GROUP BY h.storage_capacity''',
+                (self.home_id,),
+                fetch='one'
+            )
+            
+            if storage_info:
+                unique_items, total_items, capacity = storage_info
+                response_text += f"\n\n📊 **Storage Status:** {total_items}/{capacity} items ({unique_items} unique types)"
+                response_text += "\n💡 *Use `/home storage view` to see details*"
+
         await interaction.response.send_message(embed=embed)
 
+class StorageButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Storage",
+            emoji="📦",
+            style=discord.ButtonStyle.primary
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            "**Storage Commands:**\n"
+            "• `/home storage view` - View your storage\n"
+            "• `/home storage store` - Store items\n"
+            "• `/home storage retrieve` - Get items back",
+            ephemeral=True
+        )
 
+class IncomeButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Income",
+            emoji="💰",
+            style=discord.ButtonStyle.success
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        # Check if home has income
+        home_id = self.view.home_id
+        income_data = interaction.client.db.execute_query(
+            '''SELECT SUM(hu.daily_income), hi.accumulated_income
+               FROM home_upgrades hu
+               LEFT JOIN home_income hi ON hu.home_id = hi.home_id
+               WHERE hu.home_id = ?
+               GROUP BY hi.accumulated_income''',
+            (home_id,),
+            fetch='one'
+        )
+        
+        if income_data and income_data[0]:
+            daily, accumulated = income_data
+            await interaction.response.send_message(
+                f"**💰 Income Status**\n"
+                f"Daily Rate: {daily} credits/day\n"
+                f"Available to Collect: {accumulated or 0} credits\n\n"
+                f"Use `/home income collect` to collect!",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "Your home doesn't generate income yet!\n"
+                "Use `/home income upgrade` to purchase income-generating upgrades.",
+                ephemeral=True
+            )
+            
 class HomeActivityButton(discord.ui.Button):
     """Button for home activities"""
     

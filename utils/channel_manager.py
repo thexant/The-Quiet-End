@@ -244,15 +244,57 @@ class ChannelManager:
             (owner_id,),
             fetch='one'
         )[0]
-        
+        from utils.home_activities import HomeActivityManager
+        # Update the home welcome message to include new features
         embed = discord.Embed(
             title=f"🏠 Welcome to {home_name}",
             description=interior_desc or "You are now inside your home.",
             color=0x8B4513
         )
         
+        # Get storage info
+        storage_usage = self.db.execute_query(
+            '''SELECT COALESCE(SUM(quantity), 0), h.storage_capacity
+               FROM location_homes h
+               LEFT JOIN home_storage s ON h.home_id = s.home_id
+               WHERE h.home_id = ?
+               GROUP BY h.storage_capacity''',
+            (home_id,),
+            fetch='one'
+        )
+        
+        if storage_usage:
+            used, capacity = storage_usage
+            embed.add_field(
+                name="📦 Storage",
+                value=f"{used}/{capacity} items",
+                inline=True
+            )
+        
+        # Get income info
+        income_info = self.db.execute_query(
+            '''SELECT SUM(daily_income) as total_income
+               FROM home_upgrades WHERE home_id = ?''',
+            (home_id,),
+            fetch='one'
+        )
+        
+        if income_info and income_info[0]:
+            embed.add_field(
+                name="💰 Daily Income",
+                value=f"{income_info[0]} credits/day",
+                inline=True
+            )
+        
+        # Add health recovery info
+        embed.add_field(
+            name="❤️ Health Recovery",
+            value="You recover 10 HP every 20 minutes spent at home",
+            inline=False
+        )
+        
         # Get home activities
-        from utils.home_activities import HomeActivityManager
+        
         activity_manager = HomeActivityManager(self.bot)
         activities = activity_manager.get_home_activities(home_id)
         
@@ -266,10 +308,16 @@ class ChannelManager:
                 value="\n".join(activity_list),
                 inline=False
             )
-        
+            
         embed.add_field(
             name="🎮 Available Actions",
-            value="• Use the activity buttons below to interact with your home\n• `/home interior leave` - Exit your home\n• `/home interior invite` - Invite someone to your home\n• `/character inventory` - Check your items",
+            value=(
+                "• `/home storage` - Manage your storage\n"
+                "• `/home income` - View income options\n"
+                "• `/home customize` - Personalize your space\n"
+                "• `/home interior leave` - Exit your home\n"
+                "• `/home interior invite` - Invite someone"
+            ),
             inline=False
         )
         
@@ -549,7 +597,7 @@ class ChannelManager:
         # Get services info including alignment flags
         services_info = self.db.execute_query(
             '''SELECT has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population,
-                      has_federal_supplies, has_black_market
+                      has_federal_supplies, has_black_market, has_shipyard
                FROM locations WHERE location_id = ?''',
             (loc_id,),
             fetch='one'
@@ -567,7 +615,8 @@ class ChannelManager:
             fetch='all'
         )
 
-        has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population, has_federal_supplies, has_black_market = services_info
+        (has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, 
+        population, has_federal_supplies, has_black_market, has_shipyard) = services_info
         # Get available homes info
         homes_info = self.db.execute_query(
             '''SELECT COUNT(*), MIN(price), MAX(price), home_type
@@ -671,6 +720,7 @@ class ChannelManager:
         if has_repairs:services.append("🔨 Repairs")
         if has_fuel:   services.append("⛽ Fuel")
         if has_upgrades:services.append("⬆️ Upgrades")
+        if has_shipyard: services.append("🏗️ Shipyard") 
         
         # Add special services based on status
         if has_federal_supplies:

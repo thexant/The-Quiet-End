@@ -834,7 +834,48 @@ class Database:
                 FOREIGN KEY (dropped_by) REFERENCES characters (user_id)
             )''',
             
-                '''CREATE TABLE IF NOT EXISTS location_logs (
+            '''CREATE TABLE IF NOT EXISTS home_storage (
+                storage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                home_id INTEGER NOT NULL,
+                item_name TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                quantity INTEGER DEFAULT 1,
+                description TEXT,
+                value INTEGER DEFAULT 0,
+                stored_by INTEGER NOT NULL,
+                stored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (home_id) REFERENCES location_homes(home_id),
+                FOREIGN KEY (stored_by) REFERENCES characters(user_id)
+            )''',
+            
+            
+            '''ALTER TABLE location_homes ADD COLUMN storage_capacity INTEGER DEFAULT 50''',
+            
+            '''CREATE TABLE IF NOT EXISTS home_upgrades (
+                upgrade_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                home_id INTEGER NOT NULL,
+                upgrade_type TEXT NOT NULL,
+                upgrade_name TEXT NOT NULL,
+                level INTEGER DEFAULT 1,
+                daily_income INTEGER DEFAULT 0,
+                purchase_price INTEGER NOT NULL,
+                purchased_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (home_id) REFERENCES location_homes(home_id),
+                UNIQUE(home_id, upgrade_type)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS home_income (
+                income_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                home_id INTEGER NOT NULL,
+                accumulated_income INTEGER DEFAULT 0,
+                last_collected DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_calculated DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (home_id) REFERENCES location_homes(home_id),
+                UNIQUE(home_id)
+            )''',
+            
+            
+            '''CREATE TABLE IF NOT EXISTS location_logs (
                 log_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 location_id INTEGER NOT NULL,
                 author_id INTEGER NOT NULL,
@@ -844,6 +885,32 @@ class Database:
                 is_generated BOOLEAN DEFAULT 0,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id),
                 FOREIGN KEY (author_id) REFERENCES characters (user_id)
+            )''',
+            
+            
+            '''CREATE TABLE IF NOT EXISTS home_recovery_tracking (
+                tracking_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                home_id INTEGER NOT NULL,
+                entered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_recovery DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES characters(user_id),
+                FOREIGN KEY (home_id) REFERENCES location_homes(home_id),
+                UNIQUE(user_id)
+            )''',
+            
+            
+            '''CREATE TABLE IF NOT EXISTS home_customizations (
+                customization_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                home_id INTEGER NOT NULL,
+                wall_color TEXT DEFAULT 'Beige',
+                floor_type TEXT DEFAULT 'Standard Tile',
+                lighting_style TEXT DEFAULT 'Standard',
+                furniture_style TEXT DEFAULT 'Basic',
+                ambiance TEXT DEFAULT 'Cozy',
+                custom_description TEXT,
+                FOREIGN KEY (home_id) REFERENCES location_homes(home_id),
+                UNIQUE(home_id)
             )''',
 
             '''CREATE TABLE IF NOT EXISTS combat_encounters (
