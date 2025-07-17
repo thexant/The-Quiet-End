@@ -46,10 +46,10 @@ class EnhancedEventsCog(commands.Cog):
             
             # Random chance based on location activity and type
             base_chance = {
-                'colony': 0.25,
-                'space_station': 0.30,
-                'outpost': 0.20,
-                'gate': 0.15
+                'colony': 0.35,
+                'space_station': 0.35,
+                'outpost': 0.25,
+                'gate': 0.20
             }.get(loc_type, 0.20)
             
             # Wealth affects event frequency
@@ -185,9 +185,9 @@ class EnhancedEventsCog(commands.Cog):
         ]
         
         # Calculate event chances based on location characteristics
-        phenomena_chance = 0.1  # 30% base chance
-        hostile_chance = 0.1    # 10% base chance
-        reputation_chance = 0.1
+        phenomena_chance = 0.25  # 30% base chance
+        hostile_chance = 0.15    # 10% base chance
+        reputation_chance = 0.20
         
         # Increase hostile chances in dangerous areas
         edge_distance = (x_coord**2 + y_coord**2)**0.5
@@ -457,6 +457,219 @@ class EnhancedEventsCog(commands.Cog):
             view.add_item(fight_button)
             
             await channel.send(embed=embed, view=view)
+            
+    async def _handle_refugee_encounter(self, location_id, players, location_name, event_name, description, color):
+        """Handle refugee ship encounter during travel"""
+        
+        channel = await self._get_location_channel(location_id)
+        if not channel:
+            return
+        
+        embed = discord.Embed(
+            title=f"😰 {event_name}",
+            description=f"{description}\n\n**Location:** {location_name}",
+            color=color
+        )
+        
+        # Determine refugee ship status
+        refugee_count = random.randint(20, 60)
+        ship_damage = random.randint(40, 80)  # Percentage of damage
+        
+        embed.add_field(
+            name="📊 Refugee Status",
+            value=f"• {refugee_count} refugees aboard\n• Ship hull at {100-ship_damage}% integrity\n• Critical supplies depleted",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🆘 Options",
+            value="• Provide aid and supplies\n• Offer medical assistance\n• Share fuel and repairs\n• Turn them away",
+            inline=True
+        )
+        
+        # Select a random player for the encounter
+        if players:
+            user_id = random.choice(players)[0]
+            
+            view = discord.ui.View(timeout=300)
+            
+            aid_button = discord.ui.Button(
+                label="Provide Aid",
+                style=discord.ButtonStyle.success,
+                emoji="🤲"
+            )
+            
+            medical_button = discord.ui.Button(
+                label="Medical Assistance",
+                style=discord.ButtonStyle.primary,
+                emoji="⚕️"
+            )
+            
+            fuel_button = discord.ui.Button(
+                label="Share Fuel",
+                style=discord.ButtonStyle.primary,
+                emoji="⛽"
+            )
+            
+            reject_button = discord.ui.Button(
+                label="Turn Away",
+                style=discord.ButtonStyle.danger,
+                emoji="❌"
+            )
+            
+            async def aid_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                char_data = self.bot.db.execute_query(
+                    "SELECT name, money FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if not char_data:
+                    await interaction.response.send_message("Character not found!", ephemeral=True)
+                    return
+                
+                char_name, money = char_data
+                
+                cost = random.randint(100, 300)
+                if money < cost:
+                    await interaction.response.send_message(
+                        f"💸 **{char_name}** wants to help but lacks the {cost} credits needed for supplies.",
+                        ephemeral=False
+                    )
+                    return
+                
+                # Deduct cost, gain reputation
+                rep_gain = random.randint(15, 25)
+                self.bot.db.execute_query(
+                    "UPDATE characters SET money = money - ?, major_reputation = major_reputation + ? WHERE user_id = ?",
+                    (cost, rep_gain, user_id)
+                )
+                
+                await interaction.response.send_message(
+                    f"🤲 **{char_name}** provides essential supplies to the refugees, spending {cost} credits. The refugees are deeply grateful! (+{rep_gain} reputation)",
+                    ephemeral=False
+                )
+            
+            async def medical_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                char_data = self.bot.db.execute_query(
+                    "SELECT name, medicine FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if not char_data:
+                    await interaction.response.send_message("Character not found!", ephemeral=True)
+                    return
+                
+                char_name, medicine_skill = char_data
+                
+                success_chance = min(90, 50 + medicine_skill * 3)
+                roll = random.randint(1, 100)
+                
+                if roll <= success_chance:
+                    rep_gain = 10 + medicine_skill // 2
+                    self.bot.db.execute_query(
+                        "UPDATE characters SET major_reputation = major_reputation + ? WHERE user_id = ?",
+                        (rep_gain, user_id)
+                    )
+                    
+                    await interaction.response.send_message(
+                        f"⚕️ **{char_name}** successfully treats the injured refugees! Their medical expertise saves lives. (+{rep_gain} reputation)",
+                        ephemeral=False
+                    )
+                else:
+                    await interaction.response.send_message(
+                        f"⚕️ **{char_name}** does their best to help the injured, providing basic first aid.",
+                        ephemeral=False
+                    )
+            
+            async def fuel_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                # Check if player has a ship with fuel
+                ship_data = self.bot.db.execute_query(
+                    "SELECT s.ship_id, s.name, s.fuel FROM ships s WHERE s.owner_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if not ship_data:
+                    await interaction.response.send_message("You need a ship to share fuel!", ephemeral=True)
+                    return
+                
+                ship_id, ship_name, current_fuel = ship_data
+                char_name = self.bot.db.execute_query(
+                    "SELECT name FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )[0]
+                
+                fuel_to_share = random.randint(20, 40)
+                if current_fuel < fuel_to_share:
+                    await interaction.response.send_message(
+                        f"⛽ **{char_name}** doesn't have enough fuel to share. Need at least {fuel_to_share} units.",
+                        ephemeral=False
+                    )
+                    return
+                
+                rep_gain = random.randint(10, 20)
+                self.bot.db.execute_query(
+                    "UPDATE ships SET fuel = fuel - ? WHERE ship_id = ?",
+                    (fuel_to_share, ship_id)
+                )
+                self.bot.db.execute_query(
+                    "UPDATE characters SET major_reputation = major_reputation + ? WHERE user_id = ?",
+                    (rep_gain, user_id)
+                )
+                
+                await interaction.response.send_message(
+                    f"⛽ **{char_name}** transfers {fuel_to_share} fuel units to the refugee ship, enabling them to reach safety. (+{rep_gain} reputation)",
+                    ephemeral=False
+                )
+            
+            async def reject_callback(interaction):
+                if interaction.user.id != user_id:
+                    await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
+                    return
+                
+                char_name = self.bot.db.execute_query(
+                    "SELECT name FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )[0]
+                
+                rep_loss = random.randint(5, 15)
+                self.bot.db.execute_query(
+                    "UPDATE characters SET minor_reputation = GREATEST(0, minor_reputation - ?) WHERE user_id = ?",
+                    (rep_loss, user_id)
+                )
+                
+                await interaction.response.send_message(
+                    f"❌ **{char_name}** coldly ignores the refugees' desperate pleas and continues on course. Word of this callousness spreads. (-{rep_loss} reputation)",
+                    ephemeral=False
+                )
+            
+            aid_button.callback = aid_callback
+            medical_button.callback = medical_callback
+            fuel_button.callback = fuel_callback
+            reject_button.callback = reject_callback
+            
+            view.add_item(aid_button)
+            view.add_item(medical_button)
+            view.add_item(fuel_button)
+            view.add_item(reject_button)
+            
+            await channel.send(embed=embed, view=view)  
             
     async def _handle_security_encounter(self, location_id, players, location_name, event_name, description, color):
         """Handle corporate security patrol encounter during travel"""
