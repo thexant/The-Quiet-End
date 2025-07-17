@@ -3,264 +3,22 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import random
-from datetime import datetime
-from utils.channel_manager import ChannelManager
-from discord.ui import View, Button, button
-import re
+import json
+from datetime import datetime, timedelta
 
-class BoardingRequestView(View):
-    def __init__(self, bot, requester: discord.Member, target_ship_id: int, target_owner: discord.Member):
-        super().__init__(timeout=300)
-        self.bot = bot
-        self.requester = requester
-        self.target_ship_id = target_ship_id
-        self.target_owner = target_owner
-        self.response = None
-    
-    @button(label="Accept Boarding", style=discord.ButtonStyle.success, emoji="✅")
-    async def accept(self, interaction: discord.Interaction, button: Button):
-        if interaction.user.id != self.target_owner.id:
-            await interaction.response.send_message("This is not your decision to make.", ephemeral=True)
-            return
-
-        # Check if requester is still at the same location as the owner's ship
-        requester_char = self.bot.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
-            (self.requester.id,), fetch='one'
-        )
-        owner_char = self.bot.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
-            (self.target_owner.id,), fetch='one'
-        )
-
-        if not requester_char or not owner_char or requester_char[0] != owner_char[0] or requester_char[1] != 'docked':
-            await interaction.response.edit_message(content="Boarding cancelled. The requesting player is no longer docked at your location.", view=None)
-            return
-
-        # Grant access and move player
-        channel_manager = ChannelManager(self.bot)
-        success = await channel_manager.give_user_ship_access(self.requester, self.target_ship_id)
-
-        if success:
-            # Remove from location, put in ship
-            self.bot.db.execute_query(
-                "UPDATE characters SET current_ship_id = ?, current_location = NULL WHERE user_id = ?",
-                (self.target_ship_id, self.requester.id)
-            )
-            await channel_manager.remove_user_location_access(self.requester, owner_char[0])
-
-            await interaction.response.edit_message(content=f"✅ You have granted {self.requester.display_name} access to your ship.", view=None)
-            try:
-                await interaction.followup.send(f"🚀 {self.requester.mention} - {self.target_owner.display_name} has accepted your boarding request! You may now enter their ship's channel.")
-            except discord.Forbidden:
-                pass
-        else:
-            await interaction.response.edit_message(content="Failed to grant access to the ship. An error occurred.", view=None)
-
-        self.response = True
-        self.stop()
-
-    @button(label="Deny Boarding", style=discord.ButtonStyle.danger, emoji="❌")
-    async def deny(self, interaction: discord.Interaction, button: Button):
-        if interaction.user.id != self.target_owner.id:
-            await interaction.response.send_message("This is not your decision to make.", ephemeral=True)
-            return
-
-        await interaction.response.edit_message(content=f"❌ You have denied {self.requester.display_name}'s boarding request.", view=None)
-        try:
-            await interaction.followup.send(f"🚫 {self.requester.mention} - {self.target_owner.display_name} has denied your boarding request.")
-        except discord.Forbidden:
-            pass
-
-        self.response = False
-        self.stop()
 class ShipSystemsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
+        
+    ship_group = app_commands.Group(name="ship", description="Ship management commands")
     
-    ship_group = app_commands.Group(name="ship", description="Ship management and customization")
-    
-    @ship_group.command(name="customize", description="Customize your ship's appearance, name, and apply upgrades")
-    @app_commands.describe(
-        new_name="New name for your ship",
-        ship_class="Ship class (civilian, military, industrial)",
-        exterior_addition="Add to exterior description (additive)",
-        interior_addition="Add to interior description (additive)"
-    )
-    @app_commands.choices(ship_class=[
-        app_commands.Choice(name="Civilian", value="civilian"),
-        app_commands.Choice(name="Military", value="military"), 
-        app_commands.Choice(name="Industrial", value="industrial"),
-        app_commands.Choice(name="Explorer", value="explorer")
-    ])
-    async def customize_ship(self, interaction: discord.Interaction, 
-                            new_name: str = None, 
-                            ship_class: str = None,
-                            exterior_addition: str = None,
-                            interior_addition: str = None):
-        # Get character's active ship
-        ship_info = self.db.execute_query(
-            '''SELECT s.ship_id, s.name, s.ship_class, s.ship_type, s.exterior_description, s.interior_description, c.money
-               FROM characters c
-               JOIN ships s ON c.active_ship_id = s.ship_id
-               WHERE c.user_id = ?''',
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not ship_info:
-            await interaction.response.send_message("You don't have an active ship!", ephemeral=True)
-            return
-        
-        ship_id, current_name, current_class, ship_type, current_exterior, current_interior, money = ship_info
-        
-        # Check if character is at a location with shipyard services
-        location_info = self.db.execute_query(
-            '''SELECT l.has_shipyard, l.name FROM characters c
-               JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not location_info or not location_info[0]:
-            await interaction.response.send_message("You need to be at a shipyard to customize your ship.", ephemeral=True)
-            return
-        
-        costs = []
-        total_cost = 0
-        changes = []
-        
-        # Name change cost
-        if new_name and new_name != current_name:
-            if len(new_name) > 50:
-                await interaction.response.send_message("Ship name must be 50 characters or less.", ephemeral=True)
-                return
-            cost = 150
-            costs.append(f"Name change: {cost} credits")
-            total_cost += cost
-            changes.append(f"Name: {current_name} → {new_name}")
-        
-        # Class change cost
-        if ship_class and ship_class != current_class:
-            cost = 500
-            costs.append(f"Class change: {cost} credits")
-            total_cost += cost
-            changes.append(f"Class: {current_class} → {ship_class}")
-        
-        # Exterior description addition cost
-        if exterior_addition:
-            if len(exterior_addition) > 200:
-                await interaction.response.send_message("Exterior addition must be 200 characters or less.", ephemeral=True)
-                return
-            cost = 300
-            costs.append(f"Exterior addition: {cost} credits")
-            total_cost += cost
-            changes.append(f"Added exterior detail: {exterior_addition[:50]}...")
-        
-        # Interior description addition cost
-        if interior_addition:
-            if len(interior_addition) > 200:
-                await interaction.response.send_message("Interior addition must be 200 characters or less.", ephemeral=True)
-                return
-            cost = 300
-            costs.append(f"Interior addition: {cost} credits")
-            total_cost += cost
-            changes.append(f"Added interior detail: {interior_addition[:50]}...")
-        
-        if total_cost == 0:
-            # Show upgrade application interface if no other changes
-            await self._show_upgrade_application_interface(interaction, ship_id, money)
-            return
-        
-        if money < total_cost:
-            await interaction.response.send_message(
-                f"Insufficient credits! Need {total_cost:,}, have {money:,}.",
-                ephemeral=True
-            )
-            return
-        
-        # Apply changes
-        update_query = "UPDATE ships SET "
-        update_params = []
-        
-        if new_name:
-            update_query += "name = ?, "
-            update_params.append(new_name)
-        
-        if ship_class:
-            update_query += "ship_class = ?, "
-            update_params.append(ship_class)
-        
-        # Handle additive descriptions
-        if exterior_addition:
-            new_exterior = current_exterior + f"\n\n--- Custom Addition ---\n{exterior_addition}"
-            update_query += "exterior_description = ?, "
-            update_params.append(new_exterior)
-            
-            # Record customization
-            self.db.execute_query(
-                '''INSERT INTO ship_customizations (ship_id, customization_type, addition_text, added_by, cost_paid)
-                   VALUES (?, 'exterior', ?, ?, ?)''',
-                (ship_id, exterior_addition, interaction.user.id, 300)
-            )
-        
-        if interior_addition:
-            new_interior = current_interior + f"\n\n--- Custom Addition ---\n{interior_addition}"
-            update_query += "interior_description = ?, "
-            update_params.append(new_interior)
-            
-            # Record customization
-            self.db.execute_query(
-                '''INSERT INTO ship_customizations (ship_id, customization_type, addition_text, added_by, cost_paid)
-                   VALUES (?, 'interior', ?, ?, ?)''',
-                (ship_id, interior_addition, interaction.user.id, 300)
-            )
-        
-        update_query = update_query.rstrip(", ") + " WHERE ship_id = ?"
-        update_params.append(ship_id)
-        
-        self.db.execute_query(update_query, update_params)
-        
-        # Deduct credits
-        self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
-            (total_cost, interaction.user.id)
-        )
-        
-        embed = discord.Embed(
-            title="🚀 Ship Customization Complete",
-            description="Your ship has been successfully customized!",
-            color=0x00ff00
-        )
-        
-        embed.add_field(name="Changes Made", value="\n".join(changes), inline=False)
-        embed.add_field(name="Total Cost", value=f"{total_cost:,} credits", inline=True)
-        embed.add_field(name="Remaining Credits", value=f"{money - total_cost:,}", inline=True)
-        
-        # Show upgrade application interface
-        view = UpgradeApplicationView(self.bot, interaction.user.id, ship_id)
-        embed.add_field(name="💡 Apply Upgrades", value="Use the buttons below to apply upgrade items from your inventory", inline=False)
-        
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-    async def _show_upgrade_application_interface(self, interaction: discord.Interaction, ship_id: int, money: int):
-        """Show interface for applying upgrades from inventory"""
-        embed = discord.Embed(
-            title="🔧 Apply Ship Upgrades",
-            description="Apply upgrade items from your inventory to your ship",
-            color=0x4169e1
-        )
-        
-        view = UpgradeApplicationView(self.bot, interaction.user.id, ship_id)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
-    @ship_group.command(name="upgrade", description="Upgrade your ship with new components")
-    async def upgrade_ship(self, interaction: discord.Interaction):
-        # Get character location and ship info
+    @ship_group.command(name="purchase", description="Open the ship purchase interface")
+    async def ship_purchase(self, interaction: discord.Interaction):
+        """Enhanced ship purchase system with categories and detailed specs"""
+        # Get character location and wealth info
         char_info = self.db.execute_query(
-            '''SELECT c.current_location, c.money, l.has_upgrades, l.name as location_name
+            '''SELECT c.current_location, c.money, l.has_shipyard, l.wealth_level, l.name as location_name
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
                WHERE c.user_id = ?''',
@@ -272,357 +30,60 @@ class ShipSystemsCog(commands.Cog):
             await interaction.response.send_message("Character not found!", ephemeral=True)
             return
         
-        current_location, money, has_upgrades, location_name = char_info
+        current_location, money, has_shipyard, wealth_level, location_name = char_info
         
-        if not has_upgrades:
-            await interaction.response.send_message(f"{location_name} doesn't offer ship upgrade services.", ephemeral=True)
+        if not has_shipyard:
+            await interaction.response.send_message(f"{location_name} doesn't have a shipyard.", ephemeral=True)
             return
         
-        # Get ship info
-        ship_info = self.db.execute_query(
-            '''SELECT ship_id, name, upgrade_slots, used_upgrade_slots, fuel_efficiency, 
-                      combat_rating, cargo_capacity
-               FROM ships WHERE owner_id = ?''',
+        # Get current ship count for fleet management
+        ship_count = self.db.execute_query(
+            "SELECT COUNT(*) FROM player_ships WHERE owner_id = ?",
             (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not ship_info:
-            await interaction.response.send_message("You don't have a ship!", ephemeral=True)
-            return
-        
-        ship_id, ship_name, upgrade_slots, used_slots, fuel_eff, combat_rating, cargo_cap = ship_info
-        
-        if used_slots >= upgrade_slots:
-            await interaction.response.send_message("Your ship has no available upgrade slots!", ephemeral=True)
-            return
-        
-        # Generate available upgrades based on location wealth
-        location_wealth = self.db.execute_query(
-            "SELECT wealth_level FROM locations WHERE location_id = ?",
-            (current_location,),
             fetch='one'
         )[0]
         
-        available_upgrades = self._generate_upgrades(location_wealth)
-        
-        embed = discord.Embed(
-            title=f"🔧 Ship Upgrades - {location_name}",
-            description=f"**{ship_name}** - {used_slots}/{upgrade_slots} upgrade slots used",
-            color=0x4169e1
-        )
-        
-        upgrade_text = []
-        for upgrade_name, upgrade_type, cost, bonus, description in available_upgrades:
-            upgrade_text.append(f"**{upgrade_name}** - {cost:,} credits")
-            upgrade_text.append(f"  {description}")
-            upgrade_text.append(f"  Effect: +{bonus} {upgrade_type}")
-            upgrade_text.append("")
-        
-        embed.add_field(
-            name="Available Upgrades",
-            value="\n".join(upgrade_text[:20]),  # Limit display
-            inline=False
-        )
-        
-        embed.add_field(name="Your Credits", value=f"{money:,}", inline=True)
-        embed.add_field(name="Available Slots", value=f"{upgrade_slots - used_slots}", inline=True)
-        
-        view = ShipUpgradeView(self.bot, interaction.user.id, available_upgrades)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
-    def _generate_upgrades(self, location_wealth):
-        """Generate available upgrades based on location wealth"""
-        
-        base_upgrades = [
-            ("Basic Engine Tuning", "fuel_efficiency", 300, 1, "Improves fuel consumption"),
-            ("Cargo Bay Expansion", "cargo_capacity", 500, 25, "Increases cargo storage"),
-            ("Hull Reinforcement", "max_hull", 400, 20, "Strengthens ship structure"),
-            ("Improved Cooling", "fuel_efficiency", 450, 2, "Better heat management"),
-            ("Storage Optimization", "cargo_capacity", 350, 15, "Optimizes storage space"),
-        ]
-        
-        advanced_upgrades = [
-            ("Military-Grade Engines", "fuel_efficiency", 1200, 3, "High-performance propulsion"),
-            ("Combat Targeting System", "combat_rating", 800, 2, "Improved weapon accuracy"),
-            ("Advanced Navigation", "navigation_bonus", 600, 2, "Enhanced pathfinding"),
-            ("Emergency Shields", "max_hull", 900, 35, "Defensive energy barriers"),
-            ("Rapid-Fire Systems", "combat_rating", 1100, 3, "Increased combat effectiveness"),
-        ]
-        
-        premium_upgrades = [
-            ("Quantum Drive Core", "fuel_efficiency", 2500, 5, "Revolutionary propulsion"),
-            ("Aegis Defense Grid", "combat_rating", 2000, 5, "Ultimate defensive system"),
-            ("Dimensional Storage", "cargo_capacity", 1800, 50, "Extra-dimensional cargo space"),
-            ("AI Navigation Core", "navigation_bonus", 2200, 5, "Artificial intelligence guidance"),
-        ]
-        
-        # Select upgrades based on wealth
-        available = base_upgrades.copy()
-        
-        if location_wealth >= 6:
-            available.extend(random.sample(advanced_upgrades, min(3, len(advanced_upgrades))))
-        
-        if location_wealth >= 8:
-            available.extend(random.sample(premium_upgrades, min(2, len(premium_upgrades))))
-        
-        return random.sample(available, min(6, len(available)))
-    
-    @ship_group.command(name="group_ship", description="Manage group ship settings")
-    async def group_ship(self, interaction: discord.Interaction):
-        # Check if user is in a group
-        group_info = self.db.execute_query(
-            '''SELECT g.group_id, g.name, g.leader_id
-               FROM characters c
-               JOIN groups g ON c.group_id = g.group_id
-               WHERE c.user_id = ?''',
+        # Get active ship for trade-in options
+        active_ship = self.db.execute_query(
+            '''SELECT s.ship_id, s.name, s.ship_type, s.condition_rating, s.market_value
+               FROM player_ships ps
+               JOIN ships s ON ps.ship_id = s.ship_id
+               WHERE ps.owner_id = ? AND ps.is_active = 1''',
             (interaction.user.id,),
             fetch='one'
         )
         
-        if not group_info:
-            await interaction.response.send_message("You're not in a group!", ephemeral=True)
-            return
-        
-        group_id, group_name, leader_id = group_info
-        
-        # Check if group already has a ship
-        group_ship = self.db.execute_query(
-            '''SELECT gs.ship_id, gs.captain_id, s.name, s.ship_type, c.name as captain_name
-               FROM group_ships gs
-               JOIN ships s ON gs.ship_id = s.ship_id
-               LEFT JOIN characters c ON gs.captain_id = c.user_id
-               WHERE gs.group_id = ?''',
-            (group_id,),
-            fetch='one'
-        )
+        # Create ship browser view
+        view = ShipBrowserView(self.bot, interaction.user.id, money, wealth_level, location_name, active_ship, ship_count)
         
         embed = discord.Embed(
-            title=f"🚀 Group Ship - {group_name}",
-            color=0x9932cc
+            title=f"🚢 {location_name} Shipyard",
+            description="Browse available ships by category or view special offers",
+            color=0x2F4F4F
         )
         
-        if group_ship:
-            ship_id, captain_id, ship_name, ship_type, captain_name = group_ship
-            
-            embed.add_field(name="Current Group Ship", value=f"**{ship_name}** ({ship_type})", inline=False)
-            embed.add_field(name="Captain", value=captain_name or "None", inline=True)
-            
-            # Get crew positions
-            crew_positions = self.db.execute_query(
-                "SELECT crew_positions FROM group_ships WHERE group_id = ?",
-                (group_id,),
-                fetch='one'
-            )[0]
-            
-            if crew_positions:
-                import json
-                positions = json.loads(crew_positions)
-                crew_text = []
-                for position, user_id in positions.items():
-                    member = interaction.guild.get_member(int(user_id)) if user_id else None
-                    crew_text.append(f"{position}: {member.display_name if member else 'Empty'}")
-                
-                embed.add_field(name="Crew Positions", value="\n".join(crew_text), inline=False)
-        else:
-            embed.add_field(name="No Group Ship", value="This group doesn't have a designated group ship yet.", inline=False)
+        embed.add_field(name="💰 Your Credits", value=f"{money:,}", inline=True)
+        embed.add_field(name="🏭 Shipyard Tier", value=f"Level {min(wealth_level//2 + 1, 5)}", inline=True)
+        embed.add_field(name="📦 Fleet Size", value=f"{ship_count}/5 ships", inline=True)
         
-        view = GroupShipView(self.bot, interaction.user.id, group_id, leader_id)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    # In cogs/ship_systems.py, inside the ShipSystemsCog class
-
-    interior_group = app_commands.Group(name="interior", description="Manage your ship's interior", parent=ship_group)
-
-    @interior_group.command(name="enter", description="Enter your own ship's interior.")
-    async def enter_ship(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        # Check character status
-        char_info = self.db.execute_query(
-            "SELECT current_location, location_status, current_ship_id FROM characters WHERE user_id = ?",
-            (interaction.user.id,), fetch='one'
-        )
-        if not char_info:
-            await interaction.followup.send("You don't have a character.", ephemeral=True)
-            return
-
-        current_location, location_status, current_ship_id = char_info
-
-        if current_ship_id:
-            await interaction.followup.send("You are already inside a ship!", ephemeral=True)
-            return
-        if not current_location or location_status != 'docked':
-            await interaction.followup.send("You must be docked at a location to enter your ship.", ephemeral=True)
-            return
-
-        # Get ship info for channel creation
-        ship_info_raw = self.db.execute_query(
-            "SELECT ship_id, name, ship_type, interior_description, channel_id FROM ships WHERE owner_id = ?",
-            (interaction.user.id,), fetch='one'
-        )
-        if not ship_info_raw:
-            await interaction.followup.send("You don't own a ship.", ephemeral=True)
-            return
-
-        ship_id = ship_info_raw[0]
-
-        # Update ship's docking location
-        self.db.execute_query(
-            "UPDATE ships SET docked_at_location = ? WHERE ship_id = ?",
-            (current_location, ship_id)
-        )
-
-        # Get or create channel
-        channel_manager = ChannelManager(self.bot)
-        ship_channel = await channel_manager.get_or_create_ship_channel(interaction.guild, ship_info_raw, interaction.user)
-
-        if not ship_channel:
-            await interaction.followup.send("Could not access the ship's interior. Please try again later.", ephemeral=True)
-            return
-
-        # Update player location (set ship_id, nullify location_id)
-        self.db.execute_query(
-            "UPDATE characters SET current_ship_id = ?, current_location = NULL WHERE user_id = ?",
-            (ship_id, interaction.user.id)
-        )
-
-        # Remove from physical location channel
-        await channel_manager.remove_user_location_access(interaction.user, current_location)
-
-        await interaction.followup.send(f"You have entered your ship, '{ship_info_raw[1]}'. Head to {ship_channel.mention}.", ephemeral=True)
-
-    @interior_group.command(name="leave", description="Leave the ship interior and return to the docking location.")
-    async def leave_ship(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        # Check if character is in a ship
-        char_info = self.db.execute_query(
-            "SELECT current_ship_id FROM characters WHERE user_id = ?",
-            (interaction.user.id,), fetch='one'
-        )
-        if not char_info or not char_info[0]:
-            await interaction.followup.send("You are not currently inside a ship.", ephemeral=True)
-            return
-
-        current_ship_id = char_info[0]
-
-        # Get the ship's docking location
-        ship_location = self.db.execute_query(
-            "SELECT docked_at_location FROM ships WHERE ship_id = ?",
-            (current_ship_id,), fetch='one'
-        )
-
-        if not ship_location or not ship_location[0]:
-            await interaction.followup.send("Cannot leave ship. The ship is not currently docked at a known location.", ephemeral=True)
-            return
-
-        ship_location_id = ship_location[0]
-
-        # Update player location (set location_id, nullify ship_id)
-        self.db.execute_query(
-            "UPDATE characters SET current_location = ?, current_ship_id = NULL WHERE user_id = ?",
-            (ship_location_id, interaction.user.id)
-        )
-
-        # Manage channel access
-        from utils.channel_manager import ChannelManager
-        channel_manager = ChannelManager(self.bot)
-        await channel_manager.remove_user_ship_access(interaction.user, current_ship_id)
-        await channel_manager.give_user_location_access(interaction.user, ship_location_id)
-        
-        # NEW: Trigger immediate ship cleanup check
-        await channel_manager.immediate_ship_cleanup(interaction.guild, current_ship_id)
-
-        location_name = self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (ship_location_id,), fetch='one')[0]
-        await interaction.followup.send(f"You have left the ship and returned to **{location_name}**.", ephemeral=True)
-
-    @interior_group.command(name="board", description="Request to board another player's ship.")
-    @app_commands.describe(target="The player whose ship you want to board.")
-    async def board_ship(self, interaction: discord.Interaction, target: discord.Member):
-        await interaction.response.defer(ephemeral=True)
-
-        if target.id == interaction.user.id:
-            await interaction.followup.send("Use `/ship interior enter` to get into your own ship.", ephemeral=True)
-            return
-
-        # Check that both players are docked at the same location
-        requester_char = self.db.execute_query(
-            "SELECT current_location, location_status, name FROM characters WHERE user_id = ?",
-            (interaction.user.id,), fetch='one'
-        )
-        target_char = self.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
-            (target.id,), fetch='one'
-        )
-
-        if not requester_char or requester_char[1] != 'docked':
-            await interaction.followup.send("You must be docked to request boarding.", ephemeral=True)
-            return
-        if not target_char or target_char[1] != 'docked':
-            await interaction.followup.send(f"{target.display_name}'s ship is not currently docked.", ephemeral=True)
-            return
-        if requester_char[0] != target_char[0]:
-            await interaction.followup.send(f"You must be at the same location as {target.display_name} to board their ship.", ephemeral=True)
-            return
-
-        # Get target ship ID
-        target_ship_id = self.db.execute_query(
-            "SELECT ship_id FROM characters WHERE user_id = ?", (target.id,), fetch='one'
-        )
-        if not target_ship_id:
-            await interaction.followup.send(f"{target.display_name} does not seem to have a ship.", ephemeral=True)
-            return
-        target_ship_id = target_ship_id[0]
-
-        # Send boarding request to location channel instead of DM
-        try:
-            location_channel_id = self.db.execute_query(
-                "SELECT channel_id FROM locations WHERE location_id = ?",
-                (requester_char[0],),  # current_location
-                fetch='one'
+        if active_ship:
+            embed.add_field(
+                name="🔄 Trade-in Available", 
+                value=f"**{active_ship[1]}** - Est. value: {active_ship[4]:,} credits",
+                inline=False
             )
-            
-            if location_channel_id and location_channel_id[0]:
-                location_channel = interaction.guild.get_channel(location_channel_id[0])
-                if location_channel:
-                    view = BoardingRequestView(self.bot, interaction.user, target_ship_id, target)
-                    embed = discord.Embed(
-                        title="🚀 Boarding Request",
-                        description=f"**{interaction.user.display_name}** (character: {requester_char[2]}) is requesting to board {target.mention}'s ship.",
-                        color=0x4169e1
-                    )
-                    embed.add_field(name="⏰ Time Limit", value="5 minutes to respond", inline=False)
-                    
-                    await location_channel.send(f"{target.mention}", embed=embed, view=view)
-                    await interaction.followup.send(f"Boarding request sent to the location channel for {target.display_name}.", ephemeral=True)
-                else:
-                    await interaction.followup.send("Could not send boarding request - location channel not found.", ephemeral=True)
-            else:
-                await interaction.followup.send("Could not send boarding request - this location doesn't have a channel.", ephemeral=True)
-                
-        except Exception as e:
-            await interaction.followup.send(f"Error sending boarding request: {e}", ephemeral=True)
-            
-    @ship_group.command(name="shipyard", description="Access shipyard services")
-    async def shipyard(self, interaction: discord.Interaction):
-        # Check if at a shipyard
-        location_info = self.db.execute_query(
-            '''SELECT l.has_shipyard, l.name, l.wealth_level FROM characters c
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @ship_group.command(name="upgrade", description="Access comprehensive ship upgrade systems")
+    async def ship_upgrade(self, interaction: discord.Interaction):
+        """Enhanced upgrade system with components and modifications"""
+        # Get character and ship info
+        char_info = self.db.execute_query(
+            '''SELECT c.current_location, c.money, l.has_upgrades, l.wealth_level, l.name as location_name
+               FROM characters c
                JOIN locations l ON c.current_location = l.location_id
                WHERE c.user_id = ?''',
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not location_info or not location_info[0]:
-            await interaction.response.send_message("This location doesn't have shipyard services.", ephemeral=True)
-            return
-        
-        _, location_name, wealth_level = location_info
-        
-        # Get character info
-        char_info = self.db.execute_query(
-            "SELECT money, active_ship_id FROM characters WHERE user_id = ?",
             (interaction.user.id,),
             fetch='one'
         )
@@ -631,664 +92,1576 @@ class ShipSystemsCog(commands.Cog):
             await interaction.response.send_message("Character not found!", ephemeral=True)
             return
         
-        money, active_ship_id = char_info
+        current_location, money, has_upgrades, wealth_level, location_name = char_info
         
-        # Get active ship info if any
-        active_ship_info = None
-        if active_ship_id:
-            active_ship_info = self.db.execute_query(
-                "SELECT name, ship_type FROM ships WHERE ship_id = ?",
-                (active_ship_id,),
-                fetch='one'
+        if not has_upgrades:
+            await interaction.response.send_message(f"{location_name} doesn't offer upgrade services.", ephemeral=True)
+            return
+        
+        # Get active ship with detailed specs
+        ship_info = self.db.execute_query(
+            '''SELECT s.ship_id, s.name, s.ship_type, s.tier, s.condition_rating,
+                      s.engine_level, s.hull_level, s.systems_level, s.special_mods,
+                      s.max_upgrade_slots, s.used_upgrade_slots
+               FROM player_ships ps
+               JOIN ships s ON ps.ship_id = s.ship_id
+               WHERE ps.owner_id = ? AND ps.is_active = 1''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            await interaction.response.send_message("You need an active ship to upgrade!", ephemeral=True)
+            return
+        
+        # Create upgrade workshop view
+        view = UpgradeWorkshopView(self.bot, interaction.user.id, ship_info, money, wealth_level)
+        
+        embed = discord.Embed(
+            title=f"🔧 {location_name} Upgrade Workshop",
+            description=f"Enhance your **{ship_info[1]}** ({ship_info[2]})",
+            color=0x4169e1
+        )
+        
+        # Ship condition affects upgrade prices
+        condition_modifier = ship_info[4] / 100  # 0.0 to 1.0
+        
+        embed.add_field(name="⚡ Engine", value=f"Level {ship_info[5]}/5", inline=True)
+        embed.add_field(name="🛡️ Hull", value=f"Level {ship_info[6]}/5", inline=True)
+        embed.add_field(name="💻 Systems", value=f"Level {ship_info[7]}/5", inline=True)
+        
+        embed.add_field(name="🔧 Condition", value=f"{ship_info[4]}%", inline=True)
+        embed.add_field(name="📦 Mod Slots", value=f"{ship_info[10]}/{ship_info[9]}", inline=True)
+        embed.add_field(name="💰 Credits", value=f"{money:,}", inline=True)
+        
+        if ship_info[8]:  # Special mods
+            mods = json.loads(ship_info[8])
+            embed.add_field(
+                name="✨ Special Modifications",
+                value="\n".join([f"• {mod}" for mod in mods[:5]]),
+                inline=False
             )
         
-        # Get stored ships
-        stored_ships = self.db.execute_query(
-            '''SELECT ps.ship_storage_id, s.ship_id, s.name, s.ship_type, ps.is_active
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @ship_group.command(name="shipyard", description="Access the complete shipyard management interface")
+    async def shipyard(self, interaction: discord.Interaction):
+        """Main shipyard hub for all ship-related activities"""
+        # Get location and character info
+        location_info = self.db.execute_query(
+            '''SELECT l.location_id, l.name, l.has_shipyard, l.wealth_level, c.money
+               FROM characters c
+               JOIN locations l ON c.current_location = l.location_id
+               WHERE c.user_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not location_info:
+            await interaction.response.send_message("Location not found!", ephemeral=True)
+            return
+        
+        location_id, location_name, has_shipyard, wealth_level, money = location_info
+        
+        if not has_shipyard:
+            await interaction.response.send_message(f"{location_name} doesn't have a shipyard.", ephemeral=True)
+            return
+        
+        # Get fleet overview
+        fleet = self.db.execute_query(
+            '''SELECT s.ship_id, s.name, s.ship_type, s.tier, s.condition_rating, 
+                      ps.is_active, s.market_value
                FROM player_ships ps
                JOIN ships s ON ps.ship_id = s.ship_id
                WHERE ps.owner_id = ?
-               ORDER BY ps.acquired_date DESC''',
+               ORDER BY ps.is_active DESC, ps.acquired_date DESC''',
             (interaction.user.id,),
             fetch='all'
         )
         
+        view = ShipyardHubView(self.bot, interaction.user.id, wealth_level, money, fleet)
+        
         embed = discord.Embed(
-            title=f"🚢 Shipyard Services - {location_name}",
-            description="Manage your fleet and purchase new ships",
+            title=f"🏗️ {location_name} Shipyard Hub",
+            description="Complete ship management and services",
             color=0x2F4F4F
         )
         
-        if active_ship_info:
-            embed.add_field(
-                name="🚀 Active Ship",
-                value=f"**{active_ship_info[0]}** ({active_ship_info[1]})",
-                inline=True
-            )
+        # Fleet summary
+        if fleet:
+            active_ship = next((s for s in fleet if s[5]), None)
+            if active_ship:
+                embed.add_field(
+                    name="🚀 Active Ship",
+                    value=f"**{active_ship[1]}** - {active_ship[2]} (Tier {active_ship[3]})\nCondition: {active_ship[4]}%",
+                    inline=False
+                )
+            
+            embed.add_field(name="📦 Fleet Size", value=f"{len(fleet)}/5 ships", inline=True)
+            total_value = sum(s[6] for s in fleet)
+            embed.add_field(name="💎 Fleet Value", value=f"{total_value:,} credits", inline=True)
         else:
-            embed.add_field(
-                name="🚀 Active Ship",
-                value="None (You need a ship to travel)",
-                inline=True
-            )
+            embed.add_field(name="⚠️ No Ships", value="Visit the shop to purchase your first ship!", inline=False)
         
         embed.add_field(name="💰 Credits", value=f"{money:,}", inline=True)
-        embed.add_field(name="🏭 Shipyard Quality", value=f"Tier {min(wealth_level//2 + 1, 5)}", inline=True)
         
-        if stored_ships:
-            ship_list = []
-            for storage_id, ship_id, ship_name, ship_type, is_active in stored_ships[:5]:
-                status = "🟢 Active" if is_active else "🔵 Stored"
-                ship_list.append(f"{status} **{ship_name}** ({ship_type})")
+        # Available services based on wealth level
+        services = ["🛒 Ship Shop", "🔧 Upgrades", "🎨 Customization"]
+        if wealth_level >= 5:
+            services.append("🔄 Ship Exchange")
+        if wealth_level >= 7:
+            services.append("⚡ Advanced Mods")
+        
+        embed.add_field(
+            name="📋 Available Services",
+            value="\n".join(services),
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class ShipBrowserView(discord.ui.View):
+    """Enhanced ship browsing with categories and filters"""
+    def __init__(self, bot, user_id: int, money: int, wealth_level: int, location_name: str, active_ship, ship_count: int):
+        super().__init__(timeout=600)
+        self.bot = bot
+        self.user_id = user_id
+        self.money = money
+        self.wealth_level = wealth_level
+        self.location_name = location_name
+        self.active_ship = active_ship
+        self.ship_count = ship_count
+        self.current_category = "all"
+        self.show_affordable_only = False
+        
+    @discord.ui.select(
+        placeholder="Select ship category...",
+        options=[
+            discord.SelectOption(label="All Ships", value="all", emoji="🚢"),
+            discord.SelectOption(label="Cargo Vessels", value="cargo", emoji="📦"),
+            discord.SelectOption(label="Fast Ships", value="speed", emoji="💨"),
+            discord.SelectOption(label="Combat Ready", value="combat", emoji="⚔️"),
+            discord.SelectOption(label="Exploration", value="explore", emoji="🔭"),
+            discord.SelectOption(label="Luxury", value="luxury", emoji="💎"),
+            discord.SelectOption(label="Special Offers", value="special", emoji="⭐")
+        ]
+    )
+    async def category_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        self.current_category = select.values[0]
+        await self.show_ships(interaction)
+    
+    @discord.ui.button(label="Affordable Only", style=discord.ButtonStyle.secondary, emoji="💰")
+    async def toggle_affordable(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.show_affordable_only = not self.show_affordable_only
+        button.style = discord.ButtonStyle.primary if self.show_affordable_only else discord.ButtonStyle.secondary
+        await self.show_ships(interaction)
+    
+    @discord.ui.button(label="Trade-In Calculator", style=discord.ButtonStyle.success, emoji="🔄", row=2)
+    async def trade_in_calc(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.active_ship:
+            await interaction.response.send_message("You don't have an active ship to trade in!", ephemeral=True)
+            return
+        
+        # Calculate trade-in value with condition modifier
+        base_value = self.active_ship[4]  # market_value
+        condition_modifier = self.active_ship[3] / 100  # condition_rating
+        trade_value = int(base_value * condition_modifier * 0.7)  # 70% of adjusted value
+        
+        embed = discord.Embed(
+            title="🔄 Trade-In Calculator",
+            description=f"Trade in your **{self.active_ship[1]}** when purchasing a new ship",
+            color=0x00ff00
+        )
+        
+        embed.add_field(name="Ship Value", value=f"{base_value:,} credits", inline=True)
+        embed.add_field(name="Condition", value=f"{self.active_ship[3]}%", inline=True)
+        embed.add_field(name="Trade-In Value", value=f"{trade_value:,} credits", inline=True)
+        
+        embed.add_field(
+            name="💡 Tip",
+            value="Ships in better condition get higher trade-in values. Consider repairs before trading!",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    async def show_ships(self, interaction: discord.Interaction):
+        """Display ships based on current filters"""
+        # Generate available ships
+        ships = self._generate_filtered_ships()
+        
+        if self.show_affordable_only:
+            # Include trade-in value if available
+            trade_value = 0
+            if self.active_ship:
+                condition_modifier = self.active_ship[3] / 100
+                trade_value = int(self.active_ship[4] * condition_modifier * 0.7)
             
-            embed.add_field(name="🏪 Your Fleet", value="\n".join(ship_list), inline=False)
+            ships = [s for s in ships if s['price'] <= self.money + trade_value]
         
-        view = ShipyardView(self.bot, interaction.user.id, wealth_level, active_ship_id)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)        
-async def setup(bot):
-    await bot.add_cog(ShipSystemsCog(bot))            
-class ShipUpgradeView(discord.ui.View):
-    def __init__(self, bot, user_id: int, upgrades: list):
+        embed = discord.Embed(
+            title=f"🛒 Available Ships - {self.current_category.title()}",
+            description=f"Ships available at {self.location_name}",
+            color=0x00ff00
+        )
+        
+        if not ships:
+            embed.add_field(
+                name="No Ships Available",
+                value="No ships match your current filters. Try a different category!",
+                inline=False
+            )
+        else:
+            # Show up to 5 ships
+            for ship in ships[:5]:
+                value_parts = [
+                    f"**Price:** {ship['price']:,} credits",
+                    f"**Tier:** {ship['tier']} | **Class:** {ship['class']}"
+                ]
+                
+                # Add key stats
+                stats = []
+                if ship['cargo_capacity'] > 100:
+                    stats.append(f"📦 Cargo: {ship['cargo_capacity']}")
+                if ship['speed_rating'] > 7:
+                    stats.append(f"💨 Speed: {ship['speed_rating']}/10")
+                if ship['combat_rating'] > 15:
+                    stats.append(f"⚔️ Combat: {ship['combat_rating']}")
+                
+                if stats:
+                    value_parts.append(" | ".join(stats))
+                
+                if ship.get('special_features'):
+                    value_parts.append(f"✨ *{ship['special_features']}*")
+                
+                embed.add_field(
+                    name=f"{ship['name']}",
+                    value="\n".join(value_parts),
+                    inline=False
+                )
+        
+        # Add purchase instructions
+        if ships:
+            view = ShipPurchaseView(self.bot, self.user_id, ships, self.money, self.active_ship)
+            await interaction.response.edit_message(embed=embed, view=view)
+        else:
+            await interaction.response.edit_message(embed=embed, view=self)
+    
+    def _generate_filtered_ships(self):
+        """Generate ships based on category and shipyard tier"""
+        from utils.ship_data import generate_random_ship_name, SHIP_TYPES
+        
+        ships = []
+        
+        # Define ship templates by category
+        templates = self._get_ship_templates()
+        
+        # Filter by category
+        if self.current_category == "all":
+            available_templates = templates
+        else:
+            available_templates = [t for t in templates if self.current_category in t['categories']]
+        
+        # Filter by shipyard tier
+        tier_limit = min(self.wealth_level // 2 + 1, 5)
+        available_templates = [t for t in available_templates if t['tier'] <= tier_limit]
+        
+        # Generate ships from templates
+        for template in available_templates:
+            # Add some variation
+            price_variance = random.randint(-15, 15) / 100
+            ship = {
+                'name': generate_random_ship_name(),
+                'type': template['type'],
+                'class': template['class'],
+                'tier': template['tier'],
+                'price': int(template['base_price'] * (1 + price_variance)),
+                'cargo_capacity': template['cargo_capacity'] + random.randint(-10, 10),
+                'speed_rating': template['speed_rating'],
+                'combat_rating': template['combat_rating'],
+                'fuel_efficiency': template['fuel_efficiency'],
+                'special_features': template.get('special_features')
+            }
+            ships.append(ship)
+        
+        # Sort by price
+        ships.sort(key=lambda x: x['price'])
+        
+        # Add special offers for high-tier shipyards
+        if self.current_category == "special" and self.wealth_level >= 6:
+            ships.extend(self._generate_special_offers())
+        
+        return ships
+    
+    def _get_ship_templates(self):
+        """Define ship templates with categories"""
+        return [
+            # Tier 1 - Basic Ships
+            {
+                'type': 'Hauler', 'class': 'Cargo', 'tier': 1,
+                'base_price': 2500, 'cargo_capacity': 150, 'speed_rating': 4,
+                'combat_rating': 5, 'fuel_efficiency': 7,
+                'categories': ['all', 'cargo']
+            },
+            {
+                'type': 'Scout', 'class': 'Recon', 'tier': 1,
+                'base_price': 3000, 'cargo_capacity': 50, 'speed_rating': 8,
+                'combat_rating': 8, 'fuel_efficiency': 9,
+                'categories': ['all', 'speed', 'explore']
+            },
+            {
+                'type': 'Shuttle', 'class': 'Transport', 'tier': 1,
+                'base_price': 2000, 'cargo_capacity': 80, 'speed_rating': 6,
+                'combat_rating': 3, 'fuel_efficiency': 8,
+                'categories': ['all']
+            },
+            
+            # Tier 2 - Improved Ships
+            {
+                'type': 'Heavy Hauler', 'class': 'Bulk Cargo', 'tier': 2,
+                'base_price': 5500, 'cargo_capacity': 300, 'speed_rating': 3,
+                'combat_rating': 10, 'fuel_efficiency': 5,
+                'categories': ['all', 'cargo']
+            },
+            {
+                'type': 'Fast Courier', 'class': 'Express', 'tier': 2,
+                'base_price': 6000, 'cargo_capacity': 100, 'speed_rating': 9,
+                'combat_rating': 12, 'fuel_efficiency': 7,
+                'categories': ['all', 'speed']
+            },
+            
+            # Tier 3 - Specialized Ships
+            {
+                'type': 'Armed Trader', 'class': 'Combat Merchant', 'tier': 3,
+                'base_price': 8500, 'cargo_capacity': 200, 'speed_rating': 6,
+                'combat_rating': 20, 'fuel_efficiency': 6,
+                'categories': ['all', 'combat', 'cargo'],
+                'special_features': 'Reinforced hull, weapon mounts'
+            },
+            {
+                'type': 'Explorer', 'class': 'Long Range', 'tier': 3,
+                'base_price': 9000, 'cargo_capacity': 120, 'speed_rating': 7,
+                'combat_rating': 15, 'fuel_efficiency': 10,
+                'categories': ['all', 'explore'],
+                'special_features': 'Extended fuel tanks, advanced sensors'
+            },
+            
+            # Tier 4 - Advanced Ships
+            {
+                'type': 'Blockade Runner', 'class': 'Stealth Cargo', 'tier': 4,
+                'base_price': 15000, 'cargo_capacity': 180, 'speed_rating': 10,
+                'combat_rating': 18, 'fuel_efficiency': 8,
+                'categories': ['all', 'speed', 'cargo'],
+                'special_features': 'Stealth coating, smuggler holds'
+            },
+            {
+                'type': 'Corvette', 'class': 'Light Warship', 'tier': 4,
+                'base_price': 18000, 'cargo_capacity': 100, 'speed_rating': 8,
+                'combat_rating': 30, 'fuel_efficiency': 5,
+                'categories': ['all', 'combat'],
+                'special_features': 'Military-grade armor, advanced targeting'
+            },
+            
+            # Tier 5 - Premium Ships
+            {
+                'type': 'Luxury Yacht', 'class': 'Executive', 'tier': 5,
+                'base_price': 25000, 'cargo_capacity': 150, 'speed_rating': 7,
+                'combat_rating': 12, 'fuel_efficiency': 6,
+                'categories': ['all', 'luxury'],
+                'special_features': 'Luxury accommodations, prestige bonus'
+            },
+            {
+                'type': 'Research Vessel', 'class': 'Science', 'tier': 5,
+                'base_price': 22000, 'cargo_capacity': 200, 'speed_rating': 5,
+                'combat_rating': 10, 'fuel_efficiency': 8,
+                'categories': ['all', 'explore'],
+                'special_features': 'Laboratory, specialized scanners'
+            }
+        ]
+    
+    def _generate_special_offers(self):
+        """Generate limited-time special offers"""
+        from utils.ship_data import generate_random_ship_name
+        
+        specials = []
+        
+        # Refurbished military vessel
+        if random.random() > 0.5:
+            specials.append({
+                'name': f"Ex-Military {generate_random_ship_name()}",
+                'type': 'Patrol Craft',
+                'class': 'Refurbished Military',
+                'tier': 4,
+                'price': 12000,  # Discounted
+                'cargo_capacity': 120,
+                'speed_rating': 8,
+                'combat_rating': 25,
+                'fuel_efficiency': 6,
+                'special_features': '⚠️ Decommissioned weapons, military-grade hull'
+            })
+        
+        # Salvaged alien tech
+        if self.wealth_level >= 8 and random.random() > 0.7:
+            specials.append({
+                'name': f"Modified {generate_random_ship_name()}",
+                'type': 'Hybrid Craft',
+                'class': 'Experimental',
+                'tier': 5,
+                'price': 30000,
+                'cargo_capacity': 180,
+                'speed_rating': 9,
+                'combat_rating': 22,
+                'fuel_efficiency': 12,
+                'special_features': '🛸 Alien drive system, unknown capabilities'
+            })
+        
+        return specials
+
+
+class ShipPurchaseView(discord.ui.View):
+    """Handle ship purchase with options"""
+    def __init__(self, bot, user_id: int, ships: list, money: int, active_ship):
         super().__init__(timeout=300)
         self.bot = bot
         self.user_id = user_id
-        self.upgrades = upgrades
+        self.ships = ships
+        self.money = money
+        self.active_ship = active_ship
         
-        # Add upgrade options to select menu
+        # Add ship selection dropdown
         options = []
-        for i, (name, upgrade_type, cost, bonus, description) in enumerate(upgrades[:25]):
+        for i, ship in enumerate(ships[:25]):
+            label = f"{ship['name']} - {ship['price']:,} cr"
+            description = f"T{ship['tier']} {ship['class']}"
+            if ship.get('special_features'):
+                description = description[:40] + "..."
+            
             options.append(
                 discord.SelectOption(
-                    label=f"{name} - {cost:,} credits",
-                    description=f"+{bonus} {upgrade_type}: {description[:50]}",
+                    label=label,
+                    description=description,
                     value=str(i)
                 )
             )
         
-        if options:
-            select = discord.ui.Select(placeholder="Choose an upgrade...", options=options)
-            select.callback = self.upgrade_callback
-            self.add_item(select)
+        select = discord.ui.Select(placeholder="Choose a ship to purchase...", options=options)
+        select.callback = self.ship_selected
+        self.add_item(select)
     
-    async def upgrade_callback(self, interaction: discord.Interaction):
+    async def ship_selected(self, interaction: discord.Interaction):
+        """Handle ship selection and show purchase options"""
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This isn't your upgrade panel!", ephemeral=True)
+            await interaction.response.send_message("This isn't your purchase interface!", ephemeral=True)
             return
         
-        upgrade_index = int(interaction.data['values'][0])
-        upgrade_name, upgrade_type, cost, bonus, description = self.upgrades[upgrade_index]
+        ship_index = int(interaction.data['values'][0])
+        selected_ship = self.ships[ship_index]
         
-        # Check if user can afford it
-        char_info = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
-            (interaction.user.id,),
-            fetch='one'
+        # Show purchase confirmation with options
+        embed = discord.Embed(
+            title="🛒 Confirm Purchase",
+            description=f"**{selected_ship['name']}**",
+            color=0x00ff00
         )
         
-        if not char_info or char_info[0] < cost:
+        embed.add_field(name="Type", value=selected_ship['type'], inline=True)
+        embed.add_field(name="Class", value=selected_ship['class'], inline=True)
+        embed.add_field(name="Tier", value=selected_ship['tier'], inline=True)
+        
+        # Ship stats
+        embed.add_field(name="📦 Cargo", value=selected_ship['cargo_capacity'], inline=True)
+        embed.add_field(name="💨 Speed", value=f"{selected_ship['speed_rating']}/10", inline=True)
+        embed.add_field(name="⚔️ Combat", value=selected_ship['combat_rating'], inline=True)
+        
+        if selected_ship.get('special_features'):
+            embed.add_field(
+                name="✨ Special Features",
+                value=selected_ship['special_features'],
+                inline=False
+            )
+        
+        # Price breakdown
+        base_price = selected_ship['price']
+        trade_value = 0
+        
+        if self.active_ship:
+            condition_modifier = self.active_ship[3] / 100
+            trade_value = int(self.active_ship[4] * condition_modifier * 0.7)
+        
+        final_price = base_price - trade_value
+        
+        embed.add_field(name="Base Price", value=f"{base_price:,} credits", inline=True)
+        if trade_value > 0:
+            embed.add_field(name="Trade-In", value=f"-{trade_value:,} credits", inline=True)
+        embed.add_field(name="Final Price", value=f"{final_price:,} credits", inline=True)
+        
+        # Check affordability
+        can_afford = self.money >= final_price
+        
+        if not can_afford:
+            embed.add_field(
+                name="❌ Insufficient Funds",
+                value=f"You need {final_price - self.money:,} more credits",
+                inline=False
+            )
+        
+        # Create confirmation view
+        confirm_view = PurchaseConfirmView(
+            self.bot, self.user_id, selected_ship, final_price, 
+            trade_value > 0, can_afford
+        )
+        
+        await interaction.response.edit_message(embed=embed, view=confirm_view)
+
+
+class PurchaseConfirmView(discord.ui.View):
+    """Confirm or cancel ship purchase"""
+    def __init__(self, bot, user_id: int, ship_data: dict, final_price: int, has_trade: bool, can_afford: bool):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        self.ship_data = ship_data
+        self.final_price = final_price
+        self.has_trade = has_trade
+        
+        # Disable confirm if can't afford
+        self.confirm_button.disabled = not can_afford
+    
+    @discord.ui.button(label="Confirm Purchase", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your purchase!", ephemeral=True)
+            return
+        
+        # Process the purchase
+        await self._process_purchase(interaction)
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your purchase!", ephemeral=True)
+            return
+        
+        await interaction.response.edit_message(
+            content="Purchase cancelled.",
+            embed=None,
+            view=None
+        )
+    
+    async def _process_purchase(self, interaction: discord.Interaction):
+        """Process the ship purchase transaction"""
+        from utils.ship_data import SHIP_DESCRIPTIONS
+        from utils.ship_activities import ShipActivityManager
+        import json
+        
+        # Start transaction
+        try:
+            # Deduct credits
+            self.bot.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (self.final_price, self.user_id)
+            )
+            
+            # Get descriptions
+            ship_type = self.ship_data['type']
+            if ship_type in SHIP_DESCRIPTIONS:
+                exterior = random.choice(SHIP_DESCRIPTIONS[ship_type]["exterior"])
+                interior = random.choice(SHIP_DESCRIPTIONS[ship_type]["interior"])
+            else:
+                exterior = f"A well-maintained {ship_type} with standard configuration"
+                interior = f"The interior is equipped for {self.ship_data['class']} operations"
+            
+            # Create the ship
+            self.bot.db.execute_query(
+                '''INSERT INTO ships 
+                   (owner_id, name, ship_type, tier, condition_rating,
+                    fuel_capacity, cargo_capacity, combat_rating, fuel_efficiency,
+                    exterior_description, interior_description,
+                    engine_level, hull_level, systems_level,
+                    max_upgrade_slots, market_value, special_mods)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (self.user_id, self.ship_data['name'], ship_type, self.ship_data['tier'], 100,
+                 100 + (self.ship_data['tier'] * 20), self.ship_data['cargo_capacity'],
+                 self.ship_data['combat_rating'], self.ship_data['fuel_efficiency'],
+                 exterior, interior, 1, 1, 1, 3 + self.ship_data['tier'],
+                 self.ship_data['price'], json.dumps([]))
+            )
+            
+            # Get new ship ID
+            new_ship_id = self.bot.db.execute_query(
+                "SELECT last_insert_rowid()",
+                fetch='one'
+            )[0]
+            
+            # Generate ship activities
+            activity_manager = ShipActivityManager(self.bot)
+            activity_manager.generate_ship_activities(new_ship_id, ship_type)
+            
+            # Add to player_ships
+            self.bot.db.execute_query(
+                '''INSERT INTO player_ships (owner_id, ship_id, is_active)
+                   VALUES (?, ?, ?)''',
+                (self.user_id, new_ship_id, 1 if not self.has_trade else 1)
+            )
+            
+            # Handle trade-in if applicable
+            if self.has_trade:
+                # Deactivate old ship
+                self.bot.db.execute_query(
+                    "UPDATE player_ships SET is_active = 0 WHERE owner_id = ? AND is_active = 1 AND ship_id != ?",
+                    (self.user_id, new_ship_id)
+                )
+                
+                # Remove old ship from player_ships (sold)
+                active_ship = self.bot.db.execute_query(
+                    "SELECT ship_id FROM player_ships WHERE owner_id = ? AND is_active = 0 ORDER BY ship_storage_id DESC LIMIT 1",
+                    (self.user_id,),
+                    fetch='one'
+                )
+                
+                if active_ship:
+                    self.bot.db.execute_query(
+                        "DELETE FROM player_ships WHERE ship_id = ?",
+                        (active_ship[0],)
+                    )
+                    self.bot.db.execute_query(
+                        "DELETE FROM ships WHERE ship_id = ?",
+                        (active_ship[0],)
+                    )
+            
+            # Success message
+            embed = discord.Embed(
+                title="✅ Purchase Complete!",
+                description=f"Congratulations on your new ship!",
+                color=0x00ff00
+            )
+            
+            embed.add_field(name="Ship", value=self.ship_data['name'], inline=True)
+            embed.add_field(name="Type", value=f"{self.ship_data['type']} ({self.ship_data['class']})", inline=True)
+            embed.add_field(name="Credits Spent", value=f"{self.final_price:,}", inline=True)
+            
+            embed.add_field(
+                name="🎉 Next Steps",
+                value="• Use `/ship info` to view your new ship\n• Visit the upgrade workshop to enhance it\n• Check ship activities in your interior",
+                inline=False
+            )
+            
+            await interaction.response.edit_message(embed=embed, view=None)
+            
+        except Exception as e:
             await interaction.response.send_message(
-                f"Insufficient credits! Need {cost:,}, have {char_info[0] if char_info else 0:,}.",
+                f"Error processing purchase: {str(e)}",
+                ephemeral=True
+            )
+
+
+class UpgradeWorkshopView(discord.ui.View):
+    """Comprehensive upgrade interface"""
+    def __init__(self, bot, user_id: int, ship_info, money: int, wealth_level: int):
+        super().__init__(timeout=600)
+        self.bot = bot
+        self.user_id = user_id
+        self.ship_info = ship_info
+        self.money = money
+        self.wealth_level = wealth_level
+    
+    @discord.ui.button(label="Component Upgrades", style=discord.ButtonStyle.primary, emoji="⚡", row=0)
+    async def component_upgrades(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Upgrade core ship components"""
+        embed = discord.Embed(
+            title="⚡ Component Upgrades",
+            description="Upgrade your ship's core systems",
+            color=0x4169e1
+        )
+        
+        ship_id, name, ship_type, tier, condition, engine, hull, systems = self.ship_info[:8]
+        
+        # Calculate upgrade costs with condition modifier
+        condition_mod = 1 + (1 - condition/100) * 0.5  # Poor condition = higher cost
+        
+        components = [
+            {
+                'name': 'Engine',
+                'emoji': '⚡',
+                'current': engine,
+                'stat': 'Speed & Fuel Efficiency',
+                'base_cost': 1000 * (engine + 1),
+                'bonus': f"+{10 * (engine + 1)}% performance"
+            },
+            {
+                'name': 'Hull',
+                'emoji': '🛡️',
+                'current': hull,
+                'stat': 'Durability & Cargo',
+                'base_cost': 1200 * (hull + 1),
+                'bonus': f"+{15 * (hull + 1)} HP, +{5 * (hull + 1)}% cargo"
+            },
+            {
+                'name': 'Systems',
+                'emoji': '💻',
+                'current': systems,
+                'stat': 'Sensors & Navigation',
+                'base_cost': 800 * (systems + 1),
+                'bonus': f"+{(systems + 1) * 2} scan range, +{5 * (systems + 1)}% jump accuracy"
+            }
+        ]
+        
+        for comp in components:
+            if comp['current'] < 5:
+                cost = int(comp['base_cost'] * condition_mod)
+                embed.add_field(
+                    name=f"{comp['emoji']} {comp['name']} (Level {comp['current']}/5)",
+                    value=f"**Upgrade to Level {comp['current'] + 1}:** {cost:,} credits\n"
+                          f"*{comp['stat']}*\n"
+                          f"Effect: {comp['bonus']}",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name=f"{comp['emoji']} {comp['name']} (MAX)",
+                    value="Fully upgraded!",
+                    inline=False
+                )
+        
+        view = ComponentUpgradeView(self.bot, self.user_id, self.ship_info, self.money, condition_mod)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Special Modifications", style=discord.ButtonStyle.secondary, emoji="✨", row=0)
+    async def special_mods(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Install special modifications"""
+        if self.wealth_level < 5:
+            await interaction.response.send_message(
+                "Special modifications require a Tier 3+ shipyard!",
                 ephemeral=True
             )
             return
         
-        # Get ship info
-        ship_info = self.db.execute_query(
-            "SELECT ship_id, upgrade_slots, used_upgrade_slots FROM ships WHERE owner_id = ?",
-            (interaction.user.id,),
-            fetch='one'
+        embed = discord.Embed(
+            title="✨ Special Modifications",
+            description="Install unique upgrades to customize your ship",
+            color=0xffd700
         )
         
-        if ship_info[2] >= ship_info[1]:
-            await interaction.response.send_message("No upgrade slots available!", ephemeral=True)
-            return
+        # Generate available mods based on ship type and tier
+        available_mods = self._generate_special_mods()
         
-        # Install upgrade
-        self.db.execute_query(
-            '''INSERT INTO ship_upgrades (ship_id, upgrade_type, upgrade_name, bonus_value)
-               VALUES (?, ?, ?, ?)''',
-            (ship_info[0], upgrade_type, upgrade_name, bonus)
+        # Check current mods
+        current_mods = json.loads(self.ship_info[8]) if self.ship_info[8] else []
+        available_slots = self.ship_info[9] - self.ship_info[10]
+        
+        embed.add_field(
+            name="📦 Modification Slots",
+            value=f"{self.ship_info[10]}/{self.ship_info[9]} used",
+            inline=False
         )
         
-        # Update ship stats
-        if upgrade_type == "fuel_efficiency":
-            self.db.execute_query(
-                "UPDATE ships SET fuel_efficiency = fuel_efficiency + ?, used_upgrade_slots = used_upgrade_slots + 1 WHERE ship_id = ?",
-                (bonus, ship_info[0])
+        if current_mods:
+            embed.add_field(
+                name="🔧 Installed Mods",
+                value="\n".join([f"• {mod}" for mod in current_mods]),
+                inline=False
             )
-        elif upgrade_type == "cargo_capacity":
-            self.db.execute_query(
-                "UPDATE ships SET cargo_capacity = cargo_capacity + ?, used_upgrade_slots = used_upgrade_slots + 1 WHERE ship_id = ?",
-                (bonus, ship_info[0])
-            )
-        elif upgrade_type == "max_hull":
-            self.db.execute_query(
-                "UPDATE ships SET max_hull = max_hull + ?, hull_integrity = hull_integrity + ?, used_upgrade_slots = used_upgrade_slots + 1 WHERE ship_id = ?",
-                (bonus, bonus, ship_info[0])
-            )
-        elif upgrade_type == "combat_rating":
-            self.db.execute_query(
-                "UPDATE ships SET combat_rating = combat_rating + ?, used_upgrade_slots = used_upgrade_slots + 1 WHERE ship_id = ?",
-                (bonus, ship_info[0])
-            )
+        
+        if available_slots > 0:
+            for mod in available_mods[:5]:
+                if mod['name'] not in current_mods:
+                    embed.add_field(
+                        name=f"{mod['icon']} {mod['name']}",
+                        value=f"**Cost:** {mod['cost']:,} credits\n"
+                              f"*{mod['description']}*\n"
+                              f"Effect: {mod['effect']}",
+                        inline=False
+                    )
         else:
-            # For other upgrades, just mark as installed
-            self.db.execute_query(
-                "UPDATE ships SET used_upgrade_slots = used_upgrade_slots + 1 WHERE ship_id = ?",
-                (ship_info[0],)
+            embed.add_field(
+                name="❌ No Slots Available",
+                value="Remove existing mods or upgrade your ship tier for more slots",
+                inline=False
             )
         
-        # Deduct credits
-        self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
-            (cost, interaction.user.id)
-        )
+        view = SpecialModView(self.bot, self.user_id, self.ship_info, available_mods, self.money, available_slots)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Maintenance & Repairs", style=discord.ButtonStyle.success, emoji="🔧", row=0)
+    async def maintenance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Ship maintenance and condition management"""
+        condition = self.ship_info[4]
         
         embed = discord.Embed(
-            title="🔧 Upgrade Installed",
-            description=f"Successfully installed **{upgrade_name}**!",
+            title="🔧 Ship Maintenance",
+            description=f"Keep your **{self.ship_info[1]}** in top condition",
             color=0x00ff00
         )
         
-        embed.add_field(name="Effect", value=f"+{bonus} {upgrade_type}", inline=True)
-        embed.add_field(name="Cost", value=f"{cost:,} credits", inline=True)
+        embed.add_field(name="Current Condition", value=f"{condition}%", inline=True)
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # Condition affects everything
+        status = "Excellent" if condition >= 90 else "Good" if condition >= 70 else "Fair" if condition >= 50 else "Poor"
+        embed.add_field(name="Status", value=status, inline=True)
+        
+        # Repair costs
+        if condition < 100:
+            repair_cost = int((100 - condition) * 20 * (self.ship_info[3] + 1))  # Tier affects cost
+            embed.add_field(
+                name="🔧 Full Repair",
+                value=f"Cost: {repair_cost:,} credits\nRestores condition to 100%",
+                inline=False
+            )
+            
+            # Partial repair options
+            partial_amounts = [10, 25, 50]
+            for amount in partial_amounts:
+                if condition + amount <= 100:
+                    cost = int(amount * 20 * (self.ship_info[3] + 1))
+                    embed.add_field(
+                        name=f"Repair +{amount}%",
+                        value=f"{cost:,} credits",
+                        inline=True
+                    )
+        
+        # Maintenance tips
+        embed.add_field(
+            name="💡 Maintenance Tips",
+            value="• Ships lose condition during combat and long journeys\n"
+                  "• Poor condition increases upgrade costs\n"
+                  "• Well-maintained ships have better trade-in value",
+            inline=False
+        )
+        
+        view = MaintenanceView(self.bot, self.user_id, self.ship_info[0], condition, self.money, self.ship_info[3])
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Cosmetic Customization", style=discord.ButtonStyle.secondary, emoji="🎨", row=1)
+    async def cosmetics(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Visual customization options"""
+        embed = discord.Embed(
+            title="🎨 Ship Customization",
+            description="Personalize your ship's appearance",
+            color=0xff69b4
+        )
+        
+        # Current customizations
+        current_custom = self.bot.db.execute_query(
+            '''SELECT paint_job, decals, interior_style, name_plate
+               FROM ship_customization
+               WHERE ship_id = ?''',
+            (self.ship_info[0],),
+            fetch='one'
+        )
+        
+        if current_custom:
+            embed.add_field(
+                name="Current Style",
+                value=f"Paint: {current_custom[0] or 'Default'}\n"
+                      f"Decals: {current_custom[1] or 'None'}\n"
+                      f"Interior: {current_custom[2] or 'Standard'}",
+                inline=False
+            )
+        
+        # Available options
+        options = [
+            {
+                'category': 'Paint Jobs',
+                'icon': '🎨',
+                'items': [
+                    ('Midnight Black', 500),
+                    ('Arctic White', 500),
+                    ('Military Green', 750),
+                    ('Racing Red', 1000),
+                    ('Deep Space Blue', 1000),
+                    ('Chrome Finish', 2000)
+                ]
+            },
+            {
+                'category': 'Decals',
+                'icon': '🏷️',
+                'items': [
+                    ('Racing Stripes', 300),
+                    ('Skull & Crossbones', 500),
+                    ('Corporate Logo', 400),
+                    ('Flame Pattern', 600),
+                    ('Star Map', 800)
+                ]
+            },
+            {
+                'category': 'Interior Themes',
+                'icon': '🛋️',
+                'items': [
+                    ('Minimalist', 1000),
+                    ('Luxury', 2000),
+                    ('Military Spec', 1500),
+                    ('Retro-Future', 1800),
+                    ('Alien-Inspired', 2500)
+                ]
+            }
+        ]
+        
+        for opt in options:
+            items_text = "\n".join([f"• {name}: {cost:,} cr" for name, cost in opt['items'][:3]])
+            embed.add_field(
+                name=f"{opt['icon']} {opt['category']}",
+                value=items_text,
+                inline=True
+            )
+        
+        view = CosmeticView(self.bot, self.user_id, self.ship_info[0], self.money)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Apply Inventory Items", style=discord.ButtonStyle.primary, emoji="📦", row=1)
+    async def apply_items(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Apply upgrade items from inventory"""
+        # Get upgrade items from inventory
+        items = self.bot.db.execute_query(
+            '''SELECT i.item_id, i.item_name, i.quantity, i.metadata
+               FROM inventory i
+               WHERE i.owner_id = ? AND i.item_type = 'ship_upgrade'
+               ORDER BY i.item_name''',
+            (self.user_id,),
+            fetch='all'
+        )
+        
+        if not items:
+            await interaction.response.send_message(
+                "You don't have any ship upgrade items in your inventory!",
+                ephemeral=True
+            )
+            return
+        
+        embed = discord.Embed(
+            title="📦 Apply Upgrade Items",
+            description="Use items from your inventory to upgrade your ship",
+            color=0x4169e1
+        )
+        
+        for item_id, name, quantity, metadata in items[:10]:
+            try:
+                meta = json.loads(metadata) if metadata else {}
+                upgrade_type = meta.get('upgrade_type', 'general')
+                bonus = meta.get('bonus', 5)
+                
+                embed.add_field(
+                    name=f"{name} (x{quantity})",
+                    value=f"Type: {upgrade_type}\nBonus: +{bonus}",
+                    inline=True
+                )
+            except:
+                continue
+        
+        view = ItemApplicationView(self.bot, self.user_id, self.ship_info[0], items)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    def _generate_special_mods(self):
+        """Generate available special modifications"""
+        ship_type = self.ship_info[2]
+        tier = self.ship_info[3]
+        
+        # Base mods available to all
+        mods = [
+            {
+                'name': 'Smuggler Compartment',
+                'icon': '📦',
+                'cost': 5000,
+                'description': 'Hidden cargo space undetectable by standard scans',
+                'effect': '+20 stealth cargo capacity'
+            },
+            {
+                'name': 'Emergency Booster',
+                'icon': '🚀',
+                'cost': 3000,
+                'description': 'One-use speed boost for emergencies',
+                'effect': '+50% speed for one jump'
+            },
+            {
+                'name': 'Shield Generator',
+                'icon': '🛡️',
+                'cost': 8000,
+                'description': 'Basic energy shielding system',
+                'effect': '+20% damage reduction'
+            }
+        ]
+        
+        # Type-specific mods
+        if 'Cargo' in ship_type or 'Hauler' in ship_type:
+            mods.append({
+                'name': 'Magnetic Clamps',
+                'icon': '🧲',
+                'cost': 4000,
+                'description': 'External cargo attachment system',
+                'effect': '+30% cargo capacity'
+            })
+        
+        if 'Combat' in ship_type or 'Military' in ship_type:
+            mods.append({
+                'name': 'Targeting Computer',
+                'icon': '🎯',
+                'cost': 6000,
+                'description': 'Advanced weapon targeting system',
+                'effect': '+25% weapon accuracy'
+            })
+        
+        if 'Fast' in ship_type or 'Scout' in ship_type:
+            mods.append({
+                'name': 'Afterburner Kit',
+                'icon': '💨',
+                'cost': 5500,
+                'description': 'High-performance engine modification',
+                'effect': '+2 speed rating'
+            })
+        
+        # High-tier exclusive mods
+        if tier >= 4:
+            mods.append({
+                'name': 'Cloaking Device',
+                'icon': '🌑',
+                'cost': 15000,
+                'description': 'Basic stealth technology',
+                'effect': 'Avoid 30% of random encounters'
+            })
+        
+        return mods
 
-class GroupShipView(discord.ui.View):
-    def __init__(self, bot, user_id: int, group_id: int, leader_id: int):
+
+class ComponentUpgradeView(discord.ui.View):
+    """Handle component upgrade purchases"""
+    def __init__(self, bot, user_id: int, ship_info, money: int, condition_mod: float):
         super().__init__(timeout=300)
         self.bot = bot
         self.user_id = user_id
-        self.group_id = group_id
-        self.leader_id = leader_id
+        self.ship_info = ship_info
+        self.money = money
+        self.condition_mod = condition_mod
+        
+        # Add upgrade buttons
+        components = [
+            ('Engine', '⚡', 4, 1000),
+            ('Hull', '🛡️', 5, 1200),
+            ('Systems', '💻', 6, 800)
+        ]
+        
+        for name, emoji, index, base_cost in components:
+            current_level = ship_info[index]
+            if current_level < 5:
+                cost = int(base_cost * (current_level + 1) * condition_mod)
+                button = discord.ui.Button(
+                    label=f"Upgrade {name} ({cost:,} cr)",
+                    emoji=emoji,
+                    style=discord.ButtonStyle.primary,
+                    disabled=money < cost
+                )
+                button.callback = self._create_upgrade_callback(name.lower(), index, cost)
+                self.add_item(button)
     
-    @discord.ui.button(label="Designate My Ship", style=discord.ButtonStyle.primary, emoji="🚀")
-    async def designate_ship(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.leader_id:
-            await interaction.response.send_message("Only the group leader can designate the group ship!", ephemeral=True)
-            return
+    def _create_upgrade_callback(self, component: str, index: int, cost: int):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("This isn't your upgrade panel!", ephemeral=True)
+                return
+            
+            # Process upgrade
+            self.bot.db.execute_query(
+                f"UPDATE ships SET {component}_level = {component}_level + 1 WHERE ship_id = ?",
+                (self.ship_info[0],)
+            )
+            
+            self.bot.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (cost, self.user_id)
+            )
+            
+            await interaction.response.send_message(
+                f"✅ {component.title()} upgraded to level {self.ship_info[index] + 1}!",
+                ephemeral=True
+            )
         
-        # Get user's ship
-        ship_info = self.db.execute_query(
-            "SELECT ship_id, name FROM ships WHERE owner_id = ?",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not ship_info:
-            await interaction.response.send_message("You don't have a ship!", ephemeral=True)
-            return
-        
-        # Set as group ship
-        self.db.execute_query(
-            "INSERT OR REPLACE INTO group_ships (group_id, ship_id, captain_id) VALUES (?, ?, ?)",
-            (self.group_id, ship_info[0], interaction.user.id)
-        )
-        
-        embed = discord.Embed(
-            title="🚀 Group Ship Designated",
-            description=f"**{ship_info[1]}** is now the group ship!",
-            color=0x00ff00
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return callback
 
-class UpgradeApplicationView(discord.ui.View):
-    def __init__(self, bot, user_id: int, ship_id: int):
+
+class SpecialModView(discord.ui.View):
+    """Handle special modification installation"""
+    def __init__(self, bot, user_id: int, ship_info, mods: list, money: int, available_slots: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.ship_info = ship_info
+        self.mods = mods
+        self.money = money
+        
+        if available_slots > 0:
+            # Add mod selection
+            current_mods = json.loads(ship_info[8]) if ship_info[8] else []
+            
+            options = []
+            for mod in mods[:25]:
+                if mod['name'] not in current_mods:
+                    options.append(
+                        discord.SelectOption(
+                            label=f"{mod['name']} - {mod['cost']:,} cr",
+                            description=mod['effect'][:50],
+                            value=mod['name'],
+                            emoji=mod['icon']
+                        )
+                    )
+            
+            if options:
+                select = discord.ui.Select(
+                    placeholder="Choose a modification to install...",
+                    options=options
+                )
+                select.callback = self.mod_selected
+                self.add_item(select)
+    
+    async def mod_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your panel!", ephemeral=True)
+            return
+        
+        mod_name = interaction.data['values'][0]
+        mod = next(m for m in self.mods if m['name'] == mod_name)
+        
+        if self.money < mod['cost']:
+            await interaction.response.send_message("Insufficient credits!", ephemeral=True)
+            return
+        
+        # Install mod
+        current_mods = json.loads(self.ship_info[8]) if self.ship_info[8] else []
+        current_mods.append(mod['name'])
+        
+        self.bot.db.execute_query(
+            "UPDATE ships SET special_mods = ?, used_upgrade_slots = used_upgrade_slots + 1 WHERE ship_id = ?",
+            (json.dumps(current_mods), self.ship_info[0])
+        )
+        
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (mod['cost'], self.user_id)
+        )
+        
+        await interaction.response.send_message(
+            f"✅ {mod['icon']} **{mod['name']}** installed successfully!",
+            ephemeral=True
+        )
+
+
+class MaintenanceView(discord.ui.View):
+    """Handle ship repairs and maintenance"""
+    def __init__(self, bot, user_id: int, ship_id: int, condition: int, money: int, tier: int):
         super().__init__(timeout=300)
         self.bot = bot
         self.user_id = user_id
         self.ship_id = ship_id
+        self.condition = condition
+        self.money = money
+        self.tier = tier
+        
+        # Add repair buttons
+        if condition < 100:
+            # Full repair
+            full_cost = int((100 - condition) * 20 * (tier + 1))
+            full_btn = discord.ui.Button(
+                label=f"Full Repair ({full_cost:,} cr)",
+                style=discord.ButtonStyle.success,
+                emoji="🔧",
+                disabled=money < full_cost
+            )
+            full_btn.callback = self._create_repair_callback(100 - condition, full_cost)
+            self.add_item(full_btn)
+            
+            # Partial repairs
+            for amount in [10, 25, 50]:
+                if condition + amount <= 100:
+                    cost = int(amount * 20 * (tier + 1))
+                    btn = discord.ui.Button(
+                        label=f"+{amount}% ({cost:,} cr)",
+                        style=discord.ButtonStyle.primary,
+                        disabled=money < cost
+                    )
+                    btn.callback = self._create_repair_callback(amount, cost)
+                    self.add_item(btn)
     
-    @discord.ui.button(label="Apply Upgrade Items", style=discord.ButtonStyle.primary, emoji="⚙️")
-    async def apply_upgrades(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This isn't your upgrade panel!", ephemeral=True)
-            return
+    def _create_repair_callback(self, amount: int, cost: int):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("This isn't your ship!", ephemeral=True)
+                return
+            
+            # Process repair
+            self.bot.db.execute_query(
+                "UPDATE ships SET condition_rating = LEAST(condition_rating + ?, 100) WHERE ship_id = ?",
+                (amount, self.ship_id)
+            )
+            
+            self.bot.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (cost, self.user_id)
+            )
+            
+            new_condition = min(self.condition + amount, 100)
+            await interaction.response.send_message(
+                f"✅ Ship repaired! Condition: {new_condition}%",
+                ephemeral=True
+            )
         
-        # Get upgrade items from inventory
-        upgrade_items = self.bot.db.execute_query(
-            '''SELECT item_id, item_name, description, quantity
-               FROM inventory 
-               WHERE owner_id = ? AND item_type = 'upgrade' AND quantity > 0
-               ORDER BY item_name''',
-            (interaction.user.id,),
-            fetch='all'
-        )
+        return callback
+
+
+class CosmeticView(discord.ui.View):
+    """Handle cosmetic customization"""
+    def __init__(self, bot, user_id: int, ship_id: int, money: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.ship_id = ship_id
+        self.money = money
         
-        if not upgrade_items:
-            await interaction.response.send_message("You don't have any upgrade items in your inventory.", ephemeral=True)
-            return
+        # Add category buttons
+        categories = [
+            ('Paint Job', '🎨', 'paint_job'),
+            ('Decals', '🏷️', 'decals'),
+            ('Interior', '🛋️', 'interior_style')
+        ]
         
-        # Create selection interface
+        for label, emoji, category in categories:
+            btn = discord.ui.Button(
+                label=label,
+                emoji=emoji,
+                style=discord.ButtonStyle.primary
+            )
+            btn.callback = self._create_category_callback(category)
+            self.add_item(btn)
+    
+    def _create_category_callback(self, category: str):
+        async def callback(interaction: discord.Interaction):
+            # Show options for this category
+            # Implementation would show specific customization options
+            await interaction.response.send_message(
+                f"Customization options for {category} coming soon!",
+                ephemeral=True
+            )
+        
+        return callback
+
+
+class ItemApplicationView(discord.ui.View):
+    """Apply upgrade items from inventory"""
+    def __init__(self, bot, user_id: int, ship_id: int, items: list):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.ship_id = ship_id
+        
+        # Create item selection
         options = []
-        for item_id, item_name, description, quantity in upgrade_items[:25]:
+        for item_id, name, quantity, metadata in items[:25]:
             options.append(
                 discord.SelectOption(
-                    label=f"{item_name} ({quantity}x)",
-                    description=description[:100],
+                    label=f"{name} (x{quantity})",
                     value=str(item_id)
                 )
             )
         
-        select = discord.ui.Select(placeholder="Choose an upgrade to apply...", options=options)
-        select.callback = self.upgrade_select_callback
-        
-        view = discord.ui.View(timeout=300)
-        view.add_item(select)
-        
-        embed = discord.Embed(
-            title="🔧 Available Upgrade Items",
-            description="Select an upgrade item from your inventory to apply to your ship",
-            color=0x4169e1
-        )
-        
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        if options:
+            select = discord.ui.Select(
+                placeholder="Choose an item to apply...",
+                options=options
+            )
+            select.callback = self.item_selected
+            self.add_item(select)
     
-    async def upgrade_select_callback(self, interaction: discord.Interaction):
+    async def item_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your inventory!", ephemeral=True)
+            return
+        
         item_id = int(interaction.data['values'][0])
         
         # Get item details
-        item_info = self.bot.db.execute_query(
-            '''SELECT item_name, description, metadata
-               FROM inventory WHERE item_id = ?''',
+        item = self.bot.db.execute_query(
+            "SELECT item_name, metadata FROM inventory WHERE item_id = ?",
             (item_id,),
             fetch='one'
         )
         
-        if not item_info:
+        if not item:
             await interaction.response.send_message("Item not found!", ephemeral=True)
             return
         
-        item_name, description, metadata = item_info
-        
-        # Parse upgrade effect from metadata
-        import json
+        # Apply item effect
         try:
-            meta = json.loads(metadata) if metadata else {}
-            effect_value = meta.get('effect_value', '')
+            metadata = json.loads(item[1]) if item[1] else {}
+            upgrade_type = metadata.get('upgrade_type', 'general')
+            bonus = metadata.get('bonus', 5)
             
-            if ':' in effect_value:
-                upgrade_type, bonus_str = effect_value.split(':')
-                bonus = int(bonus_str)
-            else:
-                await interaction.response.send_message("Invalid upgrade item format!", ephemeral=True)
-                return
-        except:
-            await interaction.response.send_message("Error reading upgrade item data!", ephemeral=True)
-            return
-        
-        # Apply upgrade to ship
-        if upgrade_type == "fuel_efficiency":
+            # Apply based on type
+            if upgrade_type == 'fuel_efficiency':
+                self.bot.db.execute_query(
+                    "UPDATE ships SET fuel_efficiency = fuel_efficiency + ? WHERE ship_id = ?",
+                    (bonus, self.ship_id)
+                )
+            elif upgrade_type == 'cargo_capacity':
+                self.bot.db.execute_query(
+                    "UPDATE ships SET cargo_capacity = cargo_capacity + ? WHERE ship_id = ?",
+                    (bonus, self.ship_id)
+                )
+            elif upgrade_type == 'combat_rating':
+                self.bot.db.execute_query(
+                    "UPDATE ships SET combat_rating = combat_rating + ? WHERE ship_id = ?",
+                    (bonus, self.ship_id)
+                )
+            
+            # Remove item from inventory
             self.bot.db.execute_query(
-                "UPDATE ships SET fuel_efficiency = fuel_efficiency + ? WHERE ship_id = ?",
-                (bonus, self.ship_id)
+                "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = ?",
+                (item_id,)
             )
-        elif upgrade_type == "max_hull":
+            
             self.bot.db.execute_query(
-                "UPDATE ships SET max_hull = max_hull + ?, hull_integrity = hull_integrity + ? WHERE ship_id = ?",
-                (bonus, bonus, self.ship_id)
+                "DELETE FROM inventory WHERE item_id = ? AND quantity <= 0",
+                (item_id,)
             )
-        elif upgrade_type == "cargo_capacity":
-            self.bot.db.execute_query(
-                "UPDATE ships SET cargo_capacity = cargo_capacity + ? WHERE ship_id = ?",
-                (bonus, self.ship_id)
+            
+            await interaction.response.send_message(
+                f"✅ Applied **{item[0]}** to your ship! (+{bonus} {upgrade_type})",
+                ephemeral=True
             )
-        elif upgrade_type == "combat_rating":
-            self.bot.db.execute_query(
-                "UPDATE ships SET combat_rating = combat_rating + ? WHERE ship_id = ?",
-                (bonus, self.ship_id)
+            
+        except Exception as e:
+            await interaction.response.send_message(
+                f"Error applying item: {str(e)}",
+                ephemeral=True
             )
-        
-        # Remove item from inventory
-        self.bot.db.execute_query(
-            "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = ?",
-            (item_id,)
-        )
-        
-        # Remove if quantity is 0
-        self.bot.db.execute_query(
-            "DELETE FROM inventory WHERE item_id = ? AND quantity <= 0",
-            (item_id,)
-        )
-        
-        # Record upgrade installation
-        self.bot.db.execute_query(
-            '''INSERT INTO ship_upgrades (ship_id, upgrade_type, upgrade_name, bonus_value)
-               VALUES (?, ?, ?, ?)''',
-            (self.ship_id, upgrade_type, item_name, bonus)
-        )
-        
-        embed = discord.Embed(
-            title="✅ Upgrade Applied",
-            description=f"Successfully applied **{item_name}** to your ship!",
-            color=0x00ff00
-        )
-        
-        embed.add_field(name="Effect", value=f"+{bonus} {upgrade_type.replace('_', ' ').title()}", inline=True)
-        embed.add_field(name="Item Used", value=item_name, inline=True)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)        
-class ShipyardView(discord.ui.View):
-    def __init__(self, bot, user_id: int, wealth_level: int, active_ship_id: int = None):
-        super().__init__(timeout=300)
+
+
+class ShipyardHubView(discord.ui.View):
+    """Main shipyard hub navigation"""
+    def __init__(self, bot, user_id: int, wealth_level: int, money: int, fleet: list):
+        super().__init__(timeout=600)
         self.bot = bot
         self.user_id = user_id
         self.wealth_level = wealth_level
-        self.active_ship_id = active_ship_id
+        self.money = money
+        self.fleet = fleet
+        
+    @discord.ui.button(label="Browse Ships", style=discord.ButtonStyle.primary, emoji="🛒", row=0)
+    async def browse_ships(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Redirect to ship purchase command
+        await self.bot.get_cog('ShipSystemsCog').ship_purchase.callback(
+            self.bot.get_cog('ShipSystemsCog'), interaction
+        )
     
-    @discord.ui.button(label="Buy Ship", style=discord.ButtonStyle.success, emoji="🛒")
-    async def buy_ship(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This isn't your shipyard panel!", ephemeral=True)
+    @discord.ui.button(label="Upgrade Workshop", style=discord.ButtonStyle.primary, emoji="🔧", row=0)
+    async def upgrade_workshop(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not any(s[5] for s in self.fleet):  # No active ship
+            await interaction.response.send_message("You need an active ship first!", ephemeral=True)
             return
         
-        # Generate available ships based on wealth level
-        available_ships = self._generate_available_ships()
-        
-        if not available_ships:
-            await interaction.response.send_message("No ships available for purchase at this shipyard.", ephemeral=True)
-            return
-        
-        options = []
-        for ship_data in available_ships[:25]:
-            name, ship_type, price, description = ship_data
-            options.append(
-                discord.SelectOption(
-                    label=f"{name} - {price:,} credits",
-                    description=f"{ship_type}: {description[:80]}",
-                    value=f"{ship_type}|{name}|{price}"
-                )
-            )
-        
-        select = discord.ui.Select(placeholder="Choose a ship to purchase...", options=options)
-        select.callback = self.purchase_ship_callback
-        
-        purchase_view = discord.ui.View(timeout=300)
-        purchase_view.add_item(select)
-        
-        embed = discord.Embed(
-            title="🛒 Ships for Sale",
-            description="Available ships at this shipyard",
-            color=0x00ff00
+        await self.bot.get_cog('ShipSystemsCog').ship_upgrade.callback(
+            self.bot.get_cog('ShipSystemsCog'), interaction
         )
-        
-        await interaction.response.send_message(embed=embed, view=purchase_view, ephemeral=True)
     
-    @discord.ui.button(label="Sell Ship", style=discord.ButtonStyle.danger, emoji="💰")
-    async def sell_ship(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This isn't your shipyard panel!", ephemeral=True)
-            return
-        
-        if not self.active_ship_id:
-            await interaction.response.send_message("You don't have an active ship to sell.", ephemeral=True)
-            return
-        
-        # Get ship details
-        ship_info = self.db.execute_query(
-            '''SELECT name, ship_type, fuel_capacity, cargo_capacity, combat_rating, fuel_efficiency
-               FROM ships WHERE ship_id = ?''',
-            (self.active_ship_id,),
-            fetch='one'
-        )
-        
-        if not ship_info:
-            await interaction.response.send_message("Ship not found!", ephemeral=True)
-            return
-        
-        # Calculate sale price (60-80% of estimated value based on specs)
-        base_value = self._calculate_ship_value(ship_info)
-        sale_price = int(base_value * (0.6 + (self.wealth_level * 0.02)))
-        
+    @discord.ui.button(label="Fleet Management", style=discord.ButtonStyle.secondary, emoji="📦", row=0)
+    async def fleet_management(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Manage your ship collection"""
         embed = discord.Embed(
-            title="💰 Sell Ship",
-            description=f"Are you sure you want to sell **{ship_info[0]}**?",
-            color=0xff9900
-        )
-        
-        embed.add_field(name="Ship Type", value=ship_info[1], inline=True)
-        embed.add_field(name="Sale Price", value=f"{sale_price:,} credits", inline=True)
-        embed.add_field(name="⚠️ Warning", value="You won't be able to travel without a ship!", inline=False)
-        
-        view = SellShipConfirmView(self.bot, self.user_id, self.active_ship_id, sale_price)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
-    @discord.ui.button(label="Swap Ships", style=discord.ButtonStyle.primary, emoji="🔄")
-    async def swap_ships(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This isn't your shipyard panel!", ephemeral=True)
-            return
-        
-        # Get stored ships
-        stored_ships = self.db.execute_query(
-            '''SELECT ps.ship_storage_id, s.ship_id, s.name, s.ship_type, ps.is_active
-               FROM player_ships ps
-               JOIN ships s ON ps.ship_id = s.ship_id
-               WHERE ps.owner_id = ? AND ps.is_active = 0
-               ORDER BY ps.acquired_date DESC''',
-            (interaction.user.id,),
-            fetch='all'
-        )
-        
-        if not stored_ships:
-            await interaction.response.send_message("You don't have any ships in storage.", ephemeral=True)
-            return
-        
-        options = []
-        for storage_id, ship_id, ship_name, ship_type, is_active in stored_ships[:25]:
-            options.append(
-                discord.SelectOption(
-                    label=f"{ship_name} ({ship_type})",
-                    description=f"Stored ship - Click to make active",
-                    value=str(ship_id)
-                )
-            )
-        
-        select = discord.ui.Select(placeholder="Choose a ship to activate...", options=options)
-        select.callback = self.swap_ship_callback
-        
-        swap_view = discord.ui.View(timeout=300)
-        swap_view.add_item(select)
-        
-        embed = discord.Embed(
-            title="🔄 Ship Storage",
-            description="Select a stored ship to make active",
+            title="📦 Fleet Management",
+            description="Manage your ship collection",
             color=0x4169e1
         )
         
-        await interaction.response.send_message(embed=embed, view=swap_view, ephemeral=True)
+        if not self.fleet:
+            embed.add_field(
+                name="No Ships",
+                value="You don't own any ships yet!",
+                inline=False
+            )
+        else:
+            for ship in self.fleet[:10]:
+                ship_id, name, ship_type, tier, condition, is_active, value = ship
+                
+                status = "🟢 **ACTIVE**" if is_active else "🔵 Stored"
+                embed.add_field(
+                    name=f"{name}",
+                    value=f"{status}\n"
+                          f"Type: {ship_type} (Tier {tier})\n"
+                          f"Condition: {condition}%\n"
+                          f"Value: {value:,} credits",
+                    inline=True
+                )
+        
+        # Create fleet action buttons
+        view = FleetManagementView(self.bot, self.user_id, self.fleet)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
-    def _generate_available_ships(self):
-        """Generate ships available for purchase based on shipyard tier"""
-        from utils.ship_data import STARTER_SHIP_CLASSES, generate_random_ship_name
-        import random
-        
-        available = []
-        
-        # Basic ships always available
-        for ship_type in STARTER_SHIP_CLASSES.keys():
-            name = generate_random_ship_name()
-            base_price = {"Hauler": 2500, "Scout": 3000, "Courier": 3500, "Shuttle": 2000}
-            price = base_price.get(ship_type, 2500) + random.randint(-500, 1000)
-            description = f"A reliable {ship_type.lower()} for general use"
-            available.append((name, ship_type, price, description))
-        
-        # Higher tier ships for wealthy shipyards
-        if self.wealth_level >= 6:
-            advanced_ships = [
-                ("Heavy Freighter", 8000, "Large cargo capacity for bulk transport"),
-                ("Fast Courier", 6500, "Enhanced speed for urgent deliveries"),
-                ("Explorer", 7500, "Long-range vessel with advanced sensors")
-            ]
-            for ship_type, base_price, desc in advanced_ships:
-                name = generate_random_ship_name()
-                price = base_price + random.randint(-1000, 2000)
-                available.append((name, ship_type, price, desc))
-        
-        if self.wealth_level >= 8:
-            premium_ships = [
-                ("Luxury Yacht", 15000, "High-end personal transport"),
-                ("Military Corvette", 18000, "Decommissioned combat vessel"),
-                ("Research Vessel", 12000, "Specialized scientific platform")
-            ]
-            for ship_type, base_price, desc in premium_ships:
-                name = generate_random_ship_name()
-                price = base_price + random.randint(-2000, 3000)
-                available.append((name, ship_type, price, desc))
-        
-        return random.sample(available, min(6, len(available)))
-    
-    def _calculate_ship_value(self, ship_info):
-        """Calculate estimated ship value based on specs"""
-        _, ship_type, fuel_cap, cargo_cap, combat, fuel_eff = ship_info
-        
-        base_values = {"Hauler": 2500, "Scout": 3000, "Courier": 3500, "Shuttle": 2000}
-        base_value = base_values.get(ship_type, 3000)
-        
-        # Add value for enhanced specs
-        base_value += (fuel_cap - 100) * 10  # Fuel capacity bonus
-        base_value += (cargo_cap - 50) * 5   # Cargo bonus
-        base_value += (combat - 10) * 50     # Combat bonus
-        base_value += (fuel_eff - 5) * 100   # Efficiency bonus
-        
-        return max(1000, base_value)
-    
-    async def purchase_ship_callback(self, interaction: discord.Interaction):
-        ship_data = interaction.data['values'][0].split('|')
-        ship_type, ship_name, price_str = ship_data
-        price = int(price_str)
-        
-        # Check if user can afford it
-        money = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
-            (interaction.user.id,),
-            fetch='one'
-        )[0]
-        
-        if money < price:
+    @discord.ui.button(label="Ship Exchange", style=discord.ButtonStyle.success, emoji="🔄", row=1)
+    async def ship_exchange(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.wealth_level < 5:
             await interaction.response.send_message(
-                f"Insufficient credits! Need {price:,}, have {money:,}.",
+                "Ship Exchange requires a Tier 3+ shipyard!",
                 ephemeral=True
             )
             return
         
-        # Create the ship
-        from utils.ship_data import STARTER_SHIP_CLASSES
-        import random
-        
-        # Get random descriptions for this ship type
-        if ship_type in STARTER_SHIP_CLASSES:
-            exterior_desc = random.choice(STARTER_SHIP_CLASSES[ship_type]["exterior"])
-            interior_desc = random.choice(STARTER_SHIP_CLASSES[ship_type]["interior"])
-        else:
-            exterior_desc = f"A well-maintained {ship_type.lower()} with standard configuration."
-            interior_desc = f"The interior features typical {ship_type.lower()} layout and equipment."
-        
-        # Create ship in database
-        self.bot.db.execute_query(
-            '''INSERT INTO ships (owner_id, name, ship_type, exterior_description, interior_description)
-               VALUES (?, ?, ?, ?, ?)''',
-            (interaction.user.id, ship_name, ship_type, exterior_desc, interior_desc)
+        await interaction.response.send_message(
+            "Ship Exchange feature coming soon! Trade ships with other players.",
+            ephemeral=True
         )
-        
-        # Get the new ship ID
-        new_ship_id = self.bot.db.execute_query(
-            "SELECT ship_id FROM ships WHERE owner_id = ? ORDER BY ship_id DESC LIMIT 1",
-            (interaction.user.id,),
-            fetch='one'
-        )[0]
-        
-        # Add to player_ships table
-        current_location = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
-            (interaction.user.id,),
-            fetch='one'
-        )[0]
-        
-        self.bot.db.execute_query(
-            '''INSERT INTO player_ships (owner_id, ship_id, is_active, stored_at_shipyard)
-               VALUES (?, ?, 0, ?)''',
-            (interaction.user.id, new_ship_id, current_location)
-        )
-        # Generate ship activities
-        from utils.ship_activities import ShipActivityManager
-        activity_manager = ShipActivityManager(self.bot)
-        activity_manager.generate_ship_activities(new_ship_id, ship_type)
-        # Deduct credits
-        self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
-            (price, interaction.user.id)
-        )
-        
-        embed = discord.Embed(
-            title="✅ Ship Purchased",
-            description=f"Successfully purchased **{ship_name}**!",
-            color=0x00ff00
-        )
-        
-        embed.add_field(name="Ship Type", value=ship_type, inline=True)
-        embed.add_field(name="Cost", value=f"{price:,} credits", inline=True)
-        embed.add_field(name="Status", value="Stored (use Swap Ships to activate)", inline=True)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
     
-    async def swap_ship_callback(self, interaction: discord.Interaction):
+    @discord.ui.button(label="Sell Ship", style=discord.ButtonStyle.danger, emoji="💰", row=1)
+    async def sell_ship(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.fleet:
+            await interaction.response.send_message("You don't have any ships to sell!", ephemeral=True)
+            return
+        
+        # Show ship selling interface
+        embed = discord.Embed(
+            title="💰 Sell Ship",
+            description="Select a ship to sell",
+            color=0xff0000
+        )
+        
+        view = ShipSellView(self.bot, self.user_id, self.fleet)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class FleetManagementView(discord.ui.View):
+    """Manage fleet operations"""
+    def __init__(self, bot, user_id: int, fleet: list):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.fleet = fleet
+        
+        # Add ship switching if multiple ships
+        if len(fleet) > 1:
+            options = []
+            for ship in fleet:
+                ship_id, name, ship_type, tier, condition, is_active, value = ship
+                if not is_active:
+                    options.append(
+                        discord.SelectOption(
+                            label=f"{name} ({ship_type})",
+                            description=f"Tier {tier}, Condition: {condition}%",
+                            value=str(ship_id)
+                        )
+                    )
+            
+            if options:
+                select = discord.ui.Select(
+                    placeholder="Make ship active...",
+                    options=options
+                )
+                select.callback = self.switch_ship
+                self.add_item(select)
+    
+    async def switch_ship(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your fleet!", ephemeral=True)
+            return
+        
         new_ship_id = int(interaction.data['values'][0])
         
-        # Store current active ship if any
-        if self.active_ship_id:
-            self.bot.db.execute_query(
-                "UPDATE player_ships SET is_active = 0 WHERE owner_id = ? AND ship_id = ?",
-                (interaction.user.id, self.active_ship_id)
-            )
+        # Deactivate current ship
+        self.bot.db.execute_query(
+            "UPDATE player_ships SET is_active = 0 WHERE owner_id = ?",
+            (self.user_id,)
+        )
         
         # Activate new ship
         self.bot.db.execute_query(
             "UPDATE player_ships SET is_active = 1 WHERE owner_id = ? AND ship_id = ?",
-            (interaction.user.id, new_ship_id)
+            (self.user_id, new_ship_id)
         )
         
-        # Update character's active ship
-        self.bot.db.execute_query(
-            "UPDATE characters SET active_ship_id = ? WHERE user_id = ?",
-            (new_ship_id, interaction.user.id)
+        ship_name = next(s[1] for s in self.fleet if s[0] == new_ship_id)
+        await interaction.response.send_message(
+            f"✅ **{ship_name}** is now your active ship!",
+            ephemeral=True
         )
-        
-        # Get ship name
-        ship_name = self.bot.db.execute_query(
-            "SELECT name FROM ships WHERE ship_id = ?",
-            (new_ship_id,),
-            fetch='one'
-        )[0]
-        
-        embed = discord.Embed(
-            title="🔄 Ship Activated",
-            description=f"**{ship_name}** is now your active ship!",
-            color=0x00ff00
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-class SellShipConfirmView(discord.ui.View):
-    def __init__(self, bot, user_id: int, ship_id: int, sale_price: int):
+
+class ShipSellView(discord.ui.View):
+    """Handle ship selling"""
+    def __init__(self, bot, user_id: int, fleet: list):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.fleet = fleet
+        
+        # Create ship selection for selling
+        options = []
+        for ship in fleet:
+            ship_id, name, ship_type, tier, condition, is_active, value = ship
+            if not is_active or len(fleet) > 1:  # Can't sell only ship if it's active
+                sell_value = int(value * (condition / 100) * 0.6)  # 60% of adjusted value
+                options.append(
+                    discord.SelectOption(
+                        label=f"{name} - {sell_value:,} cr",
+                        description=f"{ship_type}, Condition: {condition}%",
+                        value=f"{ship_id}|{sell_value}"
+                    )
+                )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder="Choose a ship to sell...",
+                options=options
+            )
+            select.callback = self.confirm_sale
+            self.add_item(select)
+        else:
+            btn = discord.ui.Button(
+                label="Cannot sell your only active ship!",
+                disabled=True
+            )
+            self.add_item(btn)
+    
+    async def confirm_sale(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your transaction!", ephemeral=True)
+            return
+        
+        ship_id, sell_value = interaction.data['values'][0].split('|')
+        ship_id = int(ship_id)
+        sell_value = int(sell_value)
+        
+        # Get ship details
+        ship = next(s for s in self.fleet if s[0] == ship_id)
+        
+        # Confirm sale
+        embed = discord.Embed(
+            title="💰 Confirm Ship Sale",
+            description=f"Are you sure you want to sell **{ship[1]}**?",
+            color=0xff0000
+        )
+        
+        embed.add_field(name="Type", value=ship[2], inline=True)
+        embed.add_field(name="Condition", value=f"{ship[4]}%", inline=True)
+        embed.add_field(name="Sale Price", value=f"{sell_value:,} credits", inline=True)
+        
+        confirm_view = SaleConfirmView(self.bot, self.user_id, ship_id, sell_value)
+        await interaction.response.edit_message(embed=embed, view=confirm_view)
+
+
+class SaleConfirmView(discord.ui.View):
+    """Confirm ship sale"""
+    def __init__(self, bot, user_id: int, ship_id: int, sell_value: int):
         super().__init__(timeout=60)
         self.bot = bot
         self.user_id = user_id
         self.ship_id = ship_id
-        self.sale_price = sale_price
+        self.sell_value = sell_value
     
-    @discord.ui.button(label="Confirm Sale", style=discord.ButtonStyle.danger, emoji="💰")
-    async def confirm_sale(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Confirm Sale", style=discord.ButtonStyle.danger, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This isn't your sale!", ephemeral=True)
             return
         
-        # Remove ship from player_ships
+        # Process sale
+        # Remove from player_ships
         self.bot.db.execute_query(
-            "DELETE FROM player_ships WHERE owner_id = ? AND ship_id = ?",
-            (interaction.user.id, self.ship_id)
+            "DELETE FROM player_ships WHERE ship_id = ? AND owner_id = ?",
+            (self.ship_id, self.user_id)
         )
         
         # Delete ship
@@ -1297,36 +1670,30 @@ class SellShipConfirmView(discord.ui.View):
             (self.ship_id,)
         )
         
-        # Clear active ship
-        self.bot.db.execute_query(
-            "UPDATE characters SET active_ship_id = NULL WHERE user_id = ?",
-            (interaction.user.id,)
-        )
-        
         # Add credits
         self.bot.db.execute_query(
             "UPDATE characters SET money = money + ? WHERE user_id = ?",
-            (self.sale_price, interaction.user.id)
+            (self.sell_value, self.user_id)
         )
         
-        embed = discord.Embed(
-            title="💰 Ship Sold",
-            description=f"Ship sold for {self.sale_price:,} credits!",
-            color=0x00ff00
+        await interaction.response.edit_message(
+            content=f"✅ Ship sold for {self.sell_value:,} credits!",
+            embed=None,
+            view=None
         )
-        
-        embed.add_field(
-            name="⚠️ Important",
-            value="You no longer have an active ship. You cannot travel until you purchase or activate another ship.",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
     
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
-    async def cancel_sale(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This isn't your sale!", ephemeral=True)
             return
         
-        await interaction.response.send_message("Sale cancelled.", ephemeral=True)
+        await interaction.response.edit_message(
+            content="Sale cancelled.",
+            embed=None,
+            view=None
+        )
+
+
+async def setup(bot):
+    await bot.add_cog(ShipSystemsCog(bot))

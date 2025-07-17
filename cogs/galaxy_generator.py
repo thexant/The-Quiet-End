@@ -991,7 +991,7 @@ class GalaxyGeneratorCog(commands.Cog):
         """
         Enhanced black market generation using the proper item system from item_config.py
         """
-        from item_config import ItemConfig
+        from utils.item_config import ItemConfig
         
         black_markets_created = 0
         locations_to_flag = []
@@ -1631,7 +1631,7 @@ class GalaxyGeneratorCog(commands.Cog):
         """
         Enhanced federal supply depot assignment with actual item implementation
         """
-        from item_config import ItemConfig
+        from utils.item_config import ItemConfig
         
         locations_to_update = []
         federal_items_to_insert = []
