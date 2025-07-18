@@ -15,6 +15,7 @@ class AdminCog(commands.Cog):
         self.db = bot.db
     
     admin_group = app_commands.Group(name="admin", description="Administrative commands")
+    debug_group = app_commands.Group(name="debug", description="Additional administrative debug commands")
     
     @admin_group.command(name="afk", description="Trigger AFK warning for a player")
     @app_commands.describe(player="Player to send AFK warning to")
@@ -774,6 +775,207 @@ class AdminCog(commands.Cog):
             embed.add_field(name="Usage", value=usage_type.replace('_', ' ').title() if usage_type != "none" else "No usage", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+        @debug_group.command(name="setmoney", description="Set a player's money to a specific amount")
+        @app_commands.describe(
+            player="The player whose money to set",
+            amount="The amount of money to set"
+        )
+        async def set_money(self, interaction: discord.Interaction, player: discord.Member, amount: int):
+            """Set a player's money to a specific amount"""
+            if not interaction.user.guild_permissions.administrator:
+                await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+                return
+            
+            # Check if player has a character
+            char_data = self.db.execute_query(
+                "SELECT name, money FROM characters WHERE user_id = ?",
+                (player.id,),
+                fetch='one'
+            )
+            
+            if not char_data:
+                await interaction.response.send_message(
+                    f"{player.mention} doesn't have a character.",
+                    ephemeral=True
+                )
+                return
+            
+            char_name, old_money = char_data
+            
+            # Validate amount
+            if amount < 0:
+                await interaction.response.send_message(
+                    "Money amount cannot be negative.",
+                    ephemeral=True
+                )
+                return
+            
+            # Update the money
+            self.db.execute_query(
+                "UPDATE characters SET money = ? WHERE user_id = ?",
+                (amount, player.id)
+            )
+            
+            # Create confirmation embed
+            embed = discord.Embed(
+                title="💰 Money Set",
+                description=f"Successfully set **{char_name}**'s money.",
+                color=0x00ff00
+            )
+            
+            embed.add_field(name="Player", value=player.mention, inline=True)
+            embed.add_field(name="Character", value=char_name, inline=True)
+            embed.add_field(name="Previous Amount", value=f"{old_money:,} credits", inline=True)
+            embed.add_field(name="New Amount", value=f"{amount:,} credits", inline=True)
+            embed.add_field(name="Change", value=f"{amount - old_money:+,} credits", inline=True)
+            embed.add_field(name="Admin", value=interaction.user.mention, inline=True)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+            # Log the action
+            print(f"💰 Admin money set: {char_name} ({player.id}) set to {amount} credits by {interaction.user.name}")
+    
+        @debug_group.command(name="setxp", description="Set a player's experience to a specific amount")
+        @app_commands.describe(
+            player="The player whose XP to set",
+            amount="The amount of XP to set"
+        )
+        async def set_xp(self, interaction: discord.Interaction, player: discord.Member, amount: int):
+            """Set a player's XP to a specific amount and adjust level accordingly"""
+            if not interaction.user.guild_permissions.administrator:
+                await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+                return
+            
+            # Check if player has a character
+            char_data = self.db.execute_query(
+                "SELECT name, experience, level, skill_points FROM characters WHERE user_id = ?",
+                (player.id,),
+                fetch='one'
+            )
+            
+            if not char_data:
+                await interaction.response.send_message(
+                    f"{player.mention} doesn't have a character.",
+                    ephemeral=True
+                )
+                return
+            
+            char_name, old_xp, old_level, old_skill_points = char_data
+            
+            # Validate amount
+            if amount < 0:
+                await interaction.response.send_message(
+                    "XP amount cannot be negative.",
+                    ephemeral=True
+                )
+                return
+            
+            # Calculate what level the character should be at with this XP
+            new_level = self._calculate_level_from_xp(amount)
+            
+            # Calculate skill point difference
+            # Each level gives 2 skill points, starting from level 1
+            # Level 1 = 5 base skill points
+            # Level 2 = 5 + 2 = 7 total skill points
+            # Level 3 = 5 + 4 = 9 total skill points, etc.
+            base_skill_points = 5
+            earned_skill_points_old = (old_level - 1) * 2
+            earned_skill_points_new = (new_level - 1) * 2
+            
+            # Calculate how many skill points they should have spent
+            total_skill_points_old = base_skill_points + earned_skill_points_old
+            spent_skill_points = total_skill_points_old - old_skill_points
+            
+            # Calculate new available skill points
+            total_skill_points_new = base_skill_points + earned_skill_points_new
+            new_skill_points = max(0, total_skill_points_new - spent_skill_points)
+            
+            # Calculate HP changes
+            # Base HP is 100, +10 per level after 1
+            old_max_hp = 100 + (old_level - 1) * 10
+            new_max_hp = 100 + (new_level - 1) * 10
+            hp_difference = new_max_hp - old_max_hp
+            
+            # Update the character
+            self.db.execute_query(
+                """UPDATE characters 
+                   SET experience = ?, level = ?, skill_points = ?, 
+                       max_hp = max_hp + ?, hp = CASE 
+                           WHEN hp + ? > max_hp + ? THEN max_hp + ?
+                           WHEN hp + ? < 1 THEN 1
+                           ELSE hp + ?
+                       END
+                   WHERE user_id = ?""",
+                (amount, new_level, new_skill_points, 
+                 hp_difference, hp_difference, hp_difference, hp_difference, 
+                 hp_difference, hp_difference, player.id)
+            )
+            
+            # Get updated HP for display
+            updated_hp_data = self.db.execute_query(
+                "SELECT hp, max_hp FROM characters WHERE user_id = ?",
+                (player.id,),
+                fetch='one'
+            )
+            new_hp, new_max_hp_actual = updated_hp_data
+            
+            # Create confirmation embed
+            embed = discord.Embed(
+                title="✨ Experience Set",
+                description=f"Successfully set **{char_name}**'s experience.",
+                color=0x00ff00
+            )
+            
+            embed.add_field(name="Player", value=player.mention, inline=True)
+            embed.add_field(name="Character", value=char_name, inline=True)
+            embed.add_field(name="Admin", value=interaction.user.mention, inline=True)
+            
+            embed.add_field(name="Experience", value=f"{old_xp:,} → {amount:,} XP", inline=True)
+            embed.add_field(name="Level", value=f"{old_level} → {new_level}", inline=True)
+            embed.add_field(name="Skill Points", value=f"{old_skill_points} → {new_skill_points}", inline=True)
+            
+            embed.add_field(name="Max HP", value=f"{old_max_hp} → {new_max_hp_actual}", inline=True)
+            embed.add_field(name="Current HP", value=f"{new_hp}/{new_max_hp_actual}", inline=True)
+            
+            # Add level change description
+            if new_level > old_level:
+                level_change = f"🎉 Leveled up {new_level - old_level} time(s)!"
+            elif new_level < old_level:
+                level_change = f"📉 Level reduced by {old_level - new_level}"
+            else:
+                level_change = "↔️ Level unchanged"
+            
+            embed.add_field(name="Level Change", value=level_change, inline=False)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+            # Log the action
+            print(f"✨ Admin XP set: {char_name} ({player.id}) set to {amount} XP (Level {old_level} → {new_level}) by {interaction.user.name}")
+        
+        def _calculate_level_from_xp(self, total_xp: int) -> int:
+            """Calculate what level a character should be based on total XP"""
+            level = 1
+            
+            while True:
+                # Calculate XP needed for next level
+                xp_for_next_level = self._calculate_exp_for_level(level + 1)
+                
+                if total_xp < xp_for_next_level:
+                    return level
+                
+                level += 1
+                
+                # Safety cap at level 100
+                if level >= 100:
+                    return 100
+        
+        def _calculate_exp_for_level(self, level):
+            """Calculate total experience needed for a given level"""
+            if level <= 1:
+                return 0
+            return int(100 * (level - 1) * (1 + (level - 1) * 0.1))
+    
     @admin_group.command(name="create_job", description="Force create a job at a location")
     @app_commands.describe(
         location_name="Location to create job at",

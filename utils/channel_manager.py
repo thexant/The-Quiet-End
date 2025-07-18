@@ -75,8 +75,53 @@ class ChannelManager:
             self.max_location_channels = config[0] or 50
             self.channel_timeout_hours = config[1] or 48
             self.auto_cleanup_enabled = config[2] if config[2] is not None else True
+    
+
+    def get_user_faction_id(self, user_id: int) -> int:
+        """Get the faction ID for a user."""
+        result = self.db.execute_query(
+            "SELECT faction_id FROM faction_members WHERE user_id = ?",
+            (user_id,),
+            fetch='one'
+        )
+        return result[0] if result else None
+
+    def get_location_display_name(self, location_id: int, viewer_faction_id: int = None) -> tuple[str, str]:
+        """
+        Get the display name for a location, considering faction ownership.
         
-    async def get_or_create_location_channel(self, guild: discord.Guild, location_id: int, user: discord.Member = None) -> Optional[discord.TextChannel]:
+        Args:
+            location_id: The location ID
+            viewer_faction_id: Optional faction ID of the viewer (for future faction-specific views)
+        
+        Returns:
+            tuple: (display_name, base_name)
+        """
+        # Get location with ownership info
+        location_data = self.db.execute_query(
+            '''SELECT l.name, lo.custom_name, lo.faction_id
+               FROM locations l
+               LEFT JOIN location_ownership lo ON l.location_id = lo.location_id
+               WHERE l.location_id = ?''',
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_data:
+            return ("Unknown", "Unknown")
+        
+        base_name = location_data[0]
+        custom_name = location_data[1]
+        
+        # If there's a custom name set by the faction, use it
+        if custom_name:
+            return (custom_name, base_name)
+        
+        return (base_name, base_name)
+        
+    async def _create_location_channel(self, guild: discord.Guild, loc_id: int, loc_type: str, 
+                                    name: str, description: str, wealth: int,
+                                    requesting_user: discord.Member = None) -> Optional[discord.TextChannel]:
         """
         Get existing channel for location or create one if needed
         Returns None if location doesn't exist
@@ -88,7 +133,7 @@ class ChannelManager:
         location_info = self.db.execute_query(
             '''SELECT location_id, channel_id, name, location_type, description, wealth_level
                FROM locations WHERE location_id = ?''',
-            (location_id,),
+            (loc_id,),
             fetch='one'
         )
         
@@ -102,7 +147,7 @@ class ChannelManager:
             channel = guild.get_channel(channel_id)
             if channel:
                 # Update last active time
-                await self._update_channel_activity(location_id)
+                await self._update_channel_activity(loc_id)
                 return channel
             else:
                 # Channel was deleted, clear the reference
@@ -112,7 +157,7 @@ class ChannelManager:
                 )
         
         # Need to create new channel
-        channel = await self._create_location_channel(guild, location_info, user)
+        channel = await self._create_location_channel(guild, loc_id, loc_type, name, description, wealth, requesting_user)
         return channel
     
     async def get_or_create_home_channel(self, guild: discord.Guild, home_info: tuple, user: discord.Member = None) -> Optional[discord.TextChannel]:
@@ -482,18 +527,36 @@ class ChannelManager:
         Manual cleanup task for channels - wrapper for the internal cleanup method
         """
         await self._cleanup_old_channels(guild, force=False)
-    async def _create_location_channel(self, guild: discord.Guild, location_info: Tuple, requesting_user: discord.Member = None) -> Optional[discord.TextChannel]:
-        """
-        Create a new Discord channel for a location
-        """
-        loc_id, channel_id, name, loc_type, description, wealth = location_info
         
-        # Check if we need to clean up old channels first
-        await self._cleanup_old_channels_if_needed(guild)
-        
+    async def _create_location_channel(self, guild: discord.Guild, loc_id: int, loc_type: str, 
+                                    name: str, description: str, 
+                                    requesting_user: discord.Member = None) -> Optional[discord.TextChannel]:
+        """Create a channel for a location using faction-specific naming"""
         try:
-            # Generate safe channel name
-            channel_name = self._generate_channel_name(name, loc_type)
+            # Get the display name for this location
+            display_name, base_name = self.get_location_display_name(loc_id)
+            
+            # Generate channel name using the display name
+            channel_name = self._generate_channel_name(display_name, loc_type)
+            
+            # Create topic with ownership info if applicable
+            # ADD THIS: Get ownership info for topic
+            ownership_info = self.db.execute_query(
+                '''SELECT f.name, f.emoji FROM location_ownership lo
+                   JOIN factions f ON lo.faction_id = f.faction_id
+                   WHERE lo.location_id = ?''',
+                (loc_id,),
+                fetch='one'
+            )
+            
+            if ownership_info:
+                faction_name, faction_emoji = ownership_info
+                topic = f"{faction_emoji} {display_name} (Controlled by {faction_name})"
+            else:
+                topic = f"📍 {display_name}"
+                
+            if description:
+                topic += f" | {description[:100]}"
             
             # Create channel topic
             wealth_stars = "⭐" * min(wealth // 2, 5)
@@ -511,7 +574,7 @@ class ChannelManager:
                 overwrites[requesting_user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
             
             # Find or create category for location channels
-            category = await self._get_or_create_location_category(guild, loc_type)
+            category = await self.get_or_create_location_category(guild, loc_type)
             
             # Create the channel
             channel = await guild.create_text_channel(
@@ -629,8 +692,8 @@ class ChannelManager:
     
     async def _send_location_welcome(self, channel: discord.TextChannel, location_info: Tuple):
         """Send a welcome message to a newly created location channel with available routes"""
-        loc_id, channel_id, name, loc_type, description, wealth = location_info
-        
+        loc_id, name, loc_type, wealth, pop, derelict, desc, owner, danger, loyalist, npc_spawn = location_info
+        display_name, _ = self.get_location_display_name(loc_id)
         # Get services info including alignment flags
         services_info = self.db.execute_query(
             '''SELECT has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population,
@@ -698,9 +761,9 @@ class ChannelManager:
                 enhanced_description = "💀 **Outlaw Haven:** This location operates outside federal jurisdiction. Discretion is advised, and contraband trade flourishes in the shadows."
         
         # Create welcome embed with status-aware styling
-        title_with_status = f"📍 Welcome to {name}"
+        title_with_status = f"📍 Welcome to {display_name}"
         if location_status:
-            title_with_status = f"{status_emoji} Welcome to {name}"
+            title_with_status = f"{status_emoji} Welcome to {display_name}"
         
         embed = discord.Embed(
             title=title_with_status,
@@ -836,7 +899,8 @@ class ChannelManager:
 
         # Get available routes and display them
         routes = self.db.execute_query(
-            '''SELECT c.name, l.name as dest_name, l.location_type as dest_type, c.travel_time, c.danger_level
+            '''SELECT c.name, c.destination_location, l.name as dest_name, 
+                      l.location_type as dest_type, c.travel_time, c.danger_level
                FROM corridors c
                JOIN locations l ON c.destination_location = l.location_id
                WHERE c.origin_location = ? AND c.is_active = 1
@@ -848,14 +912,17 @@ class ChannelManager:
         
         if routes:
             route_lines = []
-            for corridor_name, dest_name, dest_type, travel_time, danger in routes:
-                # Determine route type and emoji
+            for corridor_name, dest_id, dest_name, dest_type, travel_time, danger in routes:
+                # ADD THIS: Get custom name for destination
+                dest_display_name, _ = self.get_location_display_name(dest_id)
+                
+                # Existing route emoji logic...
                 if "Approach" in corridor_name:
-                    route_emoji = "🌌"  # Local space
+                    route_emoji = "🌌"
                 elif "Ungated" in corridor_name:
-                    route_emoji = "⭕️"  # Dangerous ungated
+                    route_emoji = "⭕️"
                 else:
-                    route_emoji = "🔵"  # Safe gated
+                    route_emoji = "🔵"
                 
                 dest_emoji = {
                     'colony': '🏭',
@@ -864,7 +931,7 @@ class ChannelManager:
                     'gate': '🚪'
                 }.get(dest_type, '📍')
                 
-                # Format time
+                # Existing time formatting...
                 mins = travel_time // 60
                 secs = travel_time % 60
                 if mins > 60:
@@ -878,7 +945,7 @@ class ChannelManager:
                 
                 danger_text = "⚠️" * danger if danger > 0 else ""
                 # Clear departure → destination format
-                route_lines.append(f"{route_emoji} **{name} → {dest_emoji} {dest_name}** · {time_text} {danger_text}")
+                route_lines.append(f"{route_emoji} **{display_name} → {dest_emoji} {dest_display_name}** · {time_text} {danger_text}")
             
             embed.add_field(
                 name="🗺️ Available Routes",
@@ -925,7 +992,32 @@ class ChannelManager:
             await channel.send(embed=embed)
         except Exception as e:
             print(f"❌ Failed to send welcome message to {channel.name}: {e}")
-
+            
+    async def update_location_channel_name(self, guild: discord.Guild, location_id: int):
+        """Update channel name when location is renamed by faction"""
+        # Get current channel
+        channel_info = self.db.execute_query(
+            "SELECT channel_id, location_type FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if channel_info and channel_info[0]:
+            channel = guild.get_channel(channel_info[0])
+            if channel:
+                # Get new display name
+                display_name, _ = self.get_location_display_name(location_id)
+                
+                # Generate new channel name
+                new_name = self._generate_channel_name(display_name, channel_info[1])
+                
+                # Update channel
+                try:
+                    await channel.edit(name=new_name)
+                    print(f"📝 Updated channel name to {new_name} for location {location_id}")
+                except Exception as e:
+                    print(f"❌ Failed to update channel name: {e}")
+                    
     async def send_location_arrival(self, channel: discord.TextChannel, user: discord.Member, location_id: int):
         """Send arrival announcement when a player enters a location"""
         
@@ -1076,7 +1168,7 @@ class ChannelManager:
     async def give_user_location_access(self, user: discord.Member, location_id: int) -> bool:
         """Give a user access to a location's channel, creating it if necessary"""
         try:
-            channel = await self.get_or_create_location_channel(user.guild, location_id, user)
+            channel = await self._create_location_channel(user.guild, location_info, user, name, description)
             if not channel:
                 print(f"❌ Could not create or find channel for location {location_id}")
                 return False
@@ -1479,17 +1571,28 @@ class ChannelManager:
                 # Solo travel
                 overwrites[user_or_group] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
                 channel_name = f"transit-{user_or_group.id}"
-            
-            # Determine travel type based on corridor name for better topic
+                
+            # Get custom destination name (removed the extra 'try' from here)
+            dest_location = self.db.execute_query(
+                "SELECT location_id FROM locations WHERE name = ?",
+                (destination,),
+                fetch='one'
+            )
+
+            if dest_location:
+                dest_display_name, _ = self.get_location_display_name(dest_location[0])
+            else:
+                dest_display_name = destination  # Fallback to passed name
+
             if "Approach" in corridor_name:
                 travel_type = "local space"
-                topic = f"In local space traveling to {destination}"
+                topic = f"In local space traveling to {dest_display_name}"
             elif "Ungated" in corridor_name:
                 travel_type = "dangerous ungated corridor"
-                topic = f"In dangerous ungated corridor {corridor_name} to {destination}"
+                topic = f"In dangerous ungated corridor {corridor_name} to {dest_display_name}"
             else:
                 travel_type = "gated corridor"
-                topic = f"In gated corridor {corridor_name} to {destination}"
+                topic = f"In gated corridor {corridor_name} to {dest_display_name}"
             
             # Create the transit channel
             channel = await guild.create_text_channel(
@@ -1501,7 +1604,7 @@ class ChannelManager:
             )
             
             # Send initial transit message with proper travel type
-            await self._send_transit_welcome(channel, corridor_name, destination, travel_type)
+            await self._send_transit_welcome(channel, corridor_name, dest_display_name, travel_type)
             
             print(f"🚀 Created transit channel #{channel_name} for {corridor_name}")
             return channel
@@ -1690,7 +1793,21 @@ class ChannelManager:
 
     async def restore_user_location_on_login(self, user: discord.Member, location_id: int) -> bool:
         """Restore or create location access when a user logs in"""
+        # FIX: Get location information from the database first
+        location_data = self.db.execute_query(
+            "SELECT name, location_type, description FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+
+        if not location_data:
+            print(f"❌ Could not find location data for ID: {location_id}")
+            return False
+
+        name, loc_type, description = location_data
+
         # First, ensure the channel exists and user has access
+        # FIX: Pass the correct arguments in the correct order
         channel = await self.get_or_create_location_channel(user.guild, location_id, user)
         if not channel:
             print(f"❌ Failed to create/access channel for location {location_id}")
