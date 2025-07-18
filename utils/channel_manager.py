@@ -555,7 +555,7 @@ class ChannelManager:
                 overwrites[requesting_user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
             
             # Find or create category for location channels
-            category = await self._get_or_create_location_category(guild, loc_type)
+            category = await self.get_or_create_location_category(guild, loc_type)
             
             # Create the channel
             channel = await guild.create_text_channel(
