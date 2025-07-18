@@ -515,10 +515,10 @@ class GalacticNewsCog(commands.Cog):
             guild_id = guild_tuple[0]
             await self.queue_news(guild_id, 'fluff_news', title, description, location_id)
 
-    @tasks.loop(hours=2)  # Generate fluff news every 6 hours
+    @tasks.loop(hours=1)  # Generate fluff news every 6 hours
     async def fluff_news_generation(self):
         """Periodically generate fluff news"""
-        if random.random() < 0.3:  # 30% chance every 6 hours
+        if random.random() < 0.25:  # 30% chance every 2 hours
             await self.generate_fluff_news()
 
     @fluff_news_generation.before_loop

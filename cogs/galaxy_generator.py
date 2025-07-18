@@ -3128,9 +3128,14 @@ class GalaxyGeneratorCog(commands.Cog):
         max_deactivations = min(len(active_corridors) // (6 - intensity), len(active_corridors) // 3)
         max_activations = min(len(dormant_corridors) // (6 - intensity), len(dormant_corridors) // 2)
         
+        # IMPORTANT: Ensure we don't activate more than we deactivate to prevent map bloat
+        # This maintains balance in the total number of active corridors
+        actual_deactivations = random.randint(max(1, max_deactivations // 2), max_deactivations)
+        actual_activations = random.randint(0, min(actual_deactivations, max_activations))
+        
         # Deactivate some active corridors
         corridors_to_deactivate = random.sample(active_corridors, 
-                                              min(max_deactivations, random.randint(0, max_deactivations)))
+                                              min(actual_deactivations, len(active_corridors)))
         
         for corridor in corridors_to_deactivate:
             # Don't deactivate if it would completely isolate a location
@@ -3144,32 +3149,48 @@ class GalaxyGeneratorCog(commands.Cog):
                 results['affected_locations'].add(corridor[3])
                 print(f"🔴 Deactivated corridor: {corridor[1]}")
         
-        # Activate some dormant corridors
-        corridors_to_activate = random.sample(dormant_corridors,
-                                            min(max_activations, random.randint(0, max_activations)))
+        # Activate some dormant corridors (never more than we deactivated)
+        if dormant_corridors and results['deactivated'] > 0:
+            num_to_activate = min(actual_activations, results['deactivated'], len(dormant_corridors))
+            corridors_to_activate = random.sample(dormant_corridors, num_to_activate)
+            
+            for corridor in corridors_to_activate:
+                self.db.execute_query(
+                    "UPDATE corridors SET is_active = 1 WHERE corridor_id = ?",
+                    (corridor[0],)
+                )
+                results['activated'] += 1
+                results['affected_locations'].add(corridor[2])
+                results['affected_locations'].add(corridor[3])
+                print(f"🟢 Activated corridor: {corridor[1]}")
         
-        for corridor in corridors_to_activate:
-            self.db.execute_query(
-                "UPDATE corridors SET is_active = 1 WHERE corridor_id = ?",
-                (corridor[0],)
-            )
-            results['activated'] += 1
-            results['affected_locations'].add(corridor[2])
-            results['affected_locations'].add(corridor[3])
-            print(f"🟢 Activated corridor: {corridor[1]}")
+        # Only replenish dormant corridors if we're running low
+        # This prevents the total corridor count from growing infinitely
+        current_dormant_count = len(dormant_corridors) - results['activated']
+        total_locations = self.db.execute_query(
+            "SELECT COUNT(*) FROM locations",
+            fetch='one'
+        )[0]
         
-        # Generate some new dormant corridors (with intensity scaling)
-        new_dormant_count = random.randint(0, intensity * 2)
-        await self._generate_dormant_corridors(new_dormant_count)
-        results['new_dormant'] = new_dormant_count
+        # Only add new dormant corridors if we have fewer than locations * 2
+        if current_dormant_count < total_locations * 2:
+            # Generate some new dormant corridors, but not too many
+            replenish_amount = min(intensity, max(0, (total_locations - current_dormant_count) // 4))
+            if replenish_amount > 0:
+                await self._replenish_dormant_corridors(replenish_amount)
+                results['new_dormant'] = replenish_amount
         
         # Update last shift timestamp for all affected corridors
-        self.db.execute_query(
-            "UPDATE corridors SET last_shift = datetime('now') WHERE corridor_id IN ({})".format(
-                ','.join('?' * len(corridors_to_deactivate + corridors_to_activate))
-            ),
-            [c[0] for c in corridors_to_deactivate + corridors_to_activate]
-        ) if corridors_to_deactivate + corridors_to_activate else None
+        affected_ids = [c[0] for c in corridors_to_deactivate[:results['deactivated']]]
+        affected_ids.extend([c[0] for c in corridors_to_activate[:results['activated']]])
+        
+        if affected_ids:
+            self.db.execute_query(
+                "UPDATE corridors SET last_shift = datetime('now') WHERE corridor_id IN ({})".format(
+                    ','.join('?' * len(affected_ids))
+                ),
+                affected_ids
+            )
         
         return results
 
