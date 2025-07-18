@@ -190,7 +190,7 @@ class EventsCog(commands.Cog):
             
             for location_id, location_name, wealth_level, location_type in locations:
                 # 5% chance for economic change per location
-                if random.random() < 0.01:
+                if random.random() < 0.005:
                     change_type = await self._generate_economic_change(location_id, location_name, wealth_level, location_type)
                     if change_type:
                         changes_made += 1

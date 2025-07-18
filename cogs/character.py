@@ -13,33 +13,170 @@ class CharacterCog(commands.Cog):
         self.db = bot.db
     
     
-    
-    @app_commands.command(name="emote", description="Express an emotion or reaction")
-    @app_commands.describe(emotion="The emotion or reaction to express")
-    async def emote(self, interaction: discord.Interaction, emotion: str):
+
+
+
+# Add this to your character.py cog
+
+    @app_commands.command(name="tqe", description="The Quiet End - View game overview panel")
+    async def tqe_overview(self, interaction: discord.Interaction):
+        """Display The Quiet End overview panel with character, location, and galaxy info"""
+        
+        # Check if user has a character
         char_data = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            """SELECT name, is_logged_in, current_location, current_ship_id, 
+               location_status, money
+               FROM characters WHERE user_id = ?""",
             (interaction.user.id,),
             fetch='one'
         )
         
         if not char_data:
             await interaction.response.send_message(
-                "You don't have a character yet! Use `/character create` first.",
+                "You don't have a character! Use `/character create` first.",
                 ephemeral=True
             )
             return
         
-        char_name = char_data[0]
-        await interaction.response.send_message(f"**{char_name}** {emotion}")
+        char_name, is_logged_in, current_location, current_ship_id, location_status, money = char_data
         
-        # Try to award passive XP
-        xp_awarded = await self.try_award_passive_xp(interaction.user.id, "emote")
-        if xp_awarded:
-            try:
-                await interaction.followup.send("✨ *Expressing yourself helps you understand the world better.* (+5 XP)", ephemeral=True)
-            except:
-                pass
+        # Get age from character_identity table
+        age_data = self.db.execute_query(
+            "SELECT age FROM character_identity WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        age = age_data[0] if age_data else "Unknown"
+        
+        # Create the main embed
+        embed = discord.Embed(
+            title="🌌 The Quiet End - Overview",
+            description=f"**{char_name}**'s Status Overview",
+            color=0x1a1a2e
+        )
+        
+        # Character Information Section
+        status_emoji = "🟢" if is_logged_in else "⚫"
+        status_text = "Online" if is_logged_in else "Offline"
+        embed.add_field(
+            name="👤 Character",
+            value=f"**Status:** {status_emoji} {status_text}\n"
+                  f"**Age:** {age} years\n"
+                  f"**Credits:** {money:,}",
+            inline=True
+        )
+        
+        # Location/Transit Information Section
+        if location_status == "traveling":
+            # Get travel session info
+            travel_info = self.db.execute_query(
+                """SELECT destination_location, arrival_time, 
+                   julianday(arrival_time) - julianday('now') as time_remaining
+                   FROM travel_sessions 
+                   WHERE user_id = ? AND status = 'traveling'""",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if travel_info:
+                dest_id, arrival_time, time_remaining = travel_info
+                dest_info = self.db.execute_query(
+                    "SELECT name FROM locations WHERE location_id = ?",
+                    (dest_id,),
+                    fetch='one'
+                )
+                dest_name = dest_info[0] if dest_info else "Unknown"
+                
+                # Convert time remaining to hours and minutes
+                hours_remaining = int(time_remaining * 24)
+                minutes_remaining = int((time_remaining * 24 - hours_remaining) * 60)
+                
+                embed.add_field(
+                    name="🚀 Transit Status",
+                    value=f"**En Route to:** {dest_name}\n"
+                          f"**Time Remaining:** {hours_remaining}h {minutes_remaining}m",
+                    inline=True
+                )
+            else:
+                embed.add_field(
+                    name="📍 Location",
+                    value="**Status:** In Transit\n**Destination:** Unknown",
+                    inline=True
+                )
+        else:
+            # Get current location info
+            location_name = "Unknown Location"
+            location_type = ""
+            if current_location:
+                location_info = self.db.execute_query(
+                    "SELECT name, location_type FROM locations WHERE location_id = ?",
+                    (current_location,),
+                    fetch='one'
+                )
+                if location_info:
+                    location_name = location_info[0]
+                    location_type = location_info[1]
+            
+            status_emoji = "🛬" if location_status == "docked" else "🚀"
+            embed.add_field(
+                name="📍 Location",
+                value=f"**Current:** {location_name}\n"
+                      f"**Type:** {location_type.replace('_', ' ').title()}\n"
+                      f"**Status:** {status_emoji} {location_status.replace('_', ' ').title()}",
+                inline=True
+            )
+        
+        # Galaxy Information Section
+        # Get current galaxy time using TimeSystem
+        try:
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            current_datetime = time_system.calculate_current_ingame_time()
+            if current_datetime:
+                current_date = time_system.format_ingame_datetime(current_datetime)
+            else:
+                current_date = "Unknown Date"
+        except:
+            # Fallback if TimeSystem is not available
+            current_date = "Unknown Date"
+        
+        # Get logged in players count
+        logged_in_count = self.db.execute_query(
+            "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
+            fetch='one'
+        )[0]
+        
+        # Get galaxy name from galaxy_info table
+        galaxy_info = self.db.execute_query(
+            "SELECT name FROM galaxy_info WHERE galaxy_id = 1",
+            fetch='one'
+        )
+        galaxy_name = galaxy_info[0] if galaxy_info else "Unknown Galaxy"
+        
+        embed.add_field(
+            name="🌍 Galaxy",
+            value=f"**Name:** {galaxy_name}\n"
+                  f"**Date:** {current_date}\n"
+                  f"**Players Online:** {logged_in_count}",
+            inline=True
+        )
+        
+        # Add instructions
+        embed.add_field(
+            name="📱 Quick Access",
+            value="Use the buttons below to access detailed panels:",
+            inline=False
+        )
+        
+        embed.set_footer(text="The Quiet End • Use the buttons to navigate")
+        
+        # Create the view with buttons
+        # Import TQEOverviewView from utils.views
+        from utils.views import TQEOverviewView
+        view = TQEOverviewView(self.bot, interaction.user.id)
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
 
     @app_commands.command(name="think", description="Share your character's internal thoughts")
     @app_commands.describe(thought="What your character is thinking")
@@ -165,46 +302,6 @@ class CharacterCog(commands.Cog):
         # Call the existing location info logic
         await self.location_info.callback(self, interaction)
     
-    @character_group.command(name="name", description="Toggle automatic nickname changing based on your character name.")
-    @app_commands.describe(setting="Choose whether the bot should manage your nickname.")
-    @app_commands.choices(setting=[
-        app_commands.Choice(name="ON", value=1),
-        app_commands.Choice(name="OFF", value=0)
-    ])
-    async def character_name(self, interaction: discord.Interaction, setting: app_commands.Choice[int]):
-        """Toggles the automatic character nickname system."""
-        if not interaction.guild.me.guild_permissions.manage_nicknames:
-            await interaction.response.send_message(
-                "❌ The bot lacks the `Manage Nicknames` permission to perform this action.",
-                ephemeral=True
-            )
-            return
-
-        char_check = self.db.execute_query(
-            "SELECT 1 FROM characters WHERE user_id = ?",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        if not char_check:
-            await interaction.response.send_message(
-                "You don't have a character yet! Use `/character create` first.",
-                ephemeral=True
-            )
-            return
-
-        # Update the database
-        self.db.execute_query(
-            "UPDATE characters SET auto_rename = ? WHERE user_id = ?",
-            (setting.value, interaction.user.id)
-        )
-
-        # Call the central nickname handler from the bot
-        await self.bot.update_nickname(interaction.user)
-
-        await interaction.response.send_message(
-            f"✅ Automatic character naming has been set to **{setting.name}**.",
-            ephemeral=True
-        )
 
     
     @app_commands.command(
@@ -1474,8 +1571,6 @@ class CharacterCog(commands.Cog):
             inline=False
         )
         
-        await self.bot.update_nickname(interaction.user)
-        
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @character_group.command(name="logout", description="Log out of the game (saves your progress)")
@@ -1707,19 +1802,6 @@ class CharacterCog(commands.Cog):
             for guild in self.bot.guilds:
                 member = guild.get_member(user_id)
                 if member:
-                    # NEW: Clear nickname on auto-logout
-                    if guild.me.guild_permissions.manage_nicknames:
-                        auto_rename_setting = self.db.execute_query(
-                            "SELECT auto_rename FROM characters WHERE user_id = ?",
-                            (user_id,),
-                            fetch='one'
-                        )
-                        if auto_rename_setting and auto_rename_setting[0] == 1 and member.nick == char_name:
-                            try:
-                                await member.edit(nick=None, reason="Character auto-logged out.")
-                            except Exception as e:
-                                print(f"Failed to clear nickname on auto-logout for {member}: {e}")
-
                     from utils.channel_manager import ChannelManager
                     channel_manager = ChannelManager(self.bot)
                     

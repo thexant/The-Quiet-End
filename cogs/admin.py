@@ -15,7 +15,7 @@ class AdminCog(commands.Cog):
         self.db = bot.db
     
     admin_group = app_commands.Group(name="admin", description="Administrative commands")
-    debug_group = app_commands.Group(name="debug", description="Additional administrative debug commands")
+    
     
     @admin_group.command(name="afk", description="Trigger AFK warning for a player")
     @app_commands.describe(player="Player to send AFK warning to")
@@ -775,7 +775,9 @@ class AdminCog(commands.Cog):
             embed.add_field(name="Usage", value=usage_type.replace('_', ' ').title() if usage_type != "none" else "No usage", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    
+        
+        debug_group = app_commands.Group(name="debug", description="Additional administrative debug commands")
+        
         @debug_group.command(name="setmoney", description="Set a player's money to a specific amount")
         @app_commands.describe(
             player="The player whose money to set",

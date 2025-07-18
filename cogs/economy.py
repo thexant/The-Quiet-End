@@ -1372,8 +1372,8 @@ class EconomyCog(commands.Cog):
         
         # Initial progress bar
         embed.add_field(
-            name="📊 Unloading Progress",
-            value="⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0%",
+            name="📊 Unloading Cargo...",
+            value="Please wait for cargo to unload.",
             inline=False
         )
         
@@ -3377,13 +3377,14 @@ class InteractiveFederalDepotView(discord.ui.View):
         )
         current_reputation = reputation_data[0] if reputation_data else 0
         
-        # Get available items
-        item_info = self.bot.db.execute_query(
-            '''SELECT item_name, price, stock, description, item_type, clearance_level
+        # Get available items based on reputation - THIS IS THE FIX
+        items = self.bot.db.execute_query(
+            '''SELECT item_name, item_type, price, stock, description, clearance_level
                FROM federal_supply_items 
-               WHERE location_id = ? AND item_name = ?''',
-            (self.location_id, item_name),
-            fetch='one'
+               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= clearance_level
+               ORDER BY clearance_level ASC, price ASC''',
+            (self.location_id, current_reputation),
+            fetch='all'
         )
         
         if not items:

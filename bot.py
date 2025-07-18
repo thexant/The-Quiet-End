@@ -8,7 +8,7 @@ import logging
 from utils.activity_tracker import ActivityTracker
 import random
 from utils.income_calculator import HomeIncomeCalculator
-
+from config import ALLOWED_GUILD_ID
 # Try to load configuration
 try:
     from config import BOT_CONFIG, DISCORD_CONFIG
@@ -41,7 +41,8 @@ class RPGBot(commands.Bot):
         self.activity_tracker = None
         self.income_task = None
         self._background_tasks = []
-            
+        self.add_check(self.guild_check)
+        
     def start_background_tasks(self):
         """Starts the background tasks if they are not already running."""
         if self._closing:
@@ -100,7 +101,43 @@ class RPGBot(commands.Bot):
         if hasattr(self, 'income_task') and self.income_task and not self.income_task.done():
             self.income_task.cancel()
             self.income_task = None
+    async def guild_check(self, ctx):
+        """Global check that applies to EVERY command automatically"""
+        # For slash commands
+        if hasattr(ctx, 'interaction'):
+            if not ctx.guild or ctx.guild.id != ALLOWED_GUILD_ID:
+                await ctx.interaction.response.send_message(
+                    "❌ This bot is private and only works in the official server.",
+                    ephemeral=True
+                )
+                return False
+        # For text commands
+        else:
+            if not ctx.guild or ctx.guild.id != ALLOWED_GUILD_ID:
+                # Silently ignore or send message
+                return False
+        return True
     
+    async def on_guild_join(self, guild: discord.Guild):
+        """Leave immediately if joining unauthorized guild"""
+        if guild.id != ALLOWED_GUILD_ID:
+            print(f"⚠️ Attempted to join unauthorized guild: {guild.name} ({guild.id})")
+            
+            # Try to send a message before leaving
+            for channel in guild.text_channels:
+                if channel.permissions_for(guild.me).send_messages:
+                    try:
+                        await channel.send(
+                            "❌ This bot is private and only works in the official server. Leaving now."
+                        )
+                        break
+                    except:
+                        pass
+            
+            await guild.leave()
+            print(f"✅ Left unauthorized guild: {guild.name}")    
+        
+        
     async def close(self):
         """Properly close the bot and cleanup resources"""
         if self._closing:
@@ -173,7 +210,18 @@ class RPGBot(commands.Bot):
         
     async def on_ready(self):
         print(f'🚀 {self.user} has landed in human space!')
+        
+        # Leave any unauthorized guilds on startup
+        for guild in list(self.guilds):
+            if guild.id != ALLOWED_GUILD_ID:
+                print(f"⚠️ Leaving unauthorized guild: {guild.name} ({guild.id})")
+                await guild.leave()
+        
+        # Continue with your existing on_ready code...
         print(f'🌍 Connected to {len(self.guilds)} guild(s)')
+        
+        for guild in self.guilds:
+            print(f"  - {guild.name} ({guild.id})")
         
         for guild in self.guilds:
             print(f"  - {guild.name} ({guild.id})")
@@ -198,6 +246,17 @@ class RPGBot(commands.Bot):
             print(f"❌ Failed to sync commands: {e}")    
         income_calculator = HomeIncomeCalculator(bot)
         await income_calculator.start()
+    
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """This catches ALL slash command interactions globally"""
+        if not interaction.guild or interaction.guild.id != ALLOWED_GUILD_ID:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ This bot is private and only works in the official server.",
+                    ephemeral=True
+                )
+            return False
+        return True    
         
     async def on_command_error(self, ctx, error):
         """Handle command errors gracefully"""
@@ -235,47 +294,18 @@ class RPGBot(commands.Bot):
                 self.activity_tracker.update_activity(interaction.user.id)
                 
     async def update_nickname(self, member: discord.Member):
-        """Checks a user's auto_rename setting and updates their nickname accordingly."""
-        # Ensure we have a member object and the necessary permissions
-        if not member or not member.guild or not member.guild.me.guild_permissions.manage_nicknames:
-            return
-
-        char_data = self.db.execute_query(
-            "SELECT name, auto_rename FROM characters WHERE user_id = ?",
-            (member.id,),
-            fetch='one'
-        )
-
-        # Case 1: Character exists and auto-rename is ON
-        if char_data and char_data[1] == 1:  # char_data[1] is auto_rename
-            char_name = char_data[0]
-            if member.nick != char_name:
-                try:
-                    await member.edit(nick=char_name, reason="Character auto-rename enabled.")
-                except discord.Forbidden:
-                    print(f"Lacked permissions to set nickname for {member.display_name} in {member.guild.name}")
-                except Exception as e:
-                    print(f"An error occurred while setting nickname for {member.display_name}: {e}")
-        # Case 2: Auto-rename is OFF or character doesn't exist
-        else:
-            # We should only clear the nickname if the current nickname was likely set by the bot.
-            # We'll check if the current nickname matches their character name.
-            character_name_if_exists = None
-            if char_data:
-                character_name_if_exists = char_data[0]
-            
-            # If the user's nickname is their character name, clear it.
-            # This handles turning the setting OFF.
-            if member.nick and member.nick == character_name_if_exists:
-                try:
-                    await member.edit(nick=None, reason="Character auto-rename disabled.")
-                except discord.Forbidden:
-                    print(f"Lacked permissions to clear nickname for {member.display_name} in {member.guild.name}")
-                except Exception as e:
-                    print(f"An error occurred while clearing nickname for {member.display_name}: {e}")
+        """DISABLED - No longer updates nicknames automatically."""
+        # This feature has been disabled
+        return
 
     async def on_message(self, message):
-        """Track user activity on messages"""
+        """Track user activity on messages and handle character speech"""
+        # Skip bot messages to avoid loops
+        if message.author.bot:
+            await self.process_commands(message)
+            return
+        
+        # Track activity for logged-in characters
         if message.author and not message.author.bot:
             char_check = self.db.execute_query(
                 "SELECT user_id FROM characters WHERE user_id = ? AND is_logged_in = 1",
@@ -285,7 +315,160 @@ class RPGBot(commands.Bot):
             if char_check:
                 self.activity_tracker.update_activity(message.author.id)
         
-        await self.process_commands(message)
+        # Handle character speech in location channels BEFORE processing commands
+        # This ensures the message is converted before command processing
+        should_process_commands = await self.handle_character_speech(message)
+        
+        if should_process_commands:
+            await self.process_commands(message)
+
+    # Add this new method to the RPGBot class:
+
+    async def handle_character_speech(self, message):
+        """Convert player messages to character speech in location channels
+        Returns True if commands should be processed, False otherwise"""
+        
+        # Skip if author is a bot
+        if message.author.bot:
+            return True
+        
+        # Skip if message starts with command prefix or is a slash command
+        if message.content.startswith(COMMAND_PREFIX):
+            return True
+        
+        # Check if user has a logged-in character
+        char_data = self.db.execute_query(
+            "SELECT name, is_logged_in FROM characters WHERE user_id = ? AND is_logged_in = 1",
+            (message.author.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            return True
+        
+        char_name = char_data[0]
+        
+        # Check if this is a location-related channel
+        channel = message.channel
+        channel_id = channel.id
+        
+        # For threads, we need to check both the thread ID and parent channel ID
+        is_location_channel = False
+        
+        # Check if it's a sub-location thread first
+        if isinstance(channel, discord.Thread):
+            sub_location_check = self.db.execute_query(
+                "SELECT sub_location_id FROM sub_locations WHERE thread_id = ?",
+                (channel.id,),
+                fetch='one'
+            )
+            if sub_location_check:
+                is_location_channel = True
+            else:
+                # For other threads, check the parent channel
+                channel_id = channel.parent_id if channel.parent_id else channel_id
+        
+        if not is_location_channel:
+            # Check if it's a location channel
+            location_check = self.db.execute_query(
+                "SELECT location_id FROM locations WHERE channel_id = ?",
+                (channel_id,),
+                fetch='one'
+            )
+            
+            if location_check:
+                is_location_channel = True
+            else:
+                # Check if it's a home interior channel
+                home_check = self.db.execute_query(
+                    "SELECT home_id FROM home_interiors WHERE channel_id = ?",
+                    (channel_id,),
+                    fetch='one'
+                )
+                
+                if home_check:
+                    is_location_channel = True
+                else:
+                    # Check if it's a ship interior channel
+                    ship_check = self.db.execute_query(
+                        "SELECT ship_id FROM ships WHERE channel_id = ?",
+                        (channel_id,),
+                        fetch='one'
+                    )
+                    
+                    if ship_check:
+                        is_location_channel = True
+                    else:
+                        # Check if it's a transit channel (by name pattern)
+                        if channel.name and channel.name.startswith('transit-'):
+                            is_location_channel = True
+        
+        # If not a location channel, process normally
+        if not is_location_channel:
+            return True
+        
+        # Special handling for certain message types that shouldn't be converted
+        # Skip messages that are primarily embeds or have no text content
+        if not message.content.strip() and not message.attachments:
+            return True
+        
+        # Format the character speech
+        speech_content = f"**{char_name}** says: {message.content}"
+        
+        # Handle attachments
+        if message.attachments:
+            # Add a note about attachments
+            attachment_text = []
+            for attachment in message.attachments:
+                if attachment.content_type and attachment.content_type.startswith('image/'):
+                    attachment_text.append("📷 *shows an image*")
+                elif attachment.content_type and attachment.content_type.startswith('video/'):
+                    attachment_text.append("📹 *shares a video*")
+                elif attachment.content_type and attachment.content_type.startswith('audio/'):
+                    attachment_text.append("🎵 *plays audio*")
+                else:
+                    attachment_text.append("📎 *shares a file*")
+            
+            if attachment_text:
+                speech_content += "\n" + " ".join(attachment_text)
+        
+        # Handle message references (replies)
+        reference = None
+        if message.reference:
+            try:
+                # Try to fetch the referenced message
+                ref_message = await message.channel.fetch_message(message.reference.message_id)
+                reference = ref_message
+            except:
+                pass
+        
+        # Handle stickers
+        if message.stickers:
+            sticker_names = [sticker.name for sticker in message.stickers]
+            speech_content += f"\n*uses sticker: {', '.join(sticker_names)}*"
+        
+        try:
+            # Delete the original message
+            await message.delete()
+            
+            # Send the character speech
+            if reference:
+                await message.channel.send(speech_content, reference=reference)
+            else:
+                await message.channel.send(speech_content)
+            
+            # Return False to indicate commands shouldn't be processed (message was deleted)
+            return False
+                
+        except discord.Forbidden:
+            # Bot lacks permissions, process message normally
+            return True
+        except discord.HTTPException:
+            # Message too long or other HTTP error, process message normally
+            return True
+        except Exception:
+            # Any other error, process message normally
+            return True
         
     async def generate_location_income(self):
         """Generate passive income for locations every hour."""

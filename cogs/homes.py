@@ -525,15 +525,15 @@ class HomesCog(commands.Cog):
         # Define available upgrades
         self.home_upgrades = {
             'workshop': {
-                'name': 'Workshop',
+                'name': 'Mechanical Workshop',
                 'type': 'workshop',
                 'emoji': '🔧',
                 'price': 5000,
                 'income': 75,
-                'description': 'Craft and repair items for profit'
+                'description': 'Repair items for profit'
             },
             'garden': {
-                'name': 'Garden',
+                'name': 'Hydroponics Garden',
                 'type': 'garden',
                 'emoji': '🌱',
                 'price': 3000,
@@ -549,12 +549,12 @@ class HomesCog(commands.Cog):
                 'description': 'Rent out a room for passive income'
             },
             'mining': {
-                'name': 'Mining Rig',
+                'name': 'Ore Mining Rig',
                 'type': 'mining',
                 'emoji': '⛏️',
                 'price': 8000,
                 'income': 100,
-                'description': 'Mine cryptocurrency passively'
+                'description': 'Mine planetary ore passively'
             },
             'market': {
                 'name': 'Market Stall',

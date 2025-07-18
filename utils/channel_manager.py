@@ -673,8 +673,21 @@ class ChannelManager:
     
     async def _send_location_welcome(self, channel: discord.TextChannel, location_info: Tuple):
         """Send a welcome message to a newly created location channel with available routes"""
-        loc_id, name, loc_type, wealth, pop, derelict, desc, owner, danger, loyalist, npc_spawn = location_info
-        display_name, _ = self.get_location_display_name(loc_id)
+        loc_id, channel_id, name, loc_type, description, wealth = location_info
+        
+        # Get the display name for faction-owned locations
+        display_name, base_name = self.get_location_display_name(loc_id)
+        
+        # Get faction ownership info if any
+        faction_ownership = self.db.execute_query(
+            '''SELECT f.name, f.emoji, lo.custom_name, lo.docking_fee
+               FROM location_ownership lo
+               JOIN factions f ON lo.faction_id = f.faction_id
+               WHERE lo.location_id = ?''',
+            (loc_id,),
+            fetch='one'
+        )
+        
         # Get services info including alignment flags
         services_info = self.db.execute_query(
             '''SELECT has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population,
@@ -686,18 +699,10 @@ class ChannelManager:
         
         if not services_info:
             return
-        # Get available homes info
-        homes_info = self.db.execute_query(
-            '''SELECT COUNT(*), MIN(price), MAX(price), home_type
-               FROM location_homes 
-               WHERE location_id = ? AND is_available = 1
-               GROUP BY home_type''',
-            (loc_id,),
-            fetch='all'
-        )
-
+            
         (has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, 
-        population, has_federal_supplies, has_black_market, has_shipyard) = services_info
+         population, has_federal_supplies, has_black_market, has_shipyard) = services_info
+        
         # Get available homes info
         homes_info = self.db.execute_query(
             '''SELECT COUNT(*), MIN(price), MAX(price), home_type
@@ -706,14 +711,6 @@ class ChannelManager:
                GROUP BY home_type''',
             (loc_id,),
             fetch='all'
-        )
-        faction_ownership = self.db.execute_query(
-            '''SELECT f.name, f.emoji, lo.custom_name, lo.docking_fee
-               FROM location_ownership lo
-               JOIN factions f ON lo.faction_id = f.faction_id
-               WHERE lo.location_id = ?''',
-            (loc_id,),
-            fetch='one'
         )
 
         # Determine location status and enhance description
@@ -740,6 +737,14 @@ class ChannelManager:
                 enhanced_description += "\n\n💀 **Outlaw Haven:** This location operates outside federal jurisdiction. Discretion is advised, and contraband trade flourishes in the shadows."
             else:
                 enhanced_description = "💀 **Outlaw Haven:** This location operates outside federal jurisdiction. Discretion is advised, and contraband trade flourishes in the shadows."
+        
+        # If faction-owned, add ownership info to description
+        if faction_ownership:
+            faction_name, faction_emoji, custom_name, docking_fee = faction_ownership
+            ownership_line = f"\n\n{faction_emoji} **Controlled by {faction_name}**"
+            if docking_fee and docking_fee > 0:
+                ownership_line += f" • Docking fee: {docking_fee:,} credits"
+            enhanced_description += ownership_line
         
         # Create welcome embed with status-aware styling
         title_with_status = f"📍 Welcome to {display_name}"
@@ -787,16 +792,7 @@ class ChannelManager:
                 value=f"{wealth_text} {wealth}/10",
                 inline=True
             )
-        if faction_ownership:
-            faction_name, faction_emoji, custom_name, docking_fee = faction_ownership
-            ownership_text = f"{faction_emoji} **{faction_name}**"
-            if docking_fee and docking_fee > 0:
-                ownership_text += f"\n💰 Docking Fee: {docking_fee:,} credits"
-            embed.add_field(
-                name="Controlled By",
-                value=ownership_text,
-                inline=False
-            )
+        
         # For aligned locations, show wealth in a separate row for better formatting
         if location_status:
             wealth_text = "⭐" * min(wealth // 2, 5) if wealth > 0 else "💸"
@@ -831,7 +827,8 @@ class ChannelManager:
                 value=" • ".join(services),
                 inline=False
             )
-                # Add to the embed after the services section:
+        
+        # Add homes section
         if homes_info:
             homes_text = []
             for count, min_price, max_price, home_type in homes_info:
@@ -845,12 +842,13 @@ class ChannelManager:
                 value="\n".join(homes_text),
                 inline=True
             )
+        
         # STATIC NPCS
         npc_cog = self.bot.get_cog('NPCCog')
         if npc_cog:
             static_npcs = npc_cog.get_static_npcs_for_location(loc_id)
             if static_npcs:
-                npc_list = [f"{name} - {age}" for name, age in static_npcs[:5]]  # Limit to 5 for space
+                npc_list = [f"{npc_name} - {age}" for npc_name, age in static_npcs[:5]]  # Limit to 5 for space
                 if len(static_npcs) > 5:
                     npc_list.append(f"...and {len(static_npcs) - 5} more")
                 
@@ -880,8 +878,8 @@ class ChannelManager:
 
         # Get available routes and display them
         routes = self.db.execute_query(
-            '''SELECT c.name, c.destination_location, l.name as dest_name, 
-                      l.location_type as dest_type, c.travel_time, c.danger_level
+            '''SELECT c.name, l.name as dest_name, l.location_type as dest_type, 
+                      c.travel_time, c.danger_level, l.location_id as dest_id
                FROM corridors c
                JOIN locations l ON c.destination_location = l.location_id
                WHERE c.origin_location = ? AND c.is_active = 1
@@ -893,17 +891,17 @@ class ChannelManager:
         
         if routes:
             route_lines = []
-            for corridor_name, dest_id, dest_name, dest_type, travel_time, danger in routes:
-                # ADD THIS: Get custom name for destination
+            for corridor_name, dest_base_name, dest_type, travel_time, danger, dest_id in routes:
+                # Get display name for destination
                 dest_display_name, _ = self.get_location_display_name(dest_id)
                 
-                # Existing route emoji logic...
+                # Determine route type and emoji
                 if "Approach" in corridor_name:
-                    route_emoji = "🌌"
+                    route_emoji = "🌌"  # Local space
                 elif "Ungated" in corridor_name:
-                    route_emoji = "⭕️"
+                    route_emoji = "⭕"  # Dangerous ungated
                 else:
-                    route_emoji = "🔵"
+                    route_emoji = "🔵"  # Safe gated
                 
                 dest_emoji = {
                     'colony': '🏭',
@@ -912,7 +910,7 @@ class ChannelManager:
                     'gate': '🚪'
                 }.get(dest_type, '📍')
                 
-                # Existing time formatting...
+                # Format time
                 mins = travel_time // 60
                 secs = travel_time % 60
                 if mins > 60:
@@ -1146,6 +1144,28 @@ class ChannelManager:
             (current_time, location_id)
         )
     
+    async def cleanup_transit_channel(self, channel_id: int, delay_seconds: int = 30):
+        """
+        Clean up a transit channel after a delay
+        
+        Args:
+            channel_id: The ID of the transit channel to delete
+            delay_seconds: How long to wait before deleting (default 30 seconds)
+        """
+        import asyncio
+        
+        # Wait for the specified delay
+        await asyncio.sleep(delay_seconds)
+        
+        # Get the channel
+        channel = self.bot.get_channel(channel_id)
+        if channel:
+            try:
+                await channel.delete(reason="Transit completed - automated cleanup")
+                print(f"🗑️ Cleaned up transit channel #{channel.name}")
+            except Exception as e:
+                print(f"❌ Failed to delete transit channel: {e}")
+                
     async def give_user_location_access(self, user: discord.Member, location_id: int) -> bool:
         """Give a user access to a location's channel, creating it if necessary"""
         try:

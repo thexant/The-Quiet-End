@@ -3149,54 +3149,45 @@ class FuelQuantitySelect(discord.ui.Select):
     def __init__(self, fuel_needed: int, max_affordable: int, cost_per_unit: int):
         self.cost_per_unit = cost_per_unit
         
-        # Create options for common amounts
-        options = []
-        
-        # Quick options: 25%, 50%, 75%, 100% of needed (if affordable)
-        percentages = [25, 50, 75, 100]
-        for percent in percentages:
-            amount = int(fuel_needed * percent / 100)
+        options_dict = {}  # Use a dictionary to store unique options, with amount as key
+
+        # Helper to add options, automatically handles duplicates
+        def add_option(amount, label_suffix=""):
+            amount = int(amount)
             if amount > 0 and amount <= max_affordable:
-                cost = amount * cost_per_unit
-                options.append(
-                    discord.SelectOption(
-                        label=f"{amount} units ({percent}%)",
-                        description=f"Cost: {cost} credits",
-                        value=str(amount),
-                        emoji="⛽"
-                    )
+                # The dictionary key automatically handles uniqueness
+                cost = amount * self.cost_per_unit
+                label = f"{amount} units{label_suffix}"
+                options_dict[amount] = discord.SelectOption(
+                    label=label,
+                    description=f"Cost: {cost:,} credits",
+                    value=str(amount),
+                    emoji="⛽"
                 )
-        
-        # Add custom amounts if not covered
-        if max_affordable < fuel_needed and max_affordable not in [int(v.value) for v in options]:
-            cost = max_affordable * cost_per_unit
-            options.append(
-                discord.SelectOption(
-                    label=f"{max_affordable} units (Maximum)",
-                    description=f"Cost: {cost} credits",
-                    value=str(max_affordable),
-                    emoji="💰"
-                )
-            )
-        
+
+        # Quick options: 25%, 50%, 75%, 100% of needed
+        for percent in [25, 50, 75, 100]:
+            add_option(fuel_needed * (percent / 100), f" ({percent}%)")
+
         # Add some fixed amounts if affordable
-        fixed_amounts = [10, 25, 50, 100]
-        for amount in fixed_amounts:
-            if amount <= max_affordable and amount <= fuel_needed:
-                if not any(int(opt.value) == amount for opt in options):
-                    cost = amount * cost_per_unit
-                    options.append(
-                        discord.SelectOption(
-                            label=f"{amount} units",
-                            description=f"Cost: {cost} credits",
-                            value=str(amount),
-                            emoji="⛽"
-                        )
-                    )
+        for amount in [10, 25, 50, 100]:
+            if amount <= fuel_needed:
+                add_option(amount)
+
+        # Add maximum affordable amount
+        add_option(max_affordable, " (Maximum)")
         
-        # Sort options by value
-        options.sort(key=lambda x: int(x.value))
+        # Set the emoji for the maximum affordable option
+        if max_affordable in options_dict:
+            options_dict[max_affordable].emoji = "💰"
+
+        # Convert dict to list and sort
+        options = sorted(list(options_dict.values()), key=lambda opt: int(opt.value))
         
+        # Handle case with no options
+        if not options:
+            options.append(discord.SelectOption(label="No affordable amount", value="0", disabled=True))
+
         super().__init__(
             placeholder="Select fuel amount...",
             min_values=1,
@@ -3324,38 +3315,39 @@ class RepairQuantitySelect(discord.ui.Select):
     def __init__(self, repairs_needed: int, max_affordable: int, cost_per_point: int):
         self.cost_per_point = cost_per_point
         
-        options = []
-        
-        # Quick options: 25%, 50%, 75%, 100% of needed
-        percentages = [25, 50, 75, 100]
-        for percent in percentages:
-            amount = int(repairs_needed * percent / 100)
+        options_dict = {}  # Use a dictionary to store unique options, with amount as key
+
+        # Helper to add options, automatically handles duplicates
+        def add_option(amount, label_suffix=""):
+            amount = int(amount)
             if amount > 0 and amount <= max_affordable:
-                cost = amount * cost_per_point
-                options.append(
-                    discord.SelectOption(
-                        label=f"{amount} hull points ({percent}%)",
-                        description=f"Cost: {cost} credits",
-                        value=str(amount),
-                        emoji="🔧"
-                    )
+                # The dictionary key automatically handles uniqueness
+                cost = amount * self.cost_per_point
+                label = f"{amount} hull points{label_suffix}"
+                options_dict[amount] = discord.SelectOption(
+                    label=label,
+                    description=f"Cost: {cost:,} credits",
+                    value=str(amount),
+                    emoji="🔧"
                 )
+
+        # Quick options: 25%, 50%, 75%, 100% of needed
+        for percent in [25, 50, 75, 100]:
+            add_option(repairs_needed * (percent / 100), f" ({percent}%)")
         
-        # Add maximum affordable if not covered
-        if max_affordable < repairs_needed and max_affordable not in [int(v.value) for v in options]:
-            cost = max_affordable * cost_per_point
-            options.append(
-                discord.SelectOption(
-                    label=f"{max_affordable} hull points (Maximum)",
-                    description=f"Cost: {cost} credits",
-                    value=str(max_affordable),
-                    emoji="💰"
-                )
-            )
+        # Add maximum affordable amount
+        add_option(max_affordable, " (Maximum)")
+
+        # Set the emoji for the maximum affordable option
+        if max_affordable in options_dict:
+            options_dict[max_affordable].emoji = "💰"
         
-        # Sort options by value
-        options.sort(key=lambda x: int(x.value))
-        
+        # Convert dict to list and sort
+        options = sorted(list(options_dict.values()), key=lambda opt: int(opt.value))
+
+        if not options:
+            options.append(discord.SelectOption(label="No affordable amount", value="0", disabled=True))
+
         super().__init__(
             placeholder="Select repair amount...",
             min_values=1,
@@ -3481,53 +3473,44 @@ class MedicalQuantitySelect(discord.ui.Select):
     def __init__(self, healing_needed: int, max_affordable: int, cost_per_hp: int):
         self.cost_per_hp = cost_per_hp
         
-        options = []
-        
-        # Quick options: 25%, 50%, 75%, 100% of needed
-        percentages = [25, 50, 75, 100]
-        for percent in percentages:
-            amount = int(healing_needed * percent / 100)
+        options_dict = {}  # Use a dictionary to store unique options, with amount as key
+
+        # Helper to add options, automatically handles duplicates
+        def add_option(amount, label_suffix=""):
+            amount = int(amount)
             if amount > 0 and amount <= max_affordable:
-                cost = amount * cost_per_hp
-                options.append(
-                    discord.SelectOption(
-                        label=f"{amount} HP ({percent}%)",
-                        description=f"Cost: {cost} credits",
-                        value=str(amount),
-                        emoji="⚕️"
-                    )
+                # The dictionary key automatically handles uniqueness
+                cost = amount * self.cost_per_hp
+                label = f"{amount} HP{label_suffix}"
+                options_dict[amount] = discord.SelectOption(
+                    label=label,
+                    description=f"Cost: {cost:,} credits",
+                    value=str(amount),
+                    emoji="⚕️"
                 )
-        
-        # Add maximum affordable if not covered
-        if max_affordable < healing_needed and max_affordable not in [int(v.value) for v in options]:
-            cost = max_affordable * cost_per_hp
-            options.append(
-                discord.SelectOption(
-                    label=f"{max_affordable} HP (Maximum)",
-                    description=f"Cost: {cost} credits",
-                    value=str(max_affordable),
-                    emoji="💰"
-                )
-            )
-        
+
+        # Quick options: 25%, 50%, 75%, 100% of needed
+        for percent in [25, 50, 75, 100]:
+            add_option(healing_needed * (percent / 100), f" ({percent}%)")
+
         # Add some fixed amounts if affordable
-        fixed_amounts = [5, 10, 25, 50]
-        for amount in fixed_amounts:
-            if amount <= max_affordable and amount <= healing_needed:
-                if not any(int(opt.value) == amount for opt in options):
-                    cost = amount * cost_per_hp
-                    options.append(
-                        discord.SelectOption(
-                            label=f"{amount} HP",
-                            description=f"Cost: {cost} credits",
-                            value=str(amount),
-                            emoji="⚕️"
-                        )
-                    )
+        for amount in [5, 10, 25, 50]:
+            if amount <= healing_needed:
+                add_option(amount)
         
-        # Sort options by value
-        options.sort(key=lambda x: int(x.value))
+        # Add maximum affordable amount
+        add_option(max_affordable, " (Maximum)")
+
+        # Set the emoji for the maximum affordable option
+        if max_affordable in options_dict:
+            options_dict[max_affordable].emoji = "💰"
+
+        # Convert dict to list and sort
+        options = sorted(list(options_dict.values()), key=lambda opt: int(opt.value))
         
+        if not options:
+            options.append(discord.SelectOption(label="No affordable amount", value="0", disabled=True))
+
         super().__init__(
             placeholder="Select healing amount...",
             min_values=1,
@@ -4371,3 +4354,206 @@ class PersonalLogEntryModal(discord.ui.Modal):
                 inline=False
             )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+# Add this to your utils/views.py file
+# Add this to your utils/views.py file
+# Add this to your utils/views.py file
+# Make sure to import discord at the top of the file if not already imported
+# This class should be placed in the same file where CharacterPanelView is defined
+
+class TQEOverviewView(discord.ui.View):
+    """View for The Quiet End overview panel with navigation buttons"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.bot = bot
+        self.user_id = user_id
+    
+    @discord.ui.button(label="Location", style=discord.ButtonStyle.primary, emoji="📍")
+    async def location_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open the location panel (/here)"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Call the actual location_info command logic from CharacterCog
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            # Call the location_info command directly
+            await char_cog.location_info.callback(char_cog, interaction)
+        else:
+            await interaction.response.send_message("Character system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Character", style=discord.ButtonStyle.secondary, emoji="👤")
+    async def character_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open the character panel (/status)"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # The /status command is in CharacterCog, so we need to call it directly
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            # Call the status_shorthand command directly
+            await char_cog.status_shorthand.callback(char_cog, interaction)
+        else:
+            await interaction.response.send_message("Character system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.success, emoji="🔄")
+    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Refresh the overview panel"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Defer the response
+        await interaction.response.defer()
+        
+        # Get updated character data
+        char_data = self.bot.db.execute_query(
+            """SELECT name, is_logged_in, current_location, current_ship_id, 
+               location_status, money
+               FROM characters WHERE user_id = ?""",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.followup.send(
+                "Character data not found!",
+                ephemeral=True
+            )
+            return
+        
+        char_name, is_logged_in, current_location, current_ship_id, location_status, money = char_data
+        
+        # Get age from character_identity table
+        age_data = self.bot.db.execute_query(
+            "SELECT age FROM character_identity WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        age = age_data[0] if age_data else "Unknown"
+        
+        # Recreate the embed with updated data
+        embed = discord.Embed(
+            title="🌌 The Quiet End - Overview",
+            description=f"**{char_name}**'s Status Overview",
+            color=0x1a1a2e
+        )
+        
+        # Character Information Section
+        status_emoji = "🟢" if is_logged_in else "⚫"
+        status_text = "Online" if is_logged_in else "Offline"
+        embed.add_field(
+            name="👤 Character",
+            value=f"**Status:** {status_emoji} {status_text}\n"
+                  f"**Age:** {age} years\n"
+                  f"**Credits:** {money:,}",
+            inline=True
+        )
+        
+        # Location/Transit Information Section
+        if location_status == "traveling":
+            # Get travel session info
+            travel_info = self.bot.db.execute_query(
+                """SELECT destination_location, arrival_time, 
+                   julianday(arrival_time) - julianday('now') as time_remaining
+                   FROM travel_sessions 
+                   WHERE user_id = ? AND status = 'traveling'""",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if travel_info:
+                dest_id, arrival_time, time_remaining = travel_info
+                dest_info = self.bot.db.execute_query(
+                    "SELECT name FROM locations WHERE location_id = ?",
+                    (dest_id,),
+                    fetch='one'
+                )
+                dest_name = dest_info[0] if dest_info else "Unknown"
+                
+                # Convert time remaining to hours and minutes
+                hours_remaining = int(time_remaining * 24)
+                minutes_remaining = int((time_remaining * 24 - hours_remaining) * 60)
+                
+                embed.add_field(
+                    name="🚀 Transit Status",
+                    value=f"**En Route to:** {dest_name}\n"
+                          f"**Time Remaining:** {hours_remaining}h {minutes_remaining}m",
+                    inline=True
+                )
+            else:
+                embed.add_field(
+                    name="📍 Location",
+                    value="**Status:** In Transit\n**Destination:** Unknown",
+                    inline=True
+                )
+        else:
+            # Get current location info
+            location_name = "Unknown Location"
+            location_type = ""
+            if current_location:
+                location_info = self.bot.db.execute_query(
+                    "SELECT name, location_type FROM locations WHERE location_id = ?",
+                    (current_location,),
+                    fetch='one'
+                )
+                if location_info:
+                    location_name = location_info[0]
+                    location_type = location_info[1]
+            
+            status_emoji = "🛬" if location_status == "docked" else "🚀"
+            embed.add_field(
+                name="📍 Location",
+                value=f"**Current:** {location_name}\n"
+                      f"**Type:** {location_type.replace('_', ' ').title()}\n"
+                      f"**Status:** {status_emoji} {location_status.replace('_', ' ').title()}",
+                inline=True
+            )
+        
+        # Galaxy Information Section
+        try:
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            current_datetime = time_system.calculate_current_ingame_time()
+            if current_datetime:
+                current_date = time_system.format_ingame_datetime(current_datetime)
+            else:
+                current_date = "Unknown Date"
+        except:
+            current_date = "Unknown Date"
+        
+        # Get logged in players count
+        logged_in_count = self.bot.db.execute_query(
+            "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
+            fetch='one'
+        )[0]
+        
+        # Get galaxy name from galaxy_info table
+        galaxy_info = self.bot.db.execute_query(
+            "SELECT name FROM galaxy_info WHERE galaxy_id = 1",
+            fetch='one'
+        )
+        galaxy_name = galaxy_info[0] if galaxy_info else "Unknown Galaxy"
+        
+        embed.add_field(
+            name="🌍 Galaxy",
+            value=f"**Name:** {galaxy_name}\n"
+                  f"**Date:** {current_date}\n"
+                  f"**Players Online:** {logged_in_count}",
+            inline=True
+        )
+        
+        # Add instructions
+        embed.add_field(
+            name="📱 Quick Access",
+            value="Use the buttons below to access detailed panels:",
+            inline=False
+        )
+        
+        embed.set_footer(text="The Quiet End • Panel refreshed!")
+        
+        # Edit the message with updated embed
+        await interaction.edit_original_response(embed=embed, view=self)

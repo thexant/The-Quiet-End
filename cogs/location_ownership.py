@@ -419,45 +419,45 @@ class LocationOwnershipCog(commands.Cog):
         view = FactionPurchaseConfirmView(self.bot, interaction.user.id, location_id, faction_id, purchase_price)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
-    @location_group.command(name="rename", description="Rename a location owned by your faction")
-    @app_commands.describe(new_name="New name for the location")
-    async def rename_location(self, interaction: discord.Interaction, new_name: str):
-        if len(new_name) < 3 or len(new_name) > 50:
-            return await interaction.response.send_message("Name must be 3-50 characters!", ephemeral=True)
-        
-        # Get user's faction and current location
-        data = self.db.execute_query(
-            '''SELECT c.current_location, fm.faction_id, f.leader_id, lo.ownership_id
-               FROM characters c
-               LEFT JOIN faction_members fm ON c.user_id = fm.user_id
-               LEFT JOIN factions f ON fm.faction_id = f.faction_id
-               LEFT JOIN location_ownership lo ON c.current_location = lo.location_id AND lo.faction_id = f.faction_id
-               WHERE c.user_id = ?''',
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not data:
-            return await interaction.response.send_message("Character not found!", ephemeral=True)
-        
-        location_id, faction_id, leader_id, ownership_id = data
-        
-        if not faction_id:
-            return await interaction.response.send_message("You're not in a faction!", ephemeral=True)
-        
-        if leader_id != interaction.user.id:
-            return await interaction.response.send_message("Only faction leaders can rename locations!", ephemeral=True)
-        
-        if not ownership_id:
-            return await interaction.response.send_message("Your faction doesn't own this location!", ephemeral=True)
-        
-        # Update the custom name
-        self.db.execute_query(
-            "UPDATE location_ownership SET custom_name = ? WHERE ownership_id = ?",
-            (new_name, ownership_id)
-        )
-        
-        await interaction.response.send_message(f"Location renamed to **{new_name}**!", ephemeral=True)
+    #@location_group.command(name="rename", description="Rename a location owned by your faction")
+    #@app_commands.describe(new_name="New name for the location")
+    #async def rename_location(self, interaction: discord.Interaction, new_name: str):
+    #    if len(new_name) < 3 or len(new_name) > 50:
+    #        return await interaction.response.send_message("Name must be 3-50 characters!", ephemeral=True)
+    #    
+    #    # Get user's faction and current location
+    #    data = self.db.execute_query(
+    #        '''SELECT c.current_location, fm.faction_id, f.leader_id, lo.ownership_id
+    #           FROM characters c
+    #           LEFT JOIN faction_members fm ON c.user_id = fm.user_id
+    #           LEFT JOIN factions f ON fm.faction_id = f.faction_id
+    #           LEFT JOIN location_ownership lo ON c.current_location = lo.location_id AND lo.faction_id = f.faction_id
+    #           WHERE c.user_id = ?''',
+    #        (interaction.user.id,),
+    #        fetch='one'
+     #   )
+    #    
+    #    if not data:
+    #        return await interaction.response.send_message("Character not found!", ephemeral=True)
+    #    
+    #    location_id, faction_id, leader_id, ownership_id = data
+   #     
+    #    if not faction_id:
+    #        return await interaction.response.send_message("You're not in a faction!", ephemeral=True)
+    #    
+     #   if leader_id != interaction.user.id:
+    #        return await interaction.response.send_message("Only faction leaders can rename locations!", ephemeral=True)
+    #    
+    #    if not ownership_id:
+    #        return await interaction.response.send_message("Your faction doesn't own this location!", ephemeral=True)
+    #    
+    #    # Update the custom name
+    #    self.db.execute_query(
+    #        "UPDATE location_ownership SET custom_name = ? WHERE ownership_id = ?",
+    #        (new_name, ownership_id)
+    #    )
+    #    
+    #    await interaction.response.send_message(f"Location renamed to **{new_name}**!", ephemeral=True)
     
     @location_group.command(name="set_sales_tax", description="Set sales tax for shops at faction locations")
     @app_commands.describe(percentage="Tax percentage (0-25)")

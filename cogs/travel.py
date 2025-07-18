@@ -1204,7 +1204,6 @@ class TravelCog(commands.Cog):
                 return
                 
             current_location_name = location_name_result[0]
-            current_display_name, _ = get_location_display_name(self.db, origin_id)
             # Use the same query pattern as travel_go (which works)
             routes = self.db.execute_query(
                 '''SELECT c.corridor_id,

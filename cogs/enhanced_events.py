@@ -8,6 +8,94 @@ from datetime import datetime, timedelta
 import json
 from typing import Optional, Literal
 
+
+
+
+
+
+
+class FugitiveAlertView(discord.ui.View):
+    def __init__(self, bot, players, location_id):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.players = players
+        self.location_id = location_id
+        self.responded_users = []
+
+    async def check_and_record_response(self, interaction: discord.Interaction) -> bool:
+        """Checks if the user is part of the event and hasn't responded yet."""
+        if interaction.user.id not in self.players:
+            await interaction.response.send_message("You are not directly involved in this event.", ephemeral=True)
+            return False
+        if interaction.user.id in self.responded_users:
+            await interaction.response.send_message("You have already responded to this event.", ephemeral=True)
+            return False
+        
+        self.responded_users.append(interaction.user.id)
+        return True
+
+    @discord.ui.button(label="Assist Security", style=discord.ButtonStyle.success, emoji="🚔")
+    async def assist_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.check_and_record_response(interaction):
+            return
+
+        char_data = self.bot.db.execute_query("SELECT name, combat FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+        char_name, combat_skill = char_data
+
+        if combat_skill >= 15:
+            bounty = random.randint(1000, 1500)
+            self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (bounty, interaction.user.id))
+            
+            # --- Reputation Logic Start ---
+            rep_cog = self.bot.get_cog('ReputationCog')
+            if rep_cog:
+                karma_change = 15
+                await rep_cog.update_reputation(interaction.user.id, self.location_id, karma_change)
+                await interaction.response.send_message(f"🚔 **{char_name}** assists Gate Security in a swift operation, disabling the fugitive's ship. The {bounty} credit bounty is transferred to your account. Your standing with local security has improved. (+{karma_change} reputation)", ephemeral=False)
+            # --- Reputation Logic End ---
+        else:
+            await interaction.response.send_message(f"💨 The fugitive's ship gives **{char_name}** the slip during the confrontation. A valiant effort, but no reward.", ephemeral=False)
+
+    @discord.ui.button(label="Help Fugitive Escape", style=discord.ButtonStyle.danger, emoji="🤫")
+    async def help_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.check_and_record_response(interaction):
+            return
+
+        char_data = self.bot.db.execute_query("SELECT name, navigation FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+        char_name, nav_skill = char_data
+
+        if nav_skill >= 15:
+            reward = random.randint(2000, 3000)
+            self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (reward, interaction.user.id))
+            
+            # --- Reputation Logic Start ---
+            rep_cog = self.bot.get_cog('ReputationCog')
+            if rep_cog:
+                karma_change = -20
+                await rep_cog.update_reputation(interaction.user.id, self.location_id, karma_change)
+                await interaction.response.send_message(f"🤫 **{char_name}** creates a diversion, allowing the fugitive to slip through the security net. A coded message arrives later with a {reward} credit 'thank you' payment. Your reputation with law-abiding citizens has suffered. ({karma_change} reputation)", ephemeral=False)
+            # --- Reputation Logic End ---
+        else:
+            fine = 500
+            self.bot.db.execute_query("UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?", (fine, interaction.user.id))
+            await interaction.response.send_message(f"🚨 **{char_name}**'s attempt to help the fugitive is clumsy and obvious. You're caught and fined {fine} credits for obstructing justice.", ephemeral=False)
+
+    @discord.ui.button(label="Ignore Alert", style=discord.ButtonStyle.secondary, emoji="👀")
+    async def ignore_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.check_and_record_response(interaction):
+            return
+            
+        char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
+        await interaction.response.send_message(f"👀 **{char_name}** decides this situation is too hot to handle and stays out of it.", ephemeral=False)
+        
+
+
+
+
+
+
+
+
 class EnhancedEventsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -41,16 +129,16 @@ class EnhancedEventsCog(commands.Cog):
             if last_event and last_event[0]:
                 from datetime import datetime, timedelta
                 last_time = datetime.fromisoformat(last_event[0])
-                if datetime.now() - last_time < timedelta(minutes=8):
+                if datetime.now() - last_time < timedelta(minutes=5):
                     continue  # Too recent
             
             # Random chance based on location activity and type
             base_chance = {
-                'colony': 0.35,
+                'colony': 0.40,
                 'space_station': 0.35,
-                'outpost': 0.25,
-                'gate': 0.20
-            }.get(loc_type, 0.20)
+                'outpost': 0.30,
+                'gate': 0.25
+            }.get(loc_type, 0.40)
             
             # Wealth affects event frequency
             wealth_modifier = 1.0 + (wealth - 5) * 0.1
@@ -96,7 +184,7 @@ class EnhancedEventsCog(commands.Cog):
             danger_level = corridor_info[0]
             
             # Higher danger = more events
-            event_chance = 0.1 + (danger_level * 0.05)
+            event_chance = 0.20 + (danger_level * 0.1)
             
             if random.random() < event_chance:
                 await self.generate_travel_event(travel_data)
@@ -185,9 +273,10 @@ class EnhancedEventsCog(commands.Cog):
         ]
         
         # Calculate event chances based on location characteristics
-        phenomena_chance = 0.25  # 30% base chance
-        hostile_chance = 0.15    # 10% base chance
-        reputation_chance = 0.20
+        # Calculate event chances based on location characteristics
+        phenomena_chance = 0.35  # Was 0.25
+        hostile_chance = 0.30    # Was 0.15
+        reputation_chance = 0.35  # Was 0.20
         
         # Increase hostile chances in dangerous areas
         edge_distance = (x_coord**2 + y_coord**2)**0.5
@@ -670,7 +759,22 @@ class EnhancedEventsCog(commands.Cog):
             view.add_item(reject_button)
             
             await channel.send(embed=embed, view=view)  
-            
+    
+    async def _handle_fugitive_alert(self, channel, players, event_data, location_id):
+        """Handle fugitive alert event"""
+        embed = discord.Embed(
+            title="🎯 Fugitive Transit Alert",
+            description="Gate Security offers a bounty for a wanted fugitive in the area. This is a chance for profit or to make powerful enemies.",
+            color=event_data['color']
+        )
+        
+        # Get the user_ids from the list of player tuples
+        player_ids = [p[0] for p in players]
+        
+        view = FugitiveAlertView(self.bot, player_ids, location_id)
+        
+        await channel.send(embed=embed, view=view)
+        
     async def _handle_security_encounter(self, location_id, players, location_name, event_name, description, color):
         """Handle corporate security patrol encounter during travel"""
         
@@ -1355,10 +1459,213 @@ class EnhancedEventsCog(commands.Cog):
                 'base_probability': 0.03,
                 'interactive': True,
                 'effects': {'research_job': 1, 'artifact_potential': True}
+            },
+                        {
+                'name': 'Priority Convoy Passage',
+                'description': '📇 **Priority Convoy Passage**\nA heavily escorted military convoy is demanding immediate gate access, causing significant traffic delays. They are offering payment for assistance in clearing their path.',
+                'color': 0x4169e1,
+                'event_type': 'neutral',
+                'base_probability': 0.12,
+                'interactive': True,
+                'handler': self._handle_priority_convoy
+            },
+            {
+                'name': 'Gate Energy Surge',
+                'description': '🔌 **Gate Energy Surge**\nThe gate\'s energy core is experiencing a critical power surge! Emergency containment teams are requesting assistance from any qualified engineers in the area before the field collapses.',
+                'color': 0xffa500,
+                'event_type': 'negative',
+                'base_probability': 0.09,
+                'interactive': True,
+                'handler': self._handle_gate_energy_surge
+            },
+            {
+                'name': 'Fugitive Transit Alert',
+                'description': '⛓️‍💥 **Fugitive Transit Alert**\nGate Security has issued an alert: a high-profile fugitive is believed to be transiting the area aboard a nondescript freighter. A substantial bounty is offered for their capture.',
+                'color': 0x8b0000,
+                'event_type': 'neutral',
+                'base_probability': 0.07,
+                'interactive': True,
+                'handler': self._handle_fugitive_alert
+            },
+            {
+                'name': 'Spacetime Echo',
+                'description': '🌫️ **Spacetime Echo**\nThe gate\'s spatial displacement field has created a temporary spacetime echo. A faint, ghostly image of a ship that passed through long ago flickers in and out of existence.',
+                'color': 0x9932cc,
+                'event_type': 'mysterious',
+                'base_probability': 0.05,
+                'interactive': True,
+                'handler': self._handle_spacetime_echo
             }
         ]
 
-    # Interactive event handlers
+    async def _handle_priority_convoy(self, channel, players, event_data):
+        """Handle priority convoy event at a gate"""
+        embed = discord.Embed(
+            title="🚦 Priority Convoy Passage",
+            description="A military convoy is causing traffic delays and needs assistance. Your actions can speed things up or create complications.",
+            color=event_data['color']
+        )
+
+        view = discord.ui.View(timeout=300)
+
+        assist_button = discord.ui.Button(label="Assist Escort", style=discord.ButtonStyle.primary, emoji="🚀")
+        scan_button = discord.ui.Button(label="Scan Convoy", style=discord.ButtonStyle.secondary, emoji="📡")
+        wait_button = discord.ui.Button(label="Wait Patiently", style=discord.ButtonStyle.success, emoji="⏳")
+
+        async def assist_callback(interaction: discord.Interaction):
+            char_data = self.bot.db.execute_query("SELECT name, navigation FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+            if not char_data:
+                await interaction.response.send_message("Character not found!", ephemeral=True)
+                return
+
+            char_name, nav_skill = char_data
+            if nav_skill >= 12:
+                reward = random.randint(200, 350) + (nav_skill * 10)
+                self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (reward, interaction.user.id))
+                await interaction.response.send_message(f"🚀 **{char_name}** skillfully assists the convoy escort, clearing a path through the congestion. The convoy commander sends you {reward} credits for your trouble.", ephemeral=False)
+            else:
+                await interaction.response.send_message(f"⚠️ **{char_name}** tries to help, but your maneuvers only add to the traffic chaos. The escort waves you off.", ephemeral=False)
+
+        async def scan_callback(interaction: discord.Interaction):
+            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+            if not char_data:
+                await interaction.response.send_message("Character not found!", ephemeral=True)
+                return
+            
+            char_name, eng_skill = char_data
+            if eng_skill >= 15:
+                await interaction.response.send_message(f"📡 **{char_name}** discretely scans the convoy. The ships are running hot with high-energy weapon signatures and what appears to be classified cyberwarfare suites. This is a serious military force.", ephemeral=False)
+            else:
+                fine = 150
+                self.bot.db.execute_query("UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?", (fine, interaction.user.id))
+                await interaction.response.send_message(f"🚨 **{char_name}**'s scan is detected by the convoy's counter-intel systems! You receive a warning and a {fine} credit fine for unauthorized scanning of military assets.", ephemeral=False)
+
+        async def wait_callback(interaction: discord.Interaction):
+            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
+            await interaction.response.send_message(f"⏳ **{char_name}** decides to wait out the delay. The convoy eventually passes, and normal traffic resumes.", ephemeral=False)
+
+        assist_button.callback = assist_callback
+        scan_button.callback = scan_callback
+        wait_button.callback = wait_callback
+
+        view.add_item(assist_button)
+        view.add_item(scan_button)
+        view.add_item(wait_button)
+        
+        await channel.send(embed=embed, view=view)
+
+    async def _handle_gate_energy_surge(self, channel, players, event_data):
+        """Handle gate energy surge event"""
+        embed = discord.Embed(
+            title="⚠️ Gate Energy Surge",
+            description="The gate's core is surging with energy! A containment failure is imminent without skilled intervention.",
+            color=event_data['color']
+        )
+        
+        view = discord.ui.View(timeout=300)
+
+        contain_button = discord.ui.Button(label="Help Contain Surge", style=discord.ButtonStyle.danger, emoji="🔧")
+        shields_button = discord.ui.Button(label="Reinforce Shields", style=discord.ButtonStyle.primary, emoji="🛡️")
+        evacuate_button = discord.ui.Button(label="Evacuate Area", style=discord.ButtonStyle.secondary, emoji="🏃")
+
+        async def contain_callback(interaction: discord.Interaction):
+            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+            if not char_data:
+                await interaction.response.send_message("Character not found!", ephemeral=True)
+                return
+            
+            char_name, eng_skill = char_data
+            if eng_skill >= 18:
+                reward = random.randint(500, 750) + (eng_skill * 20)
+                self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (reward, interaction.user.id))
+                await interaction.response.send_message(f"🔧 **{char_name}**'s expert engineering assistance helps stabilize the gate's energy core, preventing a catastrophe! Gate authorities award you {reward} credits.", ephemeral=False)
+            else:
+                damage = random.randint(15, 30)
+                self.bot.db.execute_query("UPDATE ships SET hull_integrity = GREATEST(0, hull_integrity - ?) WHERE owner_id = ?", (damage, interaction.user.id))
+                await interaction.response.send_message(f"💥 **{char_name}** attempts to help but is caught in an energy discharge! The ship takes {damage} hull damage.", ephemeral=False)
+
+        async def shields_callback(interaction: discord.Interaction):
+            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+            if not char_data:
+                await interaction.response.send_message("Character not found!", ephemeral=True)
+                return
+
+            char_name, eng_skill = char_data
+            reward = 150 + (eng_skill * 5)
+            self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (reward, interaction.user.id))
+            await interaction.response.send_message(f"🛡️ **{char_name}** helps reinforce the shields of nearby civilian ships, earning a {reward} credit reward from Gate Traffic Control for their service.", ephemeral=False)
+            
+        async def evacuate_callback(interaction: discord.Interaction):
+            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
+            await interaction.response.send_message(f"🏃 **{char_name}** wisely moves their ship to a safe distance to watch the events unfold.", ephemeral=False)
+
+        contain_button.callback = contain_callback
+        shields_button.callback = shields_callback
+        evacuate_button.callback = evacuate_callback
+
+        view.add_item(contain_button)
+        view.add_item(shields_button)
+        view.add_item(evacuate_button)
+
+        await channel.send(embed=embed, view=view)
+        
+    async def _handle_spacetime_echo(self, channel, players, event_data):
+        """Handle spacetime echo event"""
+        embed = discord.Embed(
+            title="🌀 Spacetime Echo",
+            description="A ghostly image of a long-lost vessel flickers near the gate. It seems harmless, but it's an irresistible scientific curiosity.",
+            color=event_data['color']
+        )
+        view = discord.ui.View(timeout=300)
+
+        analyze_button = discord.ui.Button(label="Analyze Echo", style=discord.ButtonStyle.primary, emoji="🔬")
+        hail_button = discord.ui.Button(label="Hail the Echo", style=discord.ButtonStyle.secondary, emoji="👋")
+        fly_button = discord.ui.Button(label="Fly Through It", style=discord.ButtonStyle.danger, emoji="✨")
+
+        async def analyze_callback(interaction: discord.Interaction):
+            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+            if not char_data:
+                await interaction.response.send_message("Character not found!", ephemeral=True)
+                return
+
+            char_name, eng_skill = char_data
+            if eng_skill >= 12:
+                reward = random.randint(250, 500)
+                self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (reward, interaction.user.id))
+                await interaction.response.send_message(f"🔬 **{char_name}** collects valuable temporal data from the echo, selling it to a research outpost for {reward} credits.", ephemeral=False)
+            else:
+                await interaction.response.send_message(f"📉 **{char_name}**'s sensors can't make sense of the temporal distortions. The data is unusable.", ephemeral=False)
+
+        async def hail_callback(interaction: discord.Interaction):
+            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
+            await interaction.response.send_message(f"👋 **{char_name}** hails the echo. You receive only static, but for a moment, you think you hear a faint whisper... *'...left something behind...'* The echo then fades.", ephemeral=False)
+            
+        async def fly_callback(interaction: discord.Interaction):
+            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
+            roll = random.random()
+            if roll < 0.25: # 25% chance of damage
+                damage = random.randint(5, 10)
+                self.bot.db.execute_query("UPDATE ships SET hull_integrity = GREATEST(0, hull_integrity - ?) WHERE owner_id = ?", (damage, interaction.user.id))
+                await interaction.response.send_message(f"💥 **{char_name}** flies through the echo and a wave of temporal feedback rattles the ship! It takes {damage} hull damage.", ephemeral=False)
+            elif roll > 0.9: # 10% chance of a boon
+                fuel_gain = random.randint(10, 20)
+                self.bot.db.execute_query("UPDATE ships SET current_fuel = current_fuel + ? WHERE owner_id = ?", (fuel_gain, interaction.user.id))
+                await interaction.response.send_message(f"✨ **{char_name}** flies through the echo and the ship's fuel cells are mysteriously replenished, gaining {fuel_gain} fuel!", ephemeral=False)
+            else: # 65% chance of nothing
+                await interaction.response.send_message(f"💨 **{char_name}** flies through the echo. The ship feels momentarily cold, but nothing else happens.", ephemeral=False)
+
+        analyze_button.callback = analyze_callback
+        hail_button.callback = hail_callback
+        fly_button.callback = fly_callback
+
+        view.add_item(analyze_button)
+        view.add_item(hail_button)
+        view.add_item(fly_button)
+
+        await channel.send(embed=embed, view=view)
+
+
+        
     async def _handle_industrial_accident(self, channel, players, event_data):
         """Handle industrial accident event"""
         embed = discord.Embed(

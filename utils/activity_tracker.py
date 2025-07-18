@@ -24,6 +24,12 @@ class ActivityTracker:
             self.warning_tasks[user_id].cancel()
             del self.warning_tasks[user_id]
             
+            # Mark the warning as inactive in the database
+            self.db.execute_query(
+                "UPDATE afk_warnings SET is_active = 0 WHERE user_id = ?",
+                (user_id,)
+            )
+            
             # Send confirmation that timer was cancelled
             asyncio.create_task(self._send_timer_cancelled_message(user_id))
         
@@ -31,7 +37,7 @@ class ActivityTracker:
         if user_id in self.afk_tasks:
             self.afk_tasks[user_id].cancel()
             del self.afk_tasks[user_id]
-    
+        
     def start_activity_monitoring(self):
         """Start the activity monitoring background task"""
         if self.monitoring_task is None or self.monitoring_task.done():

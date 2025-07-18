@@ -1037,9 +1037,24 @@ class SubLocationServiceView(discord.ui.View):
                 service_type="travel_info"
             ))
         elif sub_type == 'historical_archive':
-            self.add_item(ServiceButton("browse_archives", "📚 Browse Archives", discord.ButtonStyle.primary))
-            self.add_item(ServiceButton("research_records", "📖 Research Records", discord.ButtonStyle.secondary))
-            self.add_item(ServiceButton("study_figures", "👤 Study Historical Figures", discord.ButtonStyle.secondary))    
+            self.add_item(SubLocationButton(
+                label="Browse Archives", 
+                emoji="📚", 
+                style=discord.ButtonStyle.primary,
+                service_type="browse_archives"
+            ))
+            self.add_item(SubLocationButton(
+                label="Research Records", 
+                emoji="📖", 
+                style=discord.ButtonStyle.secondary,
+                service_type="research_records"
+            ))
+            self.add_item(SubLocationButton(
+                label="Study Historical Figures", 
+                emoji="👤", 
+                style=discord.ButtonStyle.secondary,
+                service_type="study_figures"
+            ))  
         # Derelict area services
         elif self.sub_type in ['abandoned_quarters', 'emergency_shelter', 'salvage_yard', 'power_core', 'scavenger_den']:
             self.add_item(SubLocationButton(

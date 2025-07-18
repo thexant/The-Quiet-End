@@ -7,7 +7,7 @@ import atexit
 import time
 
 class Database:
-    def __init__(self, db_path="DEV.db"):
+    def __init__(self, db_path="beta2.db"):
         self.db_path = db_path
         self.lock = threading.Lock()
         self._shutdown = False
@@ -342,7 +342,7 @@ class Database:
             )''',
             # Add current home tracking to characters table
             '''ALTER TABLE characters ADD COLUMN current_home_id INTEGER''',
-
+            '''ALTER TABLE location_ownership ADD COLUMN faction_id INTEGER REFERENCES factions(faction_id)''',
             # Add home invitations table
             '''CREATE TABLE IF NOT EXISTS home_invitations (
                 invitation_id INTEGER PRIMARY KEY AUTOINCREMENT,
