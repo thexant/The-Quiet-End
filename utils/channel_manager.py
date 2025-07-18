@@ -119,9 +119,7 @@ class ChannelManager:
         
         return (base_name, base_name)
         
-    async def get_or_create_location_channel(self, guild: discord.Guild, loc_id: int, loc_type: str, 
-                                    name: str, description: str, wealth: int,
-                                    requesting_user: discord.Member = None) -> Optional[discord.TextChannel]:
+    async def get_or_create_location_channel(self, guild: discord.Guild, location_id: int, user: discord.Member = None) -> Optional[discord.TextChannel]:
         """
         Get existing channel for location or create one if needed
         Returns None if location doesn't exist
@@ -133,7 +131,7 @@ class ChannelManager:
         location_info = self.db.execute_query(
             '''SELECT location_id, channel_id, name, location_type, description, wealth_level
                FROM locations WHERE location_id = ?''',
-            (loc_id,),
+            (location_id,),
             fetch='one'
         )
         
@@ -147,7 +145,7 @@ class ChannelManager:
             channel = guild.get_channel(channel_id)
             if channel:
                 # Update last active time
-                await self._update_channel_activity(loc_id)
+                await self._update_channel_activity(location_id)
                 return channel
             else:
                 # Channel was deleted, clear the reference
@@ -156,8 +154,8 @@ class ChannelManager:
                     (location_id,)
                 )
         
-        # Need to create new channel
-        channel = await self._create_location_channel(guild, loc_id, loc_type, name, description, wealth, requesting_user)
+        # Need to create new channel - pass the tuple
+        channel = await self._create_location_channel(guild, location_info, user)
         return channel
     
     async def get_or_create_home_channel(self, guild: discord.Guild, home_info: tuple, user: discord.Member = None) -> Optional[discord.TextChannel]:
@@ -528,35 +526,18 @@ class ChannelManager:
         """
         await self._cleanup_old_channels(guild, force=False)
         
-    async def _create_location_channel(self, guild: discord.Guild, loc_id: int, loc_type: str, 
-                                    name: str, description: str, 
-                                    requesting_user: discord.Member = None) -> Optional[discord.TextChannel]:
-        """Create a channel for a location using faction-specific naming"""
+    async def _create_location_channel(self, guild: discord.Guild, location_info: Tuple, requesting_user: discord.Member = None) -> Optional[discord.TextChannel]:
+        """
+        Create a new Discord channel for a location
+        """
+        loc_id, channel_id, name, loc_type, description, wealth = location_info
+        
+        # Check if we need to clean up old channels first
+        await self._cleanup_old_channels_if_needed(guild)
+        
         try:
-            # Get the display name for this location
-            display_name, base_name = self.get_location_display_name(loc_id)
-            
-            # Generate channel name using the display name
-            channel_name = self._generate_channel_name(display_name, loc_type)
-            
-            # Create topic with ownership info if applicable
-            # ADD THIS: Get ownership info for topic
-            ownership_info = self.db.execute_query(
-                '''SELECT f.name, f.emoji FROM location_ownership lo
-                   JOIN factions f ON lo.faction_id = f.faction_id
-                   WHERE lo.location_id = ?''',
-                (loc_id,),
-                fetch='one'
-            )
-            
-            if ownership_info:
-                faction_name, faction_emoji = ownership_info
-                topic = f"{faction_emoji} {display_name} (Controlled by {faction_name})"
-            else:
-                topic = f"📍 {display_name}"
-                
-            if description:
-                topic += f" | {description[:100]}"
+            # Generate safe channel name
+            channel_name = self._generate_channel_name(name, loc_type)
             
             # Create channel topic
             wealth_stars = "⭐" * min(wealth // 2, 5)
@@ -574,7 +555,7 @@ class ChannelManager:
                 overwrites[requesting_user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
             
             # Find or create category for location channels
-            category = await self.get_or_create_location_category(guild, loc_type)
+            category = await self._get_or_create_location_category(guild, loc_type)
             
             # Create the channel
             channel = await guild.create_text_channel(
@@ -1168,7 +1149,8 @@ class ChannelManager:
     async def give_user_location_access(self, user: discord.Member, location_id: int) -> bool:
         """Give a user access to a location's channel, creating it if necessary"""
         try:
-            channel = await self._create_location_channel(user.guild, location_info, user, name, description)
+            # Call get_or_create_location_channel with correct 3 parameters
+            channel = await self.get_or_create_location_channel(user.guild, location_id, user)
             if not channel:
                 print(f"❌ Could not create or find channel for location {location_id}")
                 return False
@@ -1180,48 +1162,17 @@ class ChannelManager:
             # Send personalized location status to the user
             await self.send_location_arrival(channel, user, location_id)
             
-            # Check if user has a transport job to this location
-            transport_job = self.db.execute_query(
-                '''SELECT j.job_id, j.title, j.reward_money 
-                   FROM jobs j
-                   WHERE j.taken_by = ? 
-                   AND j.is_taken = 1 
-                   AND j.destination_location_id = ?
-                   AND j.job_status != 'completed' ''',
-                (user.id, location_id),
-                fetch='one'
-            )
-            
-            if transport_job:
-                job_id, job_title, reward = transport_job
-                
-                # Send transport job arrival notification
-                embed = discord.Embed(
-                    title="📦 Transport Job - Destination Reached!",
-                    description=f"You've arrived at the destination for **{job_title}**",
-                    color=0x00ff00
-                )
-                embed.add_field(
-                    name="✅ Ready to Complete",
-                    value=f"Use `/job complete` to unload cargo and receive your reward of **{reward:,} credits**",
-                    inline=False
-                )
-                
-                try:
-                    # Try ephemeral first by creating a webhook-style message
-                    await channel.send(
-                        content=f"{user.mention}",
-                        embed=embed,
-                        delete_after=60  # Auto-delete after 1 minute
-                    )
-                except Exception as e:
-                    print(f"Failed to send transport job notification: {e}")
-            
             print(f"✅ Successfully gave {user.name} access to location {location_id}")
             return True
             
+        except discord.Forbidden:
+            print(f"❌ Permission denied: Cannot give {user.name} access to location {location_id}")
+            return False
+        except discord.HTTPException as e:
+            print(f"❌ Discord HTTP error giving {user.name} access to location {location_id}: {e}")
+            return False
         except Exception as e:
-            print(f"❌ Error giving {user.name} access to location {location_id}: {e}")
+            print(f"❌ Unexpected error giving {user.name} access to location {location_id}: {e}")
             return False
             
     async def remove_user_location_access(self, user: discord.Member, location_id: int) -> bool:
@@ -1793,22 +1744,8 @@ class ChannelManager:
 
     async def restore_user_location_on_login(self, user: discord.Member, location_id: int) -> bool:
         """Restore or create location access when a user logs in"""
-        # FIX: Get location information from the database first
-        location_data = self.db.execute_query(
-            "SELECT name, location_type, description FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
-
-        if not location_data:
-            print(f"❌ Could not find location data for ID: {location_id}")
-            return False
-
-        name, loc_type, description = location_data
-
-        # First, ensure the channel exists and user has access
-        # FIX: Pass the correct arguments in the correct order
-        channel = await self.get_or_create_location_channel(user.guild, location_id, user, name, description, wealth)
+        # Simply call get_or_create_location_channel with the correct 3 parameters
+        channel = await self.get_or_create_location_channel(user.guild, location_id, user)
         if not channel:
             print(f"❌ Failed to create/access channel for location {location_id}")
             return False
@@ -1826,19 +1763,20 @@ class ChannelManager:
         except Exception as e:
             print(f"❌ Failed to restore {user.name} access during login: {e}")
             return False
-    async def cleanup_transit_channel(self, channel_id: int, delay_seconds: int = 30):
-        """
-        Clean up a transit channel after a delay
-        """
-        await asyncio.sleep(delay_seconds)
-        
-        channel = self.bot.get_channel(channel_id)
-        if channel:
-            try:
-                await channel.delete(reason="Transit completed")
-                print(f"🗑️ Cleaned up transit channel #{channel.name}")
-            except Exception as e:
-                print(f"❌ Failed to delete transit channel: {e}")
+
+        async def cleanup_transit_channel(self, channel_id: int, delay_seconds: int = 30):
+            """
+            Clean up a transit channel after a delay
+            """
+            await asyncio.sleep(delay_seconds)
+            
+            channel = self.bot.get_channel(channel_id)
+            if channel:
+                try:
+                    await channel.delete(reason="Transit completed")
+                    print(f"🗑️ Cleaned up transit channel #{channel.name}")
+                except Exception as e:
+                    print(f"❌ Failed to delete transit channel: {e}")
     
     async def get_server_config(self, guild: discord.Guild) -> dict:
         """

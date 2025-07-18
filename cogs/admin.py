@@ -2014,10 +2014,26 @@ class AdminCog(commands.Cog):
             from utils.channel_manager import ChannelManager
             channel_manager = ChannelManager(self.bot)
             
+            # Get location details first
+            location_details = self.db.execute_query(
+                "SELECT name, location_type, description, wealth_level FROM locations WHERE location_id = ?",
+                (location_id,),
+                fetch='one'
+            )
+            
+            if not location_details:
+                await interaction.response.send_message("Failed to get location details.", ephemeral=True)
+                return
+            
+            name, loc_type, description, wealth = location_details
+            
             new_channel = await channel_manager.get_or_create_location_channel(
                 interaction.guild, 
                 location_id,
-                interaction.user
+                interaction.user,
+                name,
+                description,
+                wealth
             )
             
             if not new_channel:
