@@ -2474,7 +2474,14 @@ class EphemeralLocationView(discord.ui.View):
             (location_id,),
             fetch='one'
         )
-        
+        faction_ownership = self.bot.db.execute_query(
+            '''SELECT f.name, f.emoji, lo.custom_name, lo.docking_fee
+               FROM location_ownership lo
+               JOIN factions f ON lo.faction_id = f.faction_id
+               WHERE lo.location_id = ?''',
+            (location_id,),
+            fetch='one'
+        )
         if not location_info:
             await interaction.response.send_message("Location information not found!", ephemeral=True)
             return
@@ -2555,7 +2562,16 @@ class EphemeralLocationView(discord.ui.View):
                 value=f"{wealth_text} {wealth}/10",
                 inline=True
             )
-        
+        if faction_ownership:
+            faction_name, faction_emoji, custom_name, docking_fee = faction_ownership
+            ownership_text = f"{faction_emoji} **{faction_name}**"
+            if docking_fee and docking_fee > 0:
+                ownership_text += f"\n💰 Docking Fee: {docking_fee:,} credits (non-members)"
+            embed.add_field(
+                name="Controlled By",
+                value=ownership_text,
+                inline=False
+            )
         # For aligned locations, show wealth in a separate row for better formatting
         if location_status:
             wealth_text = "⭐" * min(wealth // 2, 5) if wealth > 0 else "💸"

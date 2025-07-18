@@ -1170,6 +1170,7 @@ class Database:
                 location_id INTEGER NOT NULL UNIQUE,
                 owner_id INTEGER,
                 group_id INTEGER,
+                docking_fee INTEGER DEFAULT 0,
                 purchase_price INTEGER NOT NULL,
                 purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 ownership_type TEXT DEFAULT 'individual',
@@ -1182,7 +1183,9 @@ class Database:
                 FOREIGN KEY (owner_id) REFERENCES characters (user_id),
                 FOREIGN KEY (group_id) REFERENCES groups (group_id)
             )''',
-
+            
+            '''ALTER TABLE location_ownership ADD COLUMN docking_fee INTEGER DEFAULT 0''',
+            
             '''CREATE TABLE IF NOT EXISTS location_upgrades (
                 upgrade_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 location_id INTEGER NOT NULL,

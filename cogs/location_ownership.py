@@ -100,12 +100,6 @@ class LocationOwnershipCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
         
-        # Location purchase costs by type and wealth level
-        self.base_costs = {
-            'colony': {'derelict': 50000, 'poor': 100000},
-            'space_station': {'derelict': 75000, 'poor': 150000}, 
-            'outpost': {'derelict': 25000, 'poor': 50000}
-        }
         
         # Upgrade costs and effects
         self.upgrade_types = {
@@ -147,16 +141,18 @@ class LocationOwnershipCog(commands.Cog):
         """Calculate the purchase price for a location"""
         location_id, name, location_type, wealth_level, population, is_derelict = location_data
         
-        if not (is_derelict or wealth_level <= 3):
-            return None  # Not purchasable
+        # Exclude loyalist and black market/outlaw locations
+        if location_type in ['loyalist', 'outlaw']:
+            return None
         
-        base_cost = self.base_costs.get(location_type, {})
+        # New pricing structure:
+        # Derelict = 90,000
+        # Wealth 1 = 100,000, scaling up with wealth
         if is_derelict:
-            return base_cost.get('derelict', 50000)
-        elif wealth_level <= 3:
-            return base_cost.get('poor', 100000)
-        
-        return None
+            return 90000
+        else:
+            # Base price of 100,000 for wealth 1, +10,000 per wealth level
+            return 100000 + ((wealth_level - 1) * 10000)
 
     def calculate_upkeep_cost(self, location_id: int) -> int:
         """Calculate monthly upkeep cost based on upgrades"""
@@ -243,7 +239,16 @@ class LocationOwnershipCog(commands.Cog):
                 
                 embed.add_field(name="Upgrades", value="\n".join(upgrade_text), inline=False)
         
-        elif is_derelict or wealth_level <= 3:
+        else:  # All non-owned locations can be purchased (except loyalist/outlaw)
+            # Show purchase option
+            purchase_price = self.calculate_purchase_price((location_id, name, location_type, wealth_level, population, is_derelict))
+            if purchase_price:
+                status = "Derelict - Available for Claiming" if is_derelict else "Available for Purchase"
+                embed.add_field(
+                    name="Availability", 
+                    value=f"**{status}**\nPrice: {purchase_price:,} credits", 
+                    inline=False
+                )
             # Show purchase option
             purchase_price = self.calculate_purchase_price((location_id, name, location_type, wealth_level, population, is_derelict))
             if purchase_price:
@@ -257,12 +262,64 @@ class LocationOwnershipCog(commands.Cog):
         # Add view with action buttons if applicable
         view = LocationOwnershipView(self.bot, interaction.user.id, location_id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
+    
+    @location_group.command(name="set_docking_fee", description="Set docking fee for non-members at faction locations")
+    @app_commands.describe(fee="Docking fee amount (0-10000)")
+    async def set_docking_fee(self, interaction: discord.Interaction, fee: int):
+        if fee < 0 or fee > 10000:
+            return await interaction.response.send_message("Fee must be between 0-10,000 credits!", ephemeral=True)
+        
+        # Get user's faction and current location
+        data = self.db.execute_query(
+            '''SELECT c.current_location, fm.faction_id, f.leader_id, f.name, lo.ownership_id
+               FROM characters c
+               LEFT JOIN faction_members fm ON c.user_id = fm.user_id
+               LEFT JOIN factions f ON fm.faction_id = f.faction_id
+               LEFT JOIN location_ownership lo ON c.current_location = lo.location_id AND lo.faction_id = f.faction_id
+               WHERE c.user_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not data:
+            return await interaction.response.send_message("Character not found!", ephemeral=True)
+        
+        location_id, faction_id, leader_id, faction_name, ownership_id = data
+        
+        if not faction_id:
+            return await interaction.response.send_message("You're not in a faction!", ephemeral=True)
+        
+        if leader_id != interaction.user.id:
+            return await interaction.response.send_message("Only faction leaders can set docking fees!", ephemeral=True)
+        
+        if not ownership_id:
+            return await interaction.response.send_message("Your faction doesn't own this location!", ephemeral=True)
+        
+        # Update or insert docking fee
+        self.db.execute_query(
+            "UPDATE location_ownership SET docking_fee = ? WHERE ownership_id = ?",
+            (fee, ownership_id)
+        )
+        
+        embed = discord.Embed(
+            title="💰 Docking Fee Updated",
+            description=f"Non-members will now pay **{fee:,} credits** to dock at this location",
+            color=0x00ff00
+        )
+        if fee > 0:
+            embed.add_field(
+                name="Effect",
+                value=f"All non-faction members arriving here must pay the fee, with profits going to {faction_name}'s bank",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
     @location_group.command(name="purchase", description="Purchase or claim the current location")
     async def purchase_location(self, interaction: discord.Interaction):
         # Get character data
         char_data = self.db.execute_query(
-            '''SELECT c.current_location, c.money, c.level, fm.faction_id, f.name as faction_name, 
+            '''SELECT c.current_location, c.money, fm.faction_id, f.name as faction_name, 
                       f.emoji, f.leader_id, f.bank_balance
                FROM characters c
                LEFT JOIN faction_members fm ON c.user_id = fm.user_id
@@ -275,8 +332,7 @@ class LocationOwnershipCog(commands.Cog):
         if not char_data:
             return await interaction.response.send_message("Character not found!", ephemeral=True)
         
-        location_id, money, level, faction_id, faction_name, faction_emoji, leader_id, faction_bank = char_data
-        level = level or 1
+        location_id, money, faction_id, faction_name, faction_emoji, leader_id, faction_bank = char_data
         
         # Check faction membership
         if not faction_id:
@@ -337,10 +393,6 @@ class LocationOwnershipCog(commands.Cog):
         purchase_price = self.calculate_purchase_price((location_id, name, location_type, wealth_level, population, is_derelict))
         if not purchase_price:
             return await interaction.response.send_message("This location is not available for purchase.", ephemeral=True)
-        
-        # Check level requirement
-        if not is_derelict and level < 10:
-            return await interaction.response.send_message("You need to be at least level 10 to purchase economically distressed locations.", ephemeral=True)
         
         # Check if can afford (personal + faction bank)
         total_available = money + (faction_bank or 0)

@@ -37,11 +37,27 @@ class DockingFeeView(discord.ui.View):
             self.stop()
             return
 
-        # Deduct fee
+        # Deduct fee from player
         self.bot.db.execute_query(
             "UPDATE characters SET money = money - ? WHERE user_id = ?", (self.fee, self.user_id)
         )
-        await interaction.response.send_message(f"You paid the {self.fee:,} credit docking fee.", ephemeral=True)
+        
+        # Add fee to faction bank if this is a faction-owned location
+        faction_data = self.bot.db.execute_query(
+            "SELECT faction_id, f.name FROM location_ownership lo JOIN factions f ON lo.faction_id = f.faction_id WHERE location_id = ?",
+            (self.location_id,), fetch='one'
+        )
+        
+        if faction_data:
+            faction_id, faction_name = faction_data
+            self.bot.db.execute_query(
+                "UPDATE factions SET bank_balance = bank_balance + ? WHERE faction_id = ?",
+                (self.fee, faction_id)
+            )
+            await interaction.response.send_message(f"You paid the {self.fee:,} credit docking fee to {faction_name}.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"You paid the {self.fee:,} credit docking fee.", ephemeral=True)
+        
         self.decision.set_result('pay')
         self.stop()
 
@@ -56,7 +72,12 @@ class DockingFeeView(discord.ui.View):
         self.stop()
 
     async def wait_for_decision(self):
-        return await self.decision
+        """Wait for the user to make a decision on the docking fee"""
+        try:
+            return await asyncio.wait_for(self.decision, timeout=300)  # 5 minute timeout
+        except asyncio.TimeoutError:
+            return 'leave'  # Default to leaving if no response
+            
 class TravelCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -925,21 +946,50 @@ class TravelCog(commands.Cog):
                 print(f"⚠️ Faction column missing, using default 'neutral' for {dest_name}")
             else:
                 raise e
+        # Add this check BEFORE the existing faction logic (government/bandit):
+        # Check if location is owned by a faction
+        faction_ownership = self.db.execute_query(
+            '''SELECT lo.faction_id, lo.docking_fee, f.name, f.emoji, fm.faction_id as member_faction_id
+               FROM location_ownership lo
+               JOIN factions f ON lo.faction_id = f.faction_id
+               LEFT JOIN faction_members fm ON fm.user_id = ? AND fm.faction_id = lo.faction_id
+               WHERE lo.location_id = ?''',
+            (user_id, dest_location_id),
+            fetch='one'
+        )
 
-        # FIXED: This code should NOT be inside the except block!
-        rep_cog = self.bot.get_cog('ReputationCog')
-        if not rep_cog:
-            print("ReputationCog not found, granting standard access.")
-            await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
-            return
+        if faction_ownership:
+            owner_faction_id, docking_fee, faction_name, faction_emoji, is_member = faction_ownership
+            
+            if is_member:
+                # Member of the owning faction - free access
+                access_granted = True
+                message = f"{faction_emoji} Welcome to {dest_name}, {faction_name} member!"
+            elif docking_fee and docking_fee > 0:
+                # Non-member with docking fee
+                message = f"{faction_emoji} {dest_name} is controlled by **{faction_name}**. A docking fee of **{docking_fee:,} credits** is required for non-members."
+                view = DockingFeeView(self.bot, user_id, dest_location_id, docking_fee, origin_location_id)
+                
+                # The DockingFeeView will handle payment to faction bank
+            else:
+                # Non-member but no fee set
+                access_granted = True
+                message = f"{faction_emoji} Welcome to {dest_name}, controlled by {faction_name}."
+        else:
+            # FIXED: This code should NOT be inside the except block!
+            rep_cog = self.bot.get_cog('ReputationCog')
+            if not rep_cog:
+                print("ReputationCog not found, granting standard access.")
+                await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
+                return
 
-        rep_entry = self.db.execute_query("SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?", (user_id, dest_location_id), fetch='one')
-        reputation = rep_entry[0] if rep_entry else 0
-        rep_tier = rep_cog.get_reputation_tier(reputation)
+            rep_entry = self.db.execute_query("SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?", (user_id, dest_location_id), fetch='one')
+            reputation = rep_entry[0] if rep_entry else 0
+            rep_tier = rep_cog.get_reputation_tier(reputation)
 
-        access_granted = False
-        message = ""
-        view = None
+            access_granted = False
+            message = ""
+            view = None
 
         # Faction Logic
         if faction == 'government':

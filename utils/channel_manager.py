@@ -663,7 +663,14 @@ class ChannelManager:
             (loc_id,),
             fetch='all'
         )
-
+        faction_ownership = self.db.execute_query(
+            '''SELECT f.name, f.emoji, lo.custom_name, lo.docking_fee
+               FROM location_ownership lo
+               JOIN factions f ON lo.faction_id = f.faction_id
+               WHERE lo.location_id = ?''',
+            (loc_id,),
+            fetch='one'
+        )
 
         # Determine location status and enhance description
         location_status = None
@@ -736,7 +743,16 @@ class ChannelManager:
                 value=f"{wealth_text} {wealth}/10",
                 inline=True
             )
-        
+        if faction_ownership:
+            faction_name, faction_emoji, custom_name, docking_fee = faction_ownership
+            ownership_text = f"{faction_emoji} **{faction_name}**"
+            if docking_fee and docking_fee > 0:
+                ownership_text += f"\n💰 Docking Fee: {docking_fee:,} credits"
+            embed.add_field(
+                name="Controlled By",
+                value=ownership_text,
+                inline=False
+            )
         # For aligned locations, show wealth in a separate row for better formatting
         if location_status:
             wealth_text = "⭐" * min(wealth // 2, 5) if wealth > 0 else "💸"
