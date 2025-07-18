@@ -240,10 +240,10 @@ class GalacticNewsCog(commands.Cog):
                 title = "🌌 GALACTIC INFRASTRUCTURE ALERT"
                 description = (
                     f"**CORRIDOR NETWORK RECONFIGURATION IN PROGRESS**\n\n"
-                    f"Hyperspace monitoring stations report major fluctuations in the fabric of space-time. "
+                    f"Hyperspace monitoring stations report major shifts in the corridor network. "
                     f"Navigation computers across the galaxy are updating their databases as {results['activated']} "
-                    f"new hyperspace corridors have stabilized while {results['deactivated']} existing routes "
-                    f"have collapsed into quantum instability.\n\n"
+                    f"new corridors have stabilized while {results['deactivated']} existing routes "
+                    f"have collapsed into atomic instability.\n\n"
                     f"All vessels are advised to verify route availability before departure."
                 )
             elif results.get('activated', 0) > 0:
@@ -251,7 +251,7 @@ class GalacticNewsCog(commands.Cog):
                 description = (
                     f"**EXPLORATION OPPORTUNITY ANNOUNCEMENT**\n\n"
                     f"Deep space survey teams confirm the stabilization of {results['activated']} previously "
-                    f"unmapped hyperspace corridor{'s' if results['activated'] != 1 else ''}. These newly accessible "
+                    f"unmapped corridor{'s' if results['activated'] != 1 else ''}. These newly accessible "
                     f"routes are now cleared for civilian traffic following successful probe deployments.\n\n"
                     f"Adventurous pilots may find new opportunities in previously unreachable sectors."
                 )
@@ -259,7 +259,7 @@ class GalacticNewsCog(commands.Cog):
                 title = "⚠️ HYPERSPACE DISRUPTION WARNING"
                 description = (
                     f"**CRITICAL NAVIGATION ADVISORY**\n\n"
-                    f"Catastrophic quantum destabilization has rendered {results['deactivated']} hyperspace "
+                    f"Catastrophic corridor destabilization has rendered {results['deactivated']} "
                     f"corridor{'s' if results['deactivated'] != 1 else ''} impassable. Emergency beacons have been "
                     f"deployed to warn approaching vessels. Navigation systems galaxy-wide are recalculating "
                     f"optimal routes.\n\n"
@@ -269,7 +269,7 @@ class GalacticNewsCog(commands.Cog):
                 title = "🌊 HYPERSPACE FLUCTUATION REPORT"
                 description = (
                     "**ROUTINE MONITORING UPDATE**\n\n"
-                    "Minor quantum variations detected in the hyperspace substrate. No immediate impact "
+                    "Minor variations detected in the corridor network. No immediate major impact "
                     "on established trade routes. Continue normal operations while monitoring for updates."
                 )
             

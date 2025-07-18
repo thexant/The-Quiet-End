@@ -9,3 +9,5 @@ DEV.db
 /cogs/__pycache__
 config.py
 config.py
+web/static/css/wiki.css
+/web

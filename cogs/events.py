@@ -1026,40 +1026,54 @@ class EventsCog(commands.Cog):
             await channel.send(embed=embed)
         except:
             pass
-    @tasks.loop(hours=1)  # Run enhanced events every hour
+            
+    @tasks.loop(minutes=15)  # Run enhanced events every 15 minutes
     async def enhanced_random_events(self):
         """Generate enhanced random events including pirates and phenomena"""
         try:
-            # Get all locations with active players
+            # Get all locations with active players INCLUDING population data
             active_locations = self.db.execute_query(
-                '''SELECT c.current_location, COUNT(*) as player_count
+                '''SELECT c.current_location, COUNT(*) as player_count, 
+                          l.location_type, l.wealth_level, l.population
                    FROM characters c 
+                   JOIN locations l ON c.current_location = l.location_id
                    WHERE c.current_location IS NOT NULL
-                   GROUP BY c.current_location
-                   HAVING player_count > 0''',
+                     AND c.is_logged_in = 1
+                   GROUP BY c.current_location''',
                 fetch='all'
             )
             
             events_cog = self.bot.get_cog('EnhancedEventsCog')
             if not events_cog:
+                print("❌ EnhancedEventsCog not found!")
                 return
             
-            for location_id, player_count in active_locations:
+            for location_id, player_count, location_type, wealth, population in active_locations:
                 # Small chance for enhanced events
                 if random.random() < 0.15:  # 15% chance per hour per active location
                     
                     # Get players at this location
                     players = self.db.execute_query(
-                        "SELECT user_id FROM characters WHERE current_location = ?",
+                        "SELECT user_id FROM characters WHERE current_location = ? AND is_logged_in = 1",
                         (location_id,),
                         fetch='all'
                     )
                     
-                    player_ids = [p[0] for p in players]
-                    await events_cog.generate_enhanced_random_event(location_id, player_ids)
-            
+                    if players:
+                        # Pass the correct population parameter (not player count!)
+                        await events_cog.generate_location_event(
+                            location_id, 
+                            location_type, 
+                            wealth, 
+                            population  # THIS WAS THE BUG - was passing len(players) instead
+                        )
+                        print(f"🎲 Triggered enhanced event check at location {location_id}")
+                        
         except Exception as e:
-            print(f"Error in enhanced random events: {e}")
+            print(f"❌ Error in enhanced_random_events: {e}")
+            import traceback
+            traceback.print_exc()
+            
     async def _handle_traveler_in_collapse(self, user_id: int, temp_channel_id: int, char_name: str, corridor_name: str):
         """Handle a traveler caught in a corridor collapse with death checking"""
         user = self.bot.get_user(user_id)

@@ -1596,23 +1596,105 @@ class PersistentLocationView(discord.ui.View):
         self._configure_buttons(location_status)
         
     def _configure_buttons(self, location_status: str):
-        """Configure button states based on dock status"""
+        """Configure button states based on dock status and location services"""
         self.clear_items()
+        
+        # Get current location services to determine which buttons to show
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        has_federal_supplies = False
+        has_black_market = False
+        can_search = False
+        can_train = False
+        
+        if char_data and char_data[0]:
+            location_services = self.bot.db.execute_query(
+                """SELECT has_federal_supplies, has_black_market, location_type, 
+                          wealth_level, has_medical 
+                   FROM locations WHERE location_id = ?""",
+                (char_data[0],),
+                fetch='one'
+            )
+            if location_services:
+                has_federal_supplies = location_services[0]
+                has_black_market = location_services[1]
+                location_type = location_services[2]
+                wealth_level = location_services[3]
+                has_medical = location_services[4]
+                
+                # Check if location allows searching (not on ships or travel channels)
+                can_search = location_type not in ['ship', 'travel']
+                
+                # Check if location has any training available
+                can_train = (
+                    (location_type in ['space_station', 'colony'] and wealth_level >= 5) or
+                    (location_type in ['space_station', 'gate'] and wealth_level >= 4) or
+                    (location_type in ['space_station'] and wealth_level >= 6) or
+                    (has_medical and wealth_level >= 5)
+                )
+        
+        # Check search cooldown
+        if can_search:
+            cooldown_data = self.bot.db.execute_query(
+                "SELECT last_search_time FROM search_cooldowns WHERE user_id = ?",
+                (self.user_id,),
+                fetch='one'
+            )
+            
+            if cooldown_data:
+                import datetime
+                current_time = datetime.datetime.now()
+                last_search = datetime.datetime.fromisoformat(cooldown_data[0])
+                time_diff = current_time - last_search
+                
+                # If still on cooldown, disable search
+                if time_diff.total_seconds() < 900:  # 15 minutes
+                    can_search = False
         
         # Status-dependent buttons
         if location_status == "docked":
+            # Standard location buttons
             self.add_item(self.jobs_panel)
             self.add_item(self.shop_management)
+            self.add_item(self.services)
+            
+            # Add Search button if available and not on cooldown
+            if can_search:
+                self.add_item(self.search_location)
+            
+            # Add Train button if training is available
+            if can_train:
+                self.add_item(self.train_skills)
+            
+            # Add Federal Depot button if location has federal supplies
+            if has_federal_supplies:
+                self.add_item(self.federal_depot)
+            
+            # Add Black Market button if location has black market
+            if has_black_market:
+                self.add_item(self.black_market)
+            
+            # Continue with other docked buttons
             self.add_item(self.sub_areas)
             self.add_item(self.npc_interactions)
             self.add_item(self.undock_button)
             self.add_item(self.route_button)
             
+            # Add location info button if it exists in your implementation
+            if hasattr(self, 'location_info_button'):
+                self.add_item(self.location_info_button)
+                
         else:  # in_space
             self.add_item(self.travel_button)
             self.add_item(self.dock_button)
             self.add_item(self.route_button)
             self.add_item(self.plot_route_button)
+            if hasattr(self, 'location_info_button'):
+                self.add_item(self.location_info_button)
 
     from cogs.travel import TravelCog
     async def refresh_view(self, interaction: discord.Interaction = None):
@@ -1894,15 +1976,52 @@ class EphemeralLocationView(discord.ui.View):
         
         has_federal_supplies = False
         has_black_market = False
+        can_search = False
+        can_train = False
         
         if char_data and char_data[0]:
             location_services = self.bot.db.execute_query(
-                "SELECT has_federal_supplies, has_black_market FROM locations WHERE location_id = ?",
+                """SELECT has_federal_supplies, has_black_market, location_type, 
+                          wealth_level, has_medical 
+                   FROM locations WHERE location_id = ?""",
                 (char_data[0],),
                 fetch='one'
             )
             if location_services:
-                has_federal_supplies, has_black_market = location_services
+                has_federal_supplies = location_services[0]
+                has_black_market = location_services[1]
+                location_type = location_services[2]
+                wealth_level = location_services[3]
+                has_medical = location_services[4]
+                
+                # Check if location allows searching (not on ships or travel channels)
+                can_search = location_type not in ['ship', 'travel']
+                
+                # Check if location has any training available
+                can_train = (
+                    (location_type in ['space_station', 'colony'] and wealth_level >= 5) or
+                    (location_type in ['space_station', 'gate'] and wealth_level >= 4) or
+                    (location_type in ['space_station'] and wealth_level >= 6) or
+                    (has_medical and wealth_level >= 5)
+                )
+        
+        # Check search cooldown
+        if can_search:
+            cooldown_data = self.bot.db.execute_query(
+                "SELECT last_search_time FROM search_cooldowns WHERE user_id = ?",
+                (self.user_id,),
+                fetch='one'
+            )
+            
+            if cooldown_data:
+                import datetime
+                current_time = datetime.datetime.now()
+                last_search = datetime.datetime.fromisoformat(cooldown_data[0])
+                time_diff = current_time - last_search
+                
+                # If still on cooldown, disable search
+                if time_diff.total_seconds() < 900:  # 15 minutes
+                    can_search = False
         
         # Status-dependent buttons
         if location_status == "docked":
@@ -1910,6 +2029,14 @@ class EphemeralLocationView(discord.ui.View):
             self.add_item(self.jobs_panel)
             self.add_item(self.shop_management)
             self.add_item(self.services)
+            
+            # Add Search button if available and not on cooldown
+            if can_search:
+                self.add_item(self.search_location)
+            
+            # Add Train button if training is available
+            if can_train:
+                self.add_item(self.train_skills)
             
             # Add Federal Depot button if location has federal supplies
             if has_federal_supplies:
@@ -1925,7 +2052,7 @@ class EphemeralLocationView(discord.ui.View):
             self.add_item(self.undock_button)
             self.add_item(self.route_button)
             
-            # Add location info button if it exists in your implementation
+            # Add location info button
             self.add_item(self.location_info_button)
                 
         else:  # in_space
@@ -2274,7 +2401,80 @@ class EphemeralLocationView(discord.ui.View):
             )
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        
+    @discord.ui.button(label="Search", style=discord.ButtonStyle.secondary, emoji="🔍")
+    async def search_location(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle location search button"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get character cog and call search logic
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.search_location.callback(char_cog, interaction)
+        else:
+            await interaction.response.send_message("Search system unavailable.", ephemeral=True)
     
+    @discord.ui.button(label="Train", style=discord.ButtonStyle.secondary, emoji="🎓")
+    async def train_skills(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle skill training button"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get location and check available training
+        char_location = self.bot.db.execute_query(
+            '''SELECT l.name, l.location_type, l.wealth_level, l.has_medical
+               FROM characters c
+               JOIN locations l ON c.current_location = l.location_id
+               WHERE c.user_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_location:
+            await interaction.response.send_message("Location not found!", ephemeral=True)
+            return
+        
+        location_name, location_type, wealth, has_medical = char_location
+        
+        # Check which skills can be trained here
+        available_skills = []
+        if location_type in ['space_station', 'colony'] and wealth >= 5:
+            available_skills.append(("Engineering", "engineering", "🔧"))
+        if location_type in ['space_station', 'gate'] and wealth >= 4:
+            available_skills.append(("Navigation", "navigation", "🧭"))
+        if location_type in ['space_station'] and wealth >= 6:
+            available_skills.append(("Combat", "combat", "⚔️"))
+        if has_medical and wealth >= 5:
+            available_skills.append(("Medical", "medical", "⚕️"))
+        
+        if not available_skills:
+            await interaction.response.send_message(
+                f"No training available at {location_name}. Try higher wealth locations!",
+                ephemeral=True
+            )
+            return
+        
+        # Create view with skill selection
+        view = SkillTrainingSelectView(self.bot, interaction.user.id, available_skills, location_name)
+        
+        embed = discord.Embed(
+            title="🎓 Skill Training Available",
+            description=f"Choose a skill to train at **{location_name}**",
+            color=0x4169e1
+        )
+        
+        for skill_display, skill_value, emoji in available_skills:
+            embed.add_field(
+                name=f"{emoji} {skill_display}",
+                value="Available for training",
+                inline=True
+            )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        
     @discord.ui.button(label="Travel", style=discord.ButtonStyle.primary, emoji="🚀")
     async def travel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
@@ -2797,7 +2997,7 @@ class ServicesView(discord.ui.View):
         
         # Check which services are available at this location
         location_services = self.bot.db.execute_query(
-            '''SELECT has_fuel, has_repairs, has_medical, has_upgrades, l.location_id
+            '''SELECT has_fuel, has_repairs, has_medical, has_upgrades, l.location_id, has_shipyard
                FROM locations l
                JOIN characters c ON c.current_location = l.location_id
                WHERE c.user_id = ?''',
@@ -2806,7 +3006,7 @@ class ServicesView(discord.ui.View):
         )
         
         if location_services:
-            has_fuel, has_repairs, has_medical, has_upgrades, location_id = location_services
+            has_fuel, has_repairs, has_medical, has_upgrades, location_id, has_shipyard = location_services
             
             # Check for logbook
             has_logbook = self.bot.db.execute_query(
@@ -2824,6 +3024,8 @@ class ServicesView(discord.ui.View):
                 self.remove_item(self.medical)
             if not has_upgrades:
                 self.remove_item(self.ship_upgrades)
+            if not has_shipyard:
+                self.remove_item(self.shipyard)
             if not has_logbook:
                 self.remove_item(self.logbook)
         
@@ -2963,7 +3165,33 @@ class ServicesView(discord.ui.View):
             )
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
+        
+    @discord.ui.button(label="Shipyard", style=discord.ButtonStyle.primary, emoji="🏗️")
+    async def shipyard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Check if location has shipyard
+        location_info = self.bot.db.execute_query(
+            '''SELECT l.has_shipyard, l.name FROM characters c
+               JOIN locations l ON c.current_location = l.location_id
+               WHERE c.user_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not location_info or not location_info[0]:
+            await interaction.response.send_message("This location doesn't have a shipyard.", ephemeral=True)
+            return
+        
+        # Call the shipyard command from ShipSystemsCog
+        ship_cog = self.bot.get_cog('ShipSystemsCog')
+        if ship_cog:
+            await ship_cog.shipyard.callback(ship_cog, interaction)
+        else:
+            await interaction.response.send_message("Shipyard system unavailable.", ephemeral=True)
+            
     @discord.ui.button(label="Medical Treatment", style=discord.ButtonStyle.success, emoji="⚕️")
     async def medical(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
@@ -3043,7 +3271,7 @@ class ServicesView(discord.ui.View):
         # Call the ship upgrade command from ShipSystemsCog
         ship_cog = self.bot.get_cog('ShipSystemsCog')
         if ship_cog:
-            await ship_cog.upgrade_ship.callback(ship_cog, interaction)
+            await ship_cog.ship_upgrade.callback(ship_cog, interaction)
         else:
             await interaction.response.send_message("Ship upgrade system unavailable.", ephemeral=True)
 
@@ -4590,3 +4818,170 @@ class TQEOverviewView(discord.ui.View):
         
         # Edit the message with updated embed
         await interaction.edit_original_response(embed=embed, view=self)
+        
+        
+        
+        
+class SimpleShipUpgradeView(discord.ui.View):
+    def __init__(self, bot, user_id: int, ship_id: int, ship_info: tuple, money: int, condition_modifier: float):
+        super().__init__(timeout=180)
+        self.bot = bot
+        self.user_id = user_id
+        self.ship_id = ship_id
+        self.money = money
+        self.condition_modifier = condition_modifier
+        
+        # Unpack ship info
+        _, ship_name, ship_type, engine_level, hull_level, systems_level, condition, _ = ship_info
+        
+        # Add upgrade buttons for each component not at max level
+        if engine_level < 5:
+            cost = int(1000 * (engine_level + 1) / condition_modifier)
+            btn = discord.ui.Button(
+                label=f"Upgrade Engine ({cost:,} cr)",
+                emoji="⚡",
+                style=discord.ButtonStyle.primary,
+                disabled=money < cost
+            )
+            btn.callback = self._create_upgrade_callback("engine", cost, engine_level)
+            self.add_item(btn)
+        
+        if hull_level < 5:
+            cost = int(1200 * (hull_level + 1) / condition_modifier)
+            btn = discord.ui.Button(
+                label=f"Upgrade Hull ({cost:,} cr)",
+                emoji="🛡️",
+                style=discord.ButtonStyle.primary,
+                disabled=money < cost
+            )
+            btn.callback = self._create_upgrade_callback("hull", cost, hull_level)
+            self.add_item(btn)
+        
+        if systems_level < 5:
+            cost = int(800 * (systems_level + 1) / condition_modifier)
+            btn = discord.ui.Button(
+                label=f"Upgrade Systems ({cost:,} cr)",
+                emoji="💻",
+                style=discord.ButtonStyle.primary,
+                disabled=money < cost
+            )
+            btn.callback = self._create_upgrade_callback("systems", cost, systems_level)
+            self.add_item(btn)
+    
+    def _create_upgrade_callback(self, component: str, cost: int, current_level: int):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("This isn't your upgrade panel!", ephemeral=True)
+                return
+            
+            # Update the ship component
+            column_name = f"{component}_level"
+            self.bot.db.execute_query(
+                f"UPDATE ships SET {column_name} = {column_name} + 1 WHERE ship_id = ?",
+                (self.ship_id,)
+            )
+            
+            # Deduct credits
+            self.bot.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (cost, self.user_id)
+            )
+            
+            embed = discord.Embed(
+                title="✅ Upgrade Complete!",
+                description=f"{component.title()} upgraded to level {current_level + 1}!",
+                color=0x00ff00
+            )
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        return callback
+        
+        
+        
+        
+        
+        
+class SkillTrainingSelectView(discord.ui.View):
+    """View for selecting which skill to train"""
+    def __init__(self, bot, user_id: int, available_skills: list, location_name: str):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_name = location_name
+        
+        # Create buttons for each available skill
+        for skill_display, skill_value, emoji in available_skills:
+            button = discord.ui.Button(
+                label=skill_display,
+                style=discord.ButtonStyle.primary,
+                emoji=emoji,
+                custom_id=skill_value
+            )
+            button.callback = self.create_skill_callback(skill_value)
+            self.add_item(button)
+    
+    def create_skill_callback(self, skill: str):
+        """Create a callback for each skill button"""
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("This isn't your training menu!", ephemeral=True)
+                return
+            
+            # Get character info for the selected skill
+            char_info = self.bot.db.execute_query(
+                f"SELECT money, {skill} FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not char_info:
+                await interaction.response.send_message("Character not found!", ephemeral=True)
+                return
+            
+            money, current_skill = char_info
+            
+            # Calculate training cost
+            base_cost = 200
+            skill_multiplier = 1 + (current_skill * 0.1)
+            training_cost = int(base_cost * skill_multiplier)
+            
+            if money < training_cost:
+                await interaction.response.send_message(
+                    f"Training costs {training_cost:,} credits. You only have {money:,}.",
+                    ephemeral=True
+                )
+                return
+            
+            # Get location wealth for success chance
+            location_wealth = self.bot.db.execute_query(
+                "SELECT wealth_level FROM locations WHERE name = ?",
+                (self.location_name,),
+                fetch='one'
+            )[0]
+            
+            success_chance = 0.6 + (location_wealth * 0.05)
+            
+            # Use the existing TrainingConfirmView from character.py
+            from cogs.character import TrainingConfirmView
+            view = TrainingConfirmView(self.bot, interaction.user.id, skill, training_cost, success_chance)
+            
+            embed = discord.Embed(
+                title=f"🎓 {skill.title()} Training Available",
+                description=f"Train your {skill} skill at {self.location_name}",
+                color=0x4169e1
+            )
+            
+            embed.add_field(name="Current Skill Level", value=str(current_skill), inline=True)
+            embed.add_field(name="Training Cost", value=f"{training_cost:,} credits", inline=True)
+            embed.add_field(name="Success Chance", value=f"{int(success_chance * 100)}%", inline=True)
+            
+            embed.add_field(
+                name="Training Benefits",
+                value=f"• +1 to {skill} skill on success\n• Experience points\n• Potential for breakthrough (+2 skill)",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        
+        return callback
