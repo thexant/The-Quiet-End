@@ -402,10 +402,31 @@ class SubLocationManager:
         
         # Determine sub_type for view creation
         sub_type = None
+        
+        # First try exact match
         for key, props in self.sub_location_types.items():
             if props['name'] == sub_data['name']:
                 sub_type = key
                 break
+        
+        # If no exact match, try case-insensitive match
+        if not sub_type:
+            for key, props in self.sub_location_types.items():
+                if props['name'].lower() == sub_data['name'].lower():
+                    sub_type = key
+                    break
+        
+        # If still no match, try using the sub_type from database directly
+        if not sub_type:
+            # Get sub_type from database
+            stored_sub_type = self.db.execute_query(
+                "SELECT sub_type FROM sub_locations WHERE sub_location_id = ?",
+                (sub_data['sub_location_id'],),
+                fetch='one'
+            )
+            if stored_sub_type:
+                sub_type = stored_sub_type[0]
+                print(f"🔍 Retrieved sub_type '{sub_type}' from database for {sub_data['name']}")
         
         try:
             # Send initial message
@@ -414,13 +435,16 @@ class SubLocationManager:
             # Send buttons in a separate message
             if sub_type:
                 view = SubLocationServiceView(sub_type, location_id, self.bot)
-                button_embed = discord.Embed(
-                    title="🔧 Available Services",
-                    description="Click the buttons below to use the services available in this area:",
-                    color=0x00ff88
-                )
-                await thread.send(embed=button_embed, view=view)
-                print(f"🏢 Sub-location welcome sent with {len(view.children)} buttons for {sub_data['name']}")
+                if len(view.children) > 0:  # Check if buttons were actually added
+                    button_embed = discord.Embed(
+                        title="🔧 Available Services",
+                        description="Click the buttons below to use the services available in this area:",
+                        color=0x00ff88
+                    )
+                    await thread.send(embed=button_embed, view=view)
+                    print(f"🏢 Sub-location welcome sent with {len(view.children)} buttons for {sub_data['name']} (type: {sub_type})")
+                else:
+                    print(f"⚠️ No buttons were added for sub_type '{sub_type}'")
             else:
                 print(f"⚠️ No sub_type found for {sub_data['name']}")
                 
@@ -1036,7 +1060,8 @@ class SubLocationServiceView(discord.ui.View):
                 style=discord.ButtonStyle.primary,
                 service_type="travel_info"
             ))
-        elif sub_type == 'historical_archive':
+        
+        elif self.sub_type == 'historical_archive':
             self.add_item(SubLocationButton(
                 label="Browse Archives", 
                 emoji="📚", 

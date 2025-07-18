@@ -1,4 +1,4 @@
-# utils/activity_tracker.py - Fixed version with missing methods
+# utils/activity_tracker.py - Fixed with proper task cleanup
 import asyncio
 import discord
 from datetime import datetime, timedelta
@@ -10,7 +10,7 @@ class ActivityTracker:
         self.db = bot.db
         self.afk_tasks: Dict[int, asyncio.Task] = {}
         self.warning_tasks: Dict[int, asyncio.Task] = {}
-        self.monitoring_task = None  # Track the main monitoring task
+        self.monitoring_task = None
             
     def update_activity(self, user_id: int):
         """Update user's last activity timestamp"""
@@ -19,10 +19,19 @@ class ActivityTracker:
             (user_id,)
         )
         
-        # Cancel any existing AFK warning for this user
-        if user_id in self.warning_tasks:
-            self.warning_tasks[user_id].cancel()
-            del self.warning_tasks[user_id]
+        # Check if there's an active warning in the database
+        active_warning = self.db.execute_query(
+            "SELECT warning_id FROM afk_warnings WHERE user_id = ? AND is_active = 1",
+            (user_id,),
+            fetch='one'
+        )
+        
+        # Only cancel if there's actually an active warning
+        if active_warning:
+            # Cancel any existing AFK warning task
+            if user_id in self.warning_tasks:
+                self.warning_tasks[user_id].cancel()
+                del self.warning_tasks[user_id]
             
             # Mark the warning as inactive in the database
             self.db.execute_query(
@@ -75,7 +84,7 @@ class ActivityTracker:
             try:
                 embed = discord.Embed(
                     title="⏰ Inactivity Timer Cancelled",
-                    description="You're still logged in.",
+                    description="You're still logged in. Your activity has been recorded.",
                     color=0x00ff00
                 )
                 await user.send(embed=embed)
@@ -84,21 +93,30 @@ class ActivityTracker:
     
     async def monitor_activity(self):
         """Background task to monitor user activity and trigger AFK warnings"""
-        await self.bot.wait_until_ready()  # Wait for bot to be ready first
+        await self.bot.wait_until_ready()
         print("👁️ Activity monitoring started")
         
         while True:
             try:
                 await asyncio.sleep(300)  # Check every 5 minutes
                 
-                # Find users who have been inactive for 2 hours
-                two_hours_ago = datetime.utcnow() - timedelta(hours=2)
+                # Clean up completed tasks
+                completed_users = []
+                for user_id, task in self.warning_tasks.items():
+                    if task.done():
+                        completed_users.append(user_id)
+                
+                for user_id in completed_users:
+                    del self.warning_tasks[user_id]
+                
+                # Find users who have been inactive for 1 hour
+                one_hour_ago = datetime.utcnow() - timedelta(hours=1)
                 inactive_users = self.db.execute_query(
                     '''SELECT user_id, name FROM characters 
                        WHERE is_logged_in = 1 
                        AND datetime(last_activity) < datetime(?)
                        AND user_id NOT IN (SELECT user_id FROM afk_warnings WHERE is_active = 1)''',
-                    (two_hours_ago.isoformat(),),
+                    (one_hour_ago.isoformat(),),
                     fetch='all'
                 )
                 
@@ -175,34 +193,46 @@ class ActivityTracker:
                     "UPDATE afk_warnings SET is_active = 0 WHERE user_id = ?",
                     (user_id,)
                 )
-            
-            # Clean up task
-            if user_id in self.warning_tasks:
-                del self.warning_tasks[user_id]
                 
         except asyncio.CancelledError:
             print(f"⏰ Resumed AFK warning cancelled for user {user_id}")
         except Exception as e:
             print(f"Error in resumed AFK warning for user {user_id}: {e}")
+        finally:
+            # Always clean up task reference
+            if user_id in self.warning_tasks:
+                del self.warning_tasks[user_id]
     
     async def _start_afk_warning(self, user_id: int, char_name: str):
         """Start the AFK warning process for a user"""
         try:
             user = self.bot.get_user(user_id)
             if not user:
+                print(f"❌ Could not find user {user_id} to send AFK warning")
+                return
+            
+            # Check if they're still logged in
+            is_logged_in = self.db.execute_query(
+                "SELECT is_logged_in FROM characters WHERE user_id = ?",
+                (user_id,),
+                fetch='one'
+            )
+            
+            if not is_logged_in or not is_logged_in[0]:
+                print(f"⚠️ User {user_id} is no longer logged in, skipping AFK warning")
                 return
             
             # Create warning record using UTC time
             expires_at = datetime.utcnow() + timedelta(minutes=10)
             self.db.execute_query(
-                "INSERT INTO afk_warnings (user_id, expires_at) VALUES (?, ?)",
+                "INSERT OR REPLACE INTO afk_warnings (user_id, expires_at, is_active) VALUES (?, ?, 1)",
                 (user_id, expires_at.isoformat())
             )
             
             # Send warning message
             embed = discord.Embed(
                 title="⚠️ Inactivity Warning",
-                description=f"You've been inactive for 2 hours. You will be automatically logged out in **10 minutes** and any active jobs will be cancelled.",
+                description=f"You've been inactive for 1 hour. You will be automatically logged out in **10 minutes** and any active jobs will be cancelled.",
                 color=0xff9900
             )
             embed.add_field(
@@ -213,39 +243,60 @@ class ActivityTracker:
             
             try:
                 await user.send(embed=embed)
+                print(f"⚠️ AFK warning sent to {char_name} (ID: {user_id})")
             except:
-                pass  # Failed to DM user
+                print(f"Failed to DM AFK warning to {char_name} (ID: {user_id})")
             
-            # Wait 10 minutes, then check if user is still inactive
+            # Wait 10 minutes
             await asyncio.sleep(600)
             
-            # Check if warning is still active (user didn't interact)
+            # Check if they're still logged in AND warning is still active
+            still_logged_in = self.db.execute_query(
+                "SELECT is_logged_in FROM characters WHERE user_id = ?",
+                (user_id,),
+                fetch='one'
+            )
+            
             active_warning = self.db.execute_query(
                 "SELECT warning_id FROM afk_warnings WHERE user_id = ? AND is_active = 1",
                 (user_id,),
                 fetch='one'
             )
             
-            if active_warning:
-                # User didn't interact, auto-logout
+            if still_logged_in and still_logged_in[0] and active_warning:
+                # User didn't interact and is still logged in, execute auto-logout
+                print(f"🚪 Executing auto-logout for {char_name} (ID: {user_id})")
                 char_cog = self.bot.get_cog('CharacterCog')
-                if char_cog:
-                    await char_cog._execute_auto_logout(user_id, "AFK timeout")
                 
-                # Clean up warning
+                if char_cog and hasattr(char_cog, '_execute_auto_logout'):
+                    try:
+                        await char_cog._execute_auto_logout(user_id, "AFK timeout")
+                        print(f"✅ Auto-logout completed for {char_name} (ID: {user_id})")
+                    except Exception as e:
+                        print(f"❌ Error executing auto-logout for {user_id}: {e}")
+                else:
+                    print(f"❌ CharacterCog or _execute_auto_logout method not found!")
+                
+                # Clean up warning regardless of logout success
                 self.db.execute_query(
                     "UPDATE afk_warnings SET is_active = 0 WHERE user_id = ?",
                     (user_id,)
                 )
-            
-            # Clean up task
-            if user_id in self.warning_tasks:
-                del self.warning_tasks[user_id]
+            else:
+                if not still_logged_in or not still_logged_in[0]:
+                    print(f"ℹ️ User {user_id} is no longer logged in, skipping auto-logout")
+                if not active_warning:
+                    print(f"ℹ️ Warning for user {user_id} was cancelled, skipping auto-logout")
                 
         except asyncio.CancelledError:
             print(f"⚠️ AFK warning cancelled for user {user_id}")
         except Exception as e:
-            print(f"Error in AFK warning for user {user_id}: {e}")
+            print(f"❌ Error in AFK warning for user {user_id}: {e}")
+        finally:
+            # ALWAYS clean up the task reference when done
+            if user_id in self.warning_tasks:
+                del self.warning_tasks[user_id]
+                print(f"🧹 Cleaned up warning task for user {user_id}")
     
     def cleanup_user_tasks(self, user_id: int):
         """Clean up any pending tasks for a user"""

@@ -125,13 +125,15 @@ class RadioCog(commands.Cog):
                                          char_name: str, callsign: str, message: str):
         """Handle radio transmission from within any corridor (gated or ungated)"""
         
+        # Extract all needed values from location_data
+        corridor_id = location_data['corridor_id']
         corridor_name = location_data['corridor_name']
         origin_name = location_data['origin_name']
         dest_name = location_data['dest_name']
         origin_id = location_data['origin_id']
         dest_id = location_data['dest_id']
         
-        # Determine if it's an ungated corridor (assume 'Ungated' in name for simplicity)
+        # Determine if it's an ungated corridor by checking the name
         is_ungated = "Ungated" in corridor_name
         corridor_display_type = "Ungated Transit" if is_ungated else "Gated Transit"
         corridor_propagation_type = "ungated" if is_ungated else "gated"
@@ -153,18 +155,21 @@ class RadioCog(commands.Cog):
         origin_x, origin_y, origin_system = origin_loc_info
         dest_x, dest_y, dest_system = dest_loc_info
         
-        # Calculate propagation from both ends of the corridor, applying specific corridor degradation
+        # Apply heavy degradation to outgoing message from ungated corridor
         if is_ungated:
-            # Apply heavy degradation to outgoing message from ungated corridor
-            pre_degraded_message = self._degrade_message(message, 12, "ungated")  # Simulate 12 systems of ungated interference
+            # Apply immediate degradation to the message before ANY transmission
+            pre_degraded_message = self._degrade_message(message, 15, "ungated")  
         else:
             pre_degraded_message = message
 
+        # Calculate propagation from both ends of the corridor, using the pre-degraded message
         recipients_from_origin = await self._calculate_radio_propagation(
-            origin_x, origin_y, origin_system, pre_degraded_message, interaction.guild.id, sender_corridor_type=corridor_propagation_type
+            origin_x, origin_y, origin_system, pre_degraded_message, interaction.guild.id, 
+            sender_corridor_type=corridor_propagation_type
         )
         recipients_from_dest = await self._calculate_radio_propagation(
-            dest_x, dest_y, dest_system, pre_degraded_message, interaction.guild.id, sender_corridor_type=corridor_propagation_type
+            dest_x, dest_y, dest_system, pre_degraded_message, interaction.guild.id, 
+            sender_corridor_type=corridor_propagation_type
         )
         
         # Combine and deduplicate recipients, prioritizing stronger signals
@@ -203,18 +208,53 @@ class RadioCog(commands.Cog):
                 ephemeral=True
             )
             return
+
+        # Separate transit recipients from location recipients
+        transit_recipients = [r for r in recipients if r.get('in_transit', False)]
+        location_recipients = [r for r in recipients if not r.get('in_transit', False)]
         
-        # Broadcast to relevant location channels
-        await self._broadcast_to_location_channels(
-            interaction.guild, char_name, callsign, f"Corridor Relay ({corridor_name})", 
-            f"Corridor {corridor_display_type}", message, recipients
-        )
+        # Only broadcast to location channels (not transit)
+        if location_recipients:
+            await self._broadcast_to_location_channels(
+                interaction.guild, char_name, callsign, 
+                f"In Transit ({corridor_name})", "Corridor Transit", 
+                pre_degraded_message, location_recipients,  # Only location recipients
+                sender_corridor_type=corridor_propagation_type
+            )
         
-        # Confirmation message for the sender
-        await interaction.response.send_message(
-            f"📡 **Transmission relayed through corridor {corridor_display_type}**\n\nYour message has been broadcast from the **{origin_name}** and **{dest_name}** corridor ends.",
-            ephemeral=True
-        )
+        # Handle transit recipients separately
+        if transit_recipients:
+            # Group by corridor
+            transit_groups = {}
+            for recipient in transit_recipients:
+                corridor_id = recipient['location_id'].replace('transit_', '')
+                if corridor_id not in transit_groups:
+                    transit_groups[corridor_id] = []
+                transit_groups[corridor_id].append(recipient)
+            
+            # Send messages to transit channels
+            for corridor_id, corridor_transit_recipients in transit_groups.items():
+                await self._send_transit_radio_message(
+                    interaction.guild, corridor_id, char_name, callsign,
+                    f"In Transit ({corridor_name})", "Corridor Transit", 
+                    message, corridor_transit_recipients,
+                    sender_corridor_type=corridor_propagation_type
+                )
+        
+        # Try to award passive XP
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            xp_awarded = await char_cog.try_award_passive_xp(interaction.user.id, "radio")
+            final_message = f"📡 **Transmission relayed through {corridor_display_type}**\n\n"
+            final_message += f"Your message has been broadcast from the **{origin_name}** and **{dest_name}** corridor ends."
+            if is_ungated:
+                final_message += "\n\n⚠️ **Warning**: Signal heavily degraded by ungated corridor interference."
+            if xp_awarded:
+                final_message += "\n\n✨ *You feel more experienced with radio operations.* (+5 XP)"
+        else:
+            final_message = f"📡 **Transmission relayed through {corridor_display_type}**"
+
+        await interaction.response.send_message(final_message, ephemeral=True)
 
     # Modify _calculate_radio_propagation to accept the new corridor_type.
     async def _calculate_radio_propagation(self, sender_x: float, sender_y: float, 
@@ -504,22 +544,20 @@ class RadioCog(commands.Cog):
     def _degrade_message(self, message: str, system_distance: int, sender_corridor_type: str = "normal") -> str:
         """Apply signal degradation to message based on distance and corridor type"""
         
-        # REPLACE THE ENTIRE METHOD WITH THIS:
-        
         # More aggressive degradation for galactic distances
         degradation_start_threshold = 2  # Start degrading after just 2 systems
         
         # Apply additional fixed degradation for ungated corridors
         additional_ungated_degradation = 0
         if sender_corridor_type == "ungated":
-            additional_ungated_degradation = 15  # Increased from 10 to 15 for heavier ungated penalty
-
+            additional_ungated_degradation = 15  # Heavy penalty for ungated transmission
+        
         # Calculate total effective system distance for degradation
         total_effective_distance = system_distance + additional_ungated_degradation
-
+        
         if total_effective_distance <= degradation_start_threshold:
             return message  # Clear transmission only within 2 systems
-
+        
         # More aggressive degradation percentage for galactic realism
         degradation_factor_distance = total_effective_distance - degradation_start_threshold
         degradation_percent = min(95, degradation_factor_distance * 25)  # 25% per system beyond threshold, max 95%
@@ -548,9 +586,10 @@ class RadioCog(commands.Cog):
         return ''.join(result)
 
     async def _broadcast_to_location_channels(self, guild: discord.Guild, 
-                                            sender_name: str, sender_callsign: str, 
-                                            sender_location: str, sender_system: str,
-                                            original_message: str, recipients: List[Dict]):
+                                             sender_name: str, sender_callsign: str,
+                                             sender_location: str, sender_system: str,
+                                             original_message: str, recipients: List[Dict],
+                                             sender_corridor_type: str = "normal"):
         """Send radio messages to location channels where recipients are present"""
         
         # Group recipients by location (including transit channels)
@@ -582,12 +621,14 @@ class RadioCog(commands.Cog):
         for corridor_id, transit_recipients in transit_groups.items():
             await self._send_transit_radio_message(
                 guild, corridor_id, sender_name, sender_callsign,
-                sender_location, sender_system, original_message, transit_recipients
+                sender_location, sender_system, original_message, transit_recipients,
+                sender_corridor_type=sender_corridor_type  # PASS IT THROUGH
             )
     async def _send_transit_radio_message(self, guild: discord.Guild, corridor_id: str,
                                          sender_name: str, sender_callsign: str,
                                          sender_location: str, sender_system: str, 
-                                         original_message: str, recipients: List[Dict]):
+                                         original_message: str, recipients: List[Dict],
+                                         sender_corridor_type: str = "normal"):  # ADD THIS PARAMETER
         """Send a radio message to a transit channel"""
         
         # Find the transit channel for any of the recipients
@@ -613,19 +654,21 @@ class RadioCog(commands.Cog):
         
         first_recipient = recipients[0] if recipients else None
         signal_strength = first_recipient['signal_strength'] if first_recipient else 0
-        corridor_type = first_recipient.get('corridor_type', 'gated') if first_recipient else 'gated'
-
+        
+        # Determine if the SENDER is in an ungated corridor
+        sender_is_ungated = sender_corridor_type == "ungated"
+        
         # Create simplified radio message embed for transit
         embed = discord.Embed(
             title="📻 Incoming Radio Transmission",
             color=0x800080  # Purple for transit
         )
-
-        # Style based on corridor type and signal quality
-        if corridor_type == "ungated":
+        
+        # Style based on sender's corridor type
+        if sender_is_ungated:
             embed.color = 0xff4444  # Red for dangerous ungated corridors
             embed.title = "📻⚠️ Degraded Radio Transmission"
-
+        
         # Add transmission header with signal quality
         signal_indicator = "🟢" if signal_strength >= 70 else ("📶" if signal_strength >= 30 else "📵")
         embed.add_field(
@@ -633,28 +676,34 @@ class RadioCog(commands.Cog):
             value=f"[{sender_callsign}]\n📍 Broadcasting from {sender_location}, {sender_system}",
             inline=False
         )
-
-        # Show appropriate message version
-        if signal_strength >= 70:
+        
+        # Show message based on sender's corridor type
+        if sender_is_ungated:
+            # Sender is in ungated corridor - always show degraded
+            degraded_message = first_recipient['message'] if first_recipient else original_message
+            embed.add_field(
+                name="📊 Received (Heavily Degraded)",
+                value=f'"{degraded_message}"',
+                inline=False
+            )
+            embed.add_field(
+                name="⚠️ Sender in Ungated Corridor",
+                value="Signal severely degraded at source due to ungated corridor interference",
+                inline=False
+            )
+        elif signal_strength >= 70:
+            # Normal corridor with good signal
             embed.add_field(
                 name="📝 Transmission Content",
                 value=f'"{original_message}"',
                 inline=False
             )
         else:
-            # Show degraded message
+            # Normal corridor but weak signal due to distance
             degraded_message = first_recipient['message'] if first_recipient else original_message
             embed.add_field(
                 name="📊 Received (Signal Degraded)",
                 value=f'"{degraded_message}"',
-                inline=False
-            )
-
-        # Add corridor-specific warnings
-        if corridor_type == "ungated":
-            embed.add_field(
-                name="⚠️ Corridor Interference",
-                value="Signal severely degraded due to ungated corridor instability",
                 inline=False
             )
         

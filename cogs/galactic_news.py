@@ -235,32 +235,61 @@ class GalacticNewsCog(commands.Cog):
         for guild_tuple in guilds_with_updates:
             guild_id = guild_tuple[0]
             
-            # Create news title and description
+            # Enhanced thematic news generation
             if results.get('activated', 0) > 0 and results.get('deactivated', 0) > 0:
-                title = "Major Corridor Network Restructure"
-                description = f"Galactic infrastructure has undergone significant changes. {results['activated']} new routes have opened while {results['deactivated']} routes have collapsed. Navigation systems are updating routing algorithms."
+                title = "🌌 GALACTIC INFRASTRUCTURE ALERT"
+                description = (
+                    f"**CORRIDOR NETWORK RECONFIGURATION IN PROGRESS**\n\n"
+                    f"Hyperspace monitoring stations report major fluctuations in the fabric of space-time. "
+                    f"Navigation computers across the galaxy are updating their databases as {results['activated']} "
+                    f"new hyperspace corridors have stabilized while {results['deactivated']} existing routes "
+                    f"have collapsed into quantum instability.\n\n"
+                    f"All vessels are advised to verify route availability before departure."
+                )
             elif results.get('activated', 0) > 0:
-                title = "New Corridor Routes Discovered"
-                description = f"Survey teams report {results['activated']} new stable corridor{'s' if results['activated'] != 1 else ''} have been mapped and are now available for transit. These routes may provide new trade opportunities."
+                title = "📡 NEW HYPERSPACE ROUTES DETECTED"
+                description = (
+                    f"**EXPLORATION OPPORTUNITY ANNOUNCEMENT**\n\n"
+                    f"Deep space survey teams confirm the stabilization of {results['activated']} previously "
+                    f"unmapped hyperspace corridor{'s' if results['activated'] != 1 else ''}. These newly accessible "
+                    f"routes are now cleared for civilian traffic following successful probe deployments.\n\n"
+                    f"Adventurous pilots may find new opportunities in previously unreachable sectors."
+                )
             elif results.get('deactivated', 0) > 0:
-                title = "Corridor Network Disruption"
-                description = f"Space-time instabilities have caused {results['deactivated']} corridor{'s' if results['deactivated'] != 1 else ''} to become unstable and close to traffic. Alternate routes are being analyzed."
+                title = "⚠️ HYPERSPACE DISRUPTION WARNING"
+                description = (
+                    f"**CRITICAL NAVIGATION ADVISORY**\n\n"
+                    f"Catastrophic quantum destabilization has rendered {results['deactivated']} hyperspace "
+                    f"corridor{'s' if results['deactivated'] != 1 else ''} impassable. Emergency beacons have been "
+                    f"deployed to warn approaching vessels. Navigation systems galaxy-wide are recalculating "
+                    f"optimal routes.\n\n"
+                    f"Pilots are urged to check alternate paths before attempting travel."
+                )
             else:
-                title = "Hyperspace Fluctuations Detected"
-                description = "Deep space monitoring stations report minor fluctuations in the corridor network. No immediate impact on travel routes expected."
+                title = "🌊 HYPERSPACE FLUCTUATION REPORT"
+                description = (
+                    "**ROUTINE MONITORING UPDATE**\n\n"
+                    "Minor quantum variations detected in the hyperspace substrate. No immediate impact "
+                    "on established trade routes. Continue normal operations while monitoring for updates."
+                )
             
-            # Add intensity context
-            intensity_descriptions = {
-                1: "Minor adjustments to network topology.",
-                2: "Routine infrastructure maintenance effects.",
-                3: "Significant network reconfiguration.",
-                4: "Major galactic infrastructure event.",
-                5: "Critical network-wide restructuring."
+            # Add intensity-based urgency
+            urgency_tags = {
+                1: "\n\n`Classification: Routine Maintenance`",
+                2: "\n\n`Classification: Standard Infrastructure Update`",
+                3: "\n\n`Classification: Significant Network Event`",
+                4: "\n\n`Classification: Major Infrastructure Alert`",
+                5: "\n\n`Classification: CRITICAL NETWORK EMERGENCY`"
             }
             
-            description += f" {intensity_descriptions.get(intensity, 'Network status assessment ongoing.')}"
+            description += urgency_tags.get(intensity, "\n\n`Classification: Unspecified`")
             
-            # Find a central location for realistic delay calculation
+            # Add timestamp
+            from datetime import datetime
+            timestamp = datetime.utcnow().strftime("%H:%M IST")
+            description += f"\n\n*Broadcast Time: {timestamp}*"
+            
+            # Find a central location for delay calculation
             central_location = self.db.execute_query(
                 """SELECT location_id FROM locations 
                    WHERE location_type = 'space_station' 
@@ -273,6 +302,7 @@ class GalacticNewsCog(commands.Cog):
             location_id = central_location[0] if central_location else None
             
             await self.queue_news(guild_id, 'corridor_shift', title, description, location_id)
+            
     @tasks.loop(minutes=5)  # Check every 5 minutes for shift changes
     async def shift_change_monitor(self):
         """Monitor for galactic shift changes"""
@@ -485,7 +515,7 @@ class GalacticNewsCog(commands.Cog):
             guild_id = guild_tuple[0]
             await self.queue_news(guild_id, 'fluff_news', title, description, location_id)
 
-    @tasks.loop(hours=6)  # Generate fluff news every 6 hours
+    @tasks.loop(hours=2)  # Generate fluff news every 6 hours
     async def fluff_news_generation(self):
         """Periodically generate fluff news"""
         if random.random() < 0.3:  # 30% chance every 6 hours

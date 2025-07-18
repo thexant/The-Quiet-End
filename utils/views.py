@@ -9,7 +9,8 @@ import math
 from utils.ship_data import get_random_starter_ship
     
 # Replace the entire create_random_character function at the end of utils/views.py
-
+from cogs.character import RadioModal
+        
 async def create_random_character(bot, interaction: discord.Interaction):
     """Create a random character for the user"""
     
@@ -4398,6 +4399,38 @@ class TQEOverviewView(discord.ui.View):
             await char_cog.status_shorthand.callback(char_cog, interaction)
         else:
             await interaction.response.send_message("Character system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Radio", style=discord.ButtonStyle.primary, emoji="📡")
+    async def radio_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open radio transmission modal"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Check if character exists and is logged in
+        char_data = self.bot.db.execute_query(
+            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.response.send_message(
+                "You need a character to use the radio!",
+                ephemeral=True
+            )
+            return
+        
+        if not char_data[0]:
+            await interaction.response.send_message(
+                "You must be logged in to use the radio!",
+                ephemeral=True
+            )
+            return
+        
+        # Open the radio modal
+        modal = RadioModal(self.bot)
+        await interaction.response.send_modal(modal)
     
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.success, emoji="🔄")
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):

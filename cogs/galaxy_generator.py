@@ -153,77 +153,14 @@ class GalaxyGeneratorCog(commands.Cog):
             print(f"❌ Error executing automatic shift: {e}")
 
     async def _broadcast_major_shift_alert(self, intensity: int, results: Dict):
-        """Broadcast alerts about major corridor shifts to configured channels"""
+        """Trigger news broadcast for major corridor shifts"""
         
-        # Get notification channels from server config
-        guilds_with_config = self.db.execute_query(
-            "SELECT guild_id FROM server_config WHERE setup_completed = 1",
-            fetch='all'
-        )
+        # Instead of sending to main channels, just call the news system
+        news_cog = self.bot.get_cog('GalacticNewsCog')
+        if news_cog:
+            await news_cog.post_corridor_shift_news(results, intensity)
+        print(f"🌌 Major shift broadcast triggered: +{results['activated']} routes, -{results['deactivated']} routes")
         
-        embed = discord.Embed(
-            title="🌌 Major Corridor Shift Detected",
-            description=f"Significant changes to galactic infrastructure have been detected.",
-            color=0x800080
-        )
-        
-        embed.add_field(
-            name="Shift Magnitude", 
-            value=f"Intensity {intensity}/5", 
-            inline=True
-        )
-        
-        changes = []
-        if results['activated']:
-            changes.append(f"🟢 {results['activated']} new routes opened")
-        if results['deactivated']:
-            changes.append(f"🔴 {results['deactivated']} routes collapsed")
-        
-        if changes:
-            embed.add_field(
-                name="Infrastructure Changes",
-                value="\n".join(changes),
-                inline=False
-            )
-        
-        embed.add_field(
-            name="Advisory",
-            value="• Check `/travel routes` for updated route availability\n• Travelers in transit are unaffected\n• New opportunities for exploration may have opened",
-            inline=False
-        )
-        
-        embed.set_footer(text="Automatic corridor shifts occur every 6-24 hours")
-        
-        # Send to all configured guilds
-        for guild_id_tuple in guilds_with_config:
-            guild_id = guild_id_tuple[0]
-            guild = self.bot.get_guild(guild_id)
-            
-            if guild:
-                # Try to find a good channel to post in
-                target_channel = None
-                
-                # Look for announcements/general channels
-                for channel in guild.text_channels:
-                    if any(name in channel.name.lower() for name in ['announcement', 'general', 'news', 'galaxy', 'rpg']):
-                        if channel.permissions_for(guild.me).send_messages:
-                            target_channel = channel
-                            break
-                
-                # Fallback to first available channel
-                if not target_channel:
-                    for channel in guild.text_channels:
-                        if channel.permissions_for(guild.me).send_messages:
-                            target_channel = channel
-                            break
-                
-                if target_channel:
-                    try:
-                        await target_channel.send(embed=embed)
-                        print(f"📢 Sent shift alert to {guild.name}#{target_channel.name}")
-                    except Exception as e:
-                        print(f"❌ Failed to send shift alert to {guild.name}: {e}")
-
     async def _check_critical_connectivity_issues(self) -> str:
         """Check for critical connectivity issues that need immediate fixing"""
         
@@ -2851,6 +2788,238 @@ class GalaxyGeneratorCog(commands.Cog):
             print(f"❌ Error inserting dormant batch: {e}")
         finally:
             micro_conn = None
+    
+    @galaxy_group.command(name="fix_routes", description="Fix missing local space routes and optionally re-shift corridors")
+    @app_commands.describe(
+        reshift="Run a corridor shift after fixing routes (default: False)",
+        shift_intensity="Intensity of corridor shift if reshift is True (1-5)"
+    )
+    async def fix_routes(self, interaction: discord.Interaction, reshift: bool = False, shift_intensity: int = 2):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            # Track fixes
+            fixes = {
+                'missing_approaches': 0,
+                'missing_arrivals': 0,
+                'missing_departures': 0,
+                'total_fixed': 0
+            }
+            
+            # Batch fetch all required data upfront
+            all_gates = self.db.execute_query(
+                """SELECT location_id, name, x_coord, y_coord 
+                   FROM locations 
+                   WHERE location_type = 'gate'""",
+                fetch='all'
+            )
+            
+            all_major_locations = self.db.execute_query(
+                """SELECT location_id, name, x_coord, y_coord, location_type
+                   FROM locations
+                   WHERE location_type IN ('colony', 'space_station', 'outpost')""",
+                fetch='all'
+            )
+            
+            # Get ALL existing local space corridors in one query
+            existing_local_corridors = self.db.execute_query(
+                """SELECT origin_location, destination_location, name
+                   FROM corridors
+                   WHERE name LIKE '%Approach%' 
+                      OR name LIKE '%Arrival%' 
+                      OR name LIKE '%Departure%'""",
+                fetch='all'
+            )
+            
+            # Build lookup dictionaries for O(1) access
+            existing_corridors_lookup = {}
+            for origin, dest, name in existing_local_corridors:
+                key = f"{origin}-{dest}"
+                if 'Approach' in name:
+                    existing_corridors_lookup[f"approach_{key}"] = True
+                elif 'Arrival' in name:
+                    existing_corridors_lookup[f"arrival_{key}"] = True
+                elif 'Departure' in name:
+                    existing_corridors_lookup[f"departure_{key}"] = True
+            
+            # Process each gate
+            for gate_id, gate_name, gx, gy in all_gates:
+                # Find nearest major location
+                nearest_loc = None
+                min_distance = float('inf')
+                
+                for loc_id, loc_name, lx, ly, loc_type in all_major_locations:
+                    distance = math.sqrt((gx - lx) ** 2 + (gy - ly) ** 2)
+                    if distance < min_distance:
+                        min_distance = distance
+                        nearest_loc = (loc_id, loc_name, lx, ly)
+                
+                if not nearest_loc:
+                    continue
+                    
+                loc_id, loc_name, lx, ly = nearest_loc
+                
+                # Check for missing Approach corridor
+                approach_key = f"approach_{loc_id}-{gate_id}"
+                if approach_key not in existing_corridors_lookup:
+                    approach_time = int(min_distance * 3) + 60
+                    fuel_cost = max(5, int(min_distance * 0.2))
+                    
+                    self.db.execute_query(
+                        """INSERT INTO corridors 
+                           (name, origin_location, destination_location, travel_time,
+                            fuel_cost, danger_level, is_active, is_generated)
+                           VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                        (f"{gate_name} Approach", loc_id, gate_id, approach_time, fuel_cost)
+                    )
+                    fixes['missing_approaches'] += 1
+                    print(f"✅ Fixed approach: {loc_name} -> {gate_name}")
+                
+                # Check for missing Arrival corridor
+                arrival_key = f"arrival_{gate_id}-{loc_id}"
+                if arrival_key not in existing_corridors_lookup:
+                    arrival_time = int(min_distance * 3) + 60
+                    fuel_cost = max(5, int(min_distance * 0.2))
+                    
+                    self.db.execute_query(
+                        """INSERT INTO corridors 
+                           (name, origin_location, destination_location, travel_time,
+                            fuel_cost, danger_level, is_active, is_generated)
+                           VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                        (f"{gate_name} Arrival", gate_id, loc_id, arrival_time, fuel_cost)
+                    )
+                    fixes['missing_arrivals'] += 1
+                    print(f"✅ Fixed arrival: {gate_name} -> {loc_name}")
+            
+            # Check for missing return departures - batch fetch all gated corridors
+            gated_corridors = self.db.execute_query(
+                """SELECT DISTINCT c.corridor_id, c.name, c.origin_location, c.destination_location,
+                          lo.name as origin_name, ld.name as dest_name
+                   FROM corridors c
+                   JOIN locations lo ON c.origin_location = lo.location_id
+                   JOIN locations ld ON c.destination_location = ld.location_id
+                   WHERE lo.location_type = 'gate' 
+                   AND ld.location_type = 'gate'
+                   AND c.name NOT LIKE '%Return%'
+                   AND c.name NOT LIKE '%Approach%'
+                   AND c.name NOT LIKE '%Arrival%'
+                   AND c.name NOT LIKE '%Departure%'
+                   AND c.name NOT LIKE '%Ungated%'
+                   AND c.is_active = 1""",
+                fetch='all'
+            )
+            
+            # Get all gate-to-location connections in one query
+            gate_connections = self.db.execute_query(
+                """SELECT c.origin_location as gate_id, c.destination_location as loc_id,
+                          l.name as loc_name, l.x_coord, l.y_coord,
+                          g.x_coord as gate_x, g.y_coord as gate_y
+                   FROM corridors c
+                   JOIN locations l ON c.destination_location = l.location_id
+                   JOIN locations g ON c.origin_location = g.location_id
+                   WHERE c.name LIKE '%Arrival%'
+                   AND l.location_type != 'gate'
+                   AND g.location_type = 'gate'""",
+                fetch='all'
+            )
+            
+            # Build gate connection lookup
+            gate_to_locations = {}
+            for gate_id, loc_id, loc_name, lx, ly, gx, gy in gate_connections:
+                if gate_id not in gate_to_locations:
+                    gate_to_locations[gate_id] = []
+                gate_to_locations[gate_id].append((loc_id, loc_name, lx, ly, gx, gy))
+            
+            # Process return departures
+            for corridor_id, base_name, origin_gate, dest_gate, origin_name, dest_name in gated_corridors:
+                if dest_gate in gate_to_locations:
+                    for loc_id, loc_name, lx, ly, gx, gy in gate_to_locations[dest_gate]:
+                        departure_name = f"{base_name} Return Departure"
+                        
+                        # Check if this specific departure exists
+                        exists = any(
+                            origin == loc_id and dest == dest_gate and departure_name in name
+                            for origin, dest, name in existing_local_corridors
+                        )
+                        
+                        if not exists:
+                            distance = math.sqrt((lx - gx) ** 2 + (ly - gy) ** 2)
+                            dep_time = int(distance * 3) + 60
+                            fuel_cost = max(5, int(distance * 0.2))
+                            
+                            self.db.execute_query(
+                                """INSERT INTO corridors 
+                                   (name, origin_location, destination_location, travel_time,
+                                    fuel_cost, danger_level, is_active, is_generated)
+                                   VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                                (departure_name, loc_id, dest_gate, dep_time, fuel_cost)
+                            )
+                            fixes['missing_departures'] += 1
+                            print(f"✅ Fixed return departure for {base_name}")
+            
+            fixes['total_fixed'] = fixes['missing_approaches'] + fixes['missing_arrivals'] + fixes['missing_departures']
+            
+            # Build response embed
+            embed = discord.Embed(
+                title="🔧 Route Fixing Complete",
+                description=f"Fixed {fixes['total_fixed']} missing local space routes",
+                color=0x00ff00
+            )
+            
+            if fixes['total_fixed'] > 0:
+                embed.add_field(
+                    name="🚀 Routes Restored",
+                    value=f"• Approach routes: {fixes['missing_approaches']}\n"
+                          f"• Arrival routes: {fixes['missing_arrivals']}\n"
+                          f"• Return departures: {fixes['missing_departures']}",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="✅ All Good",
+                    value="No missing local space routes found!",
+                    inline=False
+                )
+            
+            # Run corridor shift if requested
+            if reshift:
+                if shift_intensity < 1 or shift_intensity > 5:
+                    shift_intensity = 2
+                
+                embed.add_field(
+                    name="🌀 Running Corridor Shift",
+                    value=f"Executing intensity {shift_intensity} shift...",
+                    inline=False
+                )
+                
+                # Execute the shift
+                shift_results = await self._execute_corridor_shifts(shift_intensity)
+                
+                embed.add_field(
+                    name="📊 Shift Results",
+                    value=f"• Activated: {shift_results['activated']} corridors\n"
+                          f"• Deactivated: {shift_results['deactivated']} corridors\n"
+                          f"• New dormant: {shift_results['new_dormant']} corridors",
+                    inline=False
+                )
+            
+            # Check connectivity
+            connectivity_status = await self._analyze_connectivity_post_shift()
+            embed.add_field(
+                name="🌐 Connectivity Status",
+                value=connectivity_status,
+                inline=False
+            )
+            
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            print(f"Error in fix_routes: {str(e)}")
+            await interaction.followup.send(f"Error fixing routes: {str(e)}", ephemeral=True)
         
     @galaxy_group.command(name="shift_corridors", description="Trigger corridor shifts to change galaxy connectivity")
     @app_commands.describe(
@@ -2934,14 +3103,24 @@ class GalaxyGeneratorCog(commands.Cog):
             'affected_locations': set()
         }
         
-        # Get all corridors
+        # Get all corridors, EXCLUDING local space routes
         active_corridors = self.db.execute_query(
-            "SELECT corridor_id, name, origin_location, destination_location FROM corridors WHERE is_active = 1",
+            """SELECT corridor_id, name, origin_location, destination_location 
+               FROM corridors 
+               WHERE is_active = 1 
+               AND name NOT LIKE '%Approach%' 
+               AND name NOT LIKE '%Arrival%' 
+               AND name NOT LIKE '%Departure%'""",
             fetch='all'
         )
         
         dormant_corridors = self.db.execute_query(
-            "SELECT corridor_id, name, origin_location, destination_location FROM corridors WHERE is_active = 0",
+            """SELECT corridor_id, name, origin_location, destination_location 
+               FROM corridors 
+               WHERE is_active = 0
+               AND name NOT LIKE '%Approach%' 
+               AND name NOT LIKE '%Arrival%' 
+               AND name NOT LIKE '%Departure%'""",
             fetch='all'
         )
         
@@ -2978,13 +3157,19 @@ class GalaxyGeneratorCog(commands.Cog):
             results['affected_locations'].add(corridor[2])
             results['affected_locations'].add(corridor[3])
             print(f"🟢 Activated corridor: {corridor[1]}")
-        # Simulate gate movements during shifts
-        if intensity >= 3:  # Only move gates during significant shifts
-            gate_results = await self._simulate_gate_movements(intensity)
-            results.update(gate_results)
-        # Create new dormant corridors to maintain potential
-        await self._replenish_dormant_corridors(intensity)
-        results['new_dormant'] = intensity * 5  # Approximate count
+        
+        # Generate some new dormant corridors (with intensity scaling)
+        new_dormant_count = random.randint(0, intensity * 2)
+        await self._generate_dormant_corridors(new_dormant_count)
+        results['new_dormant'] = new_dormant_count
+        
+        # Update last shift timestamp for all affected corridors
+        self.db.execute_query(
+            "UPDATE corridors SET last_shift = datetime('now') WHERE corridor_id IN ({})".format(
+                ','.join('?' * len(corridors_to_deactivate + corridors_to_activate))
+            ),
+            [c[0] for c in corridors_to_deactivate + corridors_to_activate]
+        ) if corridors_to_deactivate + corridors_to_activate else None
         
         return results
 

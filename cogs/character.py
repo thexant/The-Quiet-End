@@ -7,6 +7,53 @@ from utils.location_utils import get_character_location_status
 from datetime import datetime
 import asyncio
 
+
+
+
+
+
+
+
+class RadioModal(discord.ui.Modal):
+    def __init__(self, bot):
+        super().__init__(title="📡 Radio Transmission")
+        self.bot = bot
+        
+        # Add message input field
+        self.message = discord.ui.TextInput(
+            label="Message to Transmit",
+            placeholder="Enter your radio message...",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=1000
+        )
+        self.add_item(self.message)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Get the RadioCog to use its existing logic
+        radio_cog = self.bot.get_cog('RadioCog')
+        if not radio_cog:
+            await interaction.response.send_message(
+                "Radio system unavailable.", 
+                ephemeral=True
+            )
+            return
+        
+        # Call the radio_send command's logic directly
+        await radio_cog.radio_send.callback(
+            radio_cog, 
+            interaction, 
+            self.message.value
+        )
+
+
+
+
+
+
+
+
+
 class CharacterCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -2845,6 +2892,31 @@ class CharacterPanelView(discord.ui.View):
         char_cog = self.bot.get_cog('CharacterCog')
         if char_cog:
             await char_cog.view_skills.callback(char_cog, interaction)
+    
+    @discord.ui.button(label="Radio", style=discord.ButtonStyle.primary, emoji="📡", row=1)
+    async def radio_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open radio transmission modal"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Check if character is logged in
+        char_data = self.bot.db.execute_query(
+            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data or not char_data[0]:
+            await interaction.response.send_message(
+                "You must be logged in to use the radio!",
+                ephemeral=True
+            )
+            return
+        
+        # Open the radio modal
+        modal = RadioModal(self.bot)
+        await interaction.response.send_modal(modal)
         
 async def setup(bot):
     await bot.add_cog(CharacterCog(bot))
