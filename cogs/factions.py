@@ -99,75 +99,75 @@ class FactionCreateModal(discord.ui.Modal, title="Create New Faction"):
         self.cog = cog
         self.user_id = user_id
     
-        async def on_submit(self, interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=True)
-            
-            # Check if user has enough credits
-            user_money = self.cog.db.execute_query(
-                "SELECT money FROM characters WHERE user_id = ?",
-                (self.user_id,),
-                fetch='one'
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        # Check if user has enough credits
+        user_money = self.cog.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not user_money or user_money[0] < 2500:
+            return await interaction.followup.send(
+                f"Creating a faction costs 2,500 credits! You only have {user_money[0] if user_money else 0:,} credits.",
+                ephemeral=True
             )
-            
-            if not user_money or user_money[0] < 2500:
-                return await interaction.followup.send(
-                    f"Creating a faction costs 2,500 credits! You only have {user_money[0] if user_money else 0:,} credits.",
-                    ephemeral=True
-                )
-            
-            # Just store whatever emoji they enter - Discord will handle it
-            emoji = self.faction_emoji.value.strip()
-            
-            # Check if name is unique
-            existing = self.cog.db.execute_query(
-                "SELECT faction_id FROM factions WHERE name = ?",
-                (self.faction_name.value,),
-                fetch='one'
-            )
-            
-            if existing:
-                return await interaction.followup.send("A faction with that name already exists!", ephemeral=True)
-            
-            # Parse public setting
-            is_public = 1 if self.is_public.value.lower() == 'yes' else 0
-            
-            # Create faction with initial bank balance of 2500
-            self.cog.db.execute_query(
-                '''INSERT INTO factions (name, emoji, description, leader_id, is_public, bank_balance) 
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (self.faction_name.value, emoji, self.faction_description.value, self.user_id, is_public, 2500)
-            )
-            
-            # Deduct credits from player
-            self.cog.db.execute_query(
-                "UPDATE characters SET money = money - 2500 WHERE user_id = ?",
-                (self.user_id,)
-            )
-            
-            faction_id = self.cog.db.execute_query(
-                "SELECT faction_id FROM factions WHERE leader_id = ? ORDER BY created_at DESC LIMIT 1",
-                (self.user_id,),
-                fetch='one'
-            )[0]
-            
-            # Add leader as member
-            self.cog.db.execute_query(
-                "INSERT INTO faction_members (faction_id, user_id) VALUES (?, ?)",
-                (faction_id, self.user_id)
-            )
-            
-            embed = discord.Embed(
-                title=f"{emoji} Faction Created!",
-                description=f"**{self.faction_name.value}** has been established!",
-                color=0x00ff00
-            )
-            embed.add_field(name="Description", value=self.faction_description.value, inline=False)
-            embed.add_field(name="Type", value="Public" if is_public else "Invite-Only", inline=True)
-            embed.add_field(name="Leader", value=interaction.user.mention, inline=True)
-            embed.add_field(name="Bank Balance", value="2,500 credits", inline=True)
-            embed.add_field(name="Creation Cost", value="2,500 credits (added to faction bank)", inline=False)
-            
-            await interaction.followup.send(embed=embed, ephemeral=True)
+        
+        # Just store whatever emoji they enter - Discord will handle it
+        emoji = self.faction_emoji.value.strip()
+        
+        # Check if name is unique
+        existing = self.cog.db.execute_query(
+            "SELECT faction_id FROM factions WHERE name = ?",
+            (self.faction_name.value,),
+            fetch='one'
+        )
+        
+        if existing:
+            return await interaction.followup.send("A faction with that name already exists!", ephemeral=True)
+        
+        # Parse public setting
+        is_public = 1 if self.is_public.value.lower() == 'yes' else 0
+        
+        # Create faction with initial bank balance of 2500
+        self.cog.db.execute_query(
+            '''INSERT INTO factions (name, emoji, description, leader_id, is_public, bank_balance) 
+               VALUES (?, ?, ?, ?, ?, ?)''',
+            (self.faction_name.value, emoji, self.faction_description.value, self.user_id, is_public, 2500)
+        )
+        
+        # Deduct credits from player
+        self.cog.db.execute_query(
+            "UPDATE characters SET money = money - 2500 WHERE user_id = ?",
+            (self.user_id,)
+        )
+        
+        faction_id = self.cog.db.execute_query(
+            "SELECT faction_id FROM factions WHERE leader_id = ? ORDER BY created_at DESC LIMIT 1",
+            (self.user_id,),
+            fetch='one'
+        )[0]
+        
+        # Add leader as member
+        self.cog.db.execute_query(
+            "INSERT INTO faction_members (faction_id, user_id) VALUES (?, ?)",
+            (faction_id, self.user_id)
+        )
+        
+        embed = discord.Embed(
+            title=f"{emoji} Faction Created!",
+            description=f"**{self.faction_name.value}** has been established!",
+            color=0x00ff00
+        )
+        embed.add_field(name="Description", value=self.faction_description.value, inline=False)
+        embed.add_field(name="Type", value="Public" if is_public else "Invite-Only", inline=True)
+        embed.add_field(name="Leader", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Bank Balance", value="2,500 credits", inline=True)
+        embed.add_field(name="Creation Cost", value="2,500 credits (added to faction bank)", inline=False)
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 class FactionsCog(commands.Cog):
     def __init__(self, bot):
