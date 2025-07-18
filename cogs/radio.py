@@ -695,7 +695,7 @@ class RadioCog(commands.Cog):
             return  # No valid members found
         
         channel = await channel_manager.get_or_create_location_channel(
-            guild, location_id, representative_member
+            guild, location_id, representative_member, name, description, wealth
         )
         
         if not channel:

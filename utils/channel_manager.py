@@ -119,7 +119,7 @@ class ChannelManager:
         
         return (base_name, base_name)
         
-    async def _create_location_channel(self, guild: discord.Guild, loc_id: int, loc_type: str, 
+    async def get_or_create_location_channel(self, guild: discord.Guild, loc_id: int, loc_type: str, 
                                     name: str, description: str, wealth: int,
                                     requesting_user: discord.Member = None) -> Optional[discord.TextChannel]:
         """
@@ -626,7 +626,7 @@ class ChannelManager:
         
         return f"{type_prefix}-{safe_name}"
     
-    async def _get_or_create_location_category(self, guild: discord.Guild, location_type: str) -> Optional[discord.CategoryChannel]:
+    async def get_or_create_location_category(self, guild: discord.Guild, location_type: str) -> Optional[discord.CategoryChannel]:
         """
         Get configured category for location type from server config
         """
@@ -1808,7 +1808,7 @@ class ChannelManager:
 
         # First, ensure the channel exists and user has access
         # FIX: Pass the correct arguments in the correct order
-        channel = await self.get_or_create_location_channel(user.guild, location_id, user)
+        channel = await self.get_or_create_location_channel(user.guild, location_id, user, name, description, wealth)
         if not channel:
             print(f"❌ Failed to create/access channel for location {location_id}")
             return False
