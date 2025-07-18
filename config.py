@@ -6,11 +6,15 @@ Modify these values to customize your server experience
 
 # Bot Configuration
 BOT_CONFIG = {
-    'token': 'YOUR_BOT_TOKEN',  # REPLACE WITH YOUR ACTUAL TOKEN OR USE ENVIRONMENT VARIABLE
+    'token': 'YOUR_TOKEN_HERE',  # REPLACE WITH YOUR ACTUAL TOKEN OR USE ENVIRONMENT VARIABLE
     'command_prefix': '!',           # Prefix for text commands (slash commands don't use this)
     'description': 'A 27th century space RPG bot',
     'activity_name': 'The Stars',  # Bot status message
 }
+
+
+ALLOWED_GUILD_ID = 1234567890
+
 
 # Galaxy Generation Settings
 GALAXY_CONFIG = {
