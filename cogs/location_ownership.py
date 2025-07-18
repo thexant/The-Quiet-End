@@ -6,6 +6,95 @@ import random
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 
+
+class FactionPurchaseConfirmView(discord.ui.View):
+    def __init__(self, bot, user_id: int, location_id: int, faction_id: int, price: int):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.faction_id = faction_id
+        self.price = price
+    
+    @discord.ui.button(label="Confirm Purchase", style=discord.ButtonStyle.success, emoji="💰")
+    async def confirm_purchase(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't for you!", ephemeral=True)
+        
+        # Get current funds
+        funds = self.bot.db.execute_query(
+            '''SELECT c.money, f.bank_balance
+               FROM characters c
+               JOIN faction_members fm ON c.user_id = fm.user_id
+               JOIN factions f ON fm.faction_id = f.faction_id
+               WHERE c.user_id = ? AND f.faction_id = ?''',
+            (self.user_id, self.faction_id),
+            fetch='one'
+        )
+        
+        if not funds:
+            return await interaction.response.send_message("Error: Faction data not found!", ephemeral=True)
+        
+        personal_money, faction_bank = funds
+        
+        # Deduct from faction bank first, then personal
+        remaining_cost = self.price
+        faction_deduct = min(faction_bank or 0, remaining_cost)
+        remaining_cost -= faction_deduct
+        personal_deduct = remaining_cost
+        
+        if personal_money < personal_deduct:
+            return await interaction.response.send_message("Insufficient funds!", ephemeral=True)
+        
+        # Process purchase
+        if faction_deduct > 0:
+            self.bot.db.execute_query(
+                "UPDATE factions SET bank_balance = bank_balance - ? WHERE faction_id = ?",
+                (faction_deduct, self.faction_id)
+            )
+        
+        if personal_deduct > 0:
+            self.bot.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (personal_deduct, self.user_id)
+            )
+        
+        # Set ownership
+        self.bot.db.execute_query(
+            '''INSERT INTO location_ownership (location_id, faction_id, purchase_price, ownership_type)
+               VALUES (?, ?, ?, 'faction')''',
+            (self.location_id, self.faction_id, self.price)
+        )
+        
+        # Get location name
+        location_name = self.bot.db.execute_query(
+            "SELECT name FROM locations WHERE location_id = ?",
+            (self.location_id,),
+            fetch='one'
+        )[0]
+        
+        embed = discord.Embed(
+            title="✅ Location Purchased!",
+            description=f"Your faction now owns **{location_name}**!",
+            color=0x00ff00
+        )
+        embed.add_field(name="Total Cost", value=f"{self.price:,} credits", inline=True)
+        embed.add_field(name="From Faction Bank", value=f"{faction_deduct:,} credits", inline=True)
+        embed.add_field(name="From Personal", value=f"{personal_deduct:,} credits", inline=True)
+        
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
+    async def cancel_purchase(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't for you!", ephemeral=True)
+        
+        await interaction.response.edit_message(content="Purchase cancelled.", embed=None, view=None)
+        self.stop()
+
+
+
 class LocationOwnershipCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -51,7 +140,9 @@ class LocationOwnershipCog(commands.Cog):
                 'base_cost': 20000
             }
         }
-
+        
+    location_group = app_commands.Group(name="location", description="Location management commands")
+    
     def calculate_purchase_price(self, location_data: tuple) -> Optional[int]:
         """Calculate the purchase price for a location"""
         location_id, name, location_type, wealth_level, population, is_derelict = location_data
@@ -81,7 +172,7 @@ class LocationOwnershipCog(commands.Cog):
         
         return base_upkeep
 
-    @app_commands.command(name="location_info", description="View detailed information about current location")
+    @location_group.command(name="ownership_info", description="View detailed information about current location")
     async def location_info(self, interaction: discord.Interaction):
         # Get character's current location
         char_data = self.db.execute_query(
@@ -99,11 +190,11 @@ class LocationOwnershipCog(commands.Cog):
         location_data = self.db.execute_query(
             '''SELECT l.name, l.location_type, l.wealth_level, l.population, l.is_derelict, 
                       l.description, lo.owner_id, lo.custom_name, lo.custom_description,
-                      c.name as owner_name, g.name as group_name
+                      c.name as owner_name, f.faction_id, f.name as faction_name, f.emoji as faction_emoji
                FROM locations l
                LEFT JOIN location_ownership lo ON l.location_id = lo.location_id
                LEFT JOIN characters c ON lo.owner_id = c.user_id
-               LEFT JOIN groups g ON lo.group_id = g.group_id
+               LEFT JOIN factions f ON lo.faction_id = f.faction_id
                WHERE l.location_id = ?''',
             (location_id,),
             fetch='one'
@@ -113,7 +204,8 @@ class LocationOwnershipCog(commands.Cog):
             return await interaction.response.send_message("Location not found!", ephemeral=True)
         
         (name, location_type, wealth_level, population, is_derelict, description, 
-         owner_id, custom_name, custom_description, owner_name, group_name) = location_data
+        owner_id, custom_name, custom_description, owner_name, faction_id, 
+        faction_name, faction_emoji) = location_data
         
         # Create embed
         display_name = custom_name or name
@@ -129,14 +221,11 @@ class LocationOwnershipCog(commands.Cog):
         embed.add_field(name="Population", value=f"{population:,}", inline=True)
         
         # Ownership info
-        if owner_id:
-            if owner_id == interaction.user.id:
-                embed.add_field(name="Ownership", value="**You own this location!**", inline=False)
-            else:
-                owner_text = f"Owned by **{owner_name}**"
-                if group_name:
-                    owner_text += f" ({group_name})"
-                embed.add_field(name="Ownership", value=owner_text, inline=False)
+        if faction_id:
+            ownership_text = f"{faction_emoji} **{faction_name}**"
+            if owner_id and owner_id == interaction.user.id:
+                ownership_text += " (Your faction owns this!)"
+            embed.add_field(name="Controlled By", value=ownership_text, inline=False)
             
             # Show upgrades if owned
             upgrades = self.db.execute_query(
@@ -169,13 +258,15 @@ class LocationOwnershipCog(commands.Cog):
         view = LocationOwnershipView(self.bot, interaction.user.id, location_id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @app_commands.command(name="purchase_location", description="Purchase or claim the current location")
+    @location_group.command(name="purchase", description="Purchase or claim the current location")
     async def purchase_location(self, interaction: discord.Interaction):
         # Get character data
         char_data = self.db.execute_query(
-            '''SELECT c.current_location, c.money, ce.level
+            '''SELECT c.current_location, c.money, c.level, fm.faction_id, f.name as faction_name, 
+                      f.emoji, f.leader_id, f.bank_balance
                FROM characters c
-               LEFT JOIN character_experience ce ON c.user_id = ce.user_id
+               LEFT JOIN faction_members fm ON c.user_id = fm.user_id
+               LEFT JOIN factions f ON fm.faction_id = f.faction_id
                WHERE c.user_id = ?''',
             (interaction.user.id,),
             fetch='one'
@@ -184,10 +275,37 @@ class LocationOwnershipCog(commands.Cog):
         if not char_data:
             return await interaction.response.send_message("Character not found!", ephemeral=True)
         
-        location_id, money, level = char_data
+        location_id, money, level, faction_id, faction_name, faction_emoji, leader_id, faction_bank = char_data
         level = level or 1
         
-        # Check if player already owns a location of this type
+        # Check faction membership
+        if not faction_id:
+            # Show faction creation prompt
+            embed = discord.Embed(
+                title="🏛️ Faction Required",
+                description="You must create or join a faction before purchasing locations!",
+                color=0xff6b6b
+            )
+            embed.add_field(
+                name="Create a Faction",
+                value="Use `/faction create` to establish your own faction",
+                inline=False
+            )
+            embed.add_field(
+                name="Join a Faction", 
+                value="Use `/faction join` if you have an invitation or there are public factions nearby",
+                inline=False
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+        # Check if user is faction leader
+        if leader_id != interaction.user.id:
+            return await interaction.response.send_message(
+                f"Only the faction leader can purchase locations! Ask your leader to buy this location for {faction_name}.",
+                ephemeral=True
+            )
+        
+        # Get location data
         location_data = self.db.execute_query(
             '''SELECT l.location_type, l.name, l.wealth_level, l.population, l.is_derelict
                FROM locations l
@@ -203,7 +321,7 @@ class LocationOwnershipCog(commands.Cog):
         
         # Check if already owned
         existing_owner = self.db.execute_query(
-            "SELECT owner_id FROM location_ownership WHERE location_id = ?",
+            "SELECT faction_id, owner_id FROM location_ownership WHERE location_id = ?",
             (location_id,),
             fetch='one'
         )
@@ -211,48 +329,152 @@ class LocationOwnershipCog(commands.Cog):
         if existing_owner:
             return await interaction.response.send_message("This location is already owned!", ephemeral=True)
         
-        # Check if location is purchasable
+        # Check if location is purchasable (exclude loyalist/outlaw)
+        if location_type in ['loyalist', 'outlaw']:
+            return await interaction.response.send_message("This location type cannot be purchased!", ephemeral=True)
+        
+        # Calculate purchase price
         purchase_price = self.calculate_purchase_price((location_id, name, location_type, wealth_level, population, is_derelict))
         if not purchase_price:
             return await interaction.response.send_message("This location is not available for purchase.", ephemeral=True)
         
-        # Check level requirement for wealthy locations
+        # Check level requirement
         if not is_derelict and level < 10:
             return await interaction.response.send_message("You need to be at least level 10 to purchase economically distressed locations.", ephemeral=True)
         
-        # Check if player already owns this type of location
-        existing_ownership = self.db.execute_query(
-            '''SELECT l.location_type FROM location_ownership lo
-               JOIN locations l ON lo.location_id = l.location_id
-               WHERE lo.owner_id = ? AND l.location_type = ?''',
-            (interaction.user.id, location_type),
+        # Check if can afford (personal + faction bank)
+        total_available = money + (faction_bank or 0)
+        if total_available < purchase_price:
+            return await interaction.response.send_message(
+                f"Insufficient funds! Need {purchase_price:,} credits.\n"
+                f"Personal: {money:,} | Faction Bank: {faction_bank or 0:,} | Total: {total_available:,}",
+                ephemeral=True
+            )
+        
+        # Show purchase confirmation
+        embed = discord.Embed(
+            title=f"{faction_emoji} Purchase Location: {name}",
+            description=f"Buy this location for **{faction_name}**?",
+            color=0x00ff00
+        )
+        embed.add_field(name="Location Type", value=location_type.replace('_', ' ').title(), inline=True)
+        embed.add_field(name="Wealth Level", value=f"{wealth_level}/10", inline=True)
+        embed.add_field(name="Population", value=f"{population:,}", inline=True)
+        embed.add_field(name="Purchase Price", value=f"{purchase_price:,} credits", inline=True)
+        embed.add_field(name="Your Balance", value=f"{money:,} credits", inline=True)
+        embed.add_field(name="Faction Bank", value=f"{faction_bank or 0:,} credits", inline=True)
+        
+        view = FactionPurchaseConfirmView(self.bot, interaction.user.id, location_id, faction_id, purchase_price)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @location_group.command(name="rename", description="Rename a location owned by your faction")
+    @app_commands.describe(new_name="New name for the location")
+    async def rename_location(self, interaction: discord.Interaction, new_name: str):
+        if len(new_name) < 3 or len(new_name) > 50:
+            return await interaction.response.send_message("Name must be 3-50 characters!", ephemeral=True)
+        
+        # Get user's faction and current location
+        data = self.db.execute_query(
+            '''SELECT c.current_location, fm.faction_id, f.leader_id, lo.ownership_id
+               FROM characters c
+               LEFT JOIN faction_members fm ON c.user_id = fm.user_id
+               LEFT JOIN factions f ON fm.faction_id = f.faction_id
+               LEFT JOIN location_ownership lo ON c.current_location = lo.location_id AND lo.faction_id = f.faction_id
+               WHERE c.user_id = ?''',
+            (interaction.user.id,),
             fetch='one'
         )
         
-        if existing_ownership:
-            return await interaction.response.send_message(f"You already own a {location_type.replace('_', ' ')}! You can only own one location of each type.", ephemeral=True)
+        if not data:
+            return await interaction.response.send_message("Character not found!", ephemeral=True)
         
-        # Check if player can afford it
-        if money < purchase_price:
-            return await interaction.response.send_message(f"Insufficient funds! You need {purchase_price:,} credits but have {money:,}.", ephemeral=True)
+        location_id, faction_id, leader_id, ownership_id = data
         
-        # Create confirmation embed
-        action = "Claim" if is_derelict else "Purchase"
-        embed = discord.Embed(
-            title=f"{action} Location: {name}",
-            description=f"Are you sure you want to {action.lower()} this {location_type.replace('_', ' ')} for {purchase_price:,} credits?",
-            color=0xffa500
+        if not faction_id:
+            return await interaction.response.send_message("You're not in a faction!", ephemeral=True)
+        
+        if leader_id != interaction.user.id:
+            return await interaction.response.send_message("Only faction leaders can rename locations!", ephemeral=True)
+        
+        if not ownership_id:
+            return await interaction.response.send_message("Your faction doesn't own this location!", ephemeral=True)
+        
+        # Update the custom name
+        self.db.execute_query(
+            "UPDATE location_ownership SET custom_name = ? WHERE ownership_id = ?",
+            (new_name, ownership_id)
         )
         
-        embed.add_field(name="Type", value=location_type.replace('_', ' ').title(), inline=True)
-        embed.add_field(name="Wealth Level", value=f"{wealth_level}/10", inline=True)
-        embed.add_field(name="Population", value=f"{population:,}", inline=True)
-        embed.add_field(name="Monthly Upkeep", value="1,000 credits (base)", inline=True)
+        await interaction.response.send_message(f"Location renamed to **{new_name}**!", ephemeral=True)
+    
+    @location_group.command(name="set_sales_tax", description="Set sales tax for shops at faction locations")
+    @app_commands.describe(percentage="Tax percentage (0-25)")
+    async def set_sales_tax(self, interaction: discord.Interaction, percentage: int):
+        if percentage < 0 or percentage > 25:
+            return await interaction.response.send_message("Tax must be between 0-25%!", ephemeral=True)
         
-        view = PurchaseConfirmationView(self.bot, interaction.user.id, location_id, purchase_price)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-    @app_commands.command(name="upgrade_location", description="Upgrade one of your owned locations")
+        # Get user's faction and current location
+        data = self.db.execute_query(
+            '''SELECT c.current_location, fm.faction_id, f.leader_id, f.name, lo.ownership_id
+               FROM characters c
+               LEFT JOIN faction_members fm ON c.user_id = fm.user_id
+               LEFT JOIN factions f ON fm.faction_id = f.faction_id
+               LEFT JOIN location_ownership lo ON c.current_location = lo.location_id AND lo.faction_id = f.faction_id
+               WHERE c.user_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not data:
+            return await interaction.response.send_message("Character not found!", ephemeral=True)
+        
+        location_id, faction_id, leader_id, faction_name, ownership_id = data
+        
+        if not faction_id:
+            return await interaction.response.send_message("You're not in a faction!", ephemeral=True)
+        
+        if leader_id != interaction.user.id:
+            return await interaction.response.send_message("Only faction leaders can set sales tax!", ephemeral=True)
+        
+        if not ownership_id:
+            return await interaction.response.send_message("Your faction doesn't own this location!", ephemeral=True)
+        
+        # Update or insert tax rate
+        existing = self.db.execute_query(
+            "SELECT tax_id FROM faction_sales_tax WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if existing:
+            self.db.execute_query(
+                "UPDATE faction_sales_tax SET tax_percentage = ? WHERE location_id = ?",
+                (percentage, location_id)
+            )
+        else:
+            self.db.execute_query(
+                "INSERT INTO faction_sales_tax (faction_id, location_id, tax_percentage) VALUES (?, ?, ?)",
+                (faction_id, location_id, percentage)
+            )
+        
+        embed = discord.Embed(
+            title="💰 Sales Tax Updated",
+            description=f"Sales tax at this location is now **{percentage}%**",
+            color=0x00ff00
+        )
+        if percentage > 0:
+            embed.add_field(
+                name="Effect",
+                value=f"All shop items will cost {percentage}% more, with profits going to {faction_name}'s bank",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    
+    
+    
+    @location_group.command(name="upgrade", description="Upgrade one of your owned locations")
     async def upgrade_location(self, interaction: discord.Interaction):
         # Get user's owned locations
         owned_locations = self.db.execute_query(
@@ -664,3 +886,6 @@ class UpgradeButton(discord.ui.Button):
 
 async def setup(bot):
     await bot.add_cog(LocationOwnershipCog(bot))
+    
+    
+    

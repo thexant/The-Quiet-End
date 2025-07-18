@@ -599,7 +599,29 @@ class EconomyCog(commands.Cog):
         
         item_id, actual_name, price, stock, description, item_type = item
         total_cost = price * quantity
-        
+        tax_data = self.db.execute_query(
+            '''SELECT fst.tax_percentage, f.faction_id, f.name
+               FROM faction_sales_tax fst
+               JOIN factions f ON fst.faction_id = f.faction_id
+               WHERE fst.location_id = ?''',
+            (current_location,),
+            fetch='one'
+        )
+
+        final_price = base_price
+        tax_amount = 0
+        if tax_data and tax_data[0] > 0:
+            tax_amount = int(base_price * tax_data[0] / 100)
+            final_price = base_price + tax_amount
+
+        # When processing purchase (after deducting money), ADD:
+        if tax_amount > 0:
+            self.db.execute_query(
+                "UPDATE factions SET bank_balance = bank_balance + ? WHERE faction_id = ?",
+                (tax_amount, tax_data[1])
+            )
+
+
         if current_money < total_cost:
             await interaction.response.send_message(
                 f"Insufficient credits! Need {total_cost:,}, have {current_money:,}.",
@@ -644,6 +666,13 @@ class EconomyCog(commands.Cog):
             description=f"Bought {quantity}x **{actual_name}** for {total_cost:,} credits",
             color=0x00ff00
         )
+        # In the purchase confirmation embed, ADD:
+        if tax_amount > 0:
+            embed.add_field(
+                name="Sales Tax",
+                value=f"{tax_data[0]}% ({tax_amount:,} credits to {tax_data[2]})",
+                inline=False
+            )
         embed.add_field(name="Remaining Credits", value=f"{current_money - total_cost:,}", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -709,7 +738,29 @@ class EconomyCog(commands.Cog):
         )
 
         total_earnings = final_sell_price * quantity
+        seller_faction = self.db.execute_query(
+            '''SELECT fm.faction_id, f.name, f.emoji,
+                      CASE WHEN lo.faction_id = fm.faction_id THEN 1 ELSE 0 END as is_faction_location
+               FROM faction_members fm
+               JOIN factions f ON fm.faction_id = f.faction_id
+               LEFT JOIN location_ownership lo ON lo.location_id = ?
+               WHERE fm.user_id = ?''',
+            (current_location, interaction.user.id),
+            fetch='one'
+        )
 
+        if seller_faction and not seller_faction[3]:  # Not in faction territory
+            # 3% bonus to faction bank for external trade
+            trade_bonus = int(total_earnings * 0.03)
+            self.db.execute_query(
+                "UPDATE factions SET bank_balance = bank_balance + ? WHERE faction_id = ?",
+                (trade_bonus, seller_faction[0])
+            )
+            embed.add_field(
+                name="Trade Bonus",
+                value=f"{seller_faction[2]} +{trade_bonus:,} credits to {seller_faction[1]}",
+                inline=False
+            )
         # Add economic status message
         status_message = ""
         if status == 'in_demand':
@@ -770,6 +821,7 @@ class EconomyCog(commands.Cog):
             description=f"Sold {quantity}x **{actual_name}** for {total_earnings:,} credits",
             color=0x00ff00
         )
+
         embed.add_field(name="Price per Item", value=f"{final_sell_price:,} credits", inline=True)
         embed.add_field(name="New Balance", value=f"{current_money + total_earnings:,} credits", inline=True)
         
@@ -1481,7 +1533,27 @@ class EconomyCog(commands.Cog):
             "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
             (exp_gain, interaction.user.id)
         )
-        
+        faction_data = self.db.execute_query(
+            '''SELECT f.faction_id, f.name, f.emoji
+               FROM faction_members fm
+               JOIN factions f ON fm.faction_id = f.faction_id
+               WHERE fm.user_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+
+        if faction_data:
+            # 5% bonus goes to faction bank
+            faction_bonus = int(reward * 0.05)
+            self.db.execute_query(
+                "UPDATE factions SET bank_balance = bank_balance + ? WHERE faction_id = ?",
+                (faction_bonus, faction_data[0])
+            )
+            embed.add_field(
+                name="Faction Contribution",
+                value=f"{faction_data[2]} +{faction_bonus:,} credits to {faction_data[1]}",
+                inline=False
+            )
         # Create the response embed
         embed = discord.Embed(
             title="✅ Job Completed Successfully!",

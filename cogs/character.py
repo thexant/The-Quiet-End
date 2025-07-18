@@ -1405,7 +1405,40 @@ class CharacterCog(commands.Cog):
                             await member.send(f"📢 **{char_name}** from your group **{group_name}** has come online!")
                         except:
                             pass
-        
+            async def check_faction_payouts(self, interaction: discord.Interaction, user_id: int):
+                pending_payouts = self.db.execute_query(
+                    '''SELECT p.amount, f.name, f.emoji
+                       FROM faction_payouts p
+                       JOIN factions f ON p.faction_id = f.faction_id
+                       WHERE p.user_id = ? AND p.collected = 0''',
+                    (user_id,),
+                    fetch='all'
+                )
+                
+                if pending_payouts:
+                    total_payout = sum(payout[0] for payout in pending_payouts)
+                    
+                    # Add to character's money
+                    self.db.execute_query(
+                        "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                        (total_payout, user_id)
+                    )
+                    
+                    # Mark as collected
+                    self.db.execute_query(
+                        "UPDATE faction_payouts SET collected = 1 WHERE user_id = ? AND collected = 0",
+                        (user_id,)
+                    )
+                    
+                    # Send notification
+                    payout_text = "\n".join([f"{p[2]} {p[1]}: {p[0]:,} credits" for p in pending_payouts])
+                    embed = discord.Embed(
+                        title="💰 Faction Payout Received!",
+                        description=f"You received faction payouts while you were away:\n\n{payout_text}\n\nTotal: {total_payout:,} credits",
+                        color=0x00ff00
+                    )
+                    
+                    await interaction.followup.send(embed=embed, ephemeral=True)
         # Update activity tracker
         if hasattr(self.bot, 'activity_tracker'):
             self.bot.activity_tracker.update_activity(interaction.user.id)
@@ -1612,7 +1645,7 @@ class CharacterCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             await interaction.followup.send(embed=embed, ephemeral=True)
-
+    
     async def _execute_auto_logout(self, user_id: int, reason: str):
         """Execute automatic logout (called by activity tracker)"""
         char_data = self.db.execute_query(

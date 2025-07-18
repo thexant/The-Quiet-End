@@ -1,0 +1,610 @@
+# cogs/homes.py
+import discord
+from discord.ext import commands
+from discord import app_commands
+from typing import Optional, List, Dict
+import math
+import asyncio
+from datetime import datetime
+
+# Note: Import the home activities after creating the util file
+try:
+    from utils.home_activities import HomeActivityManager, HomeActivityView
+except ImportError:
+    print("Warning: home_activities.py not found in utils folder")
+    HomeActivityManager = None
+    HomeActivityView = None
+
+class HomeBuyView(discord.ui.View):
+    """View for home purchase confirmation"""
+    
+    def __init__(self, homes: List[Dict], buyer_id: int, bot):
+        super().__init__(timeout=60)
+        self.homes = homes
+        self.buyer_id = buyer_id
+        self.bot = bot
+        self.db = bot.db
+        
+        # Create select menu
+        options = []
+        for home in homes[:25]:  # Discord limit
+            options.append(discord.SelectOption(
+                label=home['home_name'],
+                value=str(home['home_id']),
+                description=f"{home['price']:,} credits",
+                emoji="🏠"
+            ))
+        
+        self.select = discord.ui.Select(
+            placeholder="Select a home to purchase",
+            options=options
+        )
+        self.select.callback = self.select_callback
+        self.add_item(self.select)
+    
+    async def select_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.buyer_id:
+            await interaction.response.send_message("This isn't your purchase menu!", ephemeral=True)
+            return
+        
+        home_id = int(self.select.values[0])
+        home = next((h for h in self.homes if h['home_id'] == home_id), None)
+        
+        if not home:
+            await interaction.response.send_message("Home not found!", ephemeral=True)
+            return
+        
+        # Show confirmation
+        embed = discord.Embed(
+            title="🏠 Confirm Home Purchase",
+            description=f"**{home['home_name']}**\n{home['interior_description']}",
+            color=0x2F4F4F
+        )
+        embed.add_field(name="Price", value=f"{home['price']:,} credits", inline=True)
+        embed.add_field(name="Location", value=home['location_name'], inline=True)
+        
+        confirm_view = ConfirmPurchaseView(home, self.buyer_id, self.bot)
+        await interaction.response.edit_message(embed=embed, view=confirm_view)
+
+
+class ConfirmPurchaseView(discord.ui.View):
+    """Confirmation view for home purchase"""
+    
+    def __init__(self, home: Dict, buyer_id: int, bot):
+        super().__init__(timeout=30)
+        self.home = home
+        self.buyer_id = buyer_id
+        self.bot = bot
+        self.db = bot.db
+    
+    @discord.ui.button(label="Confirm Purchase", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.buyer_id:
+            await interaction.response.send_message("This isn't your purchase!", ephemeral=True)
+            return
+        
+        # Check money again
+        money = self.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (self.buyer_id,),
+            fetch='one'
+        )[0]
+        
+        if money < self.home['price']:
+            await interaction.response.edit_message(
+                content="Insufficient funds!",
+                embed=None,
+                view=None
+            )
+            return
+        
+        # Process purchase
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (self.home['price'], self.buyer_id)
+        )
+        
+        self.db.execute_query(
+            '''UPDATE location_homes 
+               SET owner_id = ?, purchase_date = CURRENT_TIMESTAMP, is_available = 0
+               WHERE home_id = ?''',
+            (self.buyer_id, self.home['home_id'])
+        )
+        
+
+        embed = discord.Embed(
+            title="🏠 Home Purchased!",
+            description=f"You are now the owner of **{self.home['home_name']}**!",
+            color=0x00ff00
+        )
+        embed.add_field(
+            name="Next Steps",
+            value="• Use `/home interior enter` to enter your home\n• Use `/homes view` to see all your properties",
+            inline=False
+        )
+        await self.initialize_home_features(home_id, home_type)
+        await interaction.response.edit_message(embed=embed, view=None)
+    
+    async def initialize_home_features(self, home_id: int, home_type: str):
+        """Initialize storage and other features for newly purchased home"""
+        # Set storage capacity based on home type
+        storage_capacity = {
+            'Luxury Suite': 150,
+            'House': 100,
+            'Apartment': 75,
+            'Room': 50
+        }.get(home_type, 50)
+        
+        self.db.execute_query(
+            "UPDATE location_homes SET storage_capacity = ? WHERE home_id = ?",
+            (storage_capacity, home_id)
+        )
+        
+        # Initialize customization with defaults
+        self.db.execute_query(
+            '''INSERT INTO home_customizations 
+               (home_id, wall_color, floor_type, lighting_style, furniture_style, ambiance)
+               VALUES (?, 'Beige', 'Standard Tile', 'Standard', 'Basic', 'Cozy')''',
+            (home_id,)
+        )
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.buyer_id:
+            await interaction.response.send_message("This isn't your purchase!", ephemeral=True)
+            return
+        
+        await interaction.response.edit_message(
+            content="Purchase cancelled.",
+            embed=None,
+            view=None
+        )
+
+
+class HomeWarpView(discord.ui.View):
+    """View for warping to owned homes"""
+    
+    def __init__(self, homes: List[Dict], user_id: int, current_location: int, bot):
+        super().__init__(timeout=60)
+        self.homes = homes
+        self.user_id = user_id
+        self.current_location = current_location
+        self.bot = bot
+        self.db = bot.db
+        
+        # Create select menu
+        options = []
+        for home in homes[:25]:
+            # Calculate distance-based fee
+            distance = self._calculate_distance(current_location, home['location_id'])
+            fee = min(100, int(distance * 5))
+            
+            options.append(discord.SelectOption(
+                label=home['home_name'],
+                value=f"{home['home_id']}|{fee}",
+                description=f"{home['location_name']} - {fee} credits",
+                emoji="🏠"
+            ))
+        
+        self.select = discord.ui.Select(
+            placeholder="Select a home to warp to",
+            options=options
+        )
+        self.select.callback = self.select_callback
+        self.add_item(self.select)
+    
+    def _calculate_distance(self, loc1: int, loc2: int) -> int:
+        """Simple distance calculation based on location IDs"""
+        return abs(loc1 - loc2)
+    
+    async def select_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your warp menu!", ephemeral=True)
+            return
+        
+        home_id, fee = self.select.values[0].split('|')
+        home_id = int(home_id)
+        fee = int(fee)
+        
+        # Check money
+        money = self.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )[0]
+        
+        if money < fee:
+            await interaction.response.edit_message(
+                content=f"Insufficient funds! You need {fee} credits for transit.",
+                view=None
+            )
+            return
+        
+        # Process warp
+        home = next((h for h in self.homes if h['home_id'] == home_id), None)
+        
+        # Deduct fee
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (fee, self.user_id)
+        )
+        
+        # Update location
+        self.db.execute_query(
+            "UPDATE characters SET current_location = ?, location_status = 'docked' WHERE user_id = ?",
+            (home['location_id'], self.user_id)
+        )
+        
+        # Handle channel access
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        
+        # Remove from current location
+        if self.current_location:
+            await channel_manager.remove_user_location_access(interaction.user, self.current_location)
+        
+        # Give access to home location
+        await channel_manager.give_user_location_access(interaction.user, home['location_id'])
+        
+        # Auto-enter home
+        await interaction.response.defer()
+        
+        # Create home interior thread
+        location_channel = interaction.guild.get_channel(
+            self.db.execute_query(
+                "SELECT channel_id FROM locations WHERE location_id = ?",
+                (home['location_id'],),
+                fetch='one'
+            )[0]
+        )
+        
+        if location_channel:
+            # Get home interior creation from the cog
+            cog = self.bot.get_cog('HomesCog')
+            if cog:
+                thread = await cog._get_or_create_home_interior(
+                    interaction.guild,
+                    location_channel,
+                    home_id,
+                    home['home_name'],
+                    self.db.execute_query(
+                        "SELECT interior_description FROM location_homes WHERE home_id = ?",
+                        (home_id,),
+                        fetch='one'
+                    )[0],
+                    interaction.user
+                )
+            
+            embed = discord.Embed(
+                title="🏠 Warped Home!",
+                description=f"You've been transported to **{home['home_name']}** in {home['location_name']}.",
+                color=0x00ff00
+            )
+            embed.add_field(
+                name="Transit Fee",
+                value=f"{fee} credits",
+                inline=True
+            )
+            
+            if thread:
+                embed.add_field(
+                    name="Home Interior",
+                    value=f"You've entered your home at {thread.mention}",
+                    inline=False
+                )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+class HomeSellView(discord.ui.View):
+    """View for confirming direct home sale"""
+    
+    def __init__(self, seller_id: int, buyer: discord.Member, home: Dict, price: int, bot):
+        super().__init__(timeout=300)  # 5 minutes
+        self.seller_id = seller_id
+        self.buyer = buyer
+        self.home = home
+        self.price = price
+        self.bot = bot
+        self.db = bot.db
+        self.responded = False
+    
+    @discord.ui.button(label="Accept Purchase", style=discord.ButtonStyle.success, emoji="✅")
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.buyer.id:
+            await interaction.response.send_message("This offer isn't for you!", ephemeral=True)
+            return
+        
+        if self.responded:
+            await interaction.response.send_message("This offer has already been responded to!", ephemeral=True)
+            return
+        
+        # Check buyer's money
+        buyer_money = self.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (self.buyer.id,),
+            fetch='one'
+        )[0]
+        
+        if buyer_money < self.price:
+            await interaction.response.edit_message(
+                content="Purchase failed - insufficient funds!",
+                view=None
+            )
+            self.responded = True
+            return
+        
+        # Check buyer's home limit
+        owned_homes = self.db.execute_query(
+            "SELECT COUNT(*) FROM location_homes WHERE owner_id = ?",
+            (self.buyer.id,),
+            fetch='one'
+        )[0]
+        
+        if owned_homes >= 5:
+            await interaction.response.edit_message(
+                content="Purchase failed - you already own 5 homes (maximum)!",
+                view=None
+            )
+            self.responded = True
+            return
+        
+        # Process transaction
+        # Transfer money
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (self.price, self.buyer.id)
+        )
+        self.db.execute_query(
+            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            (self.price, self.seller_id)
+        )
+        
+        # Transfer ownership
+        self.db.execute_query(
+            '''UPDATE location_homes 
+               SET owner_id = ?, purchase_date = CURRENT_TIMESTAMP
+               WHERE home_id = ?''',
+            (self.buyer.id, self.home['home_id'])
+        )
+        
+        # Remove from market if listed
+        self.db.execute_query(
+            "UPDATE home_market_listings SET is_active = 0 WHERE home_id = ?",
+            (self.home['home_id'],)
+        )
+        
+        self.responded = True
+        
+        embed = discord.Embed(
+            title="🏠 Home Purchased!",
+            description=f"You've successfully purchased **{self.home['home_name']}** for {self.price:,} credits!",
+            color=0x00ff00
+        )
+        
+        await interaction.response.edit_message(embed=embed, view=None)
+        
+        # Notify seller
+        try:
+            seller = interaction.guild.get_member(self.seller_id)
+            if seller:
+                await seller.send(
+                    f"Your home **{self.home['home_name']}** has been sold to {self.buyer.display_name} for {self.price:,} credits!"
+                )
+        except:
+            pass
+    
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger, emoji="❌")
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.buyer.id:
+            await interaction.response.send_message("This offer isn't for you!", ephemeral=True)
+            return
+        
+        if self.responded:
+            await interaction.response.send_message("This offer has already been responded to!", ephemeral=True)
+            return
+        
+        self.responded = True
+        await interaction.response.edit_message(
+            content="Purchase offer declined.",
+            view=None
+        )
+        
+        # Notify seller
+        try:
+            seller = interaction.guild.get_member(self.seller_id)
+            if seller:
+                await seller.send(
+                    f"{self.buyer.display_name} has declined your offer to sell **{self.home['home_name']}**."
+                )
+        except:
+            pass
+
+
+class HomesCog(commands.Cog):
+    """Home ownership and management system"""
+    
+    def __init__(self, bot):
+        self.bot = bot
+        self.db = bot.db
+    
+    homes_group = app_commands.Group(name="homes", description="View homes information")
+    
+
+    
+    @homes_group.command(name="view", description="View your owned homes or another player's homes")
+    @app_commands.describe(player="The player whose homes to view (leave empty for your own)")
+    async def view_homes(self, interaction: discord.Interaction, player: Optional[discord.Member] = None):
+        target_user = player or interaction.user
+        
+        # Get homes
+        homes = self.db.execute_query(
+            '''SELECT h.home_id, h.home_name, h.home_type, l.name as location_name,
+                      h.price, h.purchase_date, h.value_modifier
+               FROM location_homes h
+               JOIN locations l ON h.location_id = l.location_id
+               WHERE h.owner_id = ?
+               ORDER BY h.purchase_date DESC''',
+            (target_user.id,),
+            fetch='all'
+        )
+        
+        if not homes:
+            if target_user == interaction.user:
+                await interaction.response.send_message("You don't own any homes.", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"{target_user.display_name} doesn't own any homes.", ephemeral=True)
+            return
+        
+        # Get character name
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (target_user.id,),
+            fetch='one'
+        )[0]
+        
+        embed = discord.Embed(
+            title=f"🏠 {char_name}'s Properties",
+            description=f"Total Properties: {len(homes)}/5",
+            color=0x2F4F4F
+        )
+        
+        total_value = 0
+        for home in homes:
+            home_id, name, home_type, location, price, purchase_date, value_mod = home
+            current_value = int(price * value_mod)
+            total_value += current_value
+            
+            # Check if on market
+            on_market = self.db.execute_query(
+                "SELECT asking_price FROM home_market_listings WHERE home_id = ? AND is_active = 1",
+                (home_id,),
+                fetch='one'
+            )
+            
+            market_status = f" 🏷️ Listed for {on_market[0]:,}" if on_market else ""
+            
+            embed.add_field(
+                name=f"{name}",
+                value=f"📍 {location}\n💰 Value: {current_value:,} credits{market_status}",
+                inline=True
+            )
+        
+        embed.add_field(
+            name="📊 Total Portfolio Value",
+            value=f"{total_value:,} credits",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    
+
+    
+
+
+
+
+
+    
+    async def _get_or_create_home_interior(self, guild, location_channel, home_id, home_name, interior_desc, user):
+        """Create or get home interior thread"""
+        # Check for existing thread
+        thread_name = f"🏠 {home_name}"
+        
+        for thread in location_channel.threads:
+            if thread.name == thread_name and not thread.archived:
+                await thread.add_user(user)
+                return thread
+        
+        # Create new thread
+        try:
+            thread = await location_channel.create_thread(
+                name=thread_name,
+                auto_archive_duration=1440,  # 24 hours
+                reason=f"Home interior for {user.name}"
+            )
+            
+            # Send welcome message
+            char_name = self.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (user.id,),
+                fetch='one'
+            )[0]
+            
+            embed = discord.Embed(
+                title=f"🏠 Welcome Home, {char_name}",
+                description=interior_desc,
+                color=0x2F4F4F
+            )
+            
+            # Get home activities
+            if HomeActivityManager:
+                manager = HomeActivityManager(self.bot)
+                activities = manager.get_home_activities(home_id)
+            else:
+                activities = []
+            
+            if activities:
+                activity_list = []
+                for activity in activities[:8]:
+                    activity_list.append(f"{activity['icon']} {activity['name']}")
+                
+                embed.add_field(
+                    name="🎮 Home Facilities",
+                    value="\n".join(activity_list),
+                    inline=False
+                )
+            
+            embed.add_field(
+                name="🎮 Available Actions",
+                value="• Use the activity buttons below\n• `/home interior leave` - Exit your home\n• Invite others to visit",
+                inline=False
+            )
+            
+            await thread.send(embed=embed)
+            
+            # Send activity buttons
+            if activities and HomeActivityView:
+                view = HomeActivityView(self.bot, home_id, home_name, char_name)
+                activity_embed = discord.Embed(
+                    title="🎯 Home Activities",
+                    description="Choose an activity:",
+                    color=0x00ff88
+                )
+                await thread.send(embed=activity_embed, view=view)
+            
+            # Update database
+            self.db.execute_query(
+                '''INSERT OR REPLACE INTO home_interiors (home_id, channel_id)
+                   VALUES (?, ?)''',
+                (home_id, thread.id)
+            )
+            
+            return thread
+            
+        except Exception as e:
+            print(f"Failed to create home interior: {e}")
+            return None
+    
+    @commands.Cog.listener()
+    async def on_character_delete(self, user_id: int):
+        """Release homes when character is deleted"""
+        # Make all owned homes available again
+        self.db.execute_query(
+            '''UPDATE location_homes 
+               SET owner_id = NULL, is_available = 1, purchase_date = NULL
+               WHERE owner_id = ?''',
+            (user_id,)
+        )
+        
+        # Remove from market
+        self.db.execute_query(
+            '''UPDATE home_market_listings 
+               SET is_active = 0
+               WHERE seller_id = ?''',
+            (user_id,)
+        )
+
+
+async def setup(bot):
+    await bot.add_cog(HomesCog(bot))

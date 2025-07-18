@@ -943,7 +943,67 @@ class Database:
                 installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (ship_id) REFERENCES ships (ship_id)
             )''',
+            
+           
+            '''CREATE TABLE IF NOT EXISTS factions (
+                faction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                emoji TEXT NOT NULL,
+                description TEXT,
+                leader_id INTEGER NOT NULL,
+                is_public BOOLEAN DEFAULT 0,
+                bank_balance INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (leader_id) REFERENCES characters (user_id)
+            )''',
 
+            '''CREATE TABLE IF NOT EXISTS faction_members (
+                member_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                faction_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (faction_id) REFERENCES factions (faction_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                UNIQUE(user_id)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS faction_invites (
+                invite_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                faction_id INTEGER NOT NULL,
+                inviter_id INTEGER NOT NULL,
+                invitee_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                FOREIGN KEY (faction_id) REFERENCES factions (faction_id),
+                FOREIGN KEY (inviter_id) REFERENCES characters (user_id),
+                FOREIGN KEY (invitee_id) REFERENCES characters (user_id)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS faction_sales_tax (
+                tax_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                faction_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                tax_percentage INTEGER DEFAULT 0,
+                FOREIGN KEY (faction_id) REFERENCES factions (faction_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                UNIQUE(location_id)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS faction_payouts (
+                payout_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                faction_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                collected BOOLEAN DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (faction_id) REFERENCES factions (faction_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )''',
+
+            '''ALTER TABLE location_ownership ADD COLUMN faction_id INTEGER REFERENCES factions(faction_id)''',
+            
+            
+            
             '''CREATE TABLE IF NOT EXISTS group_ships (
                 group_id INTEGER PRIMARY KEY,
                 ship_id INTEGER NOT NULL,
