@@ -1027,7 +1027,7 @@ class EventsCog(commands.Cog):
         except:
             pass
             
-    @tasks.loop(minutes=15)  # Run enhanced events every 15 minutes
+    @tasks.loop(minutes=10)  # Run enhanced events every 10 minutes
     async def enhanced_random_events(self):
         """Generate enhanced random events including pirates and phenomena"""
         try:
@@ -1050,7 +1050,7 @@ class EventsCog(commands.Cog):
             
             for location_id, player_count, location_type, wealth, population in active_locations:
                 # Small chance for enhanced events
-                if random.random() < 0.15:  # 15% chance per hour per active location
+                if random.random() < 0.30:  # 35% chance per 15mins per active location
                     
                     # Get players at this location
                     players = self.db.execute_query(

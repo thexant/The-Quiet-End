@@ -2559,9 +2559,9 @@ class InteractiveShopView(discord.ui.View):
             await interaction.response.send_message("This is not your shop interface!", ephemeral=True)
             return
         
-        # Get player's inventory
+        # Get player's inventory - MODIFIED to include item_id
         inventory_items = self.bot.db.execute_query(
-            '''SELECT item_name, quantity, value, item_type, description
+            '''SELECT item_id, item_name, quantity, value, item_type, description
                FROM inventory 
                WHERE owner_id = ? AND quantity > 0
                ORDER BY item_type, item_name''',
@@ -2821,7 +2821,8 @@ class ShopSellSelectView(discord.ui.View):
         
         if inventory_items:
             options = []
-            for item_name, quantity, value, item_type, description in inventory_items[:25]:
+            # MODIFIED to unpack item_id from the tuple
+            for item_id, item_name, quantity, value, item_type, description in inventory_items[:25]:
                 # Calculate approximate sell price (60% of value)
                 sell_price = max(1, int(value * 0.6))
                 
@@ -2829,7 +2830,7 @@ class ShopSellSelectView(discord.ui.View):
                     discord.SelectOption(
                         label=f"{item_name} (x{quantity})",
                         description=f"~{sell_price:,} credits each - {description[:60]}{'...' if len(description) > 60 else ''}"[:100],
-                        value=item_name
+                        value=str(item_id)  # MODIFIED to use item_id as the unique value
                     )
                 )
             
@@ -2843,14 +2844,15 @@ class ShopSellSelectView(discord.ui.View):
             await interaction.response.send_message("This is not your interface!", ephemeral=True)
             return
         
-        item_name = interaction.data['values'][0]
+        # MODIFIED to get item_id from the selection
+        item_id = int(interaction.data['values'][0])
         
-        # Get item details from inventory
+        # Get item details from inventory using item_id
         item_info = self.bot.db.execute_query(
             '''SELECT item_name, quantity, value, item_type, description
                FROM inventory 
-               WHERE owner_id = ? AND item_name = ?''',
-            (self.user_id, item_name),
+               WHERE owner_id = ? AND item_id = ?''',
+            (self.user_id, item_id),
             fetch='one'
         )
         
@@ -2873,7 +2875,7 @@ class ShopSellSelectView(discord.ui.View):
             base_multiplier = 0.5 + (wealth_level * 0.03)
             base_sell_price = max(1, int(item_info[2] * base_multiplier))
             
-            status, price_mod, stock_mod = econ_cog.get_economic_modifiers(self.location_id, item_name, item_info[3])
+            status, price_mod, stock_mod = econ_cog.get_economic_modifiers(self.location_id, item_info[0], item_info[3])
             final_sell_price, _ = econ_cog.apply_economic_modifiers(
                 base_sell_price, 1, status, price_mod, stock_mod, is_buying=False
             )
@@ -2881,7 +2883,7 @@ class ShopSellSelectView(discord.ui.View):
             final_sell_price = max(1, int(item_info[2] * 0.6))
         
         embed = discord.Embed(
-            title=f"💰 Sell: {item_name}",
+            title=f"💰 Sell: {item_info[0]}",
             description=item_info[4],  # description
             color=0xffd700
         )

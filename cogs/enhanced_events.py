@@ -8,10 +8,23 @@ from datetime import datetime, timedelta
 import json
 from typing import Optional, Literal
 
+ACTIVE_EVENT_RESPONSES = {}
 
+def track_event_response(event_id: str, user_id: int) -> bool:
+    """Track if a user has already responded to an event. Returns True if this is their first response."""
+    if event_id not in ACTIVE_EVENT_RESPONSES:
+        ACTIVE_EVENT_RESPONSES[event_id] = set()
+    
+    if user_id in ACTIVE_EVENT_RESPONSES[event_id]:
+        return False  # Already responded
+    
+    ACTIVE_EVENT_RESPONSES[event_id].add(user_id)
+    return True  # First response
 
-
-
+def clear_event_responses(event_id: str):
+    """Clear response tracking for an event after it's done"""
+    if event_id in ACTIVE_EVENT_RESPONSES:
+        del ACTIVE_EVENT_RESPONSES[event_id]
 
 
 class FugitiveAlertView(discord.ui.View):
@@ -77,7 +90,7 @@ class FugitiveAlertView(discord.ui.View):
             # --- Reputation Logic End ---
         else:
             fine = 500
-            self.bot.db.execute_query("UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?", (fine, interaction.user.id))
+            self.bot.db.execute_query("UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?", (fine, interaction.user.id))
             await interaction.response.send_message(f"🚨 **{char_name}**'s attempt to help the fugitive is clumsy and obvious. You're caught and fined {fine} credits for obstructing justice.", ephemeral=False)
 
     @discord.ui.button(label="Ignore Alert", style=discord.ButtonStyle.secondary, emoji="👀")
@@ -134,11 +147,11 @@ class EnhancedEventsCog(commands.Cog):
             
             # Random chance based on location activity and type
             base_chance = {
-                'colony': 0.40,
-                'space_station': 0.35,
-                'outpost': 0.30,
-                'gate': 0.25
-            }.get(loc_type, 0.40)
+                'colony': 0.50,
+                'space_station': 0.40,
+                'outpost': 0.35,
+                'gate': 0.30
+            }.get(loc_type, 0.50)
             
             # Wealth affects event frequency
             wealth_modifier = 1.0 + (wealth - 5) * 0.1
@@ -184,7 +197,7 @@ class EnhancedEventsCog(commands.Cog):
             danger_level = corridor_info[0]
             
             # Higher danger = more events
-            event_chance = 0.20 + (danger_level * 0.1)
+            event_chance = 0.25 + (danger_level * 0.1)
             
             if random.random() < event_chance:
                 await self.generate_travel_event(travel_data)
@@ -418,7 +431,7 @@ class EnhancedEventsCog(commands.Cog):
                 else:
                     damage = random.randint(10, 20)
                     self.bot.db.execute_query(
-                        "UPDATE ships SET hull_integrity = GREATEST(0, hull_integrity - ?) WHERE owner_id = ?",
+                        "UPDATE ships SET hull_integrity = MAX(0, hull_integrity - ?) WHERE owner_id = ?",
                         (damage, user_id)
                     )
                     
@@ -452,7 +465,7 @@ class EnhancedEventsCog(commands.Cog):
                 else:
                     fuel_lost = random.randint(20, 40)
                     self.bot.db.execute_query(
-                        "UPDATE ships SET current_fuel = GREATEST(0, current_fuel - ?) WHERE owner_id = ?",
+                        "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
                         (fuel_lost, user_id)
                     )
                     
@@ -526,7 +539,7 @@ class EnhancedEventsCog(commands.Cog):
                 else:
                     damage = random.randint(20, 40)
                     self.bot.db.execute_query(
-                        "UPDATE ships SET hull_integrity = GREATEST(0, hull_integrity - ?) WHERE owner_id = ?",
+                        "UPDATE ships SET hull_integrity = MAX(0, hull_integrity - ?) WHERE owner_id = ?",
                         (damage, user_id)
                     )
                     
@@ -739,7 +752,7 @@ class EnhancedEventsCog(commands.Cog):
                 
                 rep_loss = random.randint(5, 15)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET minor_reputation = GREATEST(0, minor_reputation - ?) WHERE user_id = ?",
+                    "UPDATE characters SET minor_reputation = MAX(0, minor_reputation - ?) WHERE user_id = ?",
                     (rep_loss, user_id)
                 )
                 
@@ -854,7 +867,7 @@ class EnhancedEventsCog(commands.Cog):
                 if random.random() < 0.25:
                     fine = random.randint(200, 500)
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?",
+                        "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
                         (fine, user_id)
                     )
                     
@@ -902,7 +915,7 @@ class EnhancedEventsCog(commands.Cog):
                     else:
                         fine = bribe_amount * 2
                         self.bot.db.execute_query(
-                            "UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?",
+                            "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
                             (fine, user_id)
                         )
                         
@@ -980,7 +993,7 @@ class EnhancedEventsCog(commands.Cog):
                 if random.random() < escape_chance:
                     fuel_cost = random.randint(30, 60)
                     self.bot.db.execute_query(
-                        "UPDATE ships SET current_fuel = GREATEST(0, current_fuel - ?) WHERE owner_id = ?",
+                        "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
                         (fuel_cost, user_id)
                     )
                     
@@ -993,12 +1006,12 @@ class EnhancedEventsCog(commands.Cog):
                     fine = random.randint(500, 1000)
                     
                     self.bot.db.execute_query(
-                        "UPDATE ships SET hull_integrity = GREATEST(0, hull_integrity - ?) WHERE owner_id = ?",
+                        "UPDATE ships SET hull_integrity = MAX(0, hull_integrity - ?) WHERE owner_id = ?",
                         (damage, user_id)
                     )
                     
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?",
+                        "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
                         (fine, user_id)
                     )
                     
@@ -1103,7 +1116,7 @@ class EnhancedEventsCog(commands.Cog):
                     # Communication disruption, possible ship damage
                     if random.random() < 0.1:  # 10% chance of severe damage
                         self.db.execute_query(
-                            "UPDATE dynamic_npcs SET credits = GREATEST(0, credits - ?) WHERE npc_id = ?",
+                            "UPDATE dynamic_npcs SET credits = MAX(0, credits - ?) WHERE npc_id = ?",
                             (random.randint(500, 2000), npc_id)
                         )
                     affected_count += 1
@@ -1130,7 +1143,7 @@ class EnhancedEventsCog(commands.Cog):
                     if random.random() < 0.2:  # 20% chance of being robbed
                         credits_lost = random.randint(1000, 5000)
                         self.db.execute_query(
-                            "UPDATE dynamic_npcs SET credits = GREATEST(0, credits - ?) WHERE npc_id = ?",
+                            "UPDATE dynamic_npcs SET credits = MAX(0, credits - ?) WHERE npc_id = ?",
                             (credits_lost, npc_id)
                         )
                     affected_count += 1
@@ -1195,7 +1208,7 @@ class EnhancedEventsCog(commands.Cog):
                     else:  # 30% capture/damage chance
                         if random.random() < 0.5:
                             self.db.execute_query(
-                                "UPDATE dynamic_npcs SET credits = GREATEST(0, credits - ?) WHERE npc_id = ?",
+                                "UPDATE dynamic_npcs SET credits = MAX(0, credits - ?) WHERE npc_id = ?",
                                 (random.randint(1000, 5000), npc_id)
                             )
                             affected_npcs.append(f"💸 {name} ({callsign}) lost credits to pirates")
@@ -1356,6 +1369,16 @@ class EnhancedEventsCog(commands.Cog):
                 'effects': {'danger_level': 2, 'security_bonus': 1}
             },
             {
+                'name': 'Equipment Malfunction',
+                'description': '⚙️ **Station Systems Failure**\nCritical station systems are malfunctioning. Technical expertise needed.',
+                'color': 0xff0000,
+                'event_type': 'negative',
+                'base_probability': 0.15 if wealth <= 5 else 0.08,
+                'interactive': True,
+                'handler': self._handle_equipment_malfunction,
+                'effects': {'repair_demand': 3, 'danger_level': 1}
+            },
+            {
                 'name': 'VIP Arrival',
                 'description': '👑 **Corporate Executive Visit**\nA high-ranking corporate official has arrived with a substantial security detail.',
                 'color': 0x9932cc,
@@ -1507,12 +1530,15 @@ class EnhancedEventsCog(commands.Cog):
         )
 
         view = discord.ui.View(timeout=300)
-
+        event_id = f"priorityconvoy_{channel.id}_{datetime.now().timestamp()}"
         assist_button = discord.ui.Button(label="Assist Escort", style=discord.ButtonStyle.primary, emoji="🚀")
         scan_button = discord.ui.Button(label="Scan Convoy", style=discord.ButtonStyle.secondary, emoji="📡")
         wait_button = discord.ui.Button(label="Wait Patiently", style=discord.ButtonStyle.success, emoji="⏳")
 
         async def assist_callback(interaction: discord.Interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_data = self.bot.db.execute_query("SELECT name, navigation FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
             if not char_data:
                 await interaction.response.send_message("Character not found!", ephemeral=True)
@@ -1527,6 +1553,9 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message(f"⚠️ **{char_name}** tries to help, but your maneuvers only add to the traffic chaos. The escort waves you off.", ephemeral=False)
 
         async def scan_callback(interaction: discord.Interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return         
             char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
             if not char_data:
                 await interaction.response.send_message("Character not found!", ephemeral=True)
@@ -1537,13 +1566,17 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message(f"📡 **{char_name}** discretely scans the convoy. The ships are running hot with high-energy weapon signatures and what appears to be classified cyberwarfare suites. This is a serious military force.", ephemeral=False)
             else:
                 fine = 150
-                self.bot.db.execute_query("UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?", (fine, interaction.user.id))
+                self.bot.db.execute_query("UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?", (fine, interaction.user.id))
                 await interaction.response.send_message(f"🚨 **{char_name}**'s scan is detected by the convoy's counter-intel systems! You receive a warning and a {fine} credit fine for unauthorized scanning of military assets.", ephemeral=False)
 
         async def wait_callback(interaction: discord.Interaction):
             char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
             await interaction.response.send_message(f"⏳ **{char_name}** decides to wait out the delay. The convoy eventually passes, and normal traffic resumes.", ephemeral=False)
-
+            # Set up timeout to clear tracking
+        async def on_timeout():
+            clear_event_responses(event_id)
+        
+        view.on_timeout = on_timeout
         assist_button.callback = assist_callback
         scan_button.callback = scan_callback
         wait_button.callback = wait_callback
@@ -1563,12 +1596,15 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-
+        event_id = f"energysurge_{channel.id}_{datetime.now().timestamp()}"
         contain_button = discord.ui.Button(label="Help Contain Surge", style=discord.ButtonStyle.danger, emoji="🔧")
         shields_button = discord.ui.Button(label="Reinforce Shields", style=discord.ButtonStyle.primary, emoji="🛡️")
         evacuate_button = discord.ui.Button(label="Evacuate Area", style=discord.ButtonStyle.secondary, emoji="🏃")
 
         async def contain_callback(interaction: discord.Interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return
             char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
             if not char_data:
                 await interaction.response.send_message("Character not found!", ephemeral=True)
@@ -1581,10 +1617,13 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message(f"🔧 **{char_name}**'s expert engineering assistance helps stabilize the gate's energy core, preventing a catastrophe! Gate authorities award you {reward} credits.", ephemeral=False)
             else:
                 damage = random.randint(15, 30)
-                self.bot.db.execute_query("UPDATE ships SET hull_integrity = GREATEST(0, hull_integrity - ?) WHERE owner_id = ?", (damage, interaction.user.id))
+                self.bot.db.execute_query("UPDATE ships SET hull_integrity = MAX(0, hull_integrity - ?) WHERE owner_id = ?", (damage, interaction.user.id))
                 await interaction.response.send_message(f"💥 **{char_name}** attempts to help but is caught in an energy discharge! The ship takes {damage} hull damage.", ephemeral=False)
 
         async def shields_callback(interaction: discord.Interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return
             char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
             if not char_data:
                 await interaction.response.send_message("Character not found!", ephemeral=True)
@@ -1596,9 +1635,16 @@ class EnhancedEventsCog(commands.Cog):
             await interaction.response.send_message(f"🛡️ **{char_name}** helps reinforce the shields of nearby civilian ships, earning a {reward} credit reward from Gate Traffic Control for their service.", ephemeral=False)
             
         async def evacuate_callback(interaction: discord.Interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
             await interaction.response.send_message(f"🏃 **{char_name}** wisely moves their ship to a safe distance to watch the events unfold.", ephemeral=False)
-
+        
+        async def on_timeout():
+            clear_event_responses(event_id)
+    
+        view.on_timeout = on_timeout
         contain_button.callback = contain_callback
         shields_button.callback = shields_callback
         evacuate_button.callback = evacuate_callback
@@ -1617,12 +1663,15 @@ class EnhancedEventsCog(commands.Cog):
             color=event_data['color']
         )
         view = discord.ui.View(timeout=300)
-
+        event_id = f"spacetimecho_{channel.id}_{datetime.now().timestamp()}"
         analyze_button = discord.ui.Button(label="Analyze Echo", style=discord.ButtonStyle.primary, emoji="🔬")
         hail_button = discord.ui.Button(label="Hail the Echo", style=discord.ButtonStyle.secondary, emoji="👋")
         fly_button = discord.ui.Button(label="Fly Through It", style=discord.ButtonStyle.danger, emoji="✨")
 
         async def analyze_callback(interaction: discord.Interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
             if not char_data:
                 await interaction.response.send_message("Character not found!", ephemeral=True)
@@ -1637,15 +1686,21 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message(f"📉 **{char_name}**'s sensors can't make sense of the temporal distortions. The data is unusable.", ephemeral=False)
 
         async def hail_callback(interaction: discord.Interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
             await interaction.response.send_message(f"👋 **{char_name}** hails the echo. You receive only static, but for a moment, you think you hear a faint whisper... *'...left something behind...'* The echo then fades.", ephemeral=False)
             
         async def fly_callback(interaction: discord.Interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
             roll = random.random()
             if roll < 0.25: # 25% chance of damage
                 damage = random.randint(5, 10)
-                self.bot.db.execute_query("UPDATE ships SET hull_integrity = GREATEST(0, hull_integrity - ?) WHERE owner_id = ?", (damage, interaction.user.id))
+                self.bot.db.execute_query("UPDATE ships SET hull_integrity = MAX(0, hull_integrity - ?) WHERE owner_id = ?", (damage, interaction.user.id))
                 await interaction.response.send_message(f"💥 **{char_name}** flies through the echo and a wave of temporal feedback rattles the ship! It takes {damage} hull damage.", ephemeral=False)
             elif roll > 0.9: # 10% chance of a boon
                 fuel_gain = random.randint(10, 20)
@@ -1654,6 +1709,10 @@ class EnhancedEventsCog(commands.Cog):
             else: # 65% chance of nothing
                 await interaction.response.send_message(f"💨 **{char_name}** flies through the echo. The ship feels momentarily cold, but nothing else happens.", ephemeral=False)
 
+        async def on_timeout():
+            clear_event_responses(event_id)
+    
+        view.on_timeout = on_timeout
         analyze_button.callback = analyze_callback
         hail_button.callback = hail_callback
         fly_button.callback = fly_callback
@@ -1675,7 +1734,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"industrialaccident_{channel.id}_{datetime.now().timestamp()}"
         medical_button = discord.ui.Button(
             label="Provide Medical Aid",
             style=discord.ButtonStyle.green,
@@ -1695,6 +1754,10 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def medical_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
+            char_name = se        
             char_data = self.bot.db.execute_query(
                 "SELECT name, medical FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -1731,6 +1794,10 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def repair_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
+            char_name = se        
             char_data = self.bot.db.execute_query(
                 "SELECT name, engineering FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -1761,6 +1828,10 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def evacuate_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
+            char_name = se        
             char_data = self.bot.db.execute_query(
                 "SELECT name, navigation FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -1783,7 +1854,10 @@ class EnhancedEventsCog(commands.Cog):
                 f"🚁 **{char_name}** coordinates evacuation procedures. Earned {reward} credits for leadership.",
                 ephemeral=False
             )
-        
+        async def on_timeout():
+            clear_event_responses(event_id)
+    
+        view.on_timeout = on_timeout        
         medical_button.callback = medical_callback
         repair_button.callback = repair_callback
         evacuate_button.callback = evacuate_callback
@@ -1795,126 +1869,138 @@ class EnhancedEventsCog(commands.Cog):
         await channel.send(embed=embed, view=view)
 
     async def _handle_worker_strike(self, channel, players, event_data):
-            """Handle worker strike event"""
-            embed = discord.Embed(
-                title="✊ Labor Dispute Resolution",
-                description="Colony workers are demanding better conditions. Your intervention could help resolve the crisis.",
-                color=0xff9900
+        """Handle worker strike event"""
+        embed = discord.Embed(
+            title="✊ Labor Dispute Resolution",
+            description="Colony workers are demanding better conditions. Your intervention could help resolve the crisis.",
+            color=0xff9900
+        )
+        
+        view = discord.ui.View(timeout=300)
+        event_id = f"workerstrike_{channel.id}_{datetime.now().timestamp()}"
+        negotiate_button = discord.ui.Button(
+            label="Mediate Negotiations",
+            style=discord.ButtonStyle.primary,
+            emoji="🤝"
+        )
+        
+        support_workers_button = discord.ui.Button(
+            label="Support Workers",
+            style=discord.ButtonStyle.success,
+            emoji="✊"
+        )
+        
+        support_management_button = discord.ui.Button(
+            label="Support Management",
+            style=discord.ButtonStyle.secondary,
+            emoji="🏢"
+        )
+        
+        async def negotiate_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return                  
+            char_data = self.bot.db.execute_query(
+                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
             )
             
-            view = discord.ui.View(timeout=300)
+            if not char_data:
+                await interaction.response.send_message("Character not found!", ephemeral=True)
+                return
             
-            negotiate_button = discord.ui.Button(
-                label="Mediate Negotiations",
-                style=discord.ButtonStyle.primary,
-                emoji="🤝"
-            )
+            char_name, nav_skill = char_data
             
-            support_workers_button = discord.ui.Button(
-                label="Support Workers",
-                style=discord.ButtonStyle.success,
-                emoji="✊"
-            )
-            
-            support_management_button = discord.ui.Button(
-                label="Support Management",
-                style=discord.ButtonStyle.secondary,
-                emoji="🏢"
-            )
-            
-            async def negotiate_callback(interaction):
-                char_data = self.bot.db.execute_query(
-                    "SELECT name, navigation FROM characters WHERE user_id = ?",
-                    (interaction.user.id,),
-                    fetch='one'
-                )
-                
-                if not char_data:
-                    await interaction.response.send_message("Character not found!", ephemeral=True)
-                    return
-                
-                char_name, nav_skill = char_data
-                
-                if nav_skill >= 12:
-                    reward = 250 + (nav_skill * 10)
-                    self.bot.db.execute_query(
-                        "UPDATE characters SET money = money + ? WHERE user_id = ?",
-                        (reward, interaction.user.id)
-                    )
-                    
-                    await interaction.response.send_message(
-                        f"🤝 **{char_name}** successfully mediates the labor dispute! Both sides reach agreement. Earned {reward} credits.",
-                        ephemeral=False
-                    )
-                else:
-                    await interaction.response.send_message(
-                        f"💼 **{char_name}** attempts to mediate but lacks the experience for such complex negotiations.",
-                        ephemeral=False
-                    )
-            
-            async def support_workers_callback(interaction):
-                char_data = self.bot.db.execute_query(
-                    "SELECT name, money FROM characters WHERE user_id = ?",
-                    (interaction.user.id,),
-                    fetch='one'
-                )
-                
-                if not char_data:
-                    await interaction.response.send_message("Character not found!", ephemeral=True)
-                    return
-                
-                char_name, current_money = char_data
-                cost = 100
-                
-                if current_money >= cost:
-                    self.bot.db.execute_query(
-                        "UPDATE characters SET money = money - ? WHERE user_id = ?",
-                        (cost, interaction.user.id)
-                    )
-                    
-                    await interaction.response.send_message(
-                        f"✊ **{char_name}** supports the workers with {cost} credits. Strike resolved peacefully!",
-                        ephemeral=False
-                    )
-                else:
-                    await interaction.response.send_message(
-                        f"💸 **{char_name}** wants to help but lacks the credits to make a meaningful contribution.",
-                        ephemeral=False
-                    )
-            
-            async def support_management_callback(interaction):
-                char_data = self.bot.db.execute_query(
-                    "SELECT name FROM characters WHERE user_id = ?",
-                    (interaction.user.id,),
-                    fetch='one'
-                )
-                
-                if not char_data:
-                    await interaction.response.send_message("Character not found!", ephemeral=True)
-                    return
-                
-                char_name = char_data[0]
-                reward = 150
-                
+            if nav_skill >= 12:
+                reward = 250 + (nav_skill * 10)
                 self.bot.db.execute_query(
                     "UPDATE characters SET money = money + ? WHERE user_id = ?",
                     (reward, interaction.user.id)
                 )
                 
                 await interaction.response.send_message(
-                    f"🏢 **{char_name}** assists management with strike-breaking efforts. Earned {reward} credits, but worker relations suffer.",
+                    f"🤝 **{char_name}** successfully mediates the labor dispute! Both sides reach agreement. Earned {reward} credits.",
                     ephemeral=False
                 )
+            else:
+                await interaction.response.send_message(
+                    f"💼 **{char_name}** attempts to mediate but lacks the experience for such complex negotiations.",
+                    ephemeral=False
+                )
+        
+        async def support_workers_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return              
+            char_data = self.bot.db.execute_query(
+                "SELECT name, money FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
             
-            negotiate_button.callback = negotiate_callback
-            support_workers_button.callback = support_workers_callback
-            support_management_button.callback = support_management_callback
+            if not char_data:
+                await interaction.response.send_message("Character not found!", ephemeral=True)
+                return
             
-            view.add_item(negotiate_button)
-            view.add_item(support_workers_button)
-            view.add_item(support_management_button)
+            char_name, current_money = char_data
+            cost = 100
             
-            await channel.send(embed=embed, view=view)
+            if current_money >= cost:
+                self.bot.db.execute_query(
+                    "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                    (cost, interaction.user.id)
+                )
+                
+                await interaction.response.send_message(
+                    f"✊ **{char_name}** supports the workers with {cost} credits. Strike resolved peacefully!",
+                    ephemeral=False
+                )
+            else:
+                await interaction.response.send_message(
+                    f"💸 **{char_name}** wants to help but lacks the credits to make a meaningful contribution.",
+                    ephemeral=False
+                )
+        
+        async def support_management_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return              
+            char_data = self.bot.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not char_data:
+                await interaction.response.send_message("Character not found!", ephemeral=True)
+                return
+            
+            char_name = char_data[0]
+            reward = 150
+            
+            self.bot.db.execute_query(
+                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                (reward, interaction.user.id)
+            )
+            
+            await interaction.response.send_message(
+                f"🏢 **{char_name}** assists management with strike-breaking efforts. Earned {reward} credits, but worker relations suffer.",
+                ephemeral=False
+            )
+        async def on_timeout():
+            clear_event_responses(event_id)
+    
+        view.on_timeout = on_timeout              
+        negotiate_button.callback = negotiate_callback
+        support_workers_button.callback = support_workers_callback
+        support_management_button.callback = support_management_callback
+        
+        view.add_item(negotiate_button)
+        view.add_item(support_workers_button)
+        view.add_item(support_management_button)
+        
+        await channel.send(embed=embed, view=view)
 
     async def _handle_scavenger_swarm(self, channel, user_id, event_data):
         """Handle scavenger drone encounter"""
@@ -1925,7 +2011,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"droneswarm_{channel.id}_{datetime.now().timestamp()}"
         defend_button = discord.ui.Button(
             label="Defensive Measures",
             style=discord.ButtonStyle.primary,
@@ -1939,6 +2025,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def defend_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return           
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
                 return
@@ -1967,7 +2056,7 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 damage = random.randint(5, 15)
                 self.bot.db.execute_query(
-                    "UPDATE ships SET hull_integrity = GREATEST(1, hull_integrity - ?) WHERE owner_id = ?",
+                    "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
                     (damage, user_id)
                 )
                 
@@ -1977,6 +2066,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def outrun_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return           
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
                 return
@@ -2005,7 +2097,7 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 fuel_lost = random.randint(15, 30)
                 self.bot.db.execute_query(
-                    "UPDATE ships SET current_fuel = GREATEST(0, current_fuel - ?) WHERE owner_id = ?",
+                    "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
                     (fuel_lost, user_id)
                 )
                 
@@ -2013,7 +2105,10 @@ class EnhancedEventsCog(commands.Cog):
                     f"🤖 **{char_name}** burns {fuel_lost} extra fuel trying to escape the persistent drones!",
                     ephemeral=False
                 )
-        
+        async def on_timeout():
+            clear_event_responses(event_id)
+    
+        view.on_timeout = on_timeout            
         defend_button.callback = defend_callback
         outrun_button.callback = outrun_callback
         
@@ -2031,7 +2126,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"corpambush_{channel.id}_{datetime.now().timestamp()}"
         submit_button = discord.ui.Button(
             label="Submit to Inspection",
             style=discord.ButtonStyle.secondary,
@@ -2051,6 +2146,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def submit_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return            
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
                 return
@@ -2071,7 +2169,7 @@ class EnhancedEventsCog(commands.Cog):
             if random.random() < 0.3:
                 fine = random.randint(100, 250)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?",
+                    "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
                     (fine, user_id)
                 )
                 
@@ -2086,6 +2184,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def bribe_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return             
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
                 return
@@ -2117,7 +2218,7 @@ class EnhancedEventsCog(commands.Cog):
                 else:
                     fine = bribe_cost + 200
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?",
+                        "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
                         (fine, user_id)
                     )
                     
@@ -2132,6 +2233,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def fight_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return             
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
                 return
@@ -2162,7 +2266,7 @@ class EnhancedEventsCog(commands.Cog):
                 credits_lost = random.randint(200, 500)
                 
                 self.bot.db.execute_query(
-                    "UPDATE characters SET hp = GREATEST(1, hp - ?), money = GREATEST(0, money - ?) WHERE user_id = ?",
+                    "UPDATE characters SET hp = MAX(1, hp - ?), money = MAX(0, money - ?) WHERE user_id = ?",
                     (damage, credits_lost, user_id)
                 )
                 
@@ -2170,7 +2274,10 @@ class EnhancedEventsCog(commands.Cog):
                     f"💥 **{char_name}** is overwhelmed by corporate security! Lost {damage} health and {credits_lost} credits in fines and 'damages'.",
                     ephemeral=False
                 )
-        
+        async def on_timeout():
+            clear_event_responses(event_id)
+    
+        view.on_timeout = on_timeout         
         submit_button.callback = submit_callback
         bribe_button.callback = bribe_callback
         fight_button.callback = fight_callback
@@ -2191,7 +2298,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"asteroidfield_{channel.id}_{datetime.now().timestamp()}"
         careful_button = discord.ui.Button(
             label="Navigate Carefully",
             style=discord.ButtonStyle.primary,
@@ -2205,6 +2312,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def careful_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your ship!", ephemeral=True)
                 return
@@ -2238,7 +2348,7 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 damage = random.randint(5, 15)
                 self.bot.db.execute_query(
-                    "UPDATE ships SET hull_integrity = GREATEST(1, hull_integrity - ?) WHERE owner_id = ?",
+                    "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
                     (damage, user_id)
                 )
                 await interaction.response.send_message(
@@ -2247,6 +2357,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def speed_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return         
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your ship!", ephemeral=True)
                 return
@@ -2277,14 +2390,17 @@ class EnhancedEventsCog(commands.Cog):
                 damage = random.randint(15, 35)
                 fuel_loss = random.randint(10, 20)
                 self.bot.db.execute_query(
-                    "UPDATE ships SET hull_integrity = GREATEST(1, hull_integrity - ?), current_fuel = GREATEST(0, current_fuel - ?) WHERE owner_id = ?",
+                    "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?), current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
                     (damage, fuel_loss, user_id)
                 )
                 await interaction.response.send_message(
                     f"💥 **{char_name}**'s reckless speed causes multiple collisions! Hull damage: {damage}, Fuel lost: {fuel_loss}",
                     ephemeral=False
                 )
-        
+        async def on_timeout():
+            clear_event_responses(event_id)
+    
+        view.on_timeout = on_timeout         
         careful_button.callback = careful_callback
         speed_button.callback = speed_callback
         
@@ -2317,7 +2433,7 @@ class EnhancedEventsCog(commands.Cog):
             value=f"**Source:** {signal_type}\n**Status:** {signal_desc}",
             inline=False
         )
-        
+        event_id = f"distress_{channel.id}_{datetime.now().timestamp()}"
         view = discord.ui.View(timeout=300)
         
         investigate_button = discord.ui.Button(
@@ -2333,6 +2449,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def investigate_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return           
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your ship!", ephemeral=True)
                 return
@@ -2368,7 +2487,7 @@ class EnhancedEventsCog(commands.Cog):
                     damage = random.randint(20, 40)
                     credits_lost = random.randint(50, 200)
                     self.bot.db.execute_query(
-                        "UPDATE characters SET hp = GREATEST(1, hp - ?), money = GREATEST(0, money - ?) WHERE user_id = ?",
+                        "UPDATE characters SET hp = MAX(1, hp - ?), money = MAX(0, money - ?) WHERE user_id = ?",
                         (damage, credits_lost, user_id)
                     )
                     await interaction.response.send_message(
@@ -2392,6 +2511,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def ignore_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return           
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your ship!", ephemeral=True)
                 return
@@ -2406,7 +2528,10 @@ class EnhancedEventsCog(commands.Cog):
                 f"➡️ **{char_name}** decides not to investigate the signal and continues on course.",
                 ephemeral=False
             )
-        
+        async def on_timeout():
+            clear_event_responses(event_id)
+    
+        view.on_timeout = on_timeout         
         investigate_button.callback = investigate_callback
         ignore_button.callback = ignore_callback
         
@@ -3465,7 +3590,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"corpinspection_{channel.id}_{datetime.now().timestamp()}"
         comply_button = discord.ui.Button(
             label="Full Compliance",
             style=discord.ButtonStyle.success,
@@ -3485,6 +3610,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def comply_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return    
             char_data = self.bot.db.execute_query(
                 "SELECT name FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3503,6 +3631,9 @@ class EnhancedEventsCog(commands.Cog):
             )
         
         async def partial_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return          
             char_data = self.bot.db.execute_query(
                 "SELECT name, navigation FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3523,7 +3654,7 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 fine = 75
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?",
+                    "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
                     (fine, interaction.user.id)
                 )
                 
@@ -3533,6 +3664,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def avoid_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return          
             char_data = self.bot.db.execute_query(
                 "SELECT name, combat FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3553,7 +3687,7 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 fine = 200
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = GREATEST(0, money - ?) WHERE user_id = ?",
+                    "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
                     (fine, interaction.user.id)
                 )
                 
@@ -3561,7 +3695,10 @@ class EnhancedEventsCog(commands.Cog):
                     f"🚨 **{char_name}** is caught avoiding inspection. Heavy fine of {fine} credits imposed!",
                     ephemeral=False
                 )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout        
         comply_button.callback = comply_callback
         partial_button.callback = partial_callback
         avoid_button.callback = avoid_callback
@@ -3581,7 +3718,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"corpinspection_{channel.id}_{datetime.now().timestamp()}"        
         repair_button = discord.ui.Button(
             label="Emergency Repair",
             style=discord.ButtonStyle.danger,
@@ -3601,6 +3738,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def repair_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return          
             char_data = self.bot.db.execute_query(
                 "SELECT name, engineering FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3627,7 +3767,7 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 damage = random.randint(5, 15)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET hp = GREATEST(1, hp - ?) WHERE user_id = ?",
+                    "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
                     (damage, interaction.user.id)
                 )
                 
@@ -3637,6 +3777,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def diagnose_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return          
             char_data = self.bot.db.execute_query(
                 "SELECT name, engineering FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3661,6 +3804,9 @@ class EnhancedEventsCog(commands.Cog):
             )
         
         async def evacuate_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return            
             char_data = self.bot.db.execute_query(
                 "SELECT name, navigation FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3683,7 +3829,10 @@ class EnhancedEventsCog(commands.Cog):
                 f"🚨 **{char_name}** coordinates evacuation procedures, ensuring everyone's safety. Earned {reward} credits.",
                 ephemeral=False
             )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout            
         repair_button.callback = repair_callback
         diagnose_button.callback = diagnose_callback
         evacuate_button.callback = evacuate_callback
@@ -3710,7 +3859,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"corpinspection_{channel.id}_{datetime.now().timestamp()}"         
         aid_button = discord.ui.Button(
             label="Provide Aid",
             style=discord.ButtonStyle.success,
@@ -3730,6 +3879,9 @@ class EnhancedEventsCog(commands.Cog):
         )
     
         async def aid_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return              
             char_data = self.bot.db.execute_query(
                 "SELECT name, money FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3760,6 +3912,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def medical_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return          
             char_data = self.bot.db.execute_query(
                 "SELECT name, medical FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3790,6 +3945,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def ignore_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return          
             char_data = self.bot.db.execute_query(
                 "SELECT name FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3806,7 +3964,10 @@ class EnhancedEventsCog(commands.Cog):
                 f"👋 **{char_name}** chooses not to get involved. The refugees continue searching for sanctuary elsewhere.",
                 ephemeral=False
             )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout          
         aid_button.callback = aid_callback
         medical_button.callback = medical_callback
         ignore_button.callback = ignore_callback
@@ -3826,7 +3987,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"celebration_{channel.id}_{datetime.now().timestamp()}"
         participate_button = discord.ui.Button(
             label="Join Celebration",
             style=discord.ButtonStyle.success,
@@ -3846,6 +4007,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def participate_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return
             char_data = self.bot.db.execute_query(
                 "SELECT name FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3870,6 +4034,9 @@ class EnhancedEventsCog(commands.Cog):
             )
         
         async def organize_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_data = self.bot.db.execute_query(
                 "SELECT name, navigation FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3900,6 +4067,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def trade_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return            
             char_data = self.bot.db.execute_query(
                 "SELECT name, money FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3923,6 +4093,11 @@ class EnhancedEventsCog(commands.Cog):
                 ephemeral=False
             )
         
+        async def on_timeout():
+            clear_event_responses(event_id)
+        
+        view.on_timeout = on_timeout
+        
         participate_button.callback = participate_callback
         organize_button.callback = organize_callback
         trade_button.callback = trade_callback
@@ -3932,7 +4107,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(trade_button)
         
         await channel.send(embed=embed, view=view)
-
+        
     # Add handlers for station events
     async def _handle_docking_overload(self, channel, players, event_data):
         """Handle docking system overload"""
@@ -3943,7 +4118,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"dockingoverload_{channel.id}_{datetime.now().timestamp()}"       
         assist_button = discord.ui.Button(
             label="Assist Traffic Control",
             style=discord.ButtonStyle.primary,
@@ -3957,6 +4132,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def assist_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return            
             char_data = self.bot.db.execute_query(
                 "SELECT name, navigation FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -3987,6 +4165,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def manual_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_data = self.bot.db.execute_query(
                 "SELECT name, engineering FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4009,7 +4190,10 @@ class EnhancedEventsCog(commands.Cog):
                 f"🎯 **{char_name}** provides manual docking assistance to stranded ships. Earned {reward} credits.",
                 ephemeral=False
             )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout        
         assist_button.callback = assist_callback
         manual_dock_button.callback = manual_callback
         
@@ -4027,7 +4211,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"tradeconvoy_{channel.id}_{datetime.now().timestamp()}"          
         trade_button = discord.ui.Button(
             label="Trade Goods",
             style=discord.ButtonStyle.success,
@@ -4041,6 +4225,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def trade_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return                
             char_data = self.bot.db.execute_query(
                 "SELECT name, money FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4073,6 +4260,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def negotiate_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return       
             char_data = self.bot.db.execute_query(
                 "SELECT name, navigation FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4095,7 +4285,10 @@ class EnhancedEventsCog(commands.Cog):
                 f"🤝 **{char_name}** negotiates favorable trade agreements for the station. Earned {reward} credits in commission!",
                 ephemeral=False
             )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout          
         trade_button.callback = trade_callback
         negotiate_button.callback = negotiate_callback
         
@@ -4113,7 +4306,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"viparrival_{channel.id}_{datetime.now().timestamp()}"       
         security_button = discord.ui.Button(
             label="Provide Security",
             style=discord.ButtonStyle.danger,
@@ -4127,6 +4320,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def security_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_data = self.bot.db.execute_query(
                 "SELECT name, combat FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4157,6 +4353,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def service_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_data = self.bot.db.execute_query(
                 "SELECT name, money FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4188,7 +4387,10 @@ class EnhancedEventsCog(commands.Cog):
                     f"💸 **{char_name}** lacks the credits to provide the luxury services the VIP expects.",
                     ephemeral=False
                 )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout          
         security_button.callback = security_callback
         service_button.callback = service_callback
         
@@ -4207,7 +4409,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"supplyshortage_{channel.id}_{datetime.now().timestamp()}"        
         donate_button = discord.ui.Button(
             label="Donate Supplies",
             style=discord.ButtonStyle.success,
@@ -4221,6 +4423,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def donate_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_data = self.bot.db.execute_query(
                 "SELECT name, money FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4251,6 +4456,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def emergency_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return          
             char_data = self.bot.db.execute_query(
                 "SELECT name, navigation FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4279,7 +4487,10 @@ class EnhancedEventsCog(commands.Cog):
                     f"🚚 **{char_name}** offers to help but lacks the navigation skills for emergency supply runs.",
                     ephemeral=False
                 )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout         
         donate_button.callback = donate_callback
         emergency_run_button.callback = emergency_callback
         
@@ -4295,7 +4506,7 @@ class EnhancedEventsCog(commands.Cog):
             description="Outpost scanners have detected valuable debris in the nearby area! Salvage opportunities available.",
             color=0xffd700
         )
-        
+        event_id = f"salvagediscovery{channel.id}_{datetime.now().timestamp()}"
         view = discord.ui.View(timeout=300)
         
         investigate_button = discord.ui.Button(
@@ -4311,6 +4522,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def investigate_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_data = self.bot.db.execute_query(
                 "SELECT name, engineering FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4335,6 +4549,9 @@ class EnhancedEventsCog(commands.Cog):
             )
         
         async def claim_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return         
             char_data = self.bot.db.execute_query(
                 "SELECT name, money FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4366,7 +4583,10 @@ class EnhancedEventsCog(commands.Cog):
                     f"💸 **{char_name}** lacks the credits to file proper salvage claims.",
                     ephemeral=False
                 )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout       
         investigate_button.callback = investigate_callback
         claim_button.callback = claim_callback
         
@@ -4384,7 +4604,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"commsblackout{channel.id}_{datetime.now().timestamp()}"       
         repair_button = discord.ui.Button(
             label="Repair Communications",
             style=discord.ButtonStyle.danger,
@@ -4398,6 +4618,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def repair_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return         
             char_data = self.bot.db.execute_query(
                 "SELECT name, engineering FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4424,7 +4647,7 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 damage = random.randint(5, 12)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET hp = GREATEST(1, hp - ?) WHERE user_id = ?",
+                    "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
                     (damage, interaction.user.id)
                 )
                 
@@ -4434,6 +4657,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def improvise_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return          
             char_data = self.bot.db.execute_query(
                 "SELECT name, navigation FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4456,7 +4682,10 @@ class EnhancedEventsCog(commands.Cog):
                 f"💡 **{char_name}** creates an improvised communication solution using ship systems! Earned {reward} credits.",
                 ephemeral=False
             )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout          
         repair_button.callback = repair_callback
         improvise_button.callback = improvise_callback
         
@@ -4474,6 +4703,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
+        event_id = f"mysterysignal{channel.id}_{datetime.now().timestamp()}"       
         
         investigate_button = discord.ui.Button(
             label="Investigate Signal",
@@ -4494,6 +4724,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def investigate_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             char_data = self.bot.db.execute_query(
                 "SELECT name, navigation FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4533,7 +4766,7 @@ class EnhancedEventsCog(commands.Cog):
             else:  # 40% chance of danger
                 damage = random.randint(10, 25)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET hp = GREATEST(1, hp - ?) WHERE user_id = ?",
+                    "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
                     (damage, interaction.user.id)
                 )
                 
@@ -4543,6 +4776,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def decode_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return         
             char_data = self.bot.db.execute_query(
                 "SELECT name, engineering FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4573,6 +4809,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def ignore_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return         
             char_data = self.bot.db.execute_query(
                 "SELECT name FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -4589,7 +4828,10 @@ class EnhancedEventsCog(commands.Cog):
                 f"🚫 **{char_name}** decides not to investigate the mysterious signal. Sometimes discretion is the better part of valor.",
                 ephemeral=False
             )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout         
         investigate_button.callback = investigate_callback
         decode_button.callback = decode_callback
         ignore_button.callback = ignore_callback
@@ -4599,6 +4841,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(ignore_button)
         
         await channel.send(embed=embed, view=view)
+    
     # Travel Event Handlers (different signature from location handlers)
     async def _handle_travel_solar_flare(self, channel, user_id, event_data):
         """Handle solar flare during travel"""
@@ -5110,7 +5353,7 @@ class EnhancedEventsCog(commands.Cog):
             description="A freelance merchant ship has hailed you. They're offering various goods at competitive prices.",
             color=0x00ff00
         )
-        
+        event_id = f"tradencounter{channel.id}_{datetime.now().timestamp()}"
         view = discord.ui.View(timeout=300)
         
         trade_button = discord.ui.Button(
@@ -5126,6 +5369,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def trade_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
                 return
@@ -5170,6 +5416,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def ignore_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return       
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
                 return
@@ -5184,7 +5433,10 @@ class EnhancedEventsCog(commands.Cog):
                 f"👋 **{char_name}** politely declines the trade offer and continues on course.",
                 ephemeral=False
             )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout        
         trade_button.callback = trade_callback
         ignore_button.callback = ignore_callback
         
@@ -5201,7 +5453,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"energyreadings{channel.id}_{datetime.now().timestamp()}"        
         investigate_button = discord.ui.Button(
             label="Investigate Energy Source",
             style=discord.ButtonStyle.primary,
@@ -5215,6 +5467,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def investigate_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return         
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your ship!", ephemeral=True)
                 return
@@ -5252,7 +5507,7 @@ class EnhancedEventsCog(commands.Cog):
             else:  # 30% chance of danger
                 damage = random.randint(10, 20)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET hp = GREATEST(1, hp - ?) WHERE user_id = ?",
+                    "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
                     (damage, user_id)
                 )
                 
@@ -5262,6 +5517,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def avoid_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return          
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your ship!", ephemeral=True)
                 return
@@ -5276,7 +5534,10 @@ class EnhancedEventsCog(commands.Cog):
                 f"➡️ **{char_name}** decides discretion is the better part of valor and continues on course.",
                 ephemeral=False
             )
+        async def on_timeout():
+            clear_event_responses(event_id)
         
+        view.on_timeout = on_timeout          
         investigate_button.callback = investigate_callback
         avoid_button.callback = avoid_callback
         
@@ -5293,7 +5554,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = discord.ui.View(timeout=300)
-        
+        event_id = f"travellingpirates{channel.id}_{datetime.now().timestamp()}"         
         fight_button = discord.ui.Button(
             label="Engage Pirates",
             style=discord.ButtonStyle.danger,
@@ -5307,6 +5568,9 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         async def fight_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
                 return
@@ -5342,7 +5606,7 @@ class EnhancedEventsCog(commands.Cog):
                 credits_lost = random.randint(100, 300)
                 
                 self.bot.db.execute_query(
-                    "UPDATE characters SET hp = GREATEST(1, hp - ?), money = GREATEST(0, money - ?) WHERE user_id = ?",
+                    "UPDATE characters SET hp = MAX(1, hp - ?), money = MAX(0, money - ?) WHERE user_id = ?",
                     (damage, credits_lost, user_id)
                 )
                 
@@ -5352,6 +5616,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
         
         async def evade_callback(interaction):
+            if not track_event_response(event_id, interaction.user.id):
+                await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
+                return        
             if interaction.user.id != user_id:
                 await interaction.response.send_message("This isn't your encounter!", ephemeral=True)
                 return
@@ -5643,3 +5910,29 @@ class ReputationEventView(discord.ui.View):
         return callback
 async def setup(bot):
     await bot.add_cog(EnhancedEventsCog(bot))
+    
+
+class BaseEventView(discord.ui.View):
+    """Base view for all events that tracks player responses"""
+    def __init__(self, bot, timeout=300):
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.player_responses = {}  # Track who has responded
+    
+    def has_responded(self, user_id: int) -> bool:
+        """Check if a user has already responded to this event"""
+        return user_id in self.player_responses
+    
+    def record_response(self, user_id: int, response: str):
+        """Record a user's response"""
+        self.player_responses[user_id] = response
+    
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Check if the interaction is valid"""
+        if self.has_responded(interaction.user.id):
+            await interaction.response.send_message(
+                "You've already responded to this event!", 
+                ephemeral=True
+            )
+            return False
+        return True

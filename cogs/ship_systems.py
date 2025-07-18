@@ -1134,9 +1134,9 @@ class ComponentUpgradeView(discord.ui.View):
         
         # Add upgrade buttons
         components = [
-            ('Engine', '⚡', 4, 1000),
-            ('Hull', '🛡️', 5, 1200),
-            ('Systems', '💻', 6, 800)
+            ('Engine', '⚡', 5, 1000),
+            ('Hull', '🛡️', 6, 1200),
+            ('Systems', '💻', 7, 800)
         ]
         
         for name, emoji, index, base_cost in components:

@@ -978,63 +978,73 @@ class AdminCog(commands.Cog):
                 return 0
             return int(100 * (level - 1) * (1 + (level - 1) * 0.1))
     
-    @admin_group.command(name="update_ships", description="Update existing ships with new features")
-    async def update_ships(self, interaction: discord.Interaction):
+    @admin_group.command(name="populate_ship_customizations", description="Create default customization records for all existing ships")
+    async def populate_ship_customizations(self, interaction: discord.Interaction):
+        """Create default customization records for ships that don't have them"""
+        
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
         
-        # Get all existing ships
-        ships = self.db.execute_query(
-            "SELECT ship_id, ship_type, cargo_capacity, fuel_efficiency, combat_rating FROM ships",
-            fetch='all'
-        )
-        
-        updated = 0
-        for ship in ships:
-            ship_id, ship_type, cargo, fuel_eff, combat = ship
-            
-            # Determine tier based on ship type
-            from utils.ship_data import SHIP_TYPES
-            ship_info = SHIP_TYPES.get(ship_type, {})
-            tier = ship_info.get('tier', 1)
-            
-            # Calculate market value
-            base_price = ship_info.get('price', 10000)
-            market_value = int(base_price * 0.7)  # Used ships worth 70% of new
-            
-            # Update the ship
-            self.db.execute_query(
-                '''UPDATE ships SET 
-                   tier = ?,
-                   condition_rating = ?,
-                   engine_level = ?,
-                   hull_level = ?, 
-                   systems_level = ?,
-                   special_mods = ?,
-                   market_value = ?,
-                   max_upgrade_slots = ?,
-                   speed_rating = ?
-                   WHERE ship_id = ?''',
-                (tier, 85, 1, 1, 1, '[]', market_value, 3 + tier, 5, ship_id)
+        try:
+            # Get all ships that don't have customization records
+            missing_ships = self.db.execute_query(
+                '''SELECT s.ship_id 
+                   FROM ships s 
+                   LEFT JOIN ship_customization sc ON s.ship_id = sc.ship_id 
+                   WHERE sc.ship_id IS NULL''',
+                fetch='all'
             )
-            updated += 1
-        
-        embed = discord.Embed(
-            title="✅ Ships Updated",
-            description=f"Successfully updated {updated} ships with new features!",
-            color=0x00ff00
-        )
-        
-        embed.add_field(
-            name="New Features Added",
-            value="• Ship tiers (1-5)\n• Component levels (engine/hull/systems)\n• Market values\n• Condition ratings\n• Special modification slots",
-            inline=False
-        )
-        
-        await interaction.followup.send(embed=embed, ephemeral=True)
+            
+            if not missing_ships:
+                await interaction.followup.send(
+                    "✅ All ships already have customization records!",
+                    ephemeral=True
+                )
+                return
+            
+            # Create default customization records for each ship
+            created_count = 0
+            for (ship_id,) in missing_ships:
+                self.db.execute_query(
+                    '''INSERT INTO ship_customization (ship_id, paint_job, decals, interior_style, name_plate)
+                       VALUES (?, 'Default', 'None', 'Standard', 'Standard')''',
+                    (ship_id,)
+                )
+                created_count += 1
+            
+            # Get updated statistics
+            total_ships = self.db.execute_query(
+                "SELECT COUNT(*) FROM ships",
+                fetch='one'
+            )[0]
+            
+            total_customizations = self.db.execute_query(
+                "SELECT COUNT(*) FROM ship_customization",
+                fetch='one'
+            )[0]
+            
+            embed = discord.Embed(
+                title="🎨 Ship Customizations Populated",
+                description=f"Successfully created {created_count} default customization records!",
+                color=0x00ff00
+            )
+            
+            embed.add_field(
+                name="📊 Statistics",
+                value=f"Total Ships: {total_ships}\nTotal Customizations: {total_customizations}",
+                inline=False
+            )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Error populating customizations: {str(e)}",
+                ephemeral=True
+            )
     
     async def create_job(self, interaction: discord.Interaction, location_name: str, title: str, 
                         description: str, reward: int, duration: int, danger_level: int,

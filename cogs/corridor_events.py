@@ -630,7 +630,7 @@ class CorridorEventView(discord.ui.View):
         
         # --- REBALANCED DIFFICULTY ---
         # Base difficulty is higher now
-        base_difficulty = 30 + (severity * 10) # Range: 40-80
+        base_difficulty = 40 + (severity * 15) # Range: 40-80
 
         # Skill provides a direct bonus
         skill_bonus = skill_value * 2
@@ -639,18 +639,18 @@ class CorridorEventView(discord.ui.View):
         if response_type == 'emergency_protocols':
             # High risk, high reward: Full skill bonus but high failure penalty
             difficulty = base_difficulty - skill_bonus
-            crit_fail_chance = 0.10  # 10% chance of critical failure
+            crit_fail_chance = 0.15  # 10% chance of critical failure
         elif response_type == 'standard_protocols':
             # Standard: Good bonus, low failure risk
             difficulty = base_difficulty - (skill_bonus * 0.75)
-            crit_fail_chance = 0.05  # 5% chance
+            crit_fail_chance = 0.10  # 5% chance
         elif response_type == 'basic_response':
             # Basic: Low bonus, very safe
             difficulty = base_difficulty - (skill_bonus * 0.4)
             crit_fail_chance = 0.02  # 2% chance
         else:  # no_response
             difficulty = 100
-            crit_fail_chance = 0.3
+            crit_fail_chance = 0.5
             skill_bonus = 0
         
         # Roll d100
@@ -725,7 +725,7 @@ class CorridorEventView(discord.ui.View):
         severity = event_data['severity']
         
         # Calculate base damage
-        base_hp_damage = severity * 5
+        base_hp_damage = severity * 6
         base_ship_damage = severity * 8
         
         # Apply outcome modifiers

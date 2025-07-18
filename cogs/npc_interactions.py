@@ -1077,7 +1077,7 @@ class NPCActionView(discord.ui.View):
         view = NPCJobSelectView(self.bot, self.user_id, self.npc_id, self.npc_type, jobs)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
-    @discord.ui.button(label="Buy Items", style=discord.ButtonStyle.success, emoji="🛒")
+    @discord.ui.button(label="Trade Items", style=discord.ButtonStyle.success, emoji="🔃")
     async def view_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your interaction!", ephemeral=True)

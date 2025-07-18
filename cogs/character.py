@@ -891,8 +891,32 @@ class CharacterCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
     @character_group.command(name="ship", description="View detailed ship information")
     async def view_ship(self, interaction: discord.Interaction):
+        # Modified query to explicitly select the needed columns
         ship_data = self.db.execute_query(
-            '''SELECT s.*, c.name as owner_name
+            '''SELECT 
+               s.ship_id,
+               s.owner_id,
+               s.name,
+               s.ship_type,
+               s.fuel_capacity,
+               s.current_fuel,
+               s.fuel_efficiency,
+               s.combat_rating,
+               s.hull_integrity,
+               s.max_hull,
+               s.cargo_capacity,
+               s.cargo_used,
+               s.ship_hp,
+               s.max_ship_hp,
+               s.created_at,
+               s.ship_class,
+               s.upgrade_slots,
+               s.used_upgrade_slots,
+               s.exterior_description,
+               s.interior_description,
+               s.channel_id,
+               s.docked_at_location,
+               c.name as owner_name
                FROM ships s
                JOIN characters c ON s.owner_id = c.user_id
                WHERE s.owner_id = ?''',
