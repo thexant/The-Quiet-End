@@ -54,16 +54,6 @@ class ItemConfig:
             "rarity": "common"
         },
 
-        "Emergency Beacon": {
-            "type": "equipment", 
-            "description": "One-time use distress signal broadcaster",
-            "base_value": 200,
-            "usage_type": "emergency_beacon",
-            "effect_value": 1,
-            "single_use": True,
-            "rarity": "uncommon"
-        },
-
         "Data Beacon": {
             "type": "equipment",
             "description": "Transmits data packets through radio networks",
@@ -182,7 +172,6 @@ class ItemConfig:
             "rarity": "uncommon"
         },
         
-        # Trade Items (RP/Narrative only)
         "Data Chip": {
             "type": "trade",
             "description": "Contains valuable information or entertainment",

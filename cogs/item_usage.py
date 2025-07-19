@@ -62,7 +62,7 @@ class ItemUsageCog(commands.Cog):
         
         # REPLACE THE EXISTING NARRATIVE ITEM HANDLING WITH THIS
         if not usage_type or usage_type == "narrative":
-            if usage_type == "narrative":
+            if usage_type == "narrative" or not usage_type:
                 # Get uses_remaining for narrative items
                 uses_remaining = metadata.get("uses_remaining")
                 single_use = metadata.get("single_use", False)
@@ -132,14 +132,8 @@ class ItemUsageCog(commands.Cog):
                     inline=False
                 )
                 
-            else:
-                embed = discord.Embed(
-                    title="❌ Cannot Use Item",
-                    description=f"**{actual_name}** cannot be used directly.",
-                    color=0xff0000
-                )
-            await interaction.response.send_message(embed=embed, ephemeral=False)
-            return
+                await interaction.response.send_message(embed=embed, ephemeral=False)
+                return
         
         # REST OF THE METHOD REMAINS THE SAME
         # Check if item has uses remaining
@@ -446,7 +440,7 @@ class ItemUsageCog(commands.Cog):
                 )
             
             # Create personal log interface
-            from views.personal_log_views import PersonalLogMainView
+            from utils.views import PersonalLogMainView
             view = PersonalLogMainView(self.bot, user_id, logbook_id, char_name)
             
             embed = discord.Embed(

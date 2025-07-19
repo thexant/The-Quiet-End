@@ -50,6 +50,9 @@ class EmergencyBeaconModal(discord.ui.Modal):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Defer the response first
+        await interaction.response.defer(ephemeral=True)
+        
         beacon_cog = self.beacon_view.bot.get_cog('BeaconSystemCog')
         if beacon_cog:
             success = await beacon_cog.deploy_emergency_beacon(
@@ -70,9 +73,9 @@ class EmergencyBeaconModal(discord.ui.Modal):
                 embed.add_field(name="Range", value="Galactic radio network", inline=True)
                 embed.set_footer(text="The beacon will continue transmitting even if you leave the area")
                 
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
             else:
-                await interaction.response.send_message("Failed to deploy beacon!", ephemeral=True)
+                await interaction.followup.send("Failed to deploy beacon!", ephemeral=True)
 
 class NewsBeaconModal(discord.ui.Modal):
     def __init__(self, beacon_view):
@@ -95,6 +98,9 @@ class NewsBeaconModal(discord.ui.Modal):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Defer the response first
+        await interaction.response.defer(ephemeral=True)
+        
         beacon_cog = self.beacon_view.bot.get_cog('BeaconSystemCog')
         if beacon_cog:
             success = await beacon_cog.deploy_news_beacon(
@@ -116,9 +122,9 @@ class NewsBeaconModal(discord.ui.Modal):
                 embed.add_field(name="Injection Status", value="⏳ Processing through news relays", inline=True)
                 embed.set_footer(text="Your injection will appear in galactic news with appropriate transmission delay")
                 
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
             else:
-                await interaction.response.send_message("Failed to inject data into news stream!", ephemeral=True)
+                await interaction.followup.send("Failed to inject data into news stream!", ephemeral=True)
 
 class BeaconSystemCog(commands.Cog):
     def __init__(self, bot):

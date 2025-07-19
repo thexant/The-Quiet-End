@@ -630,10 +630,10 @@ class CorridorEventView(discord.ui.View):
         
         # --- REBALANCED DIFFICULTY ---
         # Base difficulty is higher now
-        base_difficulty = 40 + (severity * 15) # Range: 40-80
+        base_difficulty = 60 + ((severity - 1) * 15) # Range: 60-120
 
         # Skill provides a direct bonus
-        skill_bonus = skill_value * 2
+        skill_bonus = skill_value * 1.2
 
         # Response type now acts as a multiplier on your skill bonus
         if response_type == 'emergency_protocols':

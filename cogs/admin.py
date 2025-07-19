@@ -978,73 +978,62 @@ class AdminCog(commands.Cog):
                 return 0
             return int(100 * (level - 1) * (1 + (level - 1) * 0.1))
     
-    @admin_group.command(name="populate_ship_customizations", description="Create default customization records for all existing ships")
-    async def populate_ship_customizations(self, interaction: discord.Interaction):
-        """Create default customization records for ships that don't have them"""
-        
+    @admin_group.command(name="fix_item_metadata", description="Fix metadata for items in shops and inventories")
+    async def fix_item_metadata(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
         
-        try:
-            # Get all ships that don't have customization records
-            missing_ships = self.db.execute_query(
-                '''SELECT s.ship_id 
-                   FROM ships s 
-                   LEFT JOIN ship_customization sc ON s.ship_id = sc.ship_id 
-                   WHERE sc.ship_id IS NULL''',
-                fetch='all'
-            )
-            
-            if not missing_ships:
-                await interaction.followup.send(
-                    "✅ All ships already have customization records!",
-                    ephemeral=True
-                )
-                return
-            
-            # Create default customization records for each ship
-            created_count = 0
-            for (ship_id,) in missing_ships:
-                self.db.execute_query(
-                    '''INSERT INTO ship_customization (ship_id, paint_job, decals, interior_style, name_plate)
-                       VALUES (?, 'Default', 'None', 'Standard', 'Standard')''',
-                    (ship_id,)
-                )
-                created_count += 1
-            
-            # Get updated statistics
-            total_ships = self.db.execute_query(
-                "SELECT COUNT(*) FROM ships",
-                fetch='one'
-            )[0]
-            
-            total_customizations = self.db.execute_query(
-                "SELECT COUNT(*) FROM ship_customization",
-                fetch='one'
-            )[0]
-            
-            embed = discord.Embed(
-                title="🎨 Ship Customizations Populated",
-                description=f"Successfully created {created_count} default customization records!",
-                color=0x00ff00
-            )
-            
-            embed.add_field(
-                name="📊 Statistics",
-                value=f"Total Ships: {total_ships}\nTotal Customizations: {total_customizations}",
-                inline=False
-            )
-            
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            
-        except Exception as e:
-            await interaction.followup.send(
-                f"❌ Error populating customizations: {str(e)}",
-                ephemeral=True
-            )
+        from utils.item_config import ItemConfig
+        import json
+        
+        # Fix shop items first
+        shop_items = self.db.execute_query(
+            "SELECT item_id, item_name, metadata FROM shop_items",
+            fetch='all'
+        )
+        
+        shop_fixed = 0
+        for item_id, item_name, current_metadata in shop_items:
+            if not current_metadata or current_metadata == '{}' or current_metadata == '':
+                item_def = ItemConfig.get_item_definition(item_name)
+                if item_def:
+                    new_metadata = ItemConfig.create_item_metadata(item_name)
+                    self.db.execute_query(
+                        "UPDATE shop_items SET metadata = ? WHERE item_id = ?",
+                        (new_metadata, item_id)
+                    )
+                    shop_fixed += 1
+        
+        # Fix inventory items
+        inv_items = self.db.execute_query(
+            "SELECT item_id, item_name, metadata FROM inventory",
+            fetch='all'
+        )
+        
+        inv_fixed = 0
+        for item_id, item_name, current_metadata in inv_items:
+            if not current_metadata or current_metadata == '{}' or current_metadata == '':
+                item_def = ItemConfig.get_item_definition(item_name)
+                if item_def:
+                    new_metadata = ItemConfig.create_item_metadata(item_name)
+                    self.db.execute_query(
+                        "UPDATE inventory SET metadata = ? WHERE item_id = ?",
+                        (new_metadata, item_id)
+                    )
+                    inv_fixed += 1
+        
+        embed = discord.Embed(
+            title="✅ Metadata Fix Complete",
+            description="Fixed missing metadata for items",
+            color=0x00ff00
+        )
+        embed.add_field(name="Shop Items Fixed", value=str(shop_fixed), inline=True)
+        embed.add_field(name="Inventory Items Fixed", value=str(inv_fixed), inline=True)
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
     
     async def create_job(self, interaction: discord.Interaction, location_name: str, title: str, 
                         description: str, reward: int, duration: int, danger_level: int,

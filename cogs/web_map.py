@@ -304,7 +304,9 @@ class WebMapCog(commands.Cog, name="WebMap"):
     <html lang="en">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="mobile-web-app-capable" content="yes">
         <title>Galaxy Map - Navigation Terminal</title>
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
         <link rel="stylesheet" href="/static/css/map.css" />
@@ -2009,6 +2011,84 @@ class WebMapCog(commands.Cog, name="WebMap"):
         .corridor-info-panel button:hover {
             background: var(--secondary-color);
             box-shadow: 0 0 15px var(--glow-primary);
+        }
+        /* Mobile performance and layout fixes */
+        /* Mobile-specific fixes */
+        @media (max-width: 768px), (pointer: coarse) {
+            /* Disable animations for performance */
+            .scanlines,
+            .static-overlay {
+                display: none !important;
+            }
+            
+            * {
+                animation: none !important;
+                transition: transform 0.2s ease, opacity 0.2s ease !important;
+            }
+            
+            /* Fix panel positioning */
+            .location-panel {
+                position: fixed !important;
+                bottom: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                top: auto !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                max-height: 60vh !important;
+                border-radius: 16px 16px 0 0 !important;
+                transform: translateZ(0) !important;
+                -webkit-transform: translateZ(0) !important;
+                z-index: 9999 !important;
+            }
+            
+            .location-panel.hidden {
+                transform: translateY(100%) !important;
+                -webkit-transform: translateY(100%) !important;
+                opacity: 1 !important;
+            }
+            
+            /* Ensure content is scrollable */
+            .panel-content {
+                max-height: calc(60vh - 80px) !important;
+                overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+                padding: 1rem !important;
+            }
+            
+            /* Force hardware acceleration */
+            #header,
+            #map,
+            .location-panel {
+                -webkit-backface-visibility: hidden;
+                backface-visibility: hidden;
+                -webkit-perspective: 1000;
+                perspective: 1000;
+                will-change: transform;
+            }
+            
+            /* Fix touch targets */
+            .leaflet-marker-icon,
+            svg path,
+            svg circle,
+            svg polygon {
+                pointer-events: all !important;
+                cursor: pointer !important;
+            }
+            
+            /* Larger buttons */
+            button,
+            .control-btn {
+                min-height: 44px !important;
+                min-width: 44px !important;
+            }
+            
+            /* Fix inputs */
+            input,
+            select,
+            textarea {
+                font-size: 16px !important;
+            }
         }'''
         with open("web/static/css/map.css", "w", encoding='utf-8') as f:
             f.write(css_content)
@@ -2020,30 +2100,28 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         this.websocket = null;
                         this.locations = new Map();
                         this.corridors = new Map();
+                        this.corridorPolylines = new Map(); // FIXED: Initialize this
                         this.players = new Map();
-                        this.npcs = new Map();  // ADD THIS LINE
+                        this.npcs = new Map();
                         this.npcsInTransit = new Map();
                         this.selectedLocation = null;
                         this.routePolylines = [];
                         this.highlightedLocations = [];
-                        this.currentRoute = null;
-                        this.labels = new Map();
-                        this.routeMode = false;
-                        this.showLabels = false;
-                        this.showRoutes = false;
-                        this.showNPCs = true;  // ADD THIS LINE
+                        this.playerLabels = new Map();
+                        this.showLabels = true;
+                        this.showRoutes = false; // FIXED: Initialize as false to match button state
+                        this.showNPCs = true; // FIXED: Initialize this
+                        this.labelGrid = new Map(); // FIXED: Initialize this
+                        this.currentTheme = 'cyan';
+                        this.liveUpdates = true;
+                        this.selectedOrigin = null;
                         this.headerExpanded = true;
+                        this.playersInTransit = new Map();
+                        this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
                         this.reconnectAttempts = 0;
                         this.maxReconnectAttempts = 10;
                         this.reconnectDelay = 1000;
-                        this.labelGrid = new Map();
-                        this.selectedCorridor = null;
-                        this.corridorPolylines = new Map(); // Track corridor polylines
-                        this.showRoutes = false; // Change default to false (hidden)
-                        this.playersInTransit = new Map(); // Track players in transit
-                        this.pendingLabelTimeouts = [];
-                        this.initializeColorScheme();
-                        console.log('🎨 Color scheme initialized');
+                        
                         this.init();
                     }
                     
@@ -2272,6 +2350,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             }
                         });
                     }
+
                     setupSearchFunctionality() {
                         const searchInput = document.getElementById('universal-search');
                         const searchBtn = document.getElementById('search-btn');
@@ -2424,7 +2503,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             case 'npc_update':
                                 this.updateNPCs(data.data);
                                 break;
-                            case 'transit_update':  // Add this new case
+                            case 'transit_update':
                                 this.updatePlayersInTransit(data.data);
                                 break;
                             case 'location_update':
@@ -2440,28 +2519,40 @@ class WebMapCog(commands.Cog, name="WebMap"):
                     
                     updateGalaxyData(data) {
                         try {
+                            console.log('🌌 Updating galaxy data:', {
+                                locations: data.locations?.length || 0,
+                                corridors: data.corridors?.length || 0,
+                                players: data.players?.length || 0
+                            });
+                            
                             this.locations.clear();
                             this.corridors.clear();
+                            this.corridorPolylines.clear();
                             this.labelGrid.clear();
+                            
+                            // Clear all layers except the base layer
                             this.map.eachLayer((layer) => {
                                 if (layer !== this.map._layers[Object.keys(this.map._layers)[0]]) {
                                     this.map.removeLayer(layer);
                                 }
                             });
+                            
                             this.updatePlayersInTransit(data.players_in_transit || []);
                             this.updateNPCsInTransit(data.npcs_in_transit || []);
                             
+                            // Add locations first
                             data.locations.forEach(location => {
                                 this.addLocation(location);
                             });
                             
+                            // Then add corridors
                             data.corridors.forEach(corridor => {
                                 this.addCorridor(corridor);
                             });
                             
                             this.applyRouteVisibility();
                             this.updatePlayers(data.players || []);
-                            this.updateNPCs(data.dynamic_npcs || []);  // ADD THIS LINE
+                            this.updateNPCs(data.dynamic_npcs || []);
                             this.populateRouteSelects();
                             this.fitMapToBounds();
                             
@@ -2530,6 +2621,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         
                         return marker;
                     }    
+
                     getZoomAdjustedBaseSize(locationType) {
                         const zoom = this.map.getZoom();
                         
@@ -2557,6 +2649,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             return baseSize;
                         }
                     }
+
                     addCorridor(corridor) {
                         // Improved corridor type detection
                         let corridorType = 'ungated'; // default
@@ -2565,16 +2658,17 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         // Detect corridor type based on name patterns
                         if (corridor.name.toLowerCase().includes('approach')) {
                             corridorType = 'approach';
-                            color = '#8c75ff'; // light green for local space
+                            color = '#8c75ff'; // light purple for local space
                         } else if (corridor.name.toLowerCase().includes('ungated')) {
                             corridorType = 'ungated';
                             color = 'var(--warning-color)'; // orange for ungated
                         } else {
                             // Check if route connects to gates by looking at endpoint types
-                            const originIsGate = this.locations.get(corridor.origin_location)?.location_type === 'gate';
-                            const destIsGate = this.locations.get(corridor.destination_location)?.location_type === 'gate';
+                            const originLocation = this.locations.get(corridor.origin_location);
+                            const destLocation = this.locations.get(corridor.destination_location);
                             
-                            if (originIsGate || destIsGate) {
+                            if ((originLocation && originLocation.location_type === 'Transit Gate') || 
+                                (destLocation && destLocation.location_type === 'Transit Gate')) {
                                 corridorType = 'gated';
                                 color = 'var(--success-color)'; // green for gated
                             }
@@ -2708,6 +2802,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         infoPanel.innerHTML = panelContent;
                         infoPanel.style.display = 'block';
                     }
+
                     // Clear corridor selection
                     clearCorridorSelection() {
                         if (this.selectedCorridor) {
@@ -2720,6 +2815,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             infoPanel.style.display = 'none';
                         }
                     }
+
                     updatePlayersInTransit(transitData) {
                         this.playersInTransit.clear();
                         
@@ -2758,6 +2854,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             }
                         });
                     }
+
                     toggleRoutes() {
                         this.showRoutes = !this.showRoutes;
                         const btn = document.getElementById('toggle-routes-btn');
@@ -2776,6 +2873,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             }
                         }
                     }
+
                     toggleNPCs() {
                         this.showNPCs = !this.showNPCs;
                         const btn = document.getElementById('toggle-npcs-btn');
@@ -2804,6 +2902,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             }
                         });
                     }
+
                     applyRouteVisibility() {
                         this.corridors.forEach(corridor => {
                             // Apply visibility to the visible polyline
@@ -2835,6 +2934,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             }
                         });
                     }
+
                     updateNPCs(npcs) {
                         this.npcs.clear();
                         
@@ -2882,6 +2982,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             marker.bringToFront();
                         }
                     }
+
                     updatePlayers(players) {
                         const playerCount = document.getElementById('player-count');
                         if (playerCount) {
@@ -2939,6 +3040,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             marker.bringToFront();
                         }
                     }
+
                     updateNPCsInTransit(transitData) {
                         this.npcsInTransit.clear();
                         
@@ -2952,6 +3054,7 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         // Update corridor highlighting
                         this.updateCorridorHighlighting();
                     }
+
                     selectLocation(location) {
                         this.selectedLocation = location;
                         this.updateLocationPanel(location);
@@ -2969,10 +3072,10 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         
                         titleElement.textContent = location.name.toUpperCase();
                         
+                        // Show basic info immediately
                         const playersHere = this.players.get(location.location_id) || [];
                         const npcsHere = this.npcs.get(location.location_id) || [];
                         const staticNPCs = location.static_npcs || [];
-                        const subLocations = await this.getSubLocations(location.location_id);
                         
                         const wealthDisplay = this.getWealthDisplay(location.wealth_level);
                         const typeIcon = this.getLocationTypeIcon(location.location_type);
@@ -2993,7 +3096,8 @@ class WebMapCog(commands.Cog, name="WebMap"):
                             `;
                         }
                         
-                        const detailsHtml = `
+                        // Show basic details immediately
+                        detailsElement.innerHTML = `
                             ${alignmentPanel}
                             <div class="location-detail">
                                 <strong>${typeIcon} TYPE:</strong> ${location.location_type.toUpperCase()}
@@ -3013,58 +3117,86 @@ class WebMapCog(commands.Cog, name="WebMap"):
                                     ${location.description || 'No description available.'}
                                 </div>
                             </div>
-                            ${subLocations.length > 0 ? `
-                                <div class="sub-locations">
+                            <div class="loading-sub-locations" style="margin-top: 1rem; color: var(--text-muted);">
+                                Loading additional areas...
+                            </div>
+                        `;
+                        
+                        // Try to fetch sub-locations, but don't let it block the UI
+                        try {
+                            const subLocations = await this.getSubLocations(location.location_id);
+                            
+                            // Remove loading message
+                            const loadingDiv = detailsElement.querySelector('.loading-sub-locations');
+                            if (loadingDiv) {
+                                loadingDiv.remove();
+                            }
+                            
+                            // Add sub-locations if any
+                            if (subLocations.length > 0) {
+                                const subLocDiv = document.createElement('div');
+                                subLocDiv.className = 'sub-locations';
+                                subLocDiv.innerHTML = `
                                     <strong>🏢 AVAILABLE AREAS:</strong>
                                     ${subLocations.map(sub => `
                                         <div class="sub-location-item">
                                             ${sub.icon || '📍'} ${sub.name.toUpperCase()} - ${sub.description}
                                         </div>
                                     `).join('')}
-                                </div>
-                            ` : ''}
-                            ${playersHere.length > 0 ? `
-                                <div class="players-list">
-                                    <strong>👥 CONTACTS PRESENT (${playersHere.length}):</strong>
+                                `;
+                                detailsElement.appendChild(subLocDiv);
+                            }
+                            
+                            // Add players if any
+                            if (playersHere.length > 0) {
+                                const playersDiv = document.createElement('div');
+                                playersDiv.className = 'players-list';
+                                playersDiv.innerHTML = `
+                                    <strong>👥 CONTACTS HERE:</strong>
                                     ${playersHere.map(player => `
                                         <div class="player-item">
                                             <span class="status-indicator status-online"></span>
                                             ${player.name.toUpperCase()}
                                         </div>
                                     `).join('')}
-                                </div>
-                            ` : ''}
-                            ${npcsHere.length > 0 ? `
-                                <div class="players-list">
-                                    <strong>🤖 NPCS PRESENT (${npcsHere.length}):</strong>
-                                    ${npcsHere.map(npc => `
-                                        <div class="player-item">
-                                            <span class="status-indicator" style="background: var(--warning-color); box-shadow: 0 0 8px var(--warning-color);"></span>
-                                            ${npc.name.toUpperCase()} (${npc.callsign}) - ${npc.ship_name}
+                                `;
+                                detailsElement.appendChild(playersDiv);
+                            }
+                            
+                            // Add NPCs if any
+                            const allNPCs = [...npcsHere, ...staticNPCs];
+                            if (allNPCs.length > 0) {
+                                const npcsDiv = document.createElement('div');
+                                npcsDiv.className = 'npcs-list';
+                                npcsDiv.innerHTML = `
+                                    <strong>🤖 NPCS:</strong>
+                                    ${allNPCs.map(npc => `
+                                        <div class="npc-item">
+                                            <span>${npc.name}</span>
                                         </div>
                                     `).join('')}
-                                </div>
-                            ` : ''}
-                            ${staticNPCs.length > 0 ? `
-                                <div class="players-list">
-                                    <strong>👤 NOTABLE INHABITANTS (${staticNPCs.length}):</strong>
-                                    ${staticNPCs.map(npc => `
-                                        <div class="player-item">
-                                            <span class="status-indicator" style="background: var(--accent-color); box-shadow: 0 0 8px var(--accent-color);"></span>
-                                            ${npc.name.toUpperCase()} (${npc.age}) - ${npc.occupation.toUpperCase()}
-                                            <div style="font-size: 0.7rem; color: var(--text-muted); margin-left: 1rem; font-style: italic;">
-                                                ${npc.personality}
-                                            </div>
-                                        </div>
-                                    `).join('')}
-                                </div>
-                            ` : ''}
-                            ${playersHere.length === 0 && npcsHere.length === 0 && staticNPCs.length === 0 ? '<div class="location-detail"><em>No contacts, NPCs, or notable inhabitants currently present</em></div>' : ''}
-                        `;
-                        
-                        detailsElement.innerHTML = detailsHtml;
+                                `;
+                                detailsElement.appendChild(npcsDiv);
+                            }
+                            
+                            // Add empty message if no inhabitants
+                            if (playersHere.length === 0 && allNPCs.length === 0) {
+                                const emptyDiv = document.createElement('div');
+                                emptyDiv.className = 'location-detail';
+                                emptyDiv.innerHTML = '<em>No contacts, NPCs, or notable inhabitants currently present</em>';
+                                detailsElement.appendChild(emptyDiv);
+                            }
+                            
+                        } catch (error) {
+                            console.error('Failed to load sub-locations:', error);
+                            // Remove loading message
+                            const loadingDiv = detailsElement.querySelector('.loading-sub-locations');
+                            if (loadingDiv) {
+                                loadingDiv.textContent = 'Additional areas unavailable';
+                                loadingDiv.style.color = 'var(--error-color)';
+                            }
+                        }
                     }
-                    
                     
                     getWealthDisplay(wealthLevel) {
                         if (wealthLevel >= 9) return '👑 OPULENT';
@@ -3308,332 +3440,301 @@ class WebMapCog(commands.Cog, name="WebMap"):
                         this.map.fitBounds(bounds, { padding: [40, 40] });
                     }
                     
-                toggleLabels() {
-                    this.showLabels = !this.showLabels;
-                    const btn = document.getElementById('toggle-labels-btn');
-                    
-                    if (this.showLabels) {
-                        this.addLocationLabels();
-                        if (btn) {
-                            btn.textContent = 'HIDE LABELS';
-                            btn.classList.add('toggle-active');
-                        }
-                    } else {
-                        this.removeLocationLabels();
-                        if (btn) {
-                            btn.textContent = 'SHOW LABELS';
-                            btn.classList.remove('toggle-active');
-                        }
-                    }
-                }
-                
-                addLocationLabels() {
-                    this.removeLocationLabels();
-                    
-                    const zoom = this.map.getZoom();
-                    const bounds = this.map.getBounds();
-                    
-                    // Get all visible locations
-                    let visibleLocations = [];
-                    this.locations.forEach(location => {
-                        const point = L.latLng(location.y_coord, location.x_coord);
-                        if (bounds.contains(point)) {
-                            visibleLocations.push(location);
-                        }
-                    });
-
-                    // Simple, predictable logic: if few locations visible, show all labels
-                    // If many locations visible, show only the most important ones
-                    let locationsToLabel;
-                    
-                    if (visibleLocations.length <= 8) {
-                        // When zoomed in close or few locations visible, show ALL labels
-                        locationsToLabel = visibleLocations;
-                    } else if (zoom >= 2) {
-                        // High zoom with many locations - show top 75%
-                        visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
-                        locationsToLabel = visibleLocations.slice(0, Math.floor(visibleLocations.length * 0.75));
-                    } else if (zoom >= 0) {
-                        // Medium zoom - show top 50%
-                        visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
-                        locationsToLabel = visibleLocations.slice(0, Math.floor(visibleLocations.length * 0.5));
-                    } else if (zoom >= -2) {
-                        // Low zoom - show top 25%
-                        visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
-                        locationsToLabel = visibleLocations.slice(0, Math.max(1, Math.floor(visibleLocations.length * 0.25)));
-                    } else {
-                        // Very low zoom - show only top 10 most important
-                        visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
-                        locationsToLabel = visibleLocations.slice(0, Math.min(10, visibleLocations.length));
-                    }
-
-                    // Initialize timeout tracking
-                    if (!this.pendingLabelTimeouts) {
-                        this.pendingLabelTimeouts = [];
-                    }
-
-                    // Add labels immediately instead of with delays to prevent conflicts
-                    locationsToLabel.forEach((location) => {
-                        this.addSimpleLabel(location);
-                    });
-                }
-
-                
-                // Replace the existing addSimpleLabel function
-                addSimpleLabel(location) {
-                    const zoom = this.map.getZoom();
-                    const labelSize = this.getSimpleLabelSize(zoom);
-                    
-                    // Simple offset pattern - cycle through positions to avoid overlap
-                    const offsetPatterns = [
-                        [0, -35],      // Above
-                        [30, -20],     // Top-right
-                        [30, 20],      // Bottom-right
-                        [0, 35],       // Below
-                        [-30, 20],     // Bottom-left
-                        [-30, -20],    // Top-left
-                        [40, 0],       // Right
-                        [-40, 0]       // Left
-                    ];
-                    
-                    // Use location ID to get consistent positioning
-                    const patternIndex = location.location_id % offsetPatterns.length;
-                    const [offsetX, offsetY] = offsetPatterns[patternIndex];
-                    
-                    // Scale offset with zoom
-                    const zoomScale = Math.max(0.7, Math.min(1.5, 1.0 + (zoom * 0.1)));
-                    const finalOffsetX = offsetX * zoomScale;
-                    const finalOffsetY = offsetY * zoomScale;
-                    
-                    // Calculate label position
-                    const basePoint = this.map.latLngToContainerPoint([location.y_coord, location.x_coord]);
-                    const labelPoint = L.point(basePoint.x + finalOffsetX, basePoint.y + finalOffsetY);
-                    const labelPosition = this.map.containerPointToLatLng(labelPoint);
-                    
-                    // Check if position is within map bounds
-                    if (!this.map.getBounds().contains(labelPosition)) {
-                        // Try opposite offset if out of bounds
-                        const fallbackPoint = L.point(basePoint.x - finalOffsetX, basePoint.y - finalOffsetY);
-                        const fallbackPosition = this.map.containerPointToLatLng(fallbackPoint);
-                        if (this.map.getBounds().contains(fallbackPosition)) {
-                            this.createLabelMarker(location, fallbackPosition, labelSize, zoom);
-                        }
-                        return;
-                    }
-                    
-                    this.createLabelMarker(location, labelPosition, labelSize, zoom);
-                }
-
-                // Add this new function to create properly sized label markers
-                createLabelMarker(location, position, labelSize, zoom) {
-                    const wealthClass = this.getWealthClass(location.wealth_level);
-                    const zoomClass = this.getZoomClass(zoom);
-                    const labelText = this.formatLabelText(location.name, zoom);
-                    
-                    // Calculate proper text dimensions
-                    const textLength = labelText.length;
-                    const charWidth = zoom >= 2 ? 8 : zoom >= 0 ? 7 : 6;
-                    const calculatedWidth = Math.max(labelSize.width, textLength * charWidth + 20);
-                    
-                    const label = L.marker(position, {
-                        icon: L.divIcon({
-                            className: `location-label ${wealthClass} ${zoomClass}`,
-                            html: `<div class="label-text">${labelText}</div>`,
-                            iconSize: [calculatedWidth, labelSize.height],
-                            iconAnchor: [calculatedWidth / 2, labelSize.height / 2]
-                        }),
-                        interactive: false
-                    });
-
-                    label.addTo(this.map);
-                    location.label = label;
-                }
-                formatLabelText(name, zoom) {
-                    // Truncate long names at low zoom levels
-                    if (zoom < -1 && name.length > 12) {
-                        return name.substring(0, 10).toUpperCase() + '...';
-                    } else if (zoom < 1 && name.length > 15) {
-                        return name.substring(0, 12).toUpperCase() + '...';
-                    }
-                    return name.toUpperCase();
-                }
-
-                getSimpleLabelSize(zoom) {
-                    if (zoom >= 3) {
-                        return { width: 120, height: 28 };
-                    } else if (zoom >= 1) {
-                        return { width: 100, height: 24 };
-                    } else if (zoom >= -1) {
-                        return { width: 80, height: 20 };
-                    } else {
-                        return { width: 70, height: 18 };
-                    }
-                }
-
-                getLocationImportance(location) {
-                    const typeWeights = {
-                        'Space Station': 100,
-                        'Colony': 80,
-                        'Transit Gate': 60,
-                        'Outpost': 40
-                    };
-                    
-                    const baseScore = typeWeights[location.location_type] || 20;
-                    const wealthBonus = (location.wealth_level || 1) * 10;
-                    const populationBonus = Math.log10((location.population || 1) + 1) * 5;
-                    
-                    return baseScore + wealthBonus + populationBonus;
-                }
-
-                getWealthClass(wealthLevel) {
-                    if (wealthLevel >= 7) return 'wealth-high';
-                    if (wealthLevel >= 4) return 'wealth-medium';
-                    return 'wealth-low';
-                }
-
-                getZoomClass(zoom) {
-                    if (zoom >= 3) return 'zoom-large';
-                    if (zoom >= 0) return 'zoom-medium';
-                    return 'zoom-small';
-                }
-
-                updateLabelsForZoom() {
-                    if (this.showLabels) {
-                        clearTimeout(this.labelUpdateTimeout);
-                        this.labelUpdateTimeout = setTimeout(() => {
+                    toggleLabels() {
+                        this.showLabels = !this.showLabels;
+                        const btn = document.getElementById('toggle-labels-btn');
+                        
+                        if (this.showLabels) {
                             this.addLocationLabels();
-                        }, 200);
-                    }
-                }
-                // Fix the removeLocationLabels function
-                removeLocationLabels() {
-                    this.locations.forEach(location => {
-                        if (location.label) {
-                            this.map.removeLayer(location.label);
-                            location.label = null;
+                            if (btn) {
+                                btn.textContent = 'HIDE LABELS';
+                                btn.classList.add('toggle-active');
+                            }
+                        } else {
+                            this.removeLocationLabels();
+                            if (btn) {
+                                btn.textContent = 'SHOW LABELS';
+                                btn.classList.remove('toggle-active');
+                            }
                         }
-                    });
-                }
-
-                // Update the createLocationMarker function to use different shapes and sizes
-                createLocationMarker(location) {
-                    const colors = {
-                        'Colony': 'var(--success-color)',
-                        'Space Station': 'var(--primary-color)',
-                        'Outpost': 'var(--warning-color)',
-                        'Transit Gate': '#ffdd00'
-                    };
-                    
-                    const color = colors[location.location_type] || '#ffffff';
-                    const zoom = this.map.getZoom();
-                    
-                    // Apply consistent zoom scaling to ALL locations
-                    let finalSize;
-                    if (zoom < -1) {
-                        finalSize = 12; // All tiny when zoomed way out
-                    } else if (zoom < 0) {
-                        finalSize = 13; // All small when zoomed out
-                    } else if (zoom < 1) {
-                        finalSize = 14; // All medium when mid-zoom
-                    } else {
-                        finalSize = 15; // All normal when zoomed in
                     }
                     
-                    return this.createShapedMarker(location, color, finalSize);
-                }
-                calculatePopulationSize(population) {
-                    // Disabled to ensure uniform scaling
-                    return 0;
-                }
-                getBaseMarkerSize(locationType) {
-                    // Uniform base size - differentiation comes from shape, not size
-                    return 15;
-                }
-                createShapedMarker(location, color, size) {
-                    const markerOptions = {
-                        radius: size,
-                        fillColor: '#ffffff',
-                        color: '#ffffff',
-                        weight: 2,
-                        opacity: 1,
-                        fillOpacity: 0.9,
-                        className: `location-marker ${location.location_type.toLowerCase().replace(' ', '-')}`
-                    };
+                    addLocationLabels() {
+                        this.removeLocationLabels();
+                        
+                        const zoom = this.map.getZoom();
+                        const bounds = this.map.getBounds();
+                        
+                        // Get all visible locations
+                        let visibleLocations = [];
+                        this.locations.forEach(location => {
+                            const point = L.latLng(location.y_coord, location.x_coord);
+                            if (bounds.contains(point)) {
+                                visibleLocations.push(location);
+                            }
+                        });
 
-                    let marker;
-                    
-                    // Use different shapes based on location type
-                    switch(location.location_type.toLowerCase()) {
-                        case 'colony':
+                        // Simple, predictable logic: if few locations visible, show all labels
+                        // If many locations visible, show only the most important ones
+                        let locationsToLabel;
+                        
+                        if (visibleLocations.length <= 8) {
+                            // When zoomed in close or few locations visible, show ALL labels
+                            locationsToLabel = visibleLocations;
+                        } else if (zoom >= 2) {
+                            // High zoom with many locations - show top 75%
+                            visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
+                            locationsToLabel = visibleLocations.slice(0, Math.floor(visibleLocations.length * 0.75));
+                        } else if (zoom >= 0) {
+                            // Medium zoom - show top 50%
+                            visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
+                            locationsToLabel = visibleLocations.slice(0, Math.floor(visibleLocations.length * 0.5));
+                        } else if (zoom >= -2) {
+                            // Low zoom - show top 25%
+                            visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
+                            locationsToLabel = visibleLocations.slice(0, Math.max(1, Math.floor(visibleLocations.length * 0.25)));
+                        } else {
+                            // Very low zoom - show only top 10 most important
+                            visibleLocations.sort((a, b) => this.getLocationImportance(b) - this.getLocationImportance(a));
+                            locationsToLabel = visibleLocations.slice(0, Math.min(10, visibleLocations.length));
+                        }
+
+                        // Initialize timeout tracking
+                        if (!this.pendingLabelTimeouts) {
+                            this.pendingLabelTimeouts = [];
+                        }
+
+                        // Add labels immediately instead of with delays to prevent conflicts
+                        locationsToLabel.forEach((location) => {
+                            this.addSimpleLabel(location);
+                        });
+                    }
+
+                    // Replace the existing addSimpleLabel function
+                    addSimpleLabel(location) {
+                        const zoom = this.map.getZoom();
+                        const labelSize = this.getSimpleLabelSize(zoom);
+                        
+                        // Simple offset pattern - cycle through positions to avoid overlap
+                        const offsetPatterns = [
+                            [0, -35],      // Above
+                            [30, -20],     // Top-right
+                            [30, 20],      // Bottom-right
+                            [0, 35],       // Below
+                            [-30, 20],     // Bottom-left
+                            [-30, -20],    // Top-left
+                            [40, 0],       // Right
+                            [-40, 0]       // Left
+                        ];
+                        
+                        // Use location ID to get consistent positioning
+                        const patternIndex = location.location_id % offsetPatterns.length;
+                        const [offsetX, offsetY] = offsetPatterns[patternIndex];
+                        
+                        // Scale offset with zoom
+                        const zoomScale = Math.max(0.7, Math.min(1.5, 1.0 + (zoom * 0.1)));
+                        const finalOffsetX = offsetX * zoomScale;
+                        const finalOffsetY = offsetY * zoomScale;
+                        
+                        // Calculate label position
+                        const basePoint = this.map.latLngToContainerPoint([location.y_coord, location.x_coord]);
+                        const labelPoint = L.point(basePoint.x + finalOffsetX, basePoint.y + finalOffsetY);
+                        const labelPosition = this.map.containerPointToLatLng(labelPoint);
+                        
+                        // Check if position is within map bounds
+                        if (!this.map.getBounds().contains(labelPosition)) {
+                            // Try opposite offset if out of bounds
+                            const fallbackPoint = L.point(basePoint.x - finalOffsetX, basePoint.y - finalOffsetY);
+                            const fallbackPosition = this.map.containerPointToLatLng(fallbackPoint);
+                            if (this.map.getBounds().contains(fallbackPosition)) {
+                                this.createLabelMarker(location, fallbackPosition, labelSize, zoom);
+                            }
+                            return;
+                        }
+                        
+                        this.createLabelMarker(location, labelPosition, labelSize, zoom);
+                    }
+
+                    // Add this new function to create properly sized label markers
+                    createLabelMarker(location, position, labelSize, zoom) {
+                        const wealthClass = this.getWealthClass(location.wealth_level);
+                        const zoomClass = this.getZoomClass(zoom);
+                        const labelText = this.formatLabelText(location.name, zoom);
+                        
+                        // Calculate proper text dimensions
+                        const textLength = labelText.length;
+                        const charWidth = zoom >= 2 ? 8 : zoom >= 0 ? 7 : 6;
+                        const calculatedWidth = Math.max(labelSize.width, textLength * charWidth + 20);
+                        
+                        const label = L.marker(position, {
+                            icon: L.divIcon({
+                                className: `location-label ${wealthClass} ${zoomClass}`,
+                                html: `<div class="label-text">${labelText}</div>`,
+                                iconSize: [calculatedWidth, labelSize.height],
+                                iconAnchor: [calculatedWidth / 2, labelSize.height / 2]
+                            }),
+                            interactive: false
+                        });
+
+                        label.addTo(this.map);
+                        location.label = label;
+                    }
+
+                    formatLabelText(name, zoom) {
+                        // Truncate long names at low zoom levels
+                        if (zoom < -1 && name.length > 12) {
+                            return name.substring(0, 10).toUpperCase() + '...';
+                        } else if (zoom < 1 && name.length > 15) {
+                            return name.substring(0, 12).toUpperCase() + '...';
+                        }
+                        return name.toUpperCase();
+                    }
+
+                    getSimpleLabelSize(zoom) {
+                        if (zoom >= 3) {
+                            return { width: 120, height: 28 };
+                        } else if (zoom >= 1) {
+                            return { width: 100, height: 24 };
+                        } else if (zoom >= -1) {
+                            return { width: 80, height: 20 };
+                        } else {
+                            return { width: 70, height: 18 };
+                        }
+                    }
+
+                    getLocationImportance(location) {
+                        const typeWeights = {
+                            'Space Station': 100,
+                            'Colony': 80,
+                            'Transit Gate': 60,
+                            'Outpost': 40
+                        };
+                        
+                        const baseScore = typeWeights[location.location_type] || 20;
+                        const wealthBonus = (location.wealth_level || 1) * 10;
+                        const populationBonus = Math.log10((location.population || 1) + 1) * 5;
+                        
+                        return baseScore + wealthBonus + populationBonus;
+                    }
+
+                    getWealthClass(wealthLevel) {
+                        if (wealthLevel >= 7) return 'wealth-high';
+                        if (wealthLevel >= 4) return 'wealth-medium';
+                        return 'wealth-low';
+                    }
+
+                    getZoomClass(zoom) {
+                        if (zoom >= 3) return 'zoom-large';
+                        if (zoom >= 0) return 'zoom-medium';
+                        return 'zoom-small';
+                    }
+
+                    updateLabelsForZoom() {
+                        if (this.showLabels) {
+                            clearTimeout(this.labelUpdateTimeout);
+                            this.labelUpdateTimeout = setTimeout(() => {
+                                this.addLocationLabels();
+                            }, 200);
+                        }
+                    }
+
+                    // Fix the removeLocationLabels function
+                    removeLocationLabels() {
+                        this.locations.forEach(location => {
+                            if (location.label) {
+                                this.map.removeLayer(location.label);
+                                location.label = null;
+                            }
+                        });
+                    }
+
+                    calculatePopulationSize(population) {
+                        // Disabled to ensure uniform scaling
+                        return 0;
+                    }
+
+                    getBaseMarkerSize(locationType) {
+                        // Uniform base size - differentiation comes from shape, not size
+                        return 15;
+                    }
+
+                    createShapedMarker(location, color, size) {
+                        const markerOptions = {
+                            radius: size,
+                            fillColor: '#ffffff',
+                            color: '#ffffff',
+                            weight: 2,
+                            opacity: 1,
+                            fillOpacity: 0.9,
+                            className: `location-marker ${location.location_type.toLowerCase().replace(' ', '-')}`
+                        };
+
+                        let marker;
+                        
+                        // FIXED: Handle the exact location types from database
+                        const locationType = location.location_type.toLowerCase();
+                        
+                        if (locationType === 'colony') {
                             marker = L.circleMarker([location.y_coord, location.x_coord], markerOptions);
-                            break;
-                            
-                        case 'space_station':
+                        } else if (locationType === 'space station') {
                             const trianglePoints = this.getTrianglePoints(location.x_coord, location.y_coord, size);
                             marker = L.polygon(trianglePoints, {
                                 ...markerOptions,
                                 className: `${markerOptions.className} triangle-marker`
                             });
-                            break;
-                            
-                        case 'outpost':
+                        } else if (locationType === 'outpost') {
                             const squarePoints = this.getSquarePoints(location.x_coord, location.y_coord, size);
                             marker = L.polygon(squarePoints, {
                                 ...markerOptions,
                                 className: `${markerOptions.className} square-marker`
                             });
-                            break;
-                            
-                        case 'gate':
+                        } else if (locationType === 'transit gate') {
                             const diamondPoints = this.getDiamondPoints(location.x_coord, location.y_coord, size);
                             marker = L.polygon(diamondPoints, {
                                 ...markerOptions,
                                 className: `${markerOptions.className} diamond-marker`
                             });
-                            break;
-                            
-                        default:
+                        } else {
+                            // Default to circle for unknown types
                             marker = L.circleMarker([location.y_coord, location.x_coord], markerOptions);
-                            break;
+                        }
+                        
+                        marker.on('click', (e) => {
+                            L.DomEvent.stopPropagation(e);
+                            this.selectLocation(location);
+                        });
+                        
+                        return marker;
                     }
-                    
-                    marker.on('click', (e) => {
-                        L.DomEvent.stopPropagation(e);
-                        this.selectLocation(location);  // ✅ CORRECT - passing location object
-                    });
-                    
-                    return marker;
-                }
-                            
 
-                getTrianglePoints(x, y, size) {
-                    const offset = size * 0.018; // Slightly larger for better visibility
-                    return [
-                        [y + offset, x],           // Top
-                        [y - offset, x - offset],  // Bottom left
-                        [y - offset, x + offset]   // Bottom right
-                    ];
-                }
+                    getTrianglePoints(x, y, size) {
+                        const offset = size * 0.018; // Slightly larger for better visibility
+                        return [
+                            [y + offset, x],           // Top
+                            [y - offset, x - offset],  // Bottom left
+                            [y - offset, x + offset]   // Bottom right
+                        ];
+                    }
 
-                getSquarePoints(x, y, size) {
-                    const offset = size * 0.015; // Slightly larger for better visibility
-                    return [
-                        [y + offset, x - offset],  // Top left
-                        [y + offset, x + offset],  // Top right
-                        [y - offset, x + offset],  // Bottom right
-                        [y - offset, x - offset]   // Bottom left
-                    ];
-                }
+                    getSquarePoints(x, y, size) {
+                        const offset = size * 0.015; // Slightly larger for better visibility
+                        return [
+                            [y + offset, x - offset],  // Top left
+                            [y + offset, x + offset],  // Top right
+                            [y - offset, x + offset],  // Bottom right
+                            [y - offset, x - offset]   // Bottom left
+                        ];
+                    }
 
-                getDiamondPoints(x, y, size) {
-                    const offset = size * 0.018; // Slightly larger for better visibility
-                    return [
-                        [y + offset, x],           // Top
-                        [y, x + offset],           // Right
-                        [y - offset, x],           // Bottom
-                        [y, x - offset]            // Left
-                    ];
-                }
+                    getDiamondPoints(x, y, size) {
+                        const offset = size * 0.018; // Slightly larger for better visibility
+                        return [
+                            [y + offset, x],           // Top
+                            [y, x + offset],           // Right
+                            [y - offset, x],           // Bottom
+                            [y, x - offset]            // Left
+                        ];
+                    }
                     
                     updateConnectionStatus(text, color) {
                         const indicator = document.getElementById('connection-indicator');

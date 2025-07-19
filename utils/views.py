@@ -89,7 +89,7 @@ async def create_random_character(bot, interaction: discord.Interaction):
         callsign = generate_callsign()
     
     # Generate balanced starting stats (total of 50 points)
-    stats = [10, 10, 10, 10]  # Base stats
+    stats = [5, 5, 5, 5]  # Base stats
     bonus_points = 10
 
     # Randomly distribute bonus points
@@ -413,8 +413,8 @@ class CharacterCreationModal(discord.ui.Modal):
             callsign = generate_callsign()
         
         # Generate balanced starting stats (total of 50 points)
-        stats = [10, 10, 10, 10]  # Base stats
-        bonus_points = 10
+        stats = [5, 5, 5, 5]  # Base stats
+        bonus_points = 2
 
         # Randomly distribute bonus points
         for _ in range(bonus_points):
@@ -1680,6 +1680,7 @@ class PersistentLocationView(discord.ui.View):
             
             # Continue with other docked buttons
             self.add_item(self.sub_areas)
+            self.add_item(self.crime_button)
             self.add_item(self.npc_interactions)
             self.add_item(self.undock_button)
             self.add_item(self.route_button)
@@ -1751,6 +1752,36 @@ class PersistentLocationView(discord.ui.View):
                         except:
                             pass
     
+    @discord.ui.button(label="Crime", style=discord.ButtonStyle.danger, emoji="🔫")
+    async def crime_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open crime actions menu"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        view = CrimeView(self.bot, self.user_id)
+        embed = discord.Embed(
+            title="🔫 Crime Actions",
+            description="Choose a criminal action:",
+            color=0xff0000
+        )
+        embed.add_field(
+            name="⚔️ Attack",
+            value="Engage in combat with NPCs or other players",
+            inline=False
+        )
+        embed.add_field(
+            name="💰 Rob",
+            value="Attempt to steal from NPCs or other players",
+            inline=False
+        )
+        embed.add_field(
+            name="⚠️ Warning",
+            value="Criminal actions may have consequences!",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     @discord.ui.button(label="NPCs", style=discord.ButtonStyle.secondary, emoji="👤")
     async def npc_interactions(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle NPC interactions button"""
@@ -2048,6 +2079,7 @@ class EphemeralLocationView(discord.ui.View):
             
             # Continue with other docked buttons
             self.add_item(self.sub_areas)
+            self.add_item(self.crime_button)
             self.add_item(self.npc_interactions)
             self.add_item(self.undock_button)
             self.add_item(self.route_button)
@@ -2110,6 +2142,36 @@ class EphemeralLocationView(discord.ui.View):
             
             await interaction.edit_original_response(embed=embed, view=self)
     
+    @discord.ui.button(label="Crime", style=discord.ButtonStyle.danger, emoji="🔫")
+    async def crime_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open crime actions menu"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        view = CrimeView(self.bot, self.user_id)
+        embed = discord.Embed(
+            title="🔫 Crime Actions",
+            description="Choose a criminal action:",
+            color=0xff0000
+        )
+        embed.add_field(
+            name="⚔️ Attack",
+            value="Engage in combat with NPCs or other players",
+            inline=False
+        )
+        embed.add_field(
+            name="💰 Rob",
+            value="Attempt to steal from NPCs or other players",
+            inline=False
+        )
+        embed.add_field(
+            name="⚠️ Warning",
+            value="Criminal actions may have consequences!",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     # Copy all the button methods from PersistentLocationView but modify dock/undock to refresh
     @discord.ui.button(label="NPCs", style=discord.ButtonStyle.secondary, emoji="👤")
     async def npc_interactions(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -4274,13 +4336,19 @@ class PersonalLogMainView(discord.ui.View):
             return
         
         # Get current in-game time
+        # Get current in-game time
         try:
             from utils.time_system import TimeSystem
             time_system = TimeSystem(self.bot)
-            current_time = time_system.get_current_time()
-            ingame_date = current_time.strftime("%Y-%m-%d %H:%M")
-        except:
+            current_time = time_system.calculate_current_ingame_time()  # <-- CORRECTED METHOD
+            if current_time:
+                ingame_date = current_time.strftime("%Y-%m-%d %H:%M")
+            else:
+                # Fallback if time calculation fails
+                ingame_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+        except Exception as e:
             # Fallback to real time if time system isn't available
+            print(f"⚠️ Failed to get in-game time for personal log: {e}")
             ingame_date = datetime.now().strftime("%Y-%m-%d %H:%M")
         
         # Create log entry modal
@@ -4597,7 +4665,34 @@ class TQEOverviewView(discord.ui.View):
         super().__init__(timeout=300)  # 5 minute timeout
         self.bot = bot
         self.user_id = user_id
+        
+        # Check if user is in combat BEFORE the view is fully initialized
+        in_combat = self._check_combat_status()
+        
+        # If NOT in combat, remove the attack button
+        if not in_combat:
+            # Remove the attack_button from the view
+            self.remove_item(self.attack_button)
+
+    def _check_combat_status(self):
+        """Check if user is in any combat"""
+        # Check NPC combat
+        npc_combat = self.bot.db.execute_query(
+            "SELECT combat_id FROM combat_states WHERE player_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        # Check PvP combat
+        pvp_combat = self.bot.db.execute_query(
+            "SELECT combat_id FROM pvp_combat_states WHERE attacker_id = ? OR defender_id = ?",
+            (self.user_id, self.user_id),
+            fetch='one'
+        )
+        
+        return (npc_combat is not None) or (pvp_combat is not None)
     
+            
     @discord.ui.button(label="Location", style=discord.ButtonStyle.primary, emoji="📍")
     async def location_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Open the location panel (/here)"""
@@ -4627,7 +4722,52 @@ class TQEOverviewView(discord.ui.View):
             await char_cog.status_shorthand.callback(char_cog, interaction)
         else:
             await interaction.response.send_message("Character system unavailable.", ephemeral=True)
-    
+            
+    @discord.ui.button(label="Attack", style=discord.ButtonStyle.danger, emoji="⚔️", row=1)
+    async def attack_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Continue combat"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Check what type of combat they're in
+        combat_cog = self.bot.get_cog('CombatCog')
+        if not combat_cog:
+            await interaction.response.send_message("Combat system unavailable.", ephemeral=True)
+            return
+        
+        # Check for NPC combat
+        npc_combat_data = self.bot.db.execute_query(
+            """SELECT cs.combat_id, cs.target_npc_id, cs.target_npc_type, cs.combat_type, 
+                      cs.player_can_act_time
+               FROM combat_states cs
+               WHERE cs.player_id = ?""",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        # Check for PvP combat
+        pvp_combat_data = self.bot.db.execute_query(
+            """SELECT pcs.combat_id, pcs.attacker_id, pcs.defender_id, pcs.combat_type,
+                      pcs.current_turn, pcs.attacker_can_act_time, pcs.defender_can_act_time
+               FROM pvp_combat_states pcs
+               WHERE pcs.attacker_id = ? OR pcs.defender_id = ?""",
+            (self.user_id, self.user_id),
+            fetch='one'
+        )
+        
+        if npc_combat_data:
+            # Handle NPC combat
+            await combat_cog._handle_npc_combat_round(interaction, npc_combat_data)
+        elif pvp_combat_data:
+            # Handle PvP combat
+            await combat_cog._handle_pvp_combat_round(interaction, pvp_combat_data)
+        else:
+            await interaction.response.send_message(
+                "You're not in combat!", 
+                ephemeral=True
+            )
+            
     @discord.ui.button(label="Radio", style=discord.ButtonStyle.primary, emoji="📡")
     async def radio_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Open radio transmission modal"""
@@ -4985,3 +5125,345 @@ class SkillTrainingSelectView(discord.ui.View):
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         
         return callback
+        
+        
+class InteractiveInventoryView(discord.ui.View):
+    """View for inventory with item selection and usage"""
+    
+    def __init__(self, bot, user_id: int, items: list):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.bot = bot
+        self.user_id = user_id
+        self.items = items
+        self.current_page = 0
+        self.items_per_page = 20  # Leave room for pagination options
+        
+        # Create the select menu and pagination buttons
+        self._update_components()
+    
+    def _update_components(self):
+        """Update the view components based on current page"""
+        self.clear_items()
+        
+        # Calculate pagination
+        total_pages = (len(self.items) - 1) // self.items_per_page + 1 if self.items else 1
+        start_idx = self.current_page * self.items_per_page
+        end_idx = start_idx + self.items_per_page
+        page_items = self.items[start_idx:end_idx]
+        
+        if page_items:
+            # Create select menu options
+            options = []
+            seen_values = set()  # Track unique values to avoid duplicates
+            
+            for idx, (item_name, item_type, quantity, description, value) in enumerate(page_items):
+                # Create unique value for each item
+                item_value = f"{start_idx + idx}_{item_name[:50]}"  # Limit name length
+                
+                # Ensure unique values
+                counter = 1
+                original_value = item_value
+                while item_value in seen_values:
+                    item_value = f"{original_value}_{counter}"
+                    counter += 1
+                seen_values.add(item_value)
+                
+                # Create label with quantity
+                label = f"{item_name}"
+                if quantity > 1:
+                    label += f" (x{quantity})"
+                
+                # Truncate label if too long
+                if len(label) > 100:
+                    label = label[:97] + "..."
+                
+                # Create description
+                desc_parts = []
+                if item_type:
+                    desc_parts.append(item_type.replace('_', ' ').title())
+                if value > 0:
+                    desc_parts.append(f"{value} credits")
+                
+                option_desc = " | ".join(desc_parts) if desc_parts else "No additional info"
+                if len(option_desc) > 100:
+                    option_desc = option_desc[:97] + "..."
+                
+                options.append(
+                    discord.SelectOption(
+                        label=label,
+                        value=item_value,
+                        description=option_desc
+                    )
+                )
+            
+            # Add select menu
+            select = discord.ui.Select(
+                placeholder=f"Select an item to use (Page {self.current_page + 1}/{total_pages})",
+                options=options,
+                custom_id="item_select"
+            )
+            select.callback = self.item_selected
+            self.add_item(select)
+        
+        # Add pagination buttons if needed
+        if total_pages > 1:
+            # Previous button
+            prev_btn = discord.ui.Button(
+                label="Previous",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.current_page == 0,
+                custom_id="prev_page"
+            )
+            prev_btn.callback = self.previous_page
+            self.add_item(prev_btn)
+            
+            # Page indicator
+            page_btn = discord.ui.Button(
+                label=f"Page {self.current_page + 1}/{total_pages}",
+                style=discord.ButtonStyle.primary,
+                disabled=True,
+                custom_id="page_info"
+            )
+            self.add_item(page_btn)
+            
+            # Next button
+            next_btn = discord.ui.Button(
+                label="Next",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.current_page >= total_pages - 1,
+                custom_id="next_page"
+            )
+            next_btn.callback = self.next_page
+            self.add_item(next_btn)
+    
+    async def item_selected(self, interaction: discord.Interaction):
+        """Handle item selection"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your inventory!", ephemeral=True)
+            return
+        
+        # Extract the actual item index from the value
+        selected_value = interaction.data['values'][0]
+        item_index = int(selected_value.split('_')[0])
+        
+        # Get the selected item
+        if item_index < len(self.items):
+            item_name, item_type, quantity, description, value = self.items[item_index]
+            
+            # Get the ItemUsageCog to use the item
+            item_cog = self.bot.get_cog('ItemUsageCog')
+            if item_cog:
+                # Call the use_item command logic directly
+                await item_cog.use_item.callback(item_cog, interaction, item_name)
+            else:
+                await interaction.response.send_message(
+                    "Item usage system unavailable.", 
+                    ephemeral=True
+                )
+        else:
+            await interaction.response.send_message(
+                "Invalid item selection.", 
+                ephemeral=True
+            )
+    
+    async def previous_page(self, interaction: discord.Interaction):
+        """Go to previous page"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your inventory!", ephemeral=True)
+            return
+        
+        self.current_page -= 1
+        self._update_components()
+        await interaction.response.edit_message(view=self)
+    
+    async def next_page(self, interaction: discord.Interaction):
+        """Go to next page"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your inventory!", ephemeral=True)
+            return
+        
+        self.current_page += 1
+        self._update_components()
+        await interaction.response.edit_message(view=self)
+        
+class CrimeView(discord.ui.View):
+    """View for crime actions - attack and rob options"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.bot = bot
+        self.user_id = user_id
+    
+    @discord.ui.button(label="Attack NPC", style=discord.ButtonStyle.danger, emoji="⚔️", row=0)
+    async def attack_npc_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Attack an NPC"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        combat_cog = self.bot.get_cog('CombatCog')
+        if combat_cog:
+            await combat_cog.attack_npc.callback(combat_cog, interaction)
+    
+    @discord.ui.button(label="Attack Player", style=discord.ButtonStyle.danger, emoji="🗡️", row=0)
+    async def attack_player_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Attack another player"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Create a simple select menu for players at location
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.response.send_message("Character data not found!", ephemeral=True)
+            return
+        
+        # Get other players at same location
+        other_players = self.bot.db.execute_query(
+            """SELECT c.user_id, c.name 
+               FROM characters c 
+               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1""",
+            (char_data[0], self.user_id),
+            fetch='all'
+        )
+        
+        if not other_players:
+            await interaction.response.send_message("No other players at this location!", ephemeral=True)
+            return
+        
+        # Create player selection view
+        view = PlayerSelectView(self.bot, self.user_id, other_players, "attack")
+        embed = discord.Embed(
+            title="⚔️ Select Target",
+            description="Choose a player to attack:",
+            color=0xff4444
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Rob NPC", style=discord.ButtonStyle.danger, emoji="💰", row=1)
+    async def rob_npc_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Rob an NPC"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        combat_cog = self.bot.get_cog('CombatCog')
+        if combat_cog:
+            await combat_cog.rob_npc.callback(combat_cog, interaction)
+    
+    @discord.ui.button(label="Rob Player", style=discord.ButtonStyle.danger, emoji="🔫", row=1)
+    async def rob_player_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Rob another player"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get current location
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.response.send_message("Character data not found!", ephemeral=True)
+            return
+        
+        # Get other players at same location
+        other_players = self.bot.db.execute_query(
+            """SELECT c.user_id, c.name 
+               FROM characters c 
+               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1""",
+            (char_data[0], self.user_id),
+            fetch='all'
+        )
+        
+        if not other_players:
+            await interaction.response.send_message("No other players at this location!", ephemeral=True)
+            return
+        
+        # Create player selection view
+        view = PlayerSelectView(self.bot, self.user_id, other_players, "rob")
+        embed = discord.Embed(
+            title="🔫 Select Target",
+            description="Choose a player to rob:",
+            color=0xff4444
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="◀️", row=2)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Go back to location menu"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Create a new LocationView
+        new_view = EphemeralLocationView(self.bot, self.user_id)
+        
+        embed = discord.Embed(
+            title="📍 Location Menu",
+            description="Choose an action:",
+            color=0x4169E1
+        )
+        
+        await interaction.response.edit_message(embed=embed, view=new_view)        
+        
+        
+        
+        
+        
+class PlayerSelectView(discord.ui.View):
+    """View for selecting a player to attack or rob"""
+    
+    def __init__(self, bot, user_id: int, players: list, action: str):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        self.action = action  # "attack" or "rob"
+        
+        # Create select menu
+        options = []
+        for player_id, player_name in players[:25]:  # Discord limit
+            options.append(
+                discord.SelectOption(
+                    label=player_name,
+                    value=str(player_id)
+                )
+            )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder=f"Choose a player to {action}...",
+                options=options
+            )
+            select.callback = self.player_selected
+            self.add_item(select)
+    
+    async def player_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        target_id = int(interaction.data['values'][0])
+        target_member = interaction.guild.get_member(target_id)
+        
+        if not target_member:
+            await interaction.response.send_message("Player not found!", ephemeral=True)
+            return
+        
+        combat_cog = self.bot.get_cog('CombatCog')
+        if not combat_cog:
+            await interaction.response.send_message("Combat system unavailable!", ephemeral=True)
+            return
+        
+        # Call the appropriate command
+        if self.action == "attack":
+            await combat_cog.attack_player.callback(combat_cog, interaction, target_member)
+        else:  # rob
+            await combat_cog.rob_group.player.callback(combat_cog, interaction, target_member)        

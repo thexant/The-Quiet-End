@@ -585,11 +585,10 @@ class EconomyCog(commands.Cog):
         
         # Find item in shop
         item = self.db.execute_query(
-            '''SELECT item_id, item_name, price, stock, description, item_type
+            '''SELECT item_id, item_name, price, stock, description, item_type, metadata
                FROM shop_items 
-               WHERE location_id = ? AND LOWER(item_name) LIKE LOWER(?)
-               AND (stock >= ? OR stock = -1)''',
-            (current_location, f"%{item_name}%", quantity),
+               WHERE location_id = ? AND LOWER(item_name) = LOWER(?)''',
+            (current_location, item_name),
             fetch='one'
         )
         
@@ -597,7 +596,7 @@ class EconomyCog(commands.Cog):
             await interaction.response.send_message(f"Item '{item_name}' not found or insufficient stock.", ephemeral=True)
             return
         
-        item_id, actual_name, price, stock, description, item_type = item
+        item_id, actual_name, price, stock, description, item_type, metadata = item
         total_cost = price * quantity
         tax_data = self.db.execute_query(
             '''SELECT fst.tax_percentage, f.faction_id, f.name
@@ -656,11 +655,10 @@ class EconomyCog(commands.Cog):
             )
         else:
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (interaction.user.id, actual_name, item_type, quantity, description, price)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, actual_name, item_type, quantity, description, price, metadata)
             )
-        
         embed = discord.Embed(
             title="✅ Purchase Successful",
             description=f"Bought {quantity}x **{actual_name}** for {total_cost:,} credits",

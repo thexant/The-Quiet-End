@@ -770,15 +770,16 @@ class CharacterCog(commands.Cog):
         )
         
         embed = discord.Embed(
-            title="Inventory",
+            title="🎒 Interactive Inventory",
             description="Your current items and equipment",
             color=0x8B4513
         )
         
         if not items:
             embed.add_field(name="Empty", value="Your inventory is empty.", inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
-            # Group by item type
+            # Group by item type for display
             item_types = {}
             total_value = 0
             
@@ -789,6 +790,7 @@ class CharacterCog(commands.Cog):
                 item_types[item_type].append((name, quantity, value))
                 total_value += value * quantity
             
+            # Add summary of items by type
             for item_type, type_items in item_types.items():
                 items_text = []
                 for name, quantity, value in type_items[:5]:  # Limit display
@@ -806,8 +808,18 @@ class CharacterCog(commands.Cog):
                 )
             
             embed.add_field(name="Total Value", value=f"{total_value:,} credits", inline=False)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed.add_field(
+                name="📋 Instructions", 
+                value="Use the dropdown menu below to select and use an item from your inventory.",
+                inline=False
+            )
+            
+            # Create the interactive view
+            from utils.views import InteractiveInventoryView
+            view = InteractiveInventoryView(self.bot, interaction.user.id, items)
+            
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
     @character_group.command(name="id", description="View character ID information")
     @app_commands.describe(target="View another character's ID (if not scrubbed)")
     async def view_character_id(self, interaction: discord.Interaction, target: discord.Member = None):
@@ -1838,8 +1850,7 @@ class CharacterCog(commands.Cog):
         )
         # Handle group notifications - SAME AS ABOVE
         group_info = self.db.execute_query(
-            "SELECT group_id, name FROM characters c JOIN groups g ON c.group_id = g.group_id WHERE c.user_id = ?",
-            (user_id,),
+            "SELECT c.group_id, g.name FROM characters c JOIN groups g ON c.group_id = g.group_id WHERE c.user_id = ?",            (user_id,),
             fetch='one'
         )
 
@@ -2104,8 +2115,8 @@ class CharacterCog(commands.Cog):
         """Calculate total experience needed for a given level"""
         if level <= 1:
             return 0
-        return int(100 * (level - 1) * (1 + (level - 1) * 0.1))
-
+        base_exp = 150  # Increased from 100
+        return int(base_exp * ((level - 1) ** 2.2))  # Exponential growth
     def _create_progress_bar(self, current, total, length=10):
         """Create a visual progress bar"""
         if total == 0:
@@ -2119,15 +2130,15 @@ class CharacterCog(commands.Cog):
 
     def _get_skill_tier(self, skill_value):
         """Get skill tier description"""
-        if skill_value >= 50:
+        if skill_value >= 80:  # Increased from 50
             return "(Master)"
-        elif skill_value >= 35:
+        elif skill_value >= 60:  # Increased from 35
             return "(Expert)"
-        elif skill_value >= 25:
+        elif skill_value >= 40:  # Increased from 25
             return "(Advanced)"
-        elif skill_value >= 15:
+        elif skill_value >= 25:  # Increased from 15
             return "(Skilled)"
-        elif skill_value >= 10:
+        elif skill_value >= 15:  # Same
             return "(Competent)"
         else:
             return "(Novice)"
@@ -2151,7 +2162,7 @@ class CharacterCog(commands.Cog):
             if current_exp >= exp_needed:
                 # Level up!
                 current_level += 1
-                skill_points_gained = 2  # 2 skill points per level
+                skill_points_gained = 1  # 2 skill points per level
                 
                 self.db.execute_query(
                     "UPDATE characters SET level = ?, skill_points = skill_points + ? WHERE user_id = ?",

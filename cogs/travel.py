@@ -230,7 +230,7 @@ class TravelCog(commands.Cog):
         # fuel_efficiency ranges 3-10, where 10 = fastest
         # Create multiplier: efficiency 3 = 1.4x time, efficiency 10 = 0.8x time
         efficiency_modifier = 1.6 - (ship_efficiency * 0.08)  # 1.36 to 0.8 range
-        actual_travel_time = max(int(travel_time * efficiency_modifier), 60)  # Minimum 1 minute
+        actual_travel_time = max(int(travel_time * efficiency_modifier), 120)  # Minimum 2 minutes
 
         # Update the variables for the rest of the function
         travel_time = actual_travel_time
@@ -538,7 +538,7 @@ class TravelCog(commands.Cog):
             # fuel_efficiency ranges 3-10, where 10 = fastest
             # Create multiplier: efficiency 3 = 1.4x time, efficiency 10 = 0.8x time
             efficiency_modifier = 1.6 - (ship_efficiency * 0.08)  # 1.36 to 0.8 range
-            actual_travel_time = max(int(travel_time * efficiency_modifier), 60)  # Minimum 1 minute
+            actual_travel_time = max(int(travel_time * efficiency_modifier), 120)  # Minimum 2 minute
 
             # Update the variables for the rest of the function
             travel_time = actual_travel_time

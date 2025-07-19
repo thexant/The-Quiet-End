@@ -773,7 +773,7 @@ class EnhancedEventsCog(commands.Cog):
             
             await channel.send(embed=embed, view=view)  
     
-    async def _handle_fugitive_alert(self, channel, players, event_data, location_id):
+    async def _handle_fugitive_alert(self, location_id, players, location_name, event_name, description, color):
         """Handle fugitive alert event"""
         embed = discord.Embed(
             title="🎯 Fugitive Transit Alert",

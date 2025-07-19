@@ -18,6 +18,7 @@ class RadioCog(commands.Cog):
     @radio_group.command(name="send", description="Send a radio message across the galaxy")
     @app_commands.describe(message="Message to broadcast via radio")
     async def radio_send(self, interaction: discord.Interaction, message: str):
+        await interaction.response.defer(ephemeral=True)
         # Check if user has a character
         char_data = self.db.execute_query(
             "SELECT current_location, name, callsign FROM characters WHERE user_id = ?",
@@ -26,7 +27,7 @@ class RadioCog(commands.Cog):
         )
         
         if not char_data:
-            await interaction.response.send_message("You need a character to use the radio! Use `/character create` first.", ephemeral=True)
+            await interaction.followup.send("You need a character to use the radio! Use `/character create` first.", ephemeral=True)
             return
         
         current_location, char_name, callsign = char_data
@@ -53,7 +54,7 @@ class RadioCog(commands.Cog):
         location_status, location_data = get_character_location_status(self.db, interaction.user.id)
 
         if not location_data:
-            await interaction.response.send_message("You are stranded in deep space and cannot access radio communications.", ephemeral=True)
+            await interaction.followup.send("You are stranded in deep space and cannot access radio communications.", ephemeral=True)
             return
 
         # Handle corridor radio behavior
@@ -72,7 +73,7 @@ class RadioCog(commands.Cog):
         )
         
         if not sender_location_info:
-            await interaction.response.send_message("Unable to determine your location for radio transmission.", ephemeral=True)
+            await interaction.followup.send("Unable to determine your location for radio transmission.", ephemeral=True)
             return
         
         sender_loc_name, sender_x, sender_y, sender_system = sender_location_info
@@ -83,7 +84,7 @@ class RadioCog(commands.Cog):
         )
         
         if not recipients:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"📡 Radio transmission sent!",
                 ephemeral=True
             )
@@ -117,7 +118,7 @@ class RadioCog(commands.Cog):
         else:
             final_message = f"📡 Radio transmission sent!"
 
-        await interaction.response.send_message(final_message, ephemeral=True)
+        await interaction.followup.send(final_message, ephemeral=True)
     
     # Replace the _handle_gated_corridor_radio method with this new _handle_transit_radio method.
     # It now correctly handles both gated and ungated transit based on corridor type.
