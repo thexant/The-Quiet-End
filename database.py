@@ -329,21 +329,26 @@ class Database:
                 hp INTEGER DEFAULT 100,
                 max_hp INTEGER DEFAULT 100,
                 money INTEGER DEFAULT 500,
-                engineering INTEGER DEFAULT 10,
-                navigation INTEGER DEFAULT 10,
-                combat INTEGER DEFAULT 10,
-                medical INTEGER DEFAULT 10,
+                engineering INTEGER DEFAULT 5,
+                navigation INTEGER DEFAULT 5,
+                combat INTEGER DEFAULT 5,
+                medical INTEGER DEFAULT 15,
                 current_location INTEGER,
                 ship_id INTEGER,
                 group_id INTEGER,
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                current_home_id INTEGER
             )''',
-            # Add current home tracking to characters table
-            '''ALTER TABLE characters ADD COLUMN current_home_id INTEGER''',
-            '''ALTER TABLE location_ownership ADD COLUMN faction_id INTEGER REFERENCES factions(faction_id)''',
-            # Add home invitations table
+            '''CREATE TABLE IF NOT EXISTS ship_customization (
+                ship_id INTEGER PRIMARY KEY,
+                paint_job TEXT DEFAULT 'Default',
+                decals TEXT DEFAULT 'None',
+                interior_style TEXT DEFAULT 'Standard',
+                name_plate TEXT DEFAULT 'Standard',
+                FOREIGN KEY (ship_id) REFERENCES ships (ship_id)
+            )''',
             '''CREATE TABLE IF NOT EXISTS home_invitations (
                 invitation_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 home_id INTEGER NOT NULL,
@@ -357,6 +362,15 @@ class Database:
                 FOREIGN KEY (invitee_id) REFERENCES characters (user_id),
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
+            '''ALTER TABLE ships ADD COLUMN tier INTEGER DEFAULT 1''',
+            '''ALTER TABLE ships ADD COLUMN condition_rating INTEGER DEFAULT 100''',
+            '''ALTER TABLE ships ADD COLUMN engine_level INTEGER DEFAULT 1''',
+            '''ALTER TABLE ships ADD COLUMN hull_level INTEGER DEFAULT 1''',
+            '''ALTER TABLE ships ADD COLUMN systems_level INTEGER DEFAULT 1''',
+            '''ALTER TABLE ships ADD COLUMN special_mods TEXT DEFAULT '[]' ''',
+            '''ALTER TABLE ships ADD COLUMN market_value INTEGER DEFAULT 10000''',
+            '''ALTER TABLE ships ADD COLUMN max_upgrade_slots INTEGER DEFAULT 3''',
+            '''ALTER TABLE ships ADD COLUMN speed_rating INTEGER DEFAULT 5''',
             '''CREATE TABLE IF NOT EXISTS galaxy_info (
                 galaxy_id INTEGER PRIMARY KEY DEFAULT 1,
                 name TEXT NOT NULL DEFAULT 'Unknown Galaxy',
@@ -1170,6 +1184,7 @@ class Database:
                 location_id INTEGER NOT NULL UNIQUE,
                 owner_id INTEGER,
                 group_id INTEGER,
+                faction_id INTEGER,
                 docking_fee INTEGER DEFAULT 0,
                 purchase_price INTEGER NOT NULL,
                 purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1181,7 +1196,8 @@ class Database:
                 total_invested INTEGER DEFAULT 0,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id),
                 FOREIGN KEY (owner_id) REFERENCES characters (user_id),
-                FOREIGN KEY (group_id) REFERENCES groups (group_id)
+                FOREIGN KEY (group_id) REFERENCES groups (group_id),
+                FOREIGN KEY (faction_id) REFERENCES factions (faction_id)
             )''',
             
             '''ALTER TABLE location_ownership ADD COLUMN docking_fee INTEGER DEFAULT 0''',
