@@ -90,7 +90,7 @@ async def create_random_character(bot, interaction: discord.Interaction):
     
     # Generate balanced starting stats (total of 50 points)
     stats = [5, 5, 5, 5]  # Base stats
-    bonus_points = 10
+    bonus_points = 2
 
     # Randomly distribute bonus points
     for _ in range(bonus_points):
@@ -214,18 +214,6 @@ async def create_random_character(bot, interaction: discord.Interaction):
     # Give location access
     from utils.channel_manager import ChannelManager
     channel_manager = ChannelManager(bot)
-    
-    # Change user's display name to character name
-    try:
-        display_name = random_name[:32]  # Discord limit is 32 characters
-        await interaction.user.edit(nick=display_name, reason="Random character name sync")
-        print(f"🏷️ Changed {interaction.user.name}'s nickname to '{display_name}'")
-    except discord.Forbidden:
-        print(f"❌ No permission to change nickname for {interaction.user.name}")
-    except discord.HTTPException as e:
-        print(f"❌ Failed to change nickname for {interaction.user.name}: {e}")
-    except Exception as e:
-        print(f"❌ Unexpected error changing nickname for {interaction.user.name}: {e}")
     
     success = await channel_manager.give_user_location_access(interaction.user, spawn_location)
     location_name = location_info[0] if location_info else "Unknown Colony"
@@ -543,18 +531,6 @@ class CharacterCreationModal(discord.ui.Modal):
         # Give location access
         from utils.channel_manager import ChannelManager
         channel_manager = ChannelManager(self.bot)
-        
-        # Change user's display name to character name
-        try:
-            display_name = self.name_input.value[:32]  # Discord limit is 32 characters
-            await interaction.user.edit(nick=display_name, reason="Character name sync")
-            print(f"🏷️ Changed {interaction.user.name}'s nickname to '{display_name}'")
-        except discord.Forbidden:
-            print(f"❌ No permission to change nickname for {interaction.user.name}")
-        except discord.HTTPException as e:
-            print(f"❌ Failed to change nickname for {interaction.user.name}: {e}")
-        except Exception as e:
-            print(f"❌ Unexpected error changing nickname for {interaction.user.name}: {e}")
         
         success = await channel_manager.give_user_location_access(interaction.user, spawn_location)
         location_name = location_info[0] if location_info else "Unknown Colony"
@@ -3199,7 +3175,7 @@ class ServicesView(discord.ui.View):
         
         # Calculate repair costs
         repairs_needed = max_hull - hull_integrity
-        cost_per_point = 25
+        cost_per_point = 10
         max_affordable = min(repairs_needed, money // cost_per_point)
         
         # Create quantity selection view
@@ -3283,7 +3259,7 @@ class ServicesView(discord.ui.View):
         
         # Calculate healing costs
         healing_needed = max_hp - hp
-        cost_per_hp = 15
+        cost_per_hp = 7
         max_affordable = min(healing_needed, money // cost_per_hp)
         
         # Create quantity selection view
@@ -4800,6 +4776,22 @@ class TQEOverviewView(discord.ui.View):
         modal = RadioModal(self.bot)
         await interaction.response.send_modal(modal)
     
+    @discord.ui.button(label="Contacts", style=discord.ButtonStyle.success, emoji="🛰️", row=1)
+    async def contacts_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open the galactic contacts panel"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Call the actual contacts command logic from ContactsCog
+        contacts_cog = self.bot.get_cog('ContactsCog')
+        if contacts_cog:
+            # Call the contacts command directly
+            await contacts_cog.contacts.callback(contacts_cog, interaction)
+        else:
+            await interaction.response.send_message("Contacts system unavailable.", ephemeral=True)
+
+    
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.success, emoji="🔄")
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Refresh the overview panel"""
@@ -4915,34 +4907,50 @@ class TQEOverviewView(discord.ui.View):
             )
         
         # Galaxy Information Section
+        # Get current galaxy time using TimeSystem
         try:
             from utils.time_system import TimeSystem
             time_system = TimeSystem(self.bot)
             current_datetime = time_system.calculate_current_ingame_time()
             if current_datetime:
                 current_date = time_system.format_ingame_datetime(current_datetime)
+                # Get the current shift
+                shift_name, shift_period = time_system.get_current_shift()
             else:
                 current_date = "Unknown Date"
+                shift_name = "Unknown Shift"
         except:
+            # Fallback if TimeSystem is not available
             current_date = "Unknown Date"
-        
+            shift_name = "Unknown Shift"
+
         # Get logged in players count
-        logged_in_count = self.bot.db.execute_query(
+        logged_in_count = self.db.execute_query(
             "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
             fetch='one'
         )[0]
-        
+
         # Get galaxy name from galaxy_info table
-        galaxy_info = self.bot.db.execute_query(
+        galaxy_info = self.db.execute_query(
             "SELECT name FROM galaxy_info WHERE galaxy_id = 1",
             fetch='one'
         )
         galaxy_name = galaxy_info[0] if galaxy_info else "Unknown Galaxy"
-        
+
+        # Add shift emoji based on period
+        shift_emojis = {
+            "morning": "🌅",
+            "day": "☀️",
+            "evening": "🌆",
+            "night": "🌙"
+        }
+        shift_emoji = shift_emojis.get(shift_period, "🌐")
+
         embed.add_field(
             name="🌍 Galaxy",
             value=f"**Name:** {galaxy_name}\n"
                   f"**Date:** {current_date}\n"
+                  f"**Shift:** {shift_emoji} {shift_name}\n"
                   f"**Players Online:** {logged_in_count}",
             inline=True
         )
@@ -4954,7 +4962,7 @@ class TQEOverviewView(discord.ui.View):
             inline=False
         )
         
-        embed.set_footer(text="The Quiet End • Panel refreshed!")
+        embed.set_footer(text="The Quiet End • Use the buttons to navigate • Panel Refreshed")
         
         # Edit the message with updated embed
         await interaction.edit_original_response(embed=embed, view=self)

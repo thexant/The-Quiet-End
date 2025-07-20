@@ -190,7 +190,7 @@ class EventsCog(commands.Cog):
             
             for location_id, location_name, wealth_level, location_type in locations:
                 # 5% chance for economic change per location
-                if random.random() < 0.005:
+                if random.random() < 0.01:
                     change_type = await self._generate_economic_change(location_id, location_name, wealth_level, location_type)
                     if change_type:
                         changes_made += 1
@@ -604,7 +604,7 @@ class EventsCog(commands.Cog):
             if self._corridor_management_task and not self._corridor_management_task.done():
                 self._corridor_management_task.cancel()
                 
-    @tasks.loop(hours=2)
+    @tasks.loop(minutes=30)
     async def job_generation(self):
         """Generate new jobs at locations with increased frequency and quantity"""
         try:
@@ -631,25 +631,25 @@ class EventsCog(commands.Cog):
                 
                 # Increased job limits based on wealth and type
                 if location_type == 'space_station':
-                    max_jobs = max(4, wealth + 1)  # Increased from max(6, wealth)
+                    max_jobs = max(6, wealth + 1)  # Increased from max(6, wealth)
                 elif location_type == 'colony':
-                    max_jobs = max(6, wealth + 3)  # Increased from max(4, wealth)
+                    max_jobs = max(8, wealth + 3)  # Increased from max(4, wealth)
                 elif location_type == 'outpost':
-                    max_jobs = max(3, wealth // 2 + 2)  # Increased from max(2, wealth // 3 + 1)
+                    max_jobs = max(4, wealth // 2 + 2)  # Increased from max(2, wealth // 3 + 1)
                 else:  # gates
                     max_jobs = 3  # Increased from 1-2
 
                 # Generate multiple jobs if under limit
-                jobs_to_generate = min(max_jobs - current_jobs, 5)  # Increased from 3
+                jobs_to_generate = min(max_jobs - current_jobs, 8)  # Increased from 3
                 
-                if jobs_to_generate > 0 and random.random() < 0.8:  # 80% chance
+                if jobs_to_generate > 0 and random.random() < 0.85:  # 80% chance
                     for _ in range(jobs_to_generate):
-                        if random.random() < 0.7:  # 70% chance for each job
+                        if random.random() < 0.75:  # 70% chance for each job
                             await self._generate_location_job(location_id, wealth, location_type)
                             jobs_generated += 1
             
             # Random bonus job generation burst
-            if random.random() < 0.2:  # 20% chance for bonus generation
+            if random.random() < 0.3:  # 20% chance for bonus generation
                 # CHANGE this line to ADD the check:
                 if locations:  # ADD THIS CHECK
                     bonus_location = random.choice(locations)
@@ -1242,7 +1242,7 @@ class EventsCog(commands.Cog):
         job_generated = False
 
         # Check for Desperation Job possibility
-        if wealth <= 3 and random.random() < 0.25: # 25% chance for a desperation job in poor locations
+        if wealth <= 3 and random.random() < 0.30: # 25% chance for a desperation job in poor locations
             desperation_jobs = [
                 ("Smuggle 'Medical Supplies'", "Transport a discreet package of 'medical supplies' to a nearby system. No questions asked. High risk, high reward.", random.randint(300, 700), -15, 4),
                 ("Silence a Witness", "A local contact needs a problem to 'disappear'. Handle it quietly.", random.randint(500, 800), -25, 5),
@@ -1271,7 +1271,7 @@ class EventsCog(commands.Cog):
             job_generated = True
 
         # Check for Good Deeds Job possibility
-        elif wealth <= 7 and random.random() < 0.25:  # 30% chance for good deeds in wealthy locations
+        elif wealth <= 7 and random.random() < 0.30:  # 30% chance for good deeds in wealthy locations
             good_deeds_jobs = [
                 ("Volunteer Medical Aid", "Provide free medical assistance to refugees and displaced persons. Dangerous but morally rewarding work.", random.randint(50, 150), +20, 1),
                 ("Rescue Stranded Civilians", "Search and rescue mission for civilians stranded in dangerous territory. Low pay, high risk, high honor.", random.randint(75, 200), +25, 3),

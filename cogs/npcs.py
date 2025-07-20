@@ -445,7 +445,7 @@ class NPCCog(commands.Cog):
                 # Failed but survived with losses
                 credits_lost = random.randint(200, 1000)
                 self.db.execute_query(
-                    "UPDATE dynamic_npcs SET credits = GREATEST(0, credits - ?) WHERE npc_id = ?",
+                    "UPDATE dynamic_npcs SET credits = MAX(0, credits - ?) WHERE npc_id = ?",
                     (credits_lost, npc_id)
                 )
                 

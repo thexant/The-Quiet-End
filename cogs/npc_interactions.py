@@ -158,7 +158,7 @@ class NPCInteractionsCog(commands.Cog):
         templates = job_templates.get(occupation, default_jobs)
         
         # Generate 1-3 jobs
-        num_jobs = random.randint(2, 4)
+        num_jobs = random.randint(1, 3)
         for _ in range(num_jobs):
             template = random.choice(templates)
             title, desc, base_reward, skill, min_skill, danger, duration = template
@@ -1009,7 +1009,7 @@ class NPCActionView(discord.ui.View):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your interaction!", ephemeral=True)
             return
-        if random.random() > 0.25:  # 75% chance of no jobs
+        if random.random() > 0.35:  # 75% chance of no jobs
             await interaction.response.send_message(
                 "This NPC doesn't have any work available right now. Try checking with other NPCs or look for location-based jobs.",
                 ephemeral=True

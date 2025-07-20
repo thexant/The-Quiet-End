@@ -141,6 +141,7 @@ class TravelCog(commands.Cog):
                     asyncio.create_task(self._delayed_corridor_event(
                         transit_channel, [user_id], danger_level, event_delay
                     ))
+    
     async def _delayed_corridor_event(self, transit_channel, travelers, danger_level, delay):
         """Trigger a corridor event after a delay"""
         await asyncio.sleep(delay)
@@ -149,6 +150,26 @@ class TravelCog(commands.Cog):
         try:
             # Verify the channel exists
             await transit_channel.fetch_message(transit_channel.last_message_id or 1)
+            
+            # Check remaining travel time
+            session_data = self.db.execute_query(
+                """SELECT end_time FROM travel_sessions 
+                   WHERE temp_channel_id = ? AND status = 'traveling'
+                   ORDER BY session_id DESC LIMIT 1""",
+                (transit_channel.id,),
+                fetch='one'
+            )
+            
+            if not session_data:
+                return  # Travel already completed
+                
+            end_time = datetime.fromisoformat(session_data[0])
+            remaining_time = (end_time - datetime.utcnow()).total_seconds()
+            
+            # Don't trigger event if less than 45 seconds remaining
+            if remaining_time < 45:
+                return
+                
         except:
             return  # Channel gone or travel completed
         
@@ -211,7 +232,7 @@ class TravelCog(commands.Cog):
             inline=False
         )
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
         
     async def _handle_corridor_selection(self, interaction: discord.Interaction, corridors: list, origin_id: int, current_location_name: str):
         """Handle corridor selection and initiate travel"""

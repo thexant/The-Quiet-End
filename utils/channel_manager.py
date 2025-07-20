@@ -939,7 +939,7 @@ class ChannelManager:
             )
         
         # Status-aware usage instructions
-        getting_started_text = "• Use `/here` for interactive options\n• Use `/travel routes` to see detailed travel info\n• Use `/shop list` and `/job list` to see what's available\n• Use `/status` to see information about your character."
+        getting_started_text = "• Use `/tqe` for interactive options"
         
         if location_status == "Loyal":
             getting_started_text += "\n• Access premium federal supplies and secure services"
@@ -1672,7 +1672,7 @@ class ChannelManager:
         
         embed.add_field(
             name="🛠️ Available Actions",
-            value="• Use ship activities below to pass the time\n• `/character ship` - Check ship status\n• `/character inventory` - Use items\n• `/travel status` - Check progress\n• `/travel emergency_exit` - Emergency exit (dangerous!)",
+            value="• Use ship activities below to pass the time\n•  Use `/tqe` for interactive options.",
             inline=False
         )
         

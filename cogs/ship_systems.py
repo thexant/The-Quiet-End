@@ -672,20 +672,23 @@ class PurchaseConfirmView(discord.ui.View):
                 exterior = f"A well-maintained {ship_type} with standard configuration"
                 interior = f"The interior is equipped for {self.ship_data['class']} operations"
             
-            # Create the ship
+            # Calculate fuel capacity for the new ship
+            fuel_capacity = 100 + (self.ship_data['tier'] * 20)
+            
+            # Create the ship with current_fuel initialized to fuel_capacity (full tank)
             self.bot.db.execute_query(
                 '''INSERT INTO ships 
                    (owner_id, name, ship_type, tier, condition_rating,
                     fuel_capacity, cargo_capacity, combat_rating, fuel_efficiency,
                     exterior_description, interior_description,
                     engine_level, hull_level, systems_level,
-                    max_upgrade_slots, market_value, special_mods)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    max_upgrade_slots, market_value, special_mods, current_fuel)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (self.user_id, self.ship_data['name'], ship_type, self.ship_data['tier'], 100,
-                 100 + (self.ship_data['tier'] * 20), self.ship_data['cargo_capacity'],
+                 fuel_capacity, self.ship_data['cargo_capacity'],
                  self.ship_data['combat_rating'], self.ship_data['fuel_efficiency'],
                  exterior, interior, 1, 1, 1, 3 + self.ship_data['tier'],
-                 self.ship_data['price'], json.dumps([]))
+                 self.ship_data['price'], json.dumps([]), fuel_capacity)  # Initialize current_fuel to fuel_capacity
             )
             
             # Get new ship ID
@@ -703,6 +706,12 @@ class PurchaseConfirmView(discord.ui.View):
                 '''INSERT INTO player_ships (owner_id, ship_id, is_active)
                    VALUES (?, ?, ?)''',
                 (self.user_id, new_ship_id, 1 if not self.has_trade else 1)
+            )
+            
+            # Update BOTH ship_id and active_ship_id to the new ship
+            self.bot.db.execute_query(
+                "UPDATE characters SET ship_id = ?, active_ship_id = ? WHERE user_id = ?",
+                (new_ship_id, new_ship_id, self.user_id)
             )
             
             # Handle trade-in if applicable
@@ -754,7 +763,6 @@ class PurchaseConfirmView(discord.ui.View):
                 f"Error processing purchase: {str(e)}",
                 ephemeral=True
             )
-
 
 class UpgradeWorkshopView(discord.ui.View):
     """Comprehensive upgrade interface"""
@@ -1560,16 +1568,22 @@ class FleetManagementView(discord.ui.View):
         
         new_ship_id = int(interaction.data['values'][0])
         
-        # Deactivate current ship
+        # Deactivate all ships first
         self.bot.db.execute_query(
             "UPDATE player_ships SET is_active = 0 WHERE owner_id = ?",
             (self.user_id,)
         )
         
-        # Activate new ship
+        # Activate the selected ship
         self.bot.db.execute_query(
             "UPDATE player_ships SET is_active = 1 WHERE owner_id = ? AND ship_id = ?",
             (self.user_id, new_ship_id)
+        )
+        
+        # UPDATE BOTH ship_id AND active_ship_id
+        self.bot.db.execute_query(
+            "UPDATE characters SET ship_id = ?, active_ship_id = ? WHERE user_id = ?",
+            (new_ship_id, new_ship_id, self.user_id)
         )
         
         ship_name = next(s[1] for s in self.fleet if s[0] == new_ship_id)
@@ -1577,7 +1591,6 @@ class FleetManagementView(discord.ui.View):
             f"✅ **{ship_name}** is now your active ship!",
             ephemeral=True
         )
-
 
 class ShipSellView(discord.ui.View):
     """Handle ship selling"""

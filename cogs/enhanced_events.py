@@ -27,6 +27,29 @@ def clear_event_responses(event_id: str):
         del ACTIVE_EVENT_RESPONSES[event_id]
 
 
+class AutoCleanupView(discord.ui.View):
+    """A view that automatically cleans itself up when it times out"""
+    def __init__(self, timeout=299):  # 4m59s
+        super().__init__(timeout=timeout)
+        self.message = None
+        
+    async def on_timeout(self):
+        """Called when the view times out"""
+        if self.message:
+            try:
+                # Create expired event embed
+                expired_embed = discord.Embed(
+                    title="⏰ Event Expired",
+                    description="This event has timed out and is no longer available.",
+                    color=0x808080,
+                    timestamp=datetime.now()
+                )
+                await self.message.edit(embed=expired_embed, view=None)
+            except Exception as e:
+                print(f"Failed to cleanup event: {e}")
+
+
+
 class FugitiveAlertView(discord.ui.View):
     def __init__(self, bot, players, location_id):
         super().__init__(timeout=300)
@@ -346,7 +369,8 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = PirateEncounterView(self.bot, encounter_id, players, pirate_ships)
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
         
     async def _handle_scavenger_encounter(self, location_id, players, location_name, event_name, description, color):
         """Handle scavenger drone encounter during travel"""
@@ -380,7 +404,7 @@ class EnhancedEventsCog(commands.Cog):
         if players:
             user_id = random.choice(players)[0]
             
-            view = discord.ui.View(timeout=300)
+            view = AutoCleanupView()
             
             countermeasures_button = discord.ui.Button(
                 label="Deploy Countermeasures",
@@ -558,7 +582,8 @@ class EnhancedEventsCog(commands.Cog):
             view.add_item(sacrifice_button)
             view.add_item(fight_button)
             
-            await channel.send(embed=embed, view=view)
+            message = await channel.send(embed=embed, view=view)
+            view.message = message
             
     async def _handle_refugee_encounter(self, location_id, players, location_name, event_name, description, color):
         """Handle refugee ship encounter during travel"""
@@ -593,7 +618,7 @@ class EnhancedEventsCog(commands.Cog):
         if players:
             user_id = random.choice(players)[0]
             
-            view = discord.ui.View(timeout=300)
+            view = AutoCleanupView()
             
             aid_button = discord.ui.Button(
                 label="Provide Aid",
@@ -771,9 +796,9 @@ class EnhancedEventsCog(commands.Cog):
             view.add_item(fuel_button)
             view.add_item(reject_button)
             
-            await channel.send(embed=embed, view=view)  
-    
-    async def _handle_fugitive_alert(self, location_id, players, location_name, event_name, description, color):
+            message = await channel.send(embed=embed, view=view)
+            view.message = message    
+    async def _handle_fugitive_alert(self, channel, players, event_data):
         """Handle fugitive alert event"""
         embed = discord.Embed(
             title="🎯 Fugitive Transit Alert",
@@ -784,10 +809,17 @@ class EnhancedEventsCog(commands.Cog):
         # Get the user_ids from the list of player tuples
         player_ids = [p[0] for p in players]
         
+        # Get location_id from the channel
+        location_id = self.bot.db.execute_query(
+            "SELECT location_id FROM locations WHERE channel_id = ?",
+            (channel.id,),
+            fetch='one'
+        )[0]
+        
         view = FugitiveAlertView(self.bot, player_ids, location_id)
         
         await channel.send(embed=embed, view=view)
-        
+        view.message = message        
     async def _handle_security_encounter(self, location_id, players, location_name, event_name, description, color):
         """Handle corporate security patrol encounter during travel"""
         
@@ -820,7 +852,7 @@ class EnhancedEventsCog(commands.Cog):
         if players:
             user_id = random.choice(players)[0]
             
-            view = discord.ui.View(timeout=300)
+            view = AutoCleanupView()
             
             submit_button = discord.ui.Button(
                 label="Submit to Inspection",
@@ -1030,8 +1062,8 @@ class EnhancedEventsCog(commands.Cog):
             view.add_item(credentials_button)
             view.add_item(resist_button)
             
-            await channel.send(embed=embed, view=view)
-            
+            message = await channel.send(embed=embed, view=view)
+            view.message = message            
             
     # Add these methods to the EnhancedEventsCog class in cogs/enhanced_events.py
     async def generate_location_event(self, location_id: int, location_type: str, wealth: int, population: int):
@@ -1093,9 +1125,6 @@ class EnhancedEventsCog(commands.Cog):
         
         # Trigger the event
         await self._execute_location_event(channel, selected_event, players_present, location_name)
-        
-        # Store event in database
-        self._store_event_log(location_id, selected_event['name'], selected_event.get('description', ''))
         
         return selected_event
     async def apply_galaxy_wide_npc_effects(self, event_type: str, severity: int = 1):
@@ -1529,7 +1558,7 @@ class EnhancedEventsCog(commands.Cog):
             color=event_data['color']
         )
 
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"priorityconvoy_{channel.id}_{datetime.now().timestamp()}"
         assist_button = discord.ui.Button(label="Assist Escort", style=discord.ButtonStyle.primary, emoji="🚀")
         scan_button = discord.ui.Button(label="Scan Convoy", style=discord.ButtonStyle.secondary, emoji="📡")
@@ -1585,8 +1614,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(scan_button)
         view.add_item(wait_button)
         
-        await channel.send(embed=embed, view=view)
-
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
     async def _handle_gate_energy_surge(self, channel, players, event_data):
         """Handle gate energy surge event"""
         embed = discord.Embed(
@@ -1595,7 +1624,7 @@ class EnhancedEventsCog(commands.Cog):
             color=event_data['color']
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"energysurge_{channel.id}_{datetime.now().timestamp()}"
         contain_button = discord.ui.Button(label="Help Contain Surge", style=discord.ButtonStyle.danger, emoji="🔧")
         shields_button = discord.ui.Button(label="Reinforce Shields", style=discord.ButtonStyle.primary, emoji="🛡️")
@@ -1653,7 +1682,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(shields_button)
         view.add_item(evacuate_button)
 
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
         
     async def _handle_spacetime_echo(self, channel, players, event_data):
         """Handle spacetime echo event"""
@@ -1662,7 +1692,7 @@ class EnhancedEventsCog(commands.Cog):
             description="A ghostly image of a long-lost vessel flickers near the gate. It seems harmless, but it's an irresistible scientific curiosity.",
             color=event_data['color']
         )
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"spacetimecho_{channel.id}_{datetime.now().timestamp()}"
         analyze_button = discord.ui.Button(label="Analyze Echo", style=discord.ButtonStyle.primary, emoji="🔬")
         hail_button = discord.ui.Button(label="Hail the Echo", style=discord.ButtonStyle.secondary, emoji="👋")
@@ -1721,7 +1751,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(hail_button)
         view.add_item(fly_button)
 
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
 
         
@@ -1733,7 +1764,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0xff4444
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"industrialaccident_{channel.id}_{datetime.now().timestamp()}"
         medical_button = discord.ui.Button(
             label="Provide Medical Aid",
@@ -1757,12 +1788,16 @@ class EnhancedEventsCog(commands.Cog):
             if not track_event_response(event_id, interaction.user.id):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
-            char_name = se        
-            char_data = self.bot.db.execute_query(
-                "SELECT name, medical FROM characters WHERE user_id = ?",
+            char_name = self.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
                 fetch='one'
-            )
+            )[0]
+            char_data = self.bot.db.execute_query(
+                    "SELECT name, medical FROM characters WHERE user_id = ?",
+                    (interaction.user.id,),
+                    fetch='one'
+                )
             
             if not char_data:
                 await interaction.response.send_message("Character not found!", ephemeral=True)
@@ -1797,7 +1832,11 @@ class EnhancedEventsCog(commands.Cog):
             if not track_event_response(event_id, interaction.user.id):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
-            char_name = se        
+            char_name = self.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )[0]       
             char_data = self.bot.db.execute_query(
                 "SELECT name, engineering FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -1831,7 +1870,11 @@ class EnhancedEventsCog(commands.Cog):
             if not track_event_response(event_id, interaction.user.id):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
-            char_name = se        
+            char_name = self.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )[0]      
             char_data = self.bot.db.execute_query(
                 "SELECT name, navigation FROM characters WHERE user_id = ?",
                 (interaction.user.id,),
@@ -1866,7 +1909,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(repair_button)
         view.add_item(evacuate_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_worker_strike(self, channel, players, event_data):
         """Handle worker strike event"""
@@ -1876,7 +1920,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0xff9900
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"workerstrike_{channel.id}_{datetime.now().timestamp()}"
         negotiate_button = discord.ui.Button(
             label="Mediate Negotiations",
@@ -2000,7 +2044,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(support_workers_button)
         view.add_item(support_management_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_scavenger_swarm(self, channel, user_id, event_data):
         """Handle scavenger drone encounter"""
@@ -2010,7 +2055,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0x708090
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"droneswarm_{channel.id}_{datetime.now().timestamp()}"
         defend_button = discord.ui.Button(
             label="Defensive Measures",
@@ -2115,7 +2160,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(defend_button)
         view.add_item(outrun_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_corporate_ambush(self, channel, user_id, event_data):
         """Handle corporate enforcement encounter"""
@@ -2125,7 +2171,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0x000080
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"corpambush_{channel.id}_{datetime.now().timestamp()}"
         submit_button = discord.ui.Button(
             label="Submit to Inspection",
@@ -2286,7 +2332,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(bribe_button)
         view.add_item(fight_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_debris_field(self, channel, user_id, event_data):
         """Handle asteroid debris field encounter"""
@@ -2297,7 +2344,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0x8b4513
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"asteroidfield_{channel.id}_{datetime.now().timestamp()}"
         careful_button = discord.ui.Button(
             label="Navigate Carefully",
@@ -2407,7 +2454,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(careful_button)
         view.add_item(speed_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_distress_signal(self, channel, user_id, event_data):
         """Handle distress signal encounter"""
@@ -2434,7 +2482,7 @@ class EnhancedEventsCog(commands.Cog):
             inline=False
         )
         event_id = f"distress_{channel.id}_{datetime.now().timestamp()}"
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         
         investigate_button = discord.ui.Button(
             label="Investigate Signal",
@@ -2538,7 +2586,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(investigate_button)
         view.add_item(ignore_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
     # Add these methods to the EnhancedEventsCog class in enhanced_events.py
 
     async def generate_reputation_event(self, location_id: int, players_present: list):
@@ -3589,7 +3638,7 @@ class EnhancedEventsCog(commands.Cog):
             inline=False
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"corpinspection_{channel.id}_{datetime.now().timestamp()}"
         comply_button = discord.ui.Button(
             label="Full Compliance",
@@ -3707,7 +3756,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(partial_button)
         view.add_item(avoid_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_equipment_malfunction(self, channel, players, event_data):
         """Handle equipment malfunction event"""
@@ -3717,7 +3767,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0xff0000
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"corpinspection_{channel.id}_{datetime.now().timestamp()}"        
         repair_button = discord.ui.Button(
             label="Emergency Repair",
@@ -3841,7 +3891,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(diagnose_button)
         view.add_item(evacuate_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_refugee_arrival(self, channel, players, event_data):
         """Handle refugee arrival event"""
@@ -3858,7 +3909,7 @@ class EnhancedEventsCog(commands.Cog):
             inline=False
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"corpinspection_{channel.id}_{datetime.now().timestamp()}"         
         aid_button = discord.ui.Button(
             label="Provide Aid",
@@ -3976,7 +4027,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(medical_button)
         view.add_item(ignore_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_celebration(self, channel, players, event_data):
         """Handle celebration festival event"""
@@ -3986,7 +4038,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0xffd700
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"celebration_{channel.id}_{datetime.now().timestamp()}"
         participate_button = discord.ui.Button(
             label="Join Celebration",
@@ -4106,7 +4158,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(organize_button)
         view.add_item(trade_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
         
     # Add handlers for station events
     async def _handle_docking_overload(self, channel, players, event_data):
@@ -4117,7 +4170,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0xff4444
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"dockingoverload_{channel.id}_{datetime.now().timestamp()}"       
         assist_button = discord.ui.Button(
             label="Assist Traffic Control",
@@ -4200,7 +4253,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(assist_button)
         view.add_item(manual_dock_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_trade_convoy(self, channel, players, event_data):
         """Handle trade convoy arrival"""
@@ -4210,7 +4264,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0x00ff00
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"tradeconvoy_{channel.id}_{datetime.now().timestamp()}"          
         trade_button = discord.ui.Button(
             label="Trade Goods",
@@ -4295,7 +4349,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(trade_button)
         view.add_item(negotiate_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_vip_arrival(self, channel, players, event_data):
         """Handle VIP arrival event"""
@@ -4305,7 +4360,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0x9932cc
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"viparrival_{channel.id}_{datetime.now().timestamp()}"       
         security_button = discord.ui.Button(
             label="Provide Security",
@@ -4397,7 +4452,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(security_button)
         view.add_item(service_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     # Add handlers for outpost events
     async def _handle_supply_shortage(self, channel, players, event_data):
@@ -4408,7 +4464,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0xff4444
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"supplyshortage_{channel.id}_{datetime.now().timestamp()}"        
         donate_button = discord.ui.Button(
             label="Donate Supplies",
@@ -4497,7 +4553,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(donate_button)
         view.add_item(emergency_run_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_salvage_discovery(self, channel, players, event_data):
         """Handle salvage discovery event"""
@@ -4507,7 +4564,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0xffd700
         )
         event_id = f"salvagediscovery{channel.id}_{datetime.now().timestamp()}"
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         
         investigate_button = discord.ui.Button(
             label="Investigate Salvage",
@@ -4593,7 +4650,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(investigate_button)
         view.add_item(claim_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_comm_blackout(self, channel, players, event_data):
         """Handle communication blackout event"""
@@ -4603,7 +4661,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0x696969
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"commsblackout{channel.id}_{datetime.now().timestamp()}"       
         repair_button = discord.ui.Button(
             label="Repair Communications",
@@ -4692,7 +4750,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(repair_button)
         view.add_item(improvise_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_mysterious_signal(self, channel, players, event_data):
         """Handle mysterious signal event"""
@@ -4702,7 +4761,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0x9400d3
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"mysterysignal{channel.id}_{datetime.now().timestamp()}"       
         
         investigate_button = discord.ui.Button(
@@ -4840,7 +4899,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(decode_button)
         view.add_item(ignore_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
     
     # Travel Event Handlers (different signature from location handlers)
     async def _handle_travel_solar_flare(self, channel, user_id, event_data):
@@ -4967,13 +5027,8 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         await channel.send(embed=embed)
-    def _store_event_log(self, location_id: int, event_name: str, description: str):
-        """Store event in database for tracking"""
-        self.bot.db.execute_query(
-            '''INSERT INTO location_logs (location_id, author_id, author_name, message, is_generated)
-               VALUES (?, 0, 'System Event', ?, 1)''',
-            (location_id, f"[{event_name}] {description}")
-        )
+
+
 
     async def _execute_location_event(self, channel, event, players, location_name):
         """Execute a location event"""
@@ -5080,7 +5135,8 @@ class EnhancedEventsCog(commands.Cog):
             inline=False
         )
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
 
     async def _handle_gravity_anomaly(self, location_id, players, location_name, event_name, description, color):
         """Handle gravitational anomaly - potential displacement"""
@@ -5354,7 +5410,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0x00ff00
         )
         event_id = f"tradencounter{channel.id}_{datetime.now().timestamp()}"
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         
         trade_button = discord.ui.Button(
             label="Browse Goods",
@@ -5443,7 +5499,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(trade_button)
         view.add_item(ignore_button)
         
-        await channel.send(embed=embed, view=view)    
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
     async def _handle_energy_readings(self, channel, user_id, event_data):
         """Handle unknown energy signature encounter"""
         embed = discord.Embed(
@@ -5452,7 +5509,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0x9400d3
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"energyreadings{channel.id}_{datetime.now().timestamp()}"        
         investigate_button = discord.ui.Button(
             label="Investigate Energy Source",
@@ -5544,7 +5601,8 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(investigate_button)
         view.add_item(avoid_button)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
     async def _handle_travel_pirates(self, channel, user_id, event_data):
         """Handle pirate encounter during travel"""
         embed = discord.Embed(
@@ -5553,7 +5611,7 @@ class EnhancedEventsCog(commands.Cog):
             color=0x8b0000
         )
         
-        view = discord.ui.View(timeout=300)
+        view = AutoCleanupView()
         event_id = f"travellingpirates{channel.id}_{datetime.now().timestamp()}"         
         fight_button = discord.ui.Button(
             label="Engage Pirates",

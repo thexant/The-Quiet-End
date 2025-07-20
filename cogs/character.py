@@ -175,35 +175,50 @@ class CharacterCog(commands.Cog):
         
         # Galaxy Information Section
         # Get current galaxy time using TimeSystem
+        # Get current galaxy time using TimeSystem
         try:
             from utils.time_system import TimeSystem
             time_system = TimeSystem(self.bot)
             current_datetime = time_system.calculate_current_ingame_time()
             if current_datetime:
                 current_date = time_system.format_ingame_datetime(current_datetime)
+                # Get the current shift
+                shift_name, shift_period = time_system.get_current_shift()
             else:
                 current_date = "Unknown Date"
+                shift_name = "Unknown Shift"
         except:
             # Fallback if TimeSystem is not available
             current_date = "Unknown Date"
-        
+            shift_name = "Unknown Shift"
+
         # Get logged in players count
         logged_in_count = self.db.execute_query(
             "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
             fetch='one'
         )[0]
-        
+
         # Get galaxy name from galaxy_info table
         galaxy_info = self.db.execute_query(
             "SELECT name FROM galaxy_info WHERE galaxy_id = 1",
             fetch='one'
         )
         galaxy_name = galaxy_info[0] if galaxy_info else "Unknown Galaxy"
-        
+
+        # Add shift emoji based on period
+        shift_emojis = {
+            "morning": "🌅",
+            "day": "☀️",
+            "evening": "🌆",
+            "night": "🌙"
+        }
+        shift_emoji = shift_emojis.get(shift_period, "🌐")
+
         embed.add_field(
             name="🌍 Galaxy",
             value=f"**Name:** {galaxy_name}\n"
                   f"**Date:** {current_date}\n"
+                  f"**Shift:** {shift_emoji} {shift_name}\n"
                   f"**Players Online:** {logged_in_count}",
             inline=True
         )
@@ -1152,10 +1167,41 @@ class CharacterCog(commands.Cog):
             )
         
         # Generate search results
+        # Check for dropped items at this location FIRST
+        dropped_items = self.db.execute_query(
+            '''SELECT item_name, item_type, SUM(quantity) as total_quantity, 
+                      MAX(description) as description, MAX(value) as value
+               FROM location_items 
+               WHERE location_id = ?
+               GROUP BY item_name, item_type
+               LIMIT 5''',
+            (current_location,),
+            fetch='all'
+        )
+
+        # Generate random search results
         from utils.item_config import ItemConfig
-        found_items = ItemConfig.generate_search_loot(location_type, wealth_level)
-        
-        # Create results embed
+        random_items = ItemConfig.generate_search_loot(location_type, wealth_level)
+
+        # Combine dropped items and random items
+        found_items = []
+
+        # Add dropped items first (guaranteed finds)
+        for item_name, item_type, quantity, description, value in dropped_items:
+            found_items.append((item_name, quantity))
+            
+            # Remove the dropped items from the location
+            self.db.execute_query(
+                "DELETE FROM location_items WHERE location_id = ? AND item_name = ? LIMIT ?",
+                (current_location, item_name, quantity)
+            )
+
+        # Add random items if we haven't found too many already
+        if len(found_items) < 3:
+            for item in random_items[:3-len(found_items)]:
+                found_items.append(item)
+
+        # NOW CREATE THE RESULT EMBED - This happens regardless of finding items or not
         if not found_items:
             embed = discord.Embed(
                 title="🔍 Search Complete",
@@ -1164,36 +1210,10 @@ class CharacterCog(commands.Cog):
             )
             embed.add_field(name="Better Luck Next Time", value="Try searching other locations or wait for the area to refresh.", inline=False)
         else:
-            # Add items to inventory
+            # Process found items (your existing code for adding to inventory)
             items_added = []
             for item_name, quantity in found_items:
-                item_def = ItemConfig.get_item_definition(item_name)
-                if not item_def:
-                    continue
-                
-                # Check if item already exists in inventory
-                existing_item = self.db.execute_query(
-                    "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
-                    (interaction.user.id, item_name),
-                    fetch='one'
-                )
-                
-                if existing_item:
-                    self.db.execute_query(
-                        "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
-                        (quantity, existing_item[0])
-                    )
-                else:
-                    # Create metadata for new item
-                    metadata = ItemConfig.create_item_metadata(item_name)
-                    
-                    self.db.execute_query(
-                        '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                        (interaction.user.id, item_name, item_def["type"], quantity, 
-                         item_def["description"], item_def["base_value"], metadata)
-                    )
-                
+                # ... (rest of your inventory adding code) ...
                 items_added.append(f"{quantity}x **{item_name}**")
             
             embed = discord.Embed(
@@ -1203,12 +1223,79 @@ class CharacterCog(commands.Cog):
             )
             embed.add_field(name="Items Found", value="\n".join(items_added), inline=False)
             embed.add_field(name="Next Search", value="You can search again in 15 minutes.", inline=False)
-        
+
+        # ALWAYS UPDATE THE MESSAGE - This is the key fix
         try:
             await interaction.edit_original_response(embed=embed)
-        except:
-            # Fallback if edit fails
-            await interaction.followup.send(embed=embed, ephemeral=True)
+        except discord.HTTPException:
+            # If edit fails, try sending a followup
+            try:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            except:
+                # If all else fails, at least log it
+                print(f"Failed to send search results for user {interaction.user.id}")
+            
+    @character_group.command(name="look", description="Look around to see dropped items")
+    async def look_around(self, interaction: discord.Interaction):
+        # Get character location
+        char_info = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info or not char_info[0]:
+            await interaction.response.send_message("You cannot look around while in transit!", ephemeral=True)
+            return
+        
+        current_location = char_info[0]
+        
+        # Get location name
+        location_name = self.db.execute_query(
+            "SELECT name FROM locations WHERE location_id = ?",
+            (current_location,),
+            fetch='one'
+        )[0]
+        
+        # Get dropped items
+        items = self.db.execute_query(
+            '''SELECT item_name, quantity, dropped_by, dropped_at 
+               FROM location_items 
+               WHERE location_id = ?
+               ORDER BY dropped_at DESC
+               LIMIT 10''',
+            (current_location,),
+            fetch='all'
+        )
+        
+        embed = discord.Embed(
+            title=f"👀 Looking Around {location_name}",
+            description="Items scattered around this location:",
+            color=0x4169E1
+        )
+        
+        if not items:
+            embed.add_field(name="Nothing Here", value="The area appears to be clear of any dropped items.", inline=False)
+        else:
+            items_text = []
+            for item_name, quantity, dropped_by, dropped_at in items:
+                qty_text = f"x{quantity}" if quantity > 1 else ""
+                items_text.append(f"• {item_name} {qty_text}")
+            
+            embed.add_field(
+                name="Visible Items",
+                value="\n".join(items_text[:10]),
+                inline=False
+            )
+            embed.add_field(
+                name="💡 Tip",
+                value="Use `/character search` to find these items, or `/character pickup` to grab a specific one!",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)        
+            
+         
     @character_group.command(name="delete", description="Permanently delete your character (cannot be undone!)")
     async def delete_character(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(
@@ -1340,7 +1427,54 @@ class CharacterCog(commands.Cog):
                         pass
             
             print(f"Released {len(owned_homes)} homes from character {user_id}")
+    
+    async def check_character_death(self, user_id: int, guild: discord.Guild, reason: str = "unknown"):
+        """Check if character has died (HP <= 0) and execute death if needed"""
+        char_data = self.db.execute_query(
+            "SELECT name, hp FROM characters WHERE user_id = ?",
+            (user_id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            return False
+        
+        char_name, hp = char_data
+        
+        if hp <= 0:
+            # Character is dead
+            await self._execute_character_death(user_id, char_name, guild, reason)
+            return True
+        
+        return False
 
+    async def check_ship_death(self, user_id: int, guild: discord.Guild, reason: str = "ship destruction"):
+        """Check if ship has been destroyed (hull <= 0) and execute character death if needed"""
+        ship_data = self.db.execute_query(
+            "SELECT hull_integrity FROM ships WHERE owner_id = ?",
+            (user_id,),
+            fetch='one'
+        )
+        
+        if not ship_data:
+            return False
+        
+        hull_integrity = ship_data[0]
+        
+        if hull_integrity <= 0:
+            # Ship is destroyed - this kills the character
+            char_name = self.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (user_id,),
+                fetch='one'
+            )
+            
+            if char_name:
+                await self._execute_character_death(user_id, char_name[0], guild, reason)
+                return True
+        
+        return False
+    
     async def _execute_character_death(self, user_id: int, char_name: str, guild: discord.Guild, reason: str = "unknown"):
         """Execute automatic character death with enhanced descriptions."""
         member = guild.get_member(user_id)

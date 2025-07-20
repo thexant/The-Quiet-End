@@ -833,10 +833,10 @@ class EconomyCog(commands.Cog):
         
         # Job generation multipliers by shift (slightly increased)
         shift_multipliers = {
-            "morning": 1.2,   # Increased from 0.8
-            "day": 1.6,       # Increased from 1.5
-            "evening": 1.1,   # Increased from 0.9
-            "night": 0.6      # Increased from 0.4
+            "morning": 1.5,   # Increased from 0.8
+            "day": 2.0,       # Increased from 1.5
+            "evening": 1.3,   # Increased from 0.9
+            "night": 0.9      # Increased from 0.4
         }
         
         return shift_multipliers.get(shift_period, 1.0)
@@ -1885,7 +1885,7 @@ class EconomyCog(commands.Cog):
         expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
 
         # 4) Generate travel jobs with shift-aware counts
-        base_travel_jobs = random.randint(6, 12)
+        base_travel_jobs = random.randint(8, 14)
         num_travel_jobs = max(2, int(base_travel_jobs * shift_multiplier))  # Apply shift multiplier
         
         print(f"🕐 Generating {num_travel_jobs} travel jobs (shift multiplier: {shift_multiplier:.1f})")
@@ -1933,7 +1933,7 @@ class EconomyCog(commands.Cog):
             )
 
         # 5) Add fewer stationary jobs with shift multiplier
-        base_stationary = random.randint(2, 4)
+        base_stationary = random.randint(6, 10)
         num_stationary = max(1, int(base_stationary * shift_multiplier))   # Can be 0 during night shift
         
         if num_stationary > 0:
@@ -1946,7 +1946,7 @@ class EconomyCog(commands.Cog):
             
             for _ in range(num_stationary):
                 title, desc = random.choice(stationary_jobs)
-                reward = random.randint(40, 80)  # Lower pay for local work
+                reward = random.randint(40, 100)  # Lower pay for local work
                 duration = random.randint(2, 8)  
                 danger = random.randint(0, 2)
                 
@@ -2752,7 +2752,8 @@ class ShopBuyQuantityView(discord.ui.View):
             await interaction.followup.send(f"Item '{self.item_name}' not available or insufficient stock.", ephemeral=True)
             return
         
-        item_id, actual_name, price, stock, description, item_type = item
+        item_id, actual_name, price, stock, description, item_type, metadata = item
+
         total_cost = price * self.quantity
         
         if current_money < total_cost:

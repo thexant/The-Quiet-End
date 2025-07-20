@@ -10,18 +10,27 @@ class ItemConfig:
         "Basic Med Kit": {
             "type": "medical",
             "description": "Basic medical supplies for treating minor injuries",
-            "base_value": 50,
+            "base_value": 75,
             "usage_type": "heal_hp",
             "effect_value": 25,
             "single_use": True,
             "rarity": "common"
+        },
+        "Space Soda": {
+            "type": "consumable",
+            "description": "Sweet and fizzy space soda",
+            "base_value": 5,
+            "usage_type": "heal_hp",
+            "effect_value": 1,
+            "single_use": True,
+            "rarirty": "common"
         },
         "Advanced Med Kit": {
             "type": "medical", 
             "description": "High-quality medical supplies for serious injuries",
             "base_value": 150,
             "usage_type": "heal_hp",
-            "effect_value": 60,
+            "effect_value": 50,
             "single_use": True,
             "rarity": "uncommon"
         },
@@ -47,7 +56,7 @@ class ItemConfig:
         "Basic Tools": {
             "type": "equipment",
             "description": "Standard repair tools for basic maintenance",
-            "base_value": 50,
+            "base_value": 250,
             "usage_type": "repair_hull",
             "effect_value": 5,
             "uses_remaining": 5,
@@ -97,8 +106,8 @@ class ItemConfig:
         "Emergency Rations": {
             "type": "consumable",
             "description": "Basic food supplies that restore energy",
-            "base_value": 20,
-            "usage_type": "restore_energy",
+            "base_value": 10,
+            "usage_type": "heal_hp",
             "effect_value": 15,
             "single_use": True,
             "rarity": "common"
@@ -106,8 +115,8 @@ class ItemConfig:
         "Protein Bars": {
             "type": "consumable",
             "description": "High-energy manufactured food",
-            "base_value": 15,
-            "usage_type": "restore_energy", 
+            "base_value": 5,
+            "usage_type": "heal_hp", 
             "effect_value": 10,
             "single_use": True,
             "rarity": "common"
@@ -156,18 +165,19 @@ class ItemConfig:
         "Fuel Cell": {
             "type": "fuel",
             "description": "Portable fuel container for ship refueling",
-            "base_value": 30,
+            "base_value": 35,
             "usage_type": "restore_fuel",
-            "effect_value": 25,
+            "effect_value": 10,
             "single_use": True,
             "rarity": "common"
         },
-        "High-Grade Fuel": {
+        
+        "High-Grade Fuel Cell": {
             "type": "fuel",
-            "description": "Premium fuel with improved efficiency",
+            "description": "Premium fuel cell with increased capacity",
             "base_value": 75,
             "usage_type": "restore_fuel",
-            "effect_value": 50,
+            "effect_value": 25,
             "single_use": True,
             "rarity": "uncommon"
         },

@@ -5,7 +5,7 @@ from discord import app_commands
 import random
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 class CorridorEventsCog(commands.Cog):
@@ -16,33 +16,52 @@ class CorridorEventsCog(commands.Cog):
     
     async def trigger_corridor_event(self, transit_channel: discord.TextChannel, 
                                    travelers: List[int], danger_level: int):
-        """Trigger a corridor event based on danger level and random chance"""
+        """Trigger a corridor event with dynamic timing based on remaining travel time"""
         
-        # Calculate event probability based on danger level
-        base_chance = danger_level * 0.15  # 15% per danger level
-        
-        if random.random() > base_chance:
-            return  # No event triggered
-        
-        # Select event type based on danger level
-        event_types = [
-            ("corridor_radiation", 1, 5),
-            ("static_fog", 2, 4), 
-            ("vacuum_bloom", 3, 5)
-        ]
-        
-        # Filter events by danger level
-        available_events = [e for e in event_types if e[1] <= danger_level]
-        if not available_events:
+        # Check for active events
+        if transit_channel.id in self.active_events:
             return
         
-        event_type, min_danger, max_danger = random.choice(available_events)
-        severity = min(danger_level, random.randint(min_danger, max_danger))
+        # Get remaining travel time
+        remaining_travel_time = await self._get_remaining_travel_time(transit_channel.id)
         
-        # Create event record
-        expires_at = datetime.now() + timedelta(minutes=random.randint(3, 8))
+        # If less than 30 seconds remaining, don't trigger event
+        if remaining_travel_time < 30:
+            return
+        
+        # Determine event type based on danger level
+        event_types = ["corridor_radiation", "static_fog", "vacuum_bloom", "hostile_raiders"]
+        weights = [0.40, 0.35, 0.3, 0.25]
+        
+        if danger_level >= 4:
+            weights = [0.45, 0.4, 0.35, 0.3]
+        
+        event_type = random.choices(event_types, weights=weights)[0]
+        
+        # Severity based on danger level
+        severity = min(5, random.randint(max(1, danger_level - 1), danger_level + 1))
+        
+        # CRITICAL FIX: Calculate response time based on remaining travel time
+        # Ensure event expires BEFORE travel completes
+        max_response_time = min(
+            180,  # Maximum 3 minutes
+            int(remaining_travel_time * 0.7)  # 70% of remaining travel time
+        )
+        
+        # Minimum 30 seconds, maximum based on calculation above
+        response_time = max(30, min(max_response_time, 60 + (severity * 20)))
+        
+        # If response time would be too short, don't trigger event
+        if response_time < 30:
+            return
+        
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=random.randint(3, 8))
+        
+        # Log event for debugging
+        print(f"🚨 Triggering {event_type} event - Remaining travel: {remaining_travel_time}s, Response time: {response_time}s")
+        
+        # Store event in database
         affected_users_json = json.dumps(travelers)
-        
         self.db.execute_query(
             '''INSERT INTO corridor_events 
                (transit_channel_id, event_type, severity, expires_at, affected_users)
@@ -56,7 +75,7 @@ class CorridorEventsCog(commands.Cog):
             fetch='one'
         )[0]
         
-        # Schedule event resolution and store the task
+        # Schedule event resolution
         timeout_task = asyncio.create_task(self._handle_event_timeout(transit_channel.id, event_id))
         
         # Track active event
@@ -67,14 +86,30 @@ class CorridorEventsCog(commands.Cog):
             'expires_at': expires_at,
             'travelers': travelers,
             'responses': {},
-            'timeout_task': timeout_task  # Store the task
+            'timeout_task': timeout_task,
+            'response_time': response_time  # Store for reference
         }
         
         # Send event alert
         await self._send_event_alert(transit_channel, event_type, severity, expires_at, travelers)
+
+    
+    async def _get_remaining_travel_time(self, channel_id: int) -> int:
+        """Get remaining travel time for a transit channel"""
+        session_data = self.db.execute_query(
+            """SELECT end_time FROM travel_sessions 
+               WHERE temp_channel_id = ? AND status = 'traveling'
+               ORDER BY session_id DESC LIMIT 1""",
+            (channel_id,),
+            fetch='one'
+        )
         
-        # Schedule event resolution
-        asyncio.create_task(self._handle_event_timeout(transit_channel.id, event_id))
+        if session_data and session_data[0]:
+            end_time = datetime.fromisoformat(session_data[0])
+            remaining = (end_time - datetime.utcnow()).total_seconds()
+            return max(0, int(remaining))
+        
+        return 0
     
     async def _send_event_alert(self, channel: discord.TextChannel, event_type: str, 
                               severity: int, expires_at: datetime, travelers: List[int]):
@@ -96,6 +131,8 @@ class CorridorEventsCog(commands.Cog):
             embed = self._create_static_fog_alert(severity, expires_at)
         elif event_type == "vacuum_bloom":
             embed = self._create_vacuum_bloom_alert(severity, expires_at)
+        elif event_type == "hostile_raiders":
+            embed = self._create_hostile_raiders_alert(severity, expires_at)
         else:
             return
         
@@ -141,7 +178,35 @@ class CorridorEventsCog(commands.Cog):
         embed.add_field(name="💡 Skill Used", value="**Engineering** - Higher skill = better outcomes", inline=False)
         
         return embed
-
+    def _create_hostile_raiders_alert(self, severity: int, expires_at: datetime) -> discord.Embed:
+        """Create hostile raiders event alert embed"""
+        embed = discord.Embed(
+            title="⚔️ HOSTILE RAIDERS DETECTED",
+            description="⚠️ **COMBAT ALERT** ⚠️\nAggressive ships detected intercepting your route!",
+            color=0xdc143c  # Crimson red
+        )
+        
+        if severity <= 2:
+            danger_text = "Small raider patrol"
+            effects_text = "• Light weapons fire\n• Attempted boarding\n• Cargo theft risk"
+            precaution_help = "**🚨 Emergency:** Full combat mode, heavy casualties\n**⚠️ Standard:** Defensive engagement\n**🔧 Basic:** Evasive maneuvers only"
+        elif severity <= 4:
+            danger_text = "MAJOR raider fleet"
+            effects_text = "• Heavy weapons barrage\n• Multiple boarding attempts\n• Ship capture risk"
+            precaution_help = "**🚨 Emergency:** All weapons hot, extreme danger\n**⚠️ Standard:** Tactical defense\n**🔧 Basic:** Risky evasion"
+        else:
+            danger_text = "**OVERWHELMING** raider armada"
+            effects_text = "• Devastating firepower\n• Coordinated assault\n• **TOTAL DESTRUCTION** risk"
+            precaution_help = "**🚨 Emergency:** Last stand protocols\n**⚠️ Standard:** Still very dangerous\n**🔧 Basic:** Near-certain death"
+        
+        embed.add_field(name="🎚️ Severity Level", value=f"Level {severity}/5 - {danger_text}", inline=False)
+        embed.add_field(name="⚠️ Potential Effects", value=effects_text, inline=False)
+        embed.add_field(name="🛡️ Response Options", value=precaution_help, inline=False)
+        embed.add_field(name="⏰ Time to Respond", value=f"Engage or evade before <t:{int(expires_at.timestamp())}:R>!", inline=False)
+        embed.add_field(name="💡 Skill Used", value="**Combat** - Higher skill = better outcomes", inline=False)
+        
+        return embed
+        
     def _create_static_fog_alert(self, severity: int, expires_at: datetime) -> discord.Embed:
         """Create static fog event alert embed"""
         embed = discord.Embed(
@@ -211,7 +276,7 @@ class CorridorEventsCog(commands.Cog):
             return
         
         # Wait until event expires
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         if event_data['expires_at'] > now:
             wait_time = (event_data['expires_at'] - now).total_seconds()
             await asyncio.sleep(wait_time)
@@ -275,8 +340,8 @@ class CorridorEventsCog(commands.Cog):
         severity = event_data['severity']
         
         # Calculate timeout damage (worse than basic response)
-        base_hp_damage = severity * 6  # Higher than normal
-        base_ship_damage = severity * 10
+        base_hp_damage = severity * 10  # Higher than normal
+        base_ship_damage = severity * 15
         
         for user_id in unresponsive_travelers:
             user = channel.guild.get_member(user_id)
@@ -388,16 +453,16 @@ class CorridorEventsCog(commands.Cog):
     
     async def _calculate_event_damage(self, event_type: str, severity: int, response: str) -> Dict:
         """Calculate damage based on event type, severity, and player response"""
-        base_hp_damage = severity * 10
-        base_ship_damage = severity * 12
+        base_hp_damage = severity * 12
+        base_ship_damage = severity * 15
         
         # Response effectiveness
         if response == 'emergency_protocols':
-            damage_reduction = 0.8  # 80% reduction
+            damage_reduction = 0.6  # 80% reduction
         elif response == 'standard_protocols':
-            damage_reduction = 0.5  # 50% reduction
+            damage_reduction = 0.4  # 50% reduction
         elif response == 'basic_response':
-            damage_reduction = 0.3  # 30% reduction
+            damage_reduction = 0.2  # 30% reduction
         else:  # no_response
             damage_reduction = 0.0  # No reduction
         
@@ -406,14 +471,17 @@ class CorridorEventsCog(commands.Cog):
             hp_modifier = 1.5  # More HP damage
             ship_modifier = 0.8
         elif event_type == "static_fog":
-            hp_modifier = 0.7
+            hp_modifier = 0.8
             ship_modifier = 2.0  # More ship damage
         elif event_type == "vacuum_bloom":
             hp_modifier = 1.35
             ship_modifier = 1.5
+        elif event_type == "hostile_raiders":
+            hp_modifier = 2.0  # Heavy crew casualties
+            ship_modifier = 1.8  # Significant ship damage from weapons fire
         else:
-            hp_modifier = 1.0
-            ship_modifier = 1.0
+            hp_modifier = 1.1
+            ship_modifier = 1.2
         
         final_hp_damage = int(base_hp_damage * hp_modifier * (1 - damage_reduction))
         final_ship_damage = int(base_ship_damage * ship_modifier * (1 - damage_reduction))
@@ -458,7 +526,8 @@ class CorridorEventView(discord.ui.View):
         descriptions = {
             "corridor_radiation": "Maximum shielding engaged. Risk: Massive power drain, potential system overload.",
             "static_fog": "Full electromagnetic isolation activated. Risk: Complete communication blackout, navigation failure.",
-            "vacuum_bloom": "Emergency quarantine protocols. Risk: Life support strain, potential system shutdown."
+            "vacuum_bloom": "Emergency quarantine protocols. Risk: Life support strain, potential system shutdown.",
+            "hostile_raiders": "All weapons engaged, full combat protocols. Risk: Massive ammunition expenditure, death or injury."
         }
         return descriptions.get(event_type, "Maximum protection with unknown consequences.")
     
@@ -466,7 +535,8 @@ class CorridorEventView(discord.ui.View):
         descriptions = {
             "corridor_radiation": "Standard shielding protocols. Balanced protection with moderate power consumption.",
             "static_fog": "Selective system hardening. Maintains basic functionality while filtering interference.",
-            "vacuum_bloom": "Controlled containment procedures. Standard filtration with normal operation."
+            "vacuum_bloom": "Controlled containment procedures. Standard filtration with normal operation.",
+            "hostile_raiders": "Defensive combat stance. Balanced engagement with moderate resource consumption."
         }
         return descriptions.get(event_type, "Standard protective measures activated.")
     
@@ -474,7 +544,8 @@ class CorridorEventView(discord.ui.View):
         descriptions = {
             "corridor_radiation": "Minimal shielding only. Low power cost but limited protection.",
             "static_fog": "Basic interference filtering. Minimal system impact but reduced effectiveness.",
-            "vacuum_bloom": "Surface-level containment only. Quick response but minimal protection."
+            "vacuum_bloom": "Surface-level containment only. Quick response but minimal protection.",
+            "hostile_raiders": "Evasive maneuvers only. Minimal engagement but limited protection."
         }
         return descriptions.get(event_type, "Minimal precautions with limited protection.")
     
@@ -551,7 +622,6 @@ class CorridorEventView(discord.ui.View):
         # Perform skill check and calculate outcome
         outcome = await self._perform_skill_check(user, response_type, event_data)
         
-        # Show skill check result
         await self._show_skill_check_result(channel, user, response_type, outcome)
         
         # Wait for dramatic effect
@@ -569,22 +639,26 @@ class CorridorEventView(discord.ui.View):
             'emergency_protocols': {
                 'corridor_radiation': f"🚨 {user.mention} activates emergency radiation shielding! Systems strain under maximum power draw...",
                 'static_fog': f"🚨 {user.mention} initiates full electromagnetic isolation! Ship goes dark to external sensors...",
-                'vacuum_bloom': f"🚨 {user.mention} triggers emergency quarantine! All ship systems lock down..."
+                'vacuum_bloom': f"🚨 {user.mention} triggers emergency quarantine! All ship systems lock down...",
+                'hostile_raiders': f"🚨 {user.mention} powers all weapon systems! The ship prepares for brutal combat..."
             },
             'standard_protocols': {
                 'corridor_radiation': f"⚠️ {user.mention} raises standard radiation shields. Power levels stable, protection adequate...",
                 'static_fog': f"⚠️ {user.mention} activates interference filters. Systems hardened against electromagnetic disruption...",
-                'vacuum_bloom': f"⚠️ {user.mention} seals air filtration systems. Containment protocols engaged..."
+                'vacuum_bloom': f"⚠️ {user.mention} seals air filtration systems. Containment protocols engaged...",
+                'hostile_raiders': f"⚠️ {user.mention} raises shields and arms defensive weapons. Ready for controlled engagement..."
             },
             'basic_response': {
                 'corridor_radiation': f"🔧 {user.mention} makes basic adjustments to shielding. Minimal power consumption...",
                 'static_fog': f"🔧 {user.mention} switches to backup communications. Basic countermeasures active...",
-                'vacuum_bloom': f"🔧 {user.mention} closes external vents. Surface-level contamination prevention..."
+                'vacuum_bloom': f"🔧 {user.mention} closes external vents. Surface-level contamination prevention...",
+                'hostile_raiders': f"🔧 {user.mention} diverts power to engines. Attempting evasive maneuvers..."
             },
             'no_response': {
                 'corridor_radiation': f"⏸️ {user.mention} takes no action. Ship remains vulnerable to radiation exposure...",
                 'static_fog': f"⏸️ {user.mention} maintains course without precautions. Systems exposed to interference...",
-                'vacuum_bloom': f"⏸️ {user.mention} ignores the contamination warning. Ship systems remain unsealed..."
+                'vacuum_bloom': f"⏸️ {user.mention} ignores the contamination warning. Ship systems remain unsealed...",
+                'hostile_raiders': f"⏸️ {user.mention} freezes in panic. Ship drifts helplessly as raiders close in..."
             }
         }
         
@@ -624,33 +698,36 @@ class CorridorEventView(discord.ui.View):
         elif event_type == "vacuum_bloom":
             skill_used = "medical"
             skill_value = medical
+        elif event_type == "hostile_raiders":
+            skill_used = "combat"
+            skill_value = combat
         else:
             skill_used = "engineering"
             skill_value = engineering
         
         # --- REBALANCED DIFFICULTY ---
         # Base difficulty is higher now
-        base_difficulty = 60 + ((severity - 1) * 15) # Range: 60-120
+        base_difficulty = 65 + ((severity - 1) * 15) # Range: 60-120
 
         # Skill provides a direct bonus
-        skill_bonus = skill_value * 1.2
+        skill_bonus = skill_value * 1
 
         # Response type now acts as a multiplier on your skill bonus
         if response_type == 'emergency_protocols':
             # High risk, high reward: Full skill bonus but high failure penalty
             difficulty = base_difficulty - skill_bonus
-            crit_fail_chance = 0.15  # 10% chance of critical failure
+            crit_fail_chance = 0.2  # 10% chance of critical failure
         elif response_type == 'standard_protocols':
             # Standard: Good bonus, low failure risk
             difficulty = base_difficulty - (skill_bonus * 0.75)
-            crit_fail_chance = 0.10  # 5% chance
+            crit_fail_chance = 0.15  # 5% chance
         elif response_type == 'basic_response':
             # Basic: Low bonus, very safe
             difficulty = base_difficulty - (skill_bonus * 0.4)
-            crit_fail_chance = 0.02  # 2% chance
+            crit_fail_chance = 0.10  # 2% chance
         else:  # no_response
             difficulty = 100
-            crit_fail_chance = 0.5
+            crit_fail_chance = 0.75
             skill_bonus = 0
         
         # Roll d100
@@ -744,12 +821,8 @@ class CorridorEventView(discord.ui.View):
                 "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
                 (ship_damage, user.id)
             )
-            # Check for character death
-            char_cog = self.bot.get_cog('CharacterCog')
-            if char_cog and (outcome.get('critical_failure', False) or not outcome['success']):
-                died_from_hp = await char_cog.check_character_death(user.id, channel.guild, f"died from a {event_type.replace('_', ' ')} after a {response_type.replace('_',' ')}")
-                if not died_from_hp:
-                    await char_cog.check_ship_death(user.id, channel.guild, f"ship destroyed by a {event_type.replace('_', ' ')} after a {response_type.replace('_',' ')}")
+            
+            # Create and send the damage result embed
             embed = discord.Embed(
                 title="💥 CATASTROPHIC CONSEQUENCES",
                 description=f"{user.mention} suffers severe consequences from the critical failure!",
@@ -760,6 +833,17 @@ class CorridorEventView(discord.ui.View):
                 value=f"• **-{hp_damage} HP** (system overload injuries)\n• **-{ship_damage} Hull** (critical system damage)\n• **-{credit_loss} Credits** (emergency repairs)",
                 inline=False
             )
+            
+            # Send the embed to show the damage
+            await channel.send(embed=embed)
+            
+            # Check for character death
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog and (outcome.get('critical_failure', False) or not outcome['success']):
+                response_type = outcome.get('response_type', 'response')
+                died_from_hp = await char_cog.check_character_death(user.id, channel.guild, f"died from a {event_type.replace('_', ' ')} after a {response_type.replace('_',' ')}")
+                if not died_from_hp:
+                    await char_cog.check_ship_death(user.id, channel.guild, f"ship destroyed by a {event_type.replace('_', ' ')} after a {response_type.replace('_',' ')}")
             
         elif outcome['success']:
             # Success: Minimal or no damage, possible benefits

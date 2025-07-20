@@ -15,10 +15,14 @@ class GalacticNewsCog(commands.Cog):
         self.db = bot.db
         self.news_delivery_loop.start()
         self.shift_change_monitor.start()
+        self.fluff_news_generation.start()
+        
     def cog_unload(self):
         """Clean up tasks when cog is unloaded"""
         self.news_delivery_loop.cancel()
         self.shift_change_monitor.cancel()
+        self.fluff_news_generation.cancel()
+        
     @tasks.loop(seconds=30)  # Check every 30 seconds for news to deliver
     async def news_delivery_loop(self):
         """Deliver scheduled news that has reached its delivery time"""
@@ -515,7 +519,7 @@ class GalacticNewsCog(commands.Cog):
             guild_id = guild_tuple[0]
             await self.queue_news(guild_id, 'fluff_news', title, description, location_id)
 
-    @tasks.loop(hours=1)  # Generate fluff news every 6 hours
+    @tasks.loop(hours=3)  # Generate fluff news every 6 hours
     async def fluff_news_generation(self):
         """Periodically generate fluff news"""
         if random.random() < 0.25:  # 30% chance every 2 hours

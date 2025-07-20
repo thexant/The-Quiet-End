@@ -2684,7 +2684,8 @@ class NPCRobSelectView(discord.ui.View):
 
         else:
             # Failed robbery - start combat
-            rep_change = self._calculate_reputation_change(npc_alignment, "rob_fail")
+            combat_cog = self.bot.get_cog('CombatCog')
+            rep_change = combat_cog._calculate_reputation_change(npc_alignment, "rob_fail")
             
             reputation_cog = self.bot.get_cog('ReputationCog')
             if reputation_cog:

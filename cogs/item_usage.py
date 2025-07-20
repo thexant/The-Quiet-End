@@ -477,6 +477,21 @@ class ItemUsageCog(commands.Cog):
             }
         else:
             return {"success": False, "message": f"Unknown usage type: {usage_type}"}
-
+        try:
+            metadata = json.loads(item_data[6]) if item_data[6] else {}
+        except json.JSONDecodeError:
+            metadata = {}
+        
+        # ADD THIS DEBUG BLOCK
+        print(f"=== DEBUG ITEM USE ===")
+        print(f"Item Name: {actual_name}")
+        print(f"Raw Metadata from DB: {item_data[6]}")
+        print(f"Parsed Metadata: {metadata}")
+        print(f"Usage Type: {metadata.get('usage_type', 'narrative')}")
+        print(f"===================")
+        
+        # Check usage type
+        usage_type = metadata.get("usage_type", "narrative")
+        
 async def setup(bot):
     await bot.add_cog(ItemUsageCog(bot))

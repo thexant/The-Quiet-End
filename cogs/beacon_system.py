@@ -166,7 +166,7 @@ class BeaconSystemCog(commands.Cog):
                     )
                 else:
                     # Schedule next transmission
-                    next_time = datetime.utcnow() + timedelta(minutes=20)
+                    next_time = datetime.utcnow() + timedelta(minutes=30)
                     self.db.execute_query(
                         """UPDATE active_beacons 
                            SET transmissions_sent = ?, next_transmission = ?

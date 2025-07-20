@@ -1424,38 +1424,133 @@ class AdminCog(commands.Cog):
             f"💀 Killed dynamic NPC: **{name}** ({callsign})",
             ephemeral=True
         )
-    @admin_group.command(name="test_news", description="Send a test news update")
-    async def test_galactic_news(self, interaction: discord.Interaction):
+
+# Add this to your admin.py file in the AdminCog class
+
+    @admin_group.command(name="ship_diagnostic", description="Diagnose ship/fuel issues for a player")
+    @app_commands.describe(player="The player to diagnose")
+    async def ship_diagnostic(self, interaction: discord.Interaction, player: discord.Member = None):
+        """Diagnose ship and fuel issues"""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
-        # Check if galactic updates channel is configured
-        updates_channel_id = self.db.execute_query(
-            "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = ?",
-            (interaction.guild.id,),
+        target = player or interaction.user
+        
+        # Get character data
+        char_data = self.db.execute_query(
+            "SELECT name, ship_id, active_ship_id FROM characters WHERE user_id = ?",
+            (target.id,),
             fetch='one'
         )
         
-        if not updates_channel_id or not updates_channel_id[0]:
-            await interaction.response.send_message(
-                "Galactic updates channel not configured. Use `/admin set_galactic_updates` first.",
-                ephemeral=True
-            )
+        if not char_data:
+            await interaction.response.send_message(f"{target.mention} doesn't have a character!", ephemeral=True)
             return
         
-        news_cog = self.bot.get_cog('GalacticNewsCog')
-        if not news_cog:
-            await interaction.response.send_message("Galactic news system not available.", ephemeral=True)
-            return
+        char_name, old_ship_id, active_ship_id = char_data
         
-        # Generate test news
-        await news_cog.generate_fluff_news()
-        
-        await interaction.response.send_message(
-            "📰 Test news has been queued and will be delivered based on transmission delays.",
-            ephemeral=True
+        # Get active ship from player_ships
+        player_ship = self.db.execute_query(
+            '''SELECT ps.ship_id, s.name, s.current_fuel, s.fuel_capacity
+               FROM player_ships ps
+               JOIN ships s ON ps.ship_id = s.ship_id
+               WHERE ps.owner_id = ? AND ps.is_active = 1''',
+            (target.id,),
+            fetch='one'
         )
+        
+        # Check fuel using old ship_id
+        old_fuel_check = self.db.execute_query(
+            '''SELECT s.current_fuel, s.fuel_capacity, s.name
+               FROM characters c
+               JOIN ships s ON c.ship_id = s.ship_id
+               WHERE c.user_id = ?''',
+            (target.id,),
+            fetch='one'
+        )
+        
+        # Check fuel using active_ship_id
+        active_fuel_check = self.db.execute_query(
+            '''SELECT s.current_fuel, s.fuel_capacity, s.name
+               FROM characters c
+               JOIN ships s ON c.active_ship_id = s.ship_id
+               WHERE c.user_id = ?''',
+            (target.id,),
+            fetch='one'
+        )
+        
+        embed = discord.Embed(
+            title="🔍 Ship Diagnostic Report",
+            description=f"Diagnosing ship issues for **{char_name}**",
+            color=0xffff00
+        )
+        
+        embed.add_field(name="Player", value=target.mention, inline=True)
+        embed.add_field(name="Character", value=char_name, inline=True)
+        embed.add_field(name="", value="", inline=True)  # Spacer
+        
+        # Database fields
+        embed.add_field(
+            name="📊 Database Fields",
+            value=f"ship_id: **{old_ship_id}**\nactive_ship_id: **{active_ship_id}**",
+            inline=False
+        )
+        
+        # Active ship from player_ships
+        if player_ship:
+            embed.add_field(
+                name="✅ Active Ship (player_ships)",
+                value=f"ID: **{player_ship[0]}** - {player_ship[1]}\nFuel: {player_ship[2]}/{player_ship[3]}",
+                inline=False
+            )
+        else:
+            embed.add_field(name="❌ No Active Ship", value="No active ship in player_ships!", inline=False)
+        
+        # Fuel check using ship_id
+        if old_fuel_check:
+            embed.add_field(
+                name="🔴 Fuel Check (using ship_id)",
+                value=f"Ship: {old_fuel_check[2]}\nFuel: {old_fuel_check[0]}/{old_fuel_check[1]}",
+                inline=True
+            )
+        else:
+            embed.add_field(name="🔴 Fuel Check (ship_id)", value="No ship found!", inline=True)
+        
+        # Fuel check using active_ship_id
+        if active_fuel_check:
+            embed.add_field(
+                name="🟢 Fuel Check (using active_ship_id)",
+                value=f"Ship: {active_fuel_check[2]}\nFuel: {active_fuel_check[0]}/{active_fuel_check[1]}",
+                inline=True
+            )
+        else:
+            embed.add_field(name="🟢 Fuel Check (active_ship_id)", value="No ship found!", inline=True)
+        
+        # Diagnosis
+        problems = []
+        if old_ship_id != active_ship_id:
+            problems.append("⚠️ ship_id and active_ship_id don't match!")
+        if player_ship and player_ship[0] != active_ship_id:
+            problems.append("⚠️ active_ship_id doesn't match player_ships!")
+        if player_ship and player_ship[0] != old_ship_id:
+            problems.append("⚠️ ship_id doesn't match player_ships!")
+        
+        if problems:
+            embed.add_field(
+                name="⚠️ Issues Found",
+                value="\n".join(problems),
+                inline=False
+            )
+            embed.add_field(
+                name="💡 Solution",
+                value="Run `/admin fix_player_ship_id` to fix this player's ship_id field",
+                inline=False
+            )
+        else:
+            embed.add_field(name="✅ No Issues", value="All ship IDs are properly synchronized!", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @admin_group.command(name="news_status", description="Check galactic news system status")
     async def galactic_news_status(self, interaction: discord.Interaction):
@@ -1523,112 +1618,92 @@ class AdminCog(commands.Cog):
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    @admin_group.command(name="config", description="View or modify server configuration")
-    @app_commands.describe(
-        setting="Setting to modify",
-        value="New value for the setting"
-    )
-    @app_commands.choices(setting=[
-        app_commands.Choice(name="Max Location Channels", value="max_channels"),
-        app_commands.Choice(name="Channel Timeout Hours", value="timeout_hours"),
-        app_commands.Choice(name="Auto Cleanup", value="auto_cleanup")
-    ])
-    async def config_server(self, interaction: discord.Interaction, setting: str = None, value: str = None):
+
+
+
+
+    @admin_group.command(name="fix_all_ships", description="Fix all ship issues for all players")
+    async def fix_all_ships(self, interaction: discord.Interaction):
+        """Fix all ship-related issues for all players"""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
-        # Check if server is set up
-        config = self.db.execute_query(
-            "SELECT setup_completed FROM server_config WHERE guild_id = ?",
-            (interaction.guild.id,),
-            fetch='one'
+        await interaction.response.defer(ephemeral=True)
+        
+        fixed_count = 0
+        
+        # Step 1: Find all characters and their ships
+        all_characters = self.db.execute_query(
+            '''SELECT c.user_id, c.name, c.ship_id, c.active_ship_id,
+                      s.ship_id as owned_ship_id, s.name as ship_name
+               FROM characters c
+               LEFT JOIN ships s ON s.owner_id = c.user_id
+               WHERE c.ship_id IS NOT NULL OR s.ship_id IS NOT NULL''',
+            fetch='all'
         )
         
-        if not config or not config[0]:
-            await interaction.response.send_message(
-                "Server not set up yet! Use `/admin setup` first.",
-                ephemeral=True
-            )
-            return
-        
-        if not setting:
-            # Show current configuration
-            await self._show_current_config(interaction)
-            return
-        
-        # Modify setting
-        if not value:
-            await interaction.response.send_message(
-                f"Please provide a value for {setting}",
-                ephemeral=True
-            )
-            return
-        
-        try:
-            if setting == "max_channels":
-                new_value = int(value)
-                if new_value < 10 or new_value > 200:
-                    await interaction.response.send_message(
-                        "Max channels must be between 10 and 200",
-                        ephemeral=True
-                    )
-                    return
+        for user_id, char_name, char_ship_id, active_ship_id, owned_ship_id, ship_name in all_characters:
+            # Determine which ship ID to use (prefer owned_ship_id from ships table)
+            ship_id = owned_ship_id or char_ship_id or active_ship_id
+            
+            if not ship_id:
+                continue
                 
+            # Check if this ship exists in player_ships
+            exists_in_player_ships = self.db.execute_query(
+                "SELECT 1 FROM player_ships WHERE owner_id = ? AND ship_id = ?",
+                (user_id, ship_id),
+                fetch='one'
+            )
+            
+            if not exists_in_player_ships:
+                # Add to player_ships
                 self.db.execute_query(
-                    "UPDATE server_config SET max_location_channels = ?, updated_at = datetime('now') WHERE guild_id = ?",
-                    (new_value, interaction.guild.id)
+                    "INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (?, ?, 1)",
+                    (user_id, ship_id)
                 )
-                
-                await interaction.response.send_message(
-                    f"✅ Max location channels set to {new_value}",
-                    ephemeral=True
-                )
-                
-            elif setting == "timeout_hours":
-                new_value = int(value)
-                if new_value < 1 or new_value > 168:  # 1 hour to 1 week
-                    await interaction.response.send_message(
-                        "Timeout must be between 1 and 168 hours (1 week)",
-                        ephemeral=True
-                    )
-                    return
-                
+                fixed_count += 1
+            else:
+                # Make sure it's active
                 self.db.execute_query(
-                    "UPDATE server_config SET channel_timeout_hours = ?, updated_at = datetime('now') WHERE guild_id = ?",
-                    (new_value, interaction.guild.id)
+                    "UPDATE player_ships SET is_active = 1 WHERE owner_id = ? AND ship_id = ?",
+                    (user_id, ship_id)
                 )
-                
-                await interaction.response.send_message(
-                    f"✅ Channel timeout set to {new_value} hours",
-                    ephemeral=True
-                )
-                
-            elif setting == "auto_cleanup":
-                new_value = value.lower() in ['true', '1', 'yes', 'on', 'enabled']
-                
-                self.db.execute_query(
-                    "UPDATE server_config SET auto_cleanup_enabled = ?, updated_at = datetime('now') WHERE guild_id = ?",
-                    (new_value, interaction.guild.id)
-                )
-                
-                status = "enabled" if new_value else "disabled"
-                await interaction.response.send_message(
-                    f"✅ Auto cleanup {status}",
-                    ephemeral=True
-                )
-                
-        except ValueError:
-            await interaction.response.send_message(
-                f"Invalid value '{value}' for setting {setting}",
-                ephemeral=True
+            
+            # Deactivate any other ships for this player
+            self.db.execute_query(
+                "UPDATE player_ships SET is_active = 0 WHERE owner_id = ? AND ship_id != ?",
+                (user_id, ship_id)
             )
-        except Exception as e:
-            await interaction.response.send_message(
-                f"Error updating setting: {str(e)}",
-                ephemeral=True
+            
+            # Update character's ship_id and active_ship_id
+            self.db.execute_query(
+                "UPDATE characters SET ship_id = ?, active_ship_id = ? WHERE user_id = ?",
+                (ship_id, ship_id, user_id)
             )
-
+        
+        # Step 2: Clean up orphaned entries in player_ships (ships that don't exist)
+        self.db.execute_query(
+            '''DELETE FROM player_ships 
+               WHERE ship_id NOT IN (SELECT ship_id FROM ships)'''
+        )
+        
+        # Step 3: Ensure fuel is initialized for all ships
+        self.db.execute_query(
+            '''UPDATE ships 
+               SET current_fuel = fuel_capacity 
+               WHERE current_fuel IS NULL OR current_fuel = 0'''
+        )
+        
+        # Count total fixed
+        total_chars = len(all_characters)
+        
+        await interaction.followup.send(
+            f"✅ Checked {total_chars} characters and fixed {fixed_count} ship issues.\n"
+            f"All ships now have fuel and are properly linked to their owners.",
+            ephemeral=True
+        )
     @admin_group.command(name="create_location", description="Manually create a new location")
     @app_commands.describe(
         channel="The channel to use for this location",
@@ -1797,113 +1872,57 @@ class AdminCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Error during cleanup: {str(e)}", ephemeral=True)
     
-    @admin_group.command(name="channel_stats", description="View detailed channel usage statistics")
-    async def channel_stats(self, interaction: discord.Interaction):
+# Add this to admin.py
+
+    @admin_group.command(name="fix_ship_activities", description="Generate activities for ships that don't have them")
+    async def fix_ship_activities(self, interaction: discord.Interaction):
+        """Generate ship activities for all ships missing them"""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
-        try:
-            from utils.channel_manager import ChannelManager
-            channel_manager = ChannelManager(self.bot)
-            stats = await channel_manager.get_location_statistics(interaction.guild)
-            
-            # Get additional details
-            locations_with_channels = self.db.execute_query(
-                '''SELECT l.name, l.location_type, l.channel_last_active, l.wealth_level
-                   FROM locations l 
-                   WHERE l.channel_id IS NOT NULL
-                   ORDER BY l.channel_last_active DESC''',
-                fetch='all'
-            )
-            
-            embed = discord.Embed(
-                title="📊 Channel Usage Statistics",
-                color=0x4169E1
-            )
-            
-            # Overview stats
-            embed.add_field(
-                name="📈 Overview",
-                value=f"**Total Locations:** {stats['total_locations']}\n" +
-                      f"**Active Channels:** {stats['active_channels']}\n" +
-                      f"**Recently Active:** {stats['recently_active']}\n" +
-                      f"**Capacity:** {stats['channel_capacity']}\n" +
-                      f"**Usage:** {stats['capacity_usage']:.1f}%",
-                inline=True
-            )
-            
-            # Channel efficiency
-            efficiency = (stats['active_channels'] / stats['total_locations']) * 100 if stats['total_locations'] > 0 else 0
-            embed.add_field(
-                name="⚡ Efficiency",
-                value=f"**Channel Efficiency:** {efficiency:.1f}%\n" +
-                      f"**Locations without channels:** {stats['total_locations'] - stats['active_channels']}\n" +
-                      f"**Memory saved:** {100 - efficiency:.1f}%",
-                inline=True
-            )
-            
-            embed.add_field(name="", value="", inline=True)  # Spacer
-            
-            # Active channels breakdown
-            if locations_with_channels:
-                channel_list = []
-                for name, loc_type, last_active, wealth in locations_with_channels[:10]:
-                    type_emoji = {
-                        'colony': '🏭',
-                        'space_station': '🛰️',
-                        'outpost': '🛤️',
-                        'gate': '🚪'
-                    }.get(loc_type, '📍')
-                    
-                    if last_active:
-                        try:
-                            last_active_dt = datetime.fromisoformat(last_active)
-                            hours_ago = (datetime.now() - last_active_dt).total_seconds() / 3600
-                            if hours_ago < 1:
-                                time_text = "< 1h ago"
-                            elif hours_ago < 24:
-                                time_text = f"{int(hours_ago)}h ago"
-                            else:
-                                time_text = f"{int(hours_ago // 24)}d ago"
-                        except:
-                            time_text = "Unknown"
-                    else:
-                        time_text = "Never"
-                    
-                    wealth_stars = "⭐" * min(wealth // 2, 5) if wealth > 0 else ""
-                    channel_list.append(f"{type_emoji} {name[:20]} {wealth_stars} - {time_text}")
-                
-                embed.add_field(
-                    name="🏢 Active Location Channels",
-                    value="\n".join(channel_list) + (f"\n... and {len(locations_with_channels) - 10} more" if len(locations_with_channels) > 10 else ""),
-                    inline=False
-                )
-            
-            # Cleanup recommendations
-            if stats['capacity_usage'] > 80:
-                embed.add_field(
-                    name="⚠️ Cleanup Recommended",
-                    value="Channel usage is high. Consider running `/admin cleanup_channels force:True`",
-                    inline=False
-                )
-            elif stats['recently_active'] < stats['active_channels'] * 0.5:
-                embed.add_field(
-                    name="🧹 Cleanup Available",
-                    value="Many channels are inactive. Run `/admin cleanup_channels` to free up space",
-                    inline=False
-                )
-            else:
-                embed.add_field(
-                    name="✅ Optimal Usage",
-                    value="Channel usage is healthy. No immediate cleanup needed",
-                    inline=False
-                )
-            
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            
-        except Exception as e:
-            await interaction.response.send_message(f"Error retrieving stats: {str(e)}", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        
+        # Import the activity manager
+        from utils.ship_activities import ShipActivityManager
+        activity_manager = ShipActivityManager(self.bot)
+        
+        # Find all ships without activities
+        ships_without_activities = self.db.execute_query(
+            '''SELECT s.ship_id, s.ship_type, s.name, c.name as owner_name
+               FROM ships s
+               LEFT JOIN ship_activities sa ON s.ship_id = sa.ship_id
+               LEFT JOIN characters c ON s.owner_id = c.user_id
+               WHERE sa.ship_id IS NULL
+               GROUP BY s.ship_id''',
+            fetch='all'
+        )
+        
+        fixed_count = 0
+        
+        for ship_id, ship_type, ship_name, owner_name in ships_without_activities:
+            # Generate activities for this ship
+            activity_manager.generate_ship_activities(ship_id, ship_type)
+            fixed_count += 1
+        
+        # Also fix any ships with zero activities
+        ships_with_no_activities = self.db.execute_query(
+            '''SELECT s.ship_id, s.ship_type, COUNT(sa.activity_id) as activity_count
+               FROM ships s
+               LEFT JOIN ship_activities sa ON s.ship_id = sa.ship_id
+               GROUP BY s.ship_id
+               HAVING activity_count = 0''',
+            fetch='all'
+        )
+        
+        for ship_id, ship_type, _ in ships_with_no_activities:
+            activity_manager.generate_ship_activities(ship_id, ship_type)
+            fixed_count += 1
+        
+        await interaction.followup.send(
+            f"✅ Generated activities for {fixed_count} ships that were missing them!",
+            ephemeral=True
+        )
     
     @admin_group.command(name="create_corridor", description="Create a corridor between locations")
     @app_commands.describe(
@@ -1992,114 +2011,6 @@ class AdminCog(commands.Cog):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
     
-    @admin_group.command(name="link_channel", description="Create or link a channel to an existing location")
-    @app_commands.describe(
-        location_name="Name of the existing location",
-        channel="Discord channel to link to this location (optional - creates new if not provided)"
-    )
-    async def link_channel(self, interaction: discord.Interaction, location_name: str, channel: discord.TextChannel = None):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
-            return
-        
-        # Find location
-        location = self.db.execute_query(
-            "SELECT location_id, name, channel_id FROM locations WHERE LOWER(name) LIKE LOWER(?)",
-            (f"%{location_name}%",),
-            fetch='one'
-        )
-        
-        if not location:
-            await interaction.response.send_message(f"Location '{location_name}' not found.", ephemeral=True)
-            return
-        
-        location_id, actual_name, current_channel_id = location
-        
-        if channel:
-            # Link to existing channel
-            # Check if channel is already used
-            existing = self.db.execute_query(
-                "SELECT name FROM locations WHERE channel_id = ?",
-                (channel.id,),
-                fetch='one'
-            )
-            
-            if existing:
-                await interaction.response.send_message(
-                    f"Channel {channel.mention} is already used by location '{existing[0]}'.",
-                    ephemeral=True
-                )
-                return
-            
-            # Update location with channel
-            self.db.execute_query(
-                "UPDATE locations SET channel_id = ?, channel_last_active = datetime('now') WHERE location_id = ?",
-                (channel.id, location_id)
-            )
-            
-            # Set channel permissions
-            await channel.set_permissions(interaction.guild.default_role, read_messages=False)
-            
-            response_text = f"Linked {channel.mention} to location '{actual_name}'"
-        else:
-            # Create new channel using channel manager
-            from utils.channel_manager import ChannelManager
-            channel_manager = ChannelManager(self.bot)
-            
-            # Get location details first
-            location_details = self.db.execute_query(
-                "SELECT name, location_type, description, wealth_level FROM locations WHERE location_id = ?",
-                (location_id,),
-                fetch='one'
-            )
-            
-            if not location_details:
-                await interaction.response.send_message("Failed to get location details.", ephemeral=True)
-                return
-            
-            name, loc_type, description, wealth = location_details
-            
-            new_channel = await channel_manager.get_or_create_location_channel(
-                interaction.guild, 
-                location_id,
-                interaction.user,
-                name,
-                description,
-                wealth
-            )
-            
-            if not new_channel:
-                await interaction.response.send_message("Failed to create channel for location.", ephemeral=True)
-                return
-            
-            response_text = f"Created {new_channel.mention} for location '{actual_name}'"
-        
-        # Move any characters currently at this location to the channel
-        characters_at_location = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE current_location = ?",
-            (location_id,),
-            fetch='all'
-        )
-        
-        moved_count = 0
-        target_channel = channel or new_channel
-        
-        for char_id in characters_at_location:
-            member = interaction.guild.get_member(char_id[0])
-            if member:
-                await target_channel.set_permissions(member, read_messages=True, send_messages=True)
-                moved_count += 1
-        
-        embed = discord.Embed(
-            title="Channel Linked",
-            description=response_text,
-            color=0x00ff00
-        )
-        
-        if moved_count > 0:
-            embed.add_field(name="Characters Moved", value=f"{moved_count} characters given access", inline=False)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
     
     @admin_group.command(name="location_info", description="Get detailed information about a location")
     @app_commands.describe(location_name="Name of the location to inspect")
@@ -2186,126 +2097,6 @@ class AdminCog(commands.Cog):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
     
-    @admin_group.command(name="clear_generated", description="Clear all auto-generated locations and corridors")
-    async def clear_generated(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
-            return
-        
-        # Get counts before deletion
-        gen_corridors = self.db.execute_query(
-            "SELECT COUNT(*) FROM corridors WHERE is_generated = 1",
-            fetch='one'
-        )[0]
-        
-        gen_locations = self.db.execute_query(
-            "SELECT COUNT(*) FROM locations WHERE is_generated = 1",
-            fetch='one'
-        )[0]
-        
-        if gen_corridors == 0 and gen_locations == 0:
-            await interaction.response.send_message("No generated locations or corridors to clear.", ephemeral=True)
-            return
-        
-        # Clear generated data
-        self.db.execute_query("DELETE FROM corridors WHERE is_generated = 1")
-        self.db.execute_query("DELETE FROM locations WHERE is_generated = 1")
-        
-        embed = discord.Embed(
-            title="Generated Content Cleared",
-            description="All auto-generated locations and corridors have been removed.",
-            color=0xff9900
-        )
-        embed.add_field(name="Locations Removed", value=str(gen_locations), inline=True)
-        embed.add_field(name="Corridors Removed", value=str(gen_corridors), inline=True)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    
-    @admin_group.command(name="stats", description="View overall server statistics including channel usage")
-    async def server_stats(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
-            return
-        
-        # Get various statistics
-        total_chars = self.db.execute_query("SELECT COUNT(*) FROM characters", fetch='one')[0]
-        total_locations = self.db.execute_query("SELECT COUNT(*) FROM locations", fetch='one')[0]
-        total_corridors = self.db.execute_query("SELECT COUNT(DISTINCT name) FROM corridors", fetch='one')[0]
-        active_corridors = self.db.execute_query("SELECT COUNT(DISTINCT name) FROM corridors WHERE is_active = 1", fetch='one')[0]
-        
-        # Generated vs manual
-        gen_locations = self.db.execute_query("SELECT COUNT(*) FROM locations WHERE is_generated = 1", fetch='one')[0]
-        gen_corridors = self.db.execute_query("SELECT COUNT(DISTINCT name) FROM corridors WHERE is_generated = 1", fetch='one')[0]
-        
-        # Location types
-        location_types = self.db.execute_query(
-            "SELECT location_type, COUNT(*) FROM locations GROUP BY location_type",
-            fetch='all'
-        )
-        
-        # Active characters (with recent activity)
-        active_chars = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE last_active > datetime('now', '-7 days')",
-            fetch='one'
-        )[0]
-        
-        # Channel statistics
-        from utils.channel_manager import ChannelManager
-        channel_manager = ChannelManager(self.bot)
-        channel_stats = await channel_manager.get_location_statistics(interaction.guild)
-        
-        embed = discord.Embed(
-            title="Server Statistics",
-            description="Current state of the RPG server",
-            color=0x4169E1
-        )
-        
-        # Character stats
-        embed.add_field(name="Total Characters", value=str(total_chars), inline=True)
-        embed.add_field(name="Active (7 days)", value=str(active_chars), inline=True)
-        embed.add_field(name="", value="", inline=True)  # Spacer
-        
-        # Location stats
-        embed.add_field(name="Total Locations", value=str(total_locations), inline=True)
-        embed.add_field(name="Generated", value=str(gen_locations), inline=True)
-        embed.add_field(name="Manual", value=str(total_locations - gen_locations), inline=True)
-        
-        # Corridor stats
-        embed.add_field(name="Total Corridors", value=str(total_corridors), inline=True)
-        embed.add_field(name="Active", value=str(active_corridors), inline=True)
-        embed.add_field(name="Generated", value=str(gen_corridors), inline=True)
-        
-        # Channel stats
-        embed.add_field(
-            name="Location Channels",
-            value=f"{channel_stats['active_channels']}/{channel_stats['channel_capacity']}",
-            inline=True
-        )
-        embed.add_field(
-            name="Recently Active",
-            value=str(channel_stats['recently_active']),
-            inline=True
-        )
-        embed.add_field(
-            name="Capacity Usage",
-            value=f"{channel_stats['capacity_usage']:.1f}%",
-            inline=True
-        )
-        
-        # Location breakdown
-        if location_types:
-            type_text = "\n".join([f"{t.replace('_', ' ').title()}: {c}" for t, c in location_types])
-            embed.add_field(name="Location Types", value=type_text, inline=False)
-        
-        # Channel efficiency note
-        efficiency = (channel_stats['active_channels'] / total_locations) * 100 if total_locations > 0 else 0
-        embed.add_field(
-            name="📊 Channel Efficiency",
-            value=f"{efficiency:.1f}% of locations have active channels\n*Channels created on-demand, cleaned up automatically*",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @admin_group.command(name="reset", description="Reset various parts of the game data")
     @app_commands.describe(

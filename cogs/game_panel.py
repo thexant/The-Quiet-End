@@ -1,19 +1,3 @@
-# Part 1: Database Schema Addition
-# Add this table creation to your database.py init_database method in the queries list:
-
-'''CREATE TABLE IF NOT EXISTS game_panels (
-    panel_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id INTEGER NOT NULL,
-    channel_id INTEGER NOT NULL,
-    message_id INTEGER NOT NULL,
-    created_by INTEGER NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(guild_id, channel_id)
-)''',
-
-# Part 2: Game Panel View Class
-# Create a new file: cogs/game_panel.py
-
 import discord
 from discord.ext import commands
 from discord import app_commands
