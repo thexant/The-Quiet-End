@@ -1210,11 +1210,76 @@ class CharacterCog(commands.Cog):
             )
             embed.add_field(name="Better Luck Next Time", value="Try searching other locations or wait for the area to refresh.", inline=False)
         else:
-            # Process found items (your existing code for adding to inventory)
+            # Process found items and add to inventory
             items_added = []
             for item_name, quantity in found_items:
-                # ... (rest of your inventory adding code) ...
-                items_added.append(f"{quantity}x **{item_name}**")
+                # For dropped items, we already have the full item data
+                # For random items, we need to get the item definition
+                if isinstance(item_name, tuple):
+                    # This is from ItemConfig.generate_search_loot() which returns (name, quantity)
+                    actual_name = item_name[0]
+                    actual_quantity = item_name[1]
+                else:
+                    actual_name = item_name
+                    actual_quantity = quantity
+                
+                # Get item definition from ItemConfig
+                from utils.item_config import ItemConfig
+                item_def = ItemConfig.get_item_definition(actual_name)
+                
+                if item_def:
+                    # Check if player already has this item
+                    existing_item = self.db.execute_query(
+                        "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+                        (interaction.user.id, actual_name),
+                        fetch='one'
+                    )
+                    
+                    if existing_item:
+                        # Update existing stack
+                        self.db.execute_query(
+                            "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
+                            (actual_quantity, existing_item[0])
+                        )
+                    else:
+                        # Create new inventory entry
+                        metadata = ItemConfig.create_item_metadata(actual_name)
+                        self.db.execute_query(
+                            '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, 
+                               description, value, metadata)
+                               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                            (interaction.user.id, actual_name, item_def["type"], actual_quantity,
+                             item_def["description"], item_def["base_value"], metadata)
+                        )
+                    
+                    items_added.append(f"{actual_quantity}x **{actual_name}**")
+                else:
+                    # Fallback for items without definitions (like dropped items)
+                    # Try to get info from dropped items data
+                    for dropped in dropped_items:
+                        if dropped[0] == actual_name:  # item_name matches
+                            existing_item = self.db.execute_query(
+                                "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+                                (interaction.user.id, actual_name),
+                                fetch='one'
+                            )
+                            
+                            if existing_item:
+                                self.db.execute_query(
+                                    "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
+                                    (actual_quantity, existing_item[0])
+                                )
+                            else:
+                                self.db.execute_query(
+                                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, 
+                                       description, value)
+                                       VALUES (?, ?, ?, ?, ?, ?)''',
+                                    (interaction.user.id, actual_name, dropped[1], actual_quantity,
+                                     dropped[3], dropped[4])
+                                )
+                            
+                            items_added.append(f"{actual_quantity}x **{actual_name}**")
+                            break
             
             embed = discord.Embed(
                 title="🔍 Search Complete",

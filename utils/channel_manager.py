@@ -875,7 +875,12 @@ class ChannelManager:
             value="Available" if log_count > 0 else "None",
             inline=True
         )
-
+        total_routes = self.db.execute_query(
+            '''SELECT COUNT(*) FROM corridors 
+               WHERE origin_location = ? AND is_active = 1''',
+            (loc_id,),
+            fetch='one'
+        )[0]
         # Get available routes and display them
         routes = self.db.execute_query(
             '''SELECT c.name, l.name as dest_name, l.location_type as dest_type, 
@@ -891,7 +896,7 @@ class ChannelManager:
         
         if routes:
             route_lines = []
-            for corridor_name, dest_base_name, dest_type, travel_time, danger, dest_id in routes:
+            for corridor_name, dest_name, dest_type, travel_time, danger in routes:
                 # Get display name for destination
                 dest_display_name, _ = self.get_location_display_name(dest_id)
                 
@@ -926,14 +931,20 @@ class ChannelManager:
                 # Clear departure → destination format
                 route_lines.append(f"{route_emoji} **{display_name} → {dest_emoji} {dest_display_name}** · {time_text} {danger_text}")
             
+            if total_routes > 8:
+                field_name = f"🗺️ Available Routes (showing 8 of {total_routes})"
+                route_lines.append(f"\n*Use 'View Routes' in the `/tqe` panel to see all {total_routes} routes*")
+            else:
+                field_name = "🗺️ Available Routes"
+            
             embed.add_field(
-                name="🗺️ Available Routes",
+                name=field_name,
                 value="\n".join(route_lines),
                 inline=False
             )
         else:
             embed.add_field(
-                name="🗺️ Available Routes",
+                name="🗺️ No Active Routes",
                 value="*No active routes from this location*",
                 inline=False
             )
@@ -1678,8 +1689,8 @@ class ChannelManager:
         
         if travel_type != "local space":
             embed.add_field(
-                name="👥 Group Travel",
-                value="Group members can coordinate actions and share resources during transit.",
+                name="🌌 Local Space",
+                value="You are travelling through local space which is significantly less dangerous than corridor travel.",
                 inline=False
             )
         

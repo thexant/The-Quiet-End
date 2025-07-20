@@ -8,6 +8,233 @@ import zipfile
 import re
 from datetime import datetime
 import asyncio
+import math
+from discord.app_commands import Choice
+from typing import Optional, List
+
+
+class LocationCreationModal(discord.ui.Modal):
+    """Modal for additional location configuration"""
+    def __init__(self, cog, location_data: dict):
+        super().__init__(title="Configure Location Details")
+        self.cog = cog
+        self.location_data = location_data
+        
+        # Description field
+        self.description = discord.ui.TextInput(
+            label="Location Description",
+            placeholder="Describe the location's atmosphere and features...",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.description)
+        
+        # Population field
+        self.population = discord.ui.TextInput(
+            label="Population Size",
+            placeholder="Number of inhabitants (e.g., 50000)",
+            default=str(self._get_default_population()),
+            required=True,
+            max_length=10
+        )
+        self.add_item(self.population)
+        
+        # Number of Static NPCs
+        self.npc_count = discord.ui.TextInput(
+            label="Number of Static NPCs",
+            placeholder="How many notable NPCs (e.g., 5-20)",
+            default=str(self._get_default_npc_count()),
+            required=True,
+            max_length=3
+        )
+        self.add_item(self.npc_count)
+    
+    def _get_default_population(self) -> int:
+        """Get default population based on location type and wealth"""
+        base_pop = {
+            'colony': 50000,
+            'space_station': 10000,
+            'outpost': 1000,
+            'gate': 500
+        }
+        pop = base_pop.get(self.location_data['type'], 5000)
+        # Adjust for wealth
+        pop = int(pop * (self.location_data['wealth'] / 5))
+        return pop
+    
+    def _get_default_npc_count(self) -> int:
+        """Get default NPC count based on location type"""
+        return {
+            'colony': 15,
+            'space_station': 12,
+            'outpost': 8,
+            'gate': 5
+        }.get(self.location_data['type'], 10)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            # Validate and store additional data
+            pop = int(self.population.value)
+            if pop < 1 or pop > 10000000:
+                await interaction.response.send_message("Population must be between 1 and 10,000,000", ephemeral=True)
+                return
+            
+            npc_count = int(self.npc_count.value)
+            if npc_count < 0 or npc_count > 100:
+                await interaction.response.send_message("NPC count must be between 0 and 100", ephemeral=True)
+                return
+            
+            self.location_data['description'] = self.description.value or ""
+            self.location_data['population'] = pop
+            self.location_data['npc_count'] = npc_count
+            
+            # Continue with location creation
+            await self.cog._finalize_location_creation(interaction, self.location_data)
+            
+        except ValueError:
+            await interaction.response.send_message("Invalid number format. Please enter valid numbers.", ephemeral=True)
+
+class ServiceSelectionView(discord.ui.View):
+    """View for selecting location services"""
+    def __init__(self, cog, location_data: dict):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.location_data = location_data
+        self.selected_services = set()
+        self.sub_locations = []
+        
+        # Add service toggle buttons
+        services = [
+            ("💼 Jobs", "jobs"),
+            ("🛒 Shops", "shops"),
+            ("⚕️ Medical", "medical"),
+            ("🔨 Repairs", "repairs"),
+            ("⛽ Fuel", "fuel"),
+            ("⬆️ Upgrades", "upgrades"),
+            ("🚢 Shipyard", "shipyard")
+        ]
+        
+        for label, service_id in services:
+            button = discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.secondary,
+                custom_id=service_id,
+                row=0 if services.index((label, service_id)) < 4 else 1
+            )
+            button.callback = self.create_service_callback(service_id)
+            self.add_item(button)
+        
+        # Add sub-location selection dropdown
+        self.add_sub_location_dropdown()
+        
+        # Add continue button
+        continue_btn = discord.ui.Button(
+            label="Continue",
+            style=discord.ButtonStyle.primary,
+            emoji="➡️",
+            row=3
+        )
+        continue_btn.callback = self.continue_setup
+        self.add_item(continue_btn)
+    
+    def add_sub_location_dropdown(self):
+        """Add dropdown for sub-location selection"""
+        # Get available sub-location types based on location type
+        sub_location_options = self._get_sub_location_options()
+        
+        if sub_location_options:
+            select = discord.ui.Select(
+                placeholder="Select sub-locations (optional)",
+                min_values=0,
+                max_values=len(sub_location_options),
+                options=sub_location_options,
+                row=2
+            )
+            select.callback = self.sub_location_callback
+            self.add_item(select)
+    
+    def _get_sub_location_options(self) -> List[discord.SelectOption]:
+        """Get available sub-location options based on location type"""
+        loc_type = self.location_data['type']
+        wealth = self.location_data['wealth']
+        
+        # Sub-location types by location type
+        options_map = {
+            'colony': [
+                ("🏛️ Administration", "administration"),
+                ("🏪 Market District", "market_district"),
+                ("🏨 Entertainment District", "entertainment_district"),
+                ("🏭 Industrial Zone", "industrial_zone"),
+                ("🏥 Medical District", "medical_district"),
+                ("📚 Historical Archive", "historical_archive")
+            ],
+            'space_station': [
+                ("🎯 Command Center", "command_center"),
+                ("🔬 Research Lab", "research_lab"),
+                ("🏪 Promenade", "promenade"),
+                ("🛠️ Engineering Bay", "engineering_bay"),
+                ("🏥 Med Bay", "med_bay")
+            ],
+            'outpost': [
+                ("📡 Communications", "communications"),
+                ("🏪 Trading Post", "trading_post"),
+                ("🛡️ Security Office", "security_office"),
+                ("🔧 Maintenance Bay", "maintenance_bay")
+            ],
+            'gate': [
+                ("🎛️ Control Room", "control_room"),
+                ("🚨 Security Checkpoint", "security_checkpoint"),
+                ("🏪 Duty Free Shop", "duty_free_shop")
+            ]
+        }
+        
+        options = []
+        for label, value in options_map.get(loc_type, []):
+            # Filter by wealth requirements
+            if value in ["entertainment_district", "research_lab"] and wealth < 6:
+                continue
+            if value in ["historical_archive", "command_center"] and wealth < 7:
+                continue
+            
+            options.append(discord.SelectOption(label=label, value=value))
+        
+        return options
+    
+    def create_service_callback(self, service_id: str):
+        async def callback(interaction: discord.Interaction):
+            # Toggle service selection
+            button = discord.utils.get(self.children, custom_id=service_id)
+            if service_id in self.selected_services:
+                self.selected_services.remove(service_id)
+                button.style = discord.ButtonStyle.secondary
+            else:
+                self.selected_services.add(service_id)
+                button.style = discord.ButtonStyle.success
+            
+            await interaction.response.edit_message(view=self)
+        return callback
+    
+    async def sub_location_callback(self, interaction: discord.Interaction):
+        self.sub_locations = interaction.data['values']
+        await interaction.response.edit_message(view=self)
+    
+    async def continue_setup(self, interaction: discord.Interaction):
+        # Store selected services
+        self.location_data['services'] = {
+            'has_jobs': 'jobs' in self.selected_services,
+            'has_shops': 'shops' in self.selected_services,
+            'has_medical': 'medical' in self.selected_services,
+            'has_repairs': 'repairs' in self.selected_services,
+            'has_fuel': 'fuel' in self.selected_services,
+            'has_upgrades': 'upgrades' in self.selected_services,
+            'has_shipyard': 'shipyard' in self.selected_services
+        }
+        self.location_data['sub_locations'] = self.sub_locations
+        
+        # Show the configuration modal
+        modal = LocationCreationModal(self.cog, self.location_data)
+        await interaction.response.send_modal(modal)
 
 class AdminCog(commands.Cog):
     def __init__(self, bot):
@@ -1704,125 +1931,515 @@ class AdminCog(commands.Cog):
             f"All ships now have fuel and are properly linked to their owners.",
             ephemeral=True
         )
-    @admin_group.command(name="create_location", description="Manually create a new location")
+        
+    @admin_group.command(name="create_location", description="Create a custom location with full configuration")
     @app_commands.describe(
-        channel="The channel to use for this location",
-        name="Name of the location", 
-        location_type="Type of location (colony, space_station, outpost, gate)",
-        description="Description of the location",
-        wealth="Wealth level 1-10 (optional)",
-        population="Population size (optional)"
+        name="Name of the location",
+        location_type="Type of location",
+        wealth="Wealth level 1-10",
+        faction="Faction alignment",
+        connect_to="Location to connect this to"
     )
-    @app_commands.choices(location_type=[
-        app_commands.Choice(name="Colony", value="colony"),
-        app_commands.Choice(name="Space Station", value="space_station"),
-        app_commands.Choice(name="Outpost", value="outpost"),
-        app_commands.Choice(name="Gate", value="gate")
-    ])
-    async def create_location(self, interaction: discord.Interaction, channel: discord.TextChannel, 
-                             name: str, location_type: str, description: str = "", 
-                             wealth: int = None, population: int = None):
+    @app_commands.choices(
+        location_type=[
+            Choice(name="Colony", value="colony"),
+            Choice(name="Space Station", value="space_station"),
+            Choice(name="Outpost", value="outpost"),
+            Choice(name="Gate", value="gate")
+        ],
+        faction=[
+            Choice(name="Loyalist (Federal)", value="loyalist"),
+            Choice(name="Outlaw (Bandit)", value="outlaw"),
+            Choice(name="Independent", value="independent")
+        ]
+    )
+    async def create_location(self, interaction: discord.Interaction, 
+                             name: str, 
+                             location_type: str,
+                             wealth: app_commands.Range[int, 1, 10],
+                             faction: str,
+                             connect_to: str):
+        """Create a fully configured custom location"""
         
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
-        # Check if channel is already used
-        existing = self.db.execute_query(
-            "SELECT name FROM locations WHERE channel_id = ?",
-            (channel.id,),
+        # Find the connection location
+        connection = self.db.execute_query(
+            """SELECT location_id, name, x_coord, y_coord, location_type 
+               FROM locations 
+               WHERE LOWER(name) LIKE LOWER(?)""",
+            (f"%{connect_to}%",),
             fetch='one'
         )
         
-        if existing:
+        if not connection:
             await interaction.response.send_message(
-                f"Channel {channel.mention} is already used by location '{existing[0]}'.",
+                f"Connection location '{connect_to}' not found.",
                 ephemeral=True
             )
             return
         
-        # Set default permissions
-        await channel.set_permissions(interaction.guild.default_role, read_messages=False)
+        connect_id, connect_name, connect_x, connect_y, connect_type = connection
         
-        # Generate location properties based on type if not specified
-        if wealth is None:
-            if location_type == 'colony':
-                wealth = random.randint(1, 8)
-            elif location_type == 'space_station':
-                wealth = random.randint(4, 10)
-            elif location_type == 'gate':
-                wealth = random.randint(3, 7)
-            else:  # outpost
-                wealth = random.randint(1, 5)
+        # Generate coordinates near the connection
+        angle = random.uniform(0, 2 * math.pi)
+        distance = random.uniform(5, 15)
+        x_coord = connect_x + distance * math.cos(angle)
+        y_coord = connect_y + distance * math.sin(angle)
         
-        if population is None:
-            if location_type == 'colony':
-                population = random.randint(80, 250)
-            elif location_type == 'space_station':
-                population = random.randint(50, 150)
-            elif location_type == 'outpost':
-                population = random.randint(5, 30)
-            else:  # gate
-                population = random.randint(20, 80)
+        # Prepare location data
+        location_data = {
+            'name': name,
+            'type': location_type,
+            'wealth': wealth,
+            'faction': faction,
+            'x_coord': x_coord,
+            'y_coord': y_coord,
+            'connect_to_id': connect_id,
+            'connect_to_name': connect_name,
+            'guild': interaction.guild,
+            'user': interaction.user
+        }
         
-        # Set capabilities based on type and wealth
-        has_jobs = location_type in ['colony', 'space_station', 'outpost']
-        has_shops = location_type in ['colony', 'space_station'] or (location_type == 'outpost' and wealth >= 4)
-        has_medical = location_type in ['colony', 'space_station'] or (wealth >= 6)
-        has_repairs = location_type != 'outpost' or wealth >= 3
-        has_fuel = True  # All locations have fuel
-        has_upgrades = location_type == 'space_station' and wealth >= 6
-        
-        # Generate random coordinates
-        x_coord = random.uniform(-100, 100)
-        y_coord = random.uniform(-100, 100)
-        
-        # Generate system name
-        system_names = ["Altair", "Vega", "Deneb", "Rigel", "Betelgeuse", "Antares", "Sirius", "Proxima"]
-        system_name = random.choice(system_names)
-        
-        if not description:
-            descriptions = {
-                'colony': "An industrial settlement focused on resource extraction and processing.",
-                'space_station': "A large orbital platform serving as a regional hub for commerce and travel.",
-                'outpost': "A small facility providing basic services to passing ships.",
-                'gate': "A massive structure that stabilizes corridor endpoints for safe travel."
-            }
-            description = descriptions[location_type]
-        
-        self.db.execute_query(
-            '''INSERT INTO locations 
-               (channel_id, name, location_type, description, wealth_level, population,
-                x_coord, y_coord, system_name, has_jobs, has_shops, has_medical, 
-                has_repairs, has_fuel, has_upgrades, is_generated) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)''',
-            (channel.id, name, location_type, description, wealth, population,
-             x_coord, y_coord, system_name, has_jobs, has_shops, has_medical, 
-             has_repairs, has_fuel, has_upgrades)
-        )
-        
+        # Show service selection view
+        view = ServiceSelectionView(self, location_data)
         embed = discord.Embed(
-            title="Location Created",
-            description=f"Successfully created {location_type} '{name}'",
+            title="🏗️ Configure Location Services",
+            description=f"Setting up **{name}** ({location_type})\n"
+                        f"Wealth Level: {wealth}/10\n"
+                        f"Faction: {faction.title()}\n"
+                        f"Connecting to: {connect_name}",
             color=0x00ff00
         )
-        embed.add_field(name="Channel", value=channel.mention, inline=True)
-        embed.add_field(name="Wealth Level", value=f"{wealth}/10", inline=True)
-        embed.add_field(name="Population", value=f"{population:,}", inline=True)
-        embed.add_field(name="System", value=system_name, inline=True)
+        embed.add_field(
+            name="📋 Instructions",
+            value="1. Click buttons to toggle services\n"
+                  "2. Select sub-locations from dropdown\n"
+                  "3. Click Continue when ready",
+            inline=False
+        )
         
-        # Services
-        services = []
-        if has_jobs: services.append("Jobs")
-        if has_shops: services.append("Shopping")
-        if has_medical: services.append("Medical")
-        if has_repairs: services.append("Repairs")
-        if has_fuel: services.append("Fuel")
-        if has_upgrades: services.append("Upgrades")
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    async def _finalize_location_creation(self, interaction: discord.Interaction, location_data: dict):
+        """Finalize the location creation process"""
+        await interaction.response.defer(ephemeral=True)
         
-        embed.add_field(name="Services", value=", ".join(services), inline=False)
+        try:
+            # Start transaction for safety
+            conn = self.db.get_connection()
+            
+            # Create the location
+            location_id = self.db.execute_in_transaction(
+                conn,
+                """INSERT INTO locations 
+                   (name, location_type, description, wealth_level, population,
+                    x_coord, y_coord,
+                    has_jobs, has_shops, has_medical, has_repairs, has_fuel, 
+                    has_upgrades, has_shipyard,
+                    has_federal_supplies, has_black_market,
+                    created_at, is_generated)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)""",
+                (
+                    location_data['name'],
+                    location_data['type'],
+                    location_data.get('description', ''),
+                    location_data['wealth'],
+                    location_data.get('population', 10000),
+                    location_data['x_coord'],
+                    location_data['y_coord'],
+                    location_data['services']['has_jobs'],
+                    location_data['services']['has_shops'],
+                    location_data['services']['has_medical'],
+                    location_data['services']['has_repairs'],
+                    location_data['services']['has_fuel'],
+                    location_data['services']['has_upgrades'],
+                    location_data['services']['has_shipyard'],
+                    location_data['faction'] == 'loyalist',
+                    location_data['faction'] == 'outlaw'
+                ),
+                return_last_id=True
+            )
+            
+            # Create sub-locations
+            for sub_type in location_data.get('sub_locations', []):
+                sub_name = self._get_sub_location_name(sub_type)
+                sub_desc = self._get_sub_location_description(sub_type)
+                
+                self.db.execute_in_transaction(
+                    conn,
+                    """INSERT INTO sub_locations 
+                       (parent_location_id, name, sub_type, description, is_active)
+                       VALUES (?, ?, ?, ?, 1)""",
+                    (location_id, sub_name, sub_type, sub_desc)
+                )
+            
+            # Create static NPCs
+            npc_count = location_data.get('npc_count', 10)
+            if npc_count > 0:
+                npc_cog = self.bot.get_cog('NPCCog')
+                if npc_cog:
+                    # Generate NPC data
+                    npc_data_list = npc_cog.generate_static_npc_batch_data(
+                        location_id,
+                        location_data.get('population', 10000),
+                        location_data['type'],
+                        location_data['wealth'],
+                        location_data['faction'] == 'outlaw'
+                    )
+                    
+                    # Limit to requested count
+                    npc_data_list = npc_data_list[:npc_count]
+                    
+                    # Insert NPCs
+                    self.db.executemany_in_transaction(
+                        conn,
+                        """INSERT INTO static_npcs 
+                           (location_id, name, age, occupation, personality, alignment, 
+                            hp, max_hp, combat_rating, credits)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        npc_data_list
+                    )
+            
+            # Create the gate if it's a gate location
+            if location_data['type'] == 'gate':
+                # Gates connect to themselves for the main corridor
+                pass  # Gate handling is done in corridor creation
+            
+            # Commit the location creation
+            self.db.commit_transaction(conn)
+            
+            # Now create corridors (outside transaction to avoid locks)
+            await self._create_location_corridors(
+                location_id, 
+                location_data['name'],
+                location_data['type'],
+                location_data['connect_to_id'],
+                location_data['connect_to_name'],
+                location_data['x_coord'],
+                location_data['y_coord']
+            )
+            
+            # Create success embed
+            embed = discord.Embed(
+                title="✅ Location Created Successfully",
+                description=f"**{location_data['name']}** has been created and integrated into the galaxy!",
+                color=0x00ff00
+            )
+            
+            embed.add_field(
+                name="📍 Location Details",
+                value=f"Type: {location_data['type'].replace('_', ' ').title()}\n"
+                      f"Wealth: {location_data['wealth']}/10\n"
+                      f"Population: {location_data.get('population', 10000):,}\n"
+                      f"Faction: {location_data['faction'].title()}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="🛠️ Services",
+                value=self._format_services(location_data['services']),
+                inline=True
+            )
+            
+            if location_data.get('sub_locations'):
+                embed.add_field(
+                    name="🏢 Sub-Locations",
+                    value="\n".join([f"• {self._get_sub_location_name(s)}" 
+                                   for s in location_data['sub_locations']]),
+                    inline=False
+                )
+            
+            embed.add_field(
+                name="🤖 NPCs",
+                value=f"{location_data.get('npc_count', 0)} static NPCs created",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="🗺️ Connections",
+                value=f"Connected to {location_data['connect_to_name']} and 2-5 other locations",
+                inline=False
+            )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            if 'conn' in locals():
+                self.db.rollback_transaction(conn)
+            
+            await interaction.followup.send(
+                f"❌ Error creating location: {str(e)}",
+                ephemeral=True
+            )
+
+    async def _create_location_corridors(self, location_id: int, location_name: str, 
+                                       location_type: str, connect_to_id: int, 
+                                       connect_to_name: str, x: float, y: float):
+        """Create corridors connecting the new location to the galaxy"""
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # Get connection location details
+        connect_info = self.db.execute_query(
+            "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = ?",
+            (connect_to_id,),
+            fetch='one'
+        )
+        
+        if not connect_info:
+            return
+        
+        cx, cy, connect_type = connect_info
+        distance = math.sqrt((x - cx)**2 + (y - cy)**2)
+        
+        # Create primary connection
+        if location_type == 'gate' or connect_type == 'gate':
+            # Create gated corridor segments
+            await self._create_gated_corridor(
+                location_id, location_name, location_type,
+                connect_to_id, connect_to_name, connect_type,
+                distance
+            )
+        else:
+            # Create ungated corridor
+            travel_time = int(distance * 60) + random.randint(300, 600)
+            fuel_cost = int(distance * 2) + random.randint(10, 30)
+            danger_level = min(5, max(1, int(distance / 10) + 2))
+            
+            # Create bidirectional corridors
+            self.db.execute_query(
+                """INSERT INTO corridors 
+                   (name, origin_location, destination_location, travel_time,
+                    fuel_cost, danger_level, is_active, is_generated)
+                   VALUES (?, ?, ?, ?, ?, ?, 1, 0)""",
+                (f"{location_name} - {connect_to_name} Route (Ungated)",
+                 location_id, connect_to_id, travel_time, fuel_cost, danger_level)
+            )
+            
+            self.db.execute_query(
+                """INSERT INTO corridors 
+                   (name, origin_location, destination_location, travel_time,
+                    fuel_cost, danger_level, is_active, is_generated)
+                   VALUES (?, ?, ?, ?, ?, ?, 1, 0)""",
+                (f"{connect_to_name} - {location_name} Route (Ungated)",
+                 connect_to_id, location_id, travel_time, fuel_cost, danger_level)
+            )
+        
+        # Add 2-5 random connections to existing locations
+        await self._add_random_connections(location_id, location_name, x, y, location_type)
+
+    async def _create_gated_corridor(self, loc1_id: int, loc1_name: str, loc1_type: str,
+                                   loc2_id: int, loc2_name: str, loc2_type: str,
+                                   distance: float):
+        """Create a gated corridor with all segments"""
+        
+        # Determine which location is the gate
+        if loc1_type == 'gate':
+            gate_id, gate_name = loc1_id, loc1_name
+            other_id, other_name = loc2_id, loc2_name
+        elif loc2_type == 'gate':
+            gate_id, gate_name = loc2_id, loc2_name
+            other_id, other_name = loc1_id, loc1_name
+        else:
+            # Neither is a gate, create a route through nearest gate
+            nearest_gate = self._find_nearest_gate(loc1_id, loc2_id)
+            if nearest_gate:
+                gate_id, gate_name = nearest_gate
+                # Create routes from both locations to the gate
+                await self._create_gated_corridor(loc1_id, loc1_name, loc1_type,
+                                                gate_id, gate_name, 'gate', distance/2)
+                await self._create_gated_corridor(loc2_id, loc2_name, loc2_type,
+                                                gate_id, gate_name, 'gate', distance/2)
+                return
+            else:
+                # No gates available, fall back to ungated
+                return
+        
+        # Calculate times
+        approach_time = int(distance * 20) + random.randint(180, 300)
+        arrival_time = approach_time
+        
+        # Create approach corridor
+        self.db.execute_query(
+            """INSERT INTO corridors 
+               (name, origin_location, destination_location, travel_time,
+                fuel_cost, danger_level, is_active, is_generated)
+               VALUES (?, ?, ?, ?, ?, ?, 1, 0)""",
+            (f"{gate_name} Approach", other_id, gate_id, approach_time, 
+             int(distance * 0.5) + 5, 1)
+        )
+        
+        # Create arrival corridor
+        self.db.execute_query(
+            """INSERT INTO corridors 
+               (name, origin_location, destination_location, travel_time,
+                fuel_cost, danger_level, is_active, is_generated)
+               VALUES (?, ?, ?, ?, ?, ?, 1, 0)""",
+            (f"{gate_name} Arrival", gate_id, other_id, arrival_time,
+             int(distance * 0.5) + 5, 1)
+        )
+        
+        # If connecting two non-gate locations through a gate, create gate-to-gate corridor
+        if loc1_type != 'gate' and loc2_type != 'gate':
+            # This would be handled by the recursive calls above
+            pass
+
+    async def _add_random_connections(self, location_id: int, location_name: str,
+                                    x: float, y: float, location_type: str):
+        """Add 2-5 random connections to nearby locations"""
+        
+        # Find nearby locations
+        nearby = self.db.execute_query(
+            """SELECT location_id, name, x_coord, y_coord, location_type
+               FROM locations
+               WHERE location_id != ?
+               AND ABS(x_coord - ?) < 30
+               AND ABS(y_coord - ?) < 30
+               ORDER BY RANDOM()
+               LIMIT 10""",
+            (location_id, x, y),
+            fetch='all'
+        )
+        
+        if not nearby:
+            return
+        
+        # Create 2-5 connections
+        num_connections = random.randint(2, min(5, len(nearby)))
+        for i in range(num_connections):
+            other_id, other_name, ox, oy, other_type = nearby[i]
+            
+            # Check if corridor already exists
+            existing = self.db.execute_query(
+                """SELECT corridor_id FROM corridors
+                   WHERE (origin_location = ? AND destination_location = ?)
+                   OR (origin_location = ? AND destination_location = ?)""",
+                (location_id, other_id, other_id, location_id),
+                fetch='one'
+            )
+            
+            if existing:
+                continue
+            
+            distance = math.sqrt((x - ox)**2 + (y - oy)**2)
+            
+            # Decide corridor type
+            if location_type == 'gate' or other_type == 'gate':
+                await self._create_gated_corridor(
+                    location_id, location_name, location_type,
+                    other_id, other_name, other_type,
+                    distance
+                )
+            else:
+                # Create ungated corridor with higher danger
+                travel_time = int(distance * 80) + random.randint(400, 800)
+                fuel_cost = int(distance * 3) + random.randint(20, 50)
+                danger_level = min(5, max(3, int(distance / 8) + 2))
+                
+                corridor_name = f"{location_name} - {other_name} Route"
+                
+                # Bidirectional
+                self.db.execute_query(
+                    """INSERT INTO corridors 
+                       (name, origin_location, destination_location, travel_time,
+                        fuel_cost, danger_level, is_active, is_generated)
+                       VALUES (?, ?, ?, ?, ?, ?, 1, 0)""",
+                    (f"{corridor_name} (Ungated)", location_id, other_id,
+                     travel_time, fuel_cost, danger_level)
+                )
+                
+                self.db.execute_query(
+                    """INSERT INTO corridors 
+                       (name, origin_location, destination_location, travel_time,
+                        fuel_cost, danger_level, is_active, is_generated)
+                       VALUES (?, ?, ?, ?, ?, ?, 1, 0)""",
+                    (f"{other_name} - {location_name} Route (Ungated)", 
+                     other_id, location_id, travel_time, fuel_cost, danger_level)
+                )
+
+    def _find_nearest_gate(self, loc1_id: int, loc2_id: int) -> Optional[tuple]:
+        """Find the nearest gate to route through"""
+        result = self.db.execute_query(
+            """SELECT g.location_id, g.name
+               FROM locations g
+               JOIN locations l1 ON l1.location_id = ?
+               JOIN locations l2 ON l2.location_id = ?
+               WHERE g.location_type = 'gate'
+               ORDER BY (ABS(g.x_coord - l1.x_coord) + ABS(g.y_coord - l1.y_coord) +
+                        ABS(g.x_coord - l2.x_coord) + ABS(g.y_coord - l2.y_coord))
+               LIMIT 1""",
+            (loc1_id, loc2_id),
+            fetch='one'
+        )
+        return result if result else None
+
+    def _get_sub_location_name(self, sub_type: str) -> str:
+        """Get the display name for a sub-location type"""
+        names = {
+            'administration': 'Administration',
+            'market_district': 'Market District',
+            'entertainment_district': 'Entertainment District',
+            'industrial_zone': 'Industrial Zone',
+            'medical_district': 'Medical District',
+            'historical_archive': 'Historical Archive',
+            'command_center': 'Command Center',
+            'research_lab': 'Research Lab',
+            'promenade': 'Promenade',
+            'engineering_bay': 'Engineering Bay',
+            'med_bay': 'Med Bay',
+            'communications': 'Communications',
+            'trading_post': 'Trading Post',
+            'security_office': 'Security Office',
+            'maintenance_bay': 'Maintenance Bay',
+            'control_room': 'Control Room',
+            'security_checkpoint': 'Security Checkpoint',
+            'duty_free_shop': 'Duty Free Shop'
+        }
+        return names.get(sub_type, sub_type.replace('_', ' ').title())
+
+    def _get_sub_location_description(self, sub_type: str) -> str:
+        """Get the description for a sub-location type"""
+        descriptions = {
+            'administration': 'The bureaucratic heart of the location, handling permits and documentation.',
+            'market_district': 'A bustling commercial area with shops and traders.',
+            'entertainment_district': 'Bars, clubs, and entertainment venues for off-duty personnel.',
+            'industrial_zone': 'Manufacturing and industrial facilities.',
+            'medical_district': 'Advanced medical facilities and research centers.',
+            'historical_archive': 'A repository of historical records and cultural artifacts.',
+            'command_center': 'The strategic command hub for station operations.',
+            'research_lab': 'Cutting-edge research facilities and laboratories.',
+            'promenade': 'A central hub with shops, restaurants, and social spaces.',
+            'engineering_bay': 'Technical workshops and engineering facilities.',
+            'med_bay': 'Medical treatment and emergency care facilities.',
+            'communications': 'Communication arrays and message relay systems.',
+            'trading_post': 'A hub for traders and merchants.',
+            'security_office': 'Local security and law enforcement headquarters.',
+            'maintenance_bay': 'Repair and maintenance facilities.',
+            'control_room': 'Gate operations and navigation control.',
+            'security_checkpoint': 'Security screening and customs.',
+            'duty_free_shop': 'Tax-free shopping for travelers.'
+        }
+        return descriptions.get(sub_type, f"A {sub_type.replace('_', ' ')} area.")
+
+    def _format_services(self, services: dict) -> str:
+        """Format services dictionary into a readable string"""
+        active_services = []
+        service_names = {
+            'has_jobs': '💼 Jobs',
+            'has_shops': '🛒 Shops',
+            'has_medical': '⚕️ Medical',
+            'has_repairs': '🔨 Repairs',
+            'has_fuel': '⛽ Fuel',
+            'has_upgrades': '⬆️ Upgrades',
+            'has_shipyard': '🚢 Shipyard'
+        }
+        
+        for key, name in service_names.items():
+            if services.get(key, False):
+                active_services.append(name)
+        
+        return '\n'.join(active_services) if active_services else "No services"
     
     @admin_group.command(name="cleanup_channels", description="Manually trigger cleanup of unused location channels")
     @app_commands.describe(force="Force cleanup even for recently used channels")

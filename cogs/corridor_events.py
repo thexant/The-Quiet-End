@@ -885,10 +885,46 @@ class CorridorEventView(discord.ui.View):
                     inline=False
                 )
         else:
-            # Failure: Standard damage
-            hp_damage = int(base_hp_damage * 0.6)
-            ship_damage = int(base_ship_damage * 0.6)
+            # FAILURE HANDLING - NEW LOGIC
+            roll = outcome['roll']
+            needed = outcome['needed']
+            margin = needed - roll
             
+            # Calculate how badly they failed
+            # If they missed by 20 or less, it's a partial failure
+            # If they missed by more than 20, it's a full failure
+            if margin <= 20:
+                # Partial failure: Some damage reduction for being close
+                hp_damage = int(base_hp_damage * 0.6)
+                ship_damage = int(base_ship_damage * 0.6)
+                
+                embed = discord.Embed(
+                    title="⚠️ PARTIAL FAILURE",
+                    description=f"{user.mention}'s response was insufficient but partially mitigated the hazard.",
+                    color=0xff4444
+                )
+                embed.add_field(
+                    name="Consequences",
+                    value=f"• **-{hp_damage} HP** (partial exposure)\n• **-{ship_damage} Hull** (moderate damage)",
+                    inline=False
+                )
+            else:
+                # Full failure: Take full damage
+                hp_damage = base_hp_damage
+                ship_damage = base_ship_damage
+                
+                embed = discord.Embed(
+                    title="❌ COMPLETE FAILURE",
+                    description=f"{user.mention}'s response completely failed to protect against the hazard!",
+                    color=0x8b0000
+                )
+                embed.add_field(
+                    name="Severe Consequences",
+                    value=f"• **-{hp_damage} HP** (full hazard exposure)\n• **-{ship_damage} Hull** (major system damage)",
+                    inline=False
+                )
+            
+            # Apply the damage
             self.bot.db.execute_query(
                 "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
                 (hp_damage, user.id)
@@ -897,17 +933,6 @@ class CorridorEventView(discord.ui.View):
                 "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
                 (ship_damage, user.id)
             )
-            
-            embed = discord.Embed(
-                title="⚠️ PARTIAL FAILURE",
-                description=f"{user.mention}'s response was insufficient to fully protect against the hazard.",
-                color=0xff4444
-            )
-            embed.add_field(
-                name="Consequences",
-                value=f"• **-{hp_damage} HP** (hazard exposure)\n• **-{ship_damage} Hull** (system damage)",
-                inline=False
-            )
         
         await channel.send(embed=embed)
         
@@ -915,6 +940,6 @@ class CorridorEventView(discord.ui.View):
         char_cog = self.bot.get_cog('CharacterCog')
         if char_cog and (outcome.get('critical_failure', False) or not outcome['success']):
             await char_cog.check_character_death(user.id, channel.guild)
-
+        
 async def setup(bot):
     await bot.add_cog(CorridorEventsCog(bot))

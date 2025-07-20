@@ -1232,7 +1232,7 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_corridor_status(interaction, char_name)
         elif service_type == "rest_recuperate":
             await self._handle_rest_recuperate(interaction, char_name, money)
-        elif service_type == "traveler_info":
+        elif service_type == "travel_info":
             await self._handle_traveler_info(interaction, char_name)
         elif service_type == "security_scan":
             await self._handle_security_scan(interaction, char_name)
@@ -3747,18 +3747,7 @@ class SubLocationServiceView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_wait_comfortably(self, interaction, char_name: str, hp: int, max_hp: int):
-        """Handle waiting comfortably in transit lounge"""
-        if hp >= max_hp:
-            rest_bonus = 0
-            message = "You relax in comfort while maintaining peak condition."
-        else:
-            rest_bonus = min(max_hp - hp, 10)
-            self.db.execute_query(
-                "UPDATE characters SET hp = hp + ? WHERE user_id = ?",
-                (rest_bonus, interaction.user.id)
-            )
-            message = f"The comfortable seating helps you recover! (+{rest_bonus} HP)"
-        
+        """Handle waiting comfortably in transit lounge"""  
         embed = discord.Embed(
             title="🛋️ Comfortable Wait",
             description=f"**{char_name}** settles into the comfortable transit lounge.",
@@ -3828,7 +3817,6 @@ class SubLocationServiceView(discord.ui.View):
             "request_escort": "Security services are available if you need an escort.",
             "file_complaint": "Administrative services are ready to process any complaints.",
             "rest_recuperate": "You take some time to rest and recover.",
-            "traveler_info": "You gather useful information for travelers.",
             "security_scan": "Security procedures are in place for your safety.",
             "transit_papers": "Documentation services are available when needed.",
             "fuel_quality": "Fuel quality meets all safety standards.",

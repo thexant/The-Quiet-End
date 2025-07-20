@@ -2740,7 +2740,7 @@ class ShopBuyQuantityView(discord.ui.View):
         
         # Find item in shop
         item = econ_cog.db.execute_query(
-            '''SELECT item_id, item_name, price, stock, description, item_type
+            '''SELECT item_id, item_name, price, stock, description, item_type, metadata
                FROM shop_items 
                WHERE location_id = ? AND item_name = ?
                AND (stock >= ? OR stock = -1)''',
