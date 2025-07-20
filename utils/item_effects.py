@@ -24,7 +24,7 @@ class ItemEffectChecker:
             metadata = json.loads(bypass_check[0])
             if 'active_until' in metadata:
                 expire_time = datetime.fromisoformat(metadata['active_until'])
-                return expire_time > datetime.utcnow()
+                return expire_time > datetime.now()  # Compare with server local time
         return False
     
     def has_federal_access(self, user_id):

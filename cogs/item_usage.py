@@ -407,9 +407,8 @@ class ItemUsageCog(commands.Cog):
 
         elif usage_type == "bypass_security":
             # Forged Transit Papers - stores in inventory metadata as active effect
-            # We'll use the inventory table's metadata field to track active effects
             import json
-            expire_time = (datetime.utcnow() + timedelta(hours=24)).isoformat()
+            expire_time = (datetime.now() + timedelta(hours=2)).isoformat()
             
             # Add a special inventory item to track the active effect
             metadata = json.dumps({"active_until": expire_time, "effect": "bypass_security"})
@@ -432,7 +431,10 @@ class ItemUsageCog(commands.Cog):
                     (user_id, metadata)
                 )
             
-            return {"success": True, "message": "Transit papers activated. Security checks bypassed for 24 hours."}
+            expire_dt = datetime.fromisoformat(expire_time).replace(tzinfo=timezone.utc)
+            discord_timestamp = f"<t:{int(expire_dt.timestamp())}:R>"  # Shows "in 2 hours"
+            
+            return {"success": True, "message": f"Transit papers activated. Security checks bypassed {discord_timestamp}."}
 
         elif usage_type == "scrub_identity":
             # Identity Scrubber - clears negative reputation (WORKS WITH EXISTING character_reputation TABLE)

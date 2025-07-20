@@ -957,6 +957,13 @@ class TravelCog(commands.Cog):
                 return
             dest_name, faction = location_info
         except sqlite3.OperationalError as e:
+            # Check if user has active Forged Transit Papers
+        effect_checker = ItemEffectChecker(self.db)
+        if effect_checker.has_security_bypass(user_id):
+            # User has active transit papers - bypass all security checks
+            message = f"🎫 Your forged transit papers get you through security without question. Welcome to {dest_name}!"
+            await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, message)
+            return
             if "no such column: faction" in str(e):
                 # Fallback to just getting name, assume neutral faction
                 location_info = self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (dest_location_id,), fetch='one')
