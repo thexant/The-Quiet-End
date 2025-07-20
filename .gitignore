@@ -11,3 +11,4 @@ config.py
 config.py
 web/static/css/wiki.css
 /web
+cogs/web_map.py.bkp
