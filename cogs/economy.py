@@ -7,6 +7,8 @@ import random
 from datetime import datetime, timedelta
 import math
 import asyncio
+from utils.item_effects import ItemEffectChecker
+
 class EconomyCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot

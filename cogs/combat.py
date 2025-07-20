@@ -7,6 +7,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 from utils.location_utils import get_character_location_status
+from utils.item_effects import ItemEffectChecker
 
 class CombatCog(commands.Cog):
     def __init__(self, bot):

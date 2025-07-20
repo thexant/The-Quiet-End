@@ -9,6 +9,7 @@ from utils.channel_manager import ChannelManager
 from cogs.corridor_events import CorridorEventsCog
 import sqlite3
 from typing import Optional
+from utils.item_effects import ItemEffectChecker
 
 class DockingFeeView(discord.ui.View):
     def __init__(self, bot, user_id, location_id, fee, origin_location_id):
