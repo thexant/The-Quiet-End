@@ -124,6 +124,8 @@ class ChannelManager:
         Get existing channel for location or create one if needed
         Returns None if location doesn't exist
         """
+        print(f"DEBUG: Starting get_or_create_location_channel for location_id {location_id}")
+        
         # Load server configuration
         await self._load_server_config(guild)
         
@@ -136,9 +138,18 @@ class ChannelManager:
         )
         
         if not location_info:
+            print(f"DEBUG: No location found for id {location_id}")
             return None
         
-        loc_id, channel_id, name, loc_type, description, wealth = location_info
+        print(f"DEBUG: location_info has {len(location_info)} elements: {location_info}")
+        
+        try:
+            loc_id, channel_id, name, loc_type, description, wealth = location_info
+            print(f"DEBUG: Successfully unpacked 6 values")
+        except ValueError as e:
+            print(f"DEBUG: Error unpacking location_info: {e}")
+            print(f"DEBUG: location_info contents: {location_info}")
+            raise
         
         # Check if channel already exists
         if channel_id:
@@ -154,7 +165,8 @@ class ChannelManager:
                     (location_id,)
                 )
         
-        # Need to create new channel - pass the tuple
+        # Need to create new channel
+        print(f"DEBUG: About to call _create_location_channel with {len(location_info)} elements")
         channel = await self._create_location_channel(guild, location_info, user)
         return channel
     
@@ -530,7 +542,16 @@ class ChannelManager:
         """
         Create a new Discord channel for a location
         """
-        loc_id, channel_id, name, loc_type, description, wealth = location_info
+        print(f"DEBUG _create_location_channel: Received location_info with {len(location_info)} elements")
+        print(f"DEBUG _create_location_channel: location_info = {location_info}")
+        
+        try:
+            loc_id, channel_id, name, loc_type, description, wealth = location_info
+            print(f"DEBUG _create_location_channel: Successfully unpacked into 6 variables")
+        except ValueError as e:
+            print(f"DEBUG _create_location_channel: ERROR unpacking - {e}")
+            print(f"DEBUG _create_location_channel: Trying to unpack {len(location_info)} values into 6 variables")
+            raise
         
         # Check if we need to clean up old channels first
         await self._cleanup_old_channels_if_needed(guild)
@@ -896,10 +917,8 @@ class ChannelManager:
         
         if routes:
             route_lines = []
-            for corridor_name, dest_name, dest_type, travel_time, danger in routes:
-                # Get display name for destination
-                dest_display_name, _ = self.get_location_display_name(dest_id)
-                
+            for corridor_name, dest_name, dest_type, travel_time, danger, dest_id in routes:  # FIXED: Added dest_id                # Get display name for destination
+                dest_display_name, _ = self.get_location_display_name(dest_id)  # Now dest_id is defined!                
                 # Determine route type and emoji
                 if "Approach" in corridor_name:
                     route_emoji = "🌌"  # Local space
@@ -1465,7 +1484,7 @@ class ChannelManager:
     async def _immediate_cleanup_check(self, guild: discord.Guild, location_id: int):
         """Check if a location should be cleaned up immediately - IMPROVED to check login status"""
         # Wait just a moment for database to update
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
         
         # IMPROVED: Check if location has any LOGGED-IN players
         logged_in_count = self.db.execute_query(
@@ -1795,19 +1814,7 @@ class ChannelManager:
             print(f"❌ Failed to restore {user.name} access during login: {e}")
             return False
 
-        async def cleanup_transit_channel(self, channel_id: int, delay_seconds: int = 30):
-            """
-            Clean up a transit channel after a delay
-            """
-            await asyncio.sleep(delay_seconds)
-            
-            channel = self.bot.get_channel(channel_id)
-            if channel:
-                try:
-                    await channel.delete(reason="Transit completed")
-                    print(f"🗑️ Cleaned up transit channel #{channel.name}")
-                except Exception as e:
-                    print(f"❌ Failed to delete transit channel: {e}")
+
     
     async def get_server_config(self, guild: discord.Guild) -> dict:
         """
