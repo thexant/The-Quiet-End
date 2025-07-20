@@ -426,17 +426,27 @@ class CombatCog(commands.Cog):
                                        attacker_max_hp=None, defender_max_hp=None):
         """Execute a single round of PvP combat"""
         
+        effect_checker = ItemEffectChecker(self.bot)
+    
+        # Get combat boosts for both players
+        attacker_boost = effect_checker.get_combat_boost(attacker_id)
+        defender_boost = effect_checker.get_combat_boost(defender_id)
+        
+        # Apply boosts to combat skills
+        effective_attacker_combat = attacker_combat + attacker_boost
+        effective_defender_combat = defender_combat + defender_boost
+        # Current attacker stats
         # Current attacker stats
         if user_is_attacker:
-            attacker_roll = random.randint(1, 20) + attacker_combat
-            defender_roll = random.randint(1, 20) + defender_combat
+            attacker_roll = random.randint(1, 20) + effective_attacker_combat  # Changed
+            defender_roll = random.randint(1, 20) + effective_defender_combat  # Changed
             current_name = attacker_name
             target_name = defender_name
             target_id = defender_id
             target_ship_id = defender_ship_id
         else:
-            attacker_roll = random.randint(1, 20) + defender_combat  # Defender attacking back
-            defender_roll = random.randint(1, 20) + attacker_combat  # Attacker defending
+            attacker_roll = random.randint(1, 20) + effective_defender_combat  # Defender attacking back
+            defender_roll = random.randint(1, 20) + effective_attacker_combat  # Attacker defending
             current_name = defender_name
             target_name = attacker_name
             target_id = attacker_id
@@ -464,7 +474,11 @@ class CombatCog(commands.Cog):
                     "UPDATE characters SET hp = max(0, hp - ?) WHERE user_id = ?",
                     (damage_dealt, target_id)
                 )
-
+            if user_is_attacker:
+                skill_bonus = effective_attacker_combat // 2
+            else:
+                skill_bonus = effective_defender_combat // 2
+            damage_dealt = base_damage + skill_bonus
         # Switch turns
         new_turn = 'defender' if user_is_attacker else 'attacker'
         
@@ -514,7 +528,18 @@ class CombatCog(commands.Cog):
             title=combat_title,
             color=0xff4444 if damage_dealt == 0 else 0x00ff00
         )
+        boost_text = []
+        if user_is_attacker and attacker_boost > 0:
+            boost_text.append(f"{attacker_name}: +{attacker_boost}")
+        elif not user_is_attacker and defender_boost > 0:
+            boost_text.append(f"{defender_name}: +{defender_boost}")
 
+        if boost_text:
+            embed.add_field(
+                name="💉 Combat Stims Active",
+                value=" | ".join(boost_text),
+                inline=False
+            )
         if damage_dealt > 0:
             if combat_type == "space":
                 embed.add_field(
@@ -1353,7 +1378,9 @@ class CombatCog(commands.Cog):
     async def _execute_combat_round(self, interaction, combat_id, target_npc_id, target_npc_type, 
                                     combat_type, location_id, player_name, player_combat):
         """Execute a single round of combat"""
-        
+        effect_checker = ItemEffectChecker(self.bot)
+        combat_boost = effect_checker.get_combat_boost(interaction.user.id)
+        effective_combat = player_combat + combat_boost
         # Get NPC data
         if target_npc_type == "static":
             npc_data = self.db.execute_query(
@@ -1382,13 +1409,13 @@ class CombatCog(commands.Cog):
         npc_name, npc_hp, npc_max_hp, npc_combat, npc_alignment = npc_data
 
         # Player attack roll
-        player_roll = random.randint(1, 20) + player_combat
+        player_roll = random.randint(1, 20) + effective_combat  # Changed from player_combat
         npc_defense = random.randint(1, 20) + npc_combat
 
         damage_dealt = 0
         if player_roll > npc_defense:
             base_damage = random.randint(5, 15)
-            skill_bonus = player_combat // 2
+            skill_bonus = effective_combat // 2  # Changed from player_combat // 2
             damage_dealt = base_damage + skill_bonus
             new_npc_hp = max(0, npc_hp - damage_dealt)
 
@@ -1572,7 +1599,7 @@ class CombatCog(commands.Cog):
             (player_id,),
             fetch='one'
         )
-
+        
         if not player_data or player_data[0] <= 0:
             # Player is dead or gone, end combat
             self.db.execute_query(
@@ -1582,7 +1609,9 @@ class CombatCog(commands.Cog):
             return
 
         player_hp, player_combat, player_name = player_data
-
+        effect_checker = ItemEffectChecker(self.bot)
+        combat_boost = effect_checker.get_combat_boost(player_id)
+        effective_player_combat = player_combat + combat_boost
         # Get NPC data
         if npc_type == "static":
             npc_data = self.db.execute_query(
@@ -1609,7 +1638,7 @@ class CombatCog(commands.Cog):
 
         # NPC attack roll
         npc_roll = random.randint(1, 20) + npc_combat
-        player_defense = random.randint(1, 20) + player_combat
+        player_defense = random.randint(1, 20) + effective_player_combat
 
         damage_dealt = 0
         if npc_roll > player_defense:
@@ -2156,6 +2185,17 @@ class PlayerRobberyView(discord.ui.View):
     async def _process_fight_back(self, interaction):
         """Process victim fighting back"""
         # Get combat stats
+        effect_checker = ItemEffectChecker(self.bot)
+        # Get combat boosts
+        robber_boost = effect_checker.get_combat_boost(self.robber_id)
+        victim_boost = effect_checker.get_combat_boost(self.victim_id)
+        
+        robber_combat, robber_hp, robber_name = robber_data
+        victim_combat, victim_hp, victim_name, victim_money = victim_data
+        
+        # Apply boosts
+        effective_robber_combat = robber_combat + robber_boost
+        effective_victim_combat = victim_combat + victim_boost    
         robber_data = self.bot.db.execute_query(
             "SELECT combat, hp, name FROM characters WHERE user_id = ?",
             (self.robber_id,),
@@ -2176,8 +2216,8 @@ class PlayerRobberyView(discord.ui.View):
         victim_combat, victim_hp, victim_name, victim_money = victim_data
         
         # Combat rolls
-        robber_roll = random.randint(1, 20) + robber_combat
-        victim_roll = random.randint(1, 20) + victim_combat
+        robber_roll = random.randint(1, 20) + effective_robber_combat
+        victim_roll = random.randint(1, 20) + effective_victim_combat
         
         # Determine winner
         if victim_roll >= robber_roll:
@@ -2190,8 +2230,12 @@ class PlayerRobberyView(discord.ui.View):
     async def _victim_wins_fight(self, interaction, robber_roll, victim_roll, robber_combat, victim_combat):
         """Handle victim winning the fight"""
         # Determine damage to robber
-        damage_to_robber = random.randint(10, 20) + (victim_combat // 2)
-        
+        damage_to_robber = random.randint(10, 20) + (effective_victim_combat // 2)
+        effect_checker = ItemEffectChecker(self.bot)
+        robber_boost = effect_checker.get_combat_boost(self.robber_id)
+        victim_boost = effect_checker.get_combat_boost(self.victim_id)
+        effective_robber_combat = robber_combat + robber_boost
+        effective_victim_combat = victim_combat + victim_boost    
         # Small chance victim takes damage too
         damage_to_victim = 0
         if random.random() < 0.3:  # 30% chance
@@ -2265,8 +2309,13 @@ class PlayerRobberyView(discord.ui.View):
 
     async def _robber_wins_fight(self, interaction, robber_roll, victim_roll, robber_combat, victim_combat, victim_money):
         """Handle robber winning the fight"""
+        effect_checker = ItemEffectChecker(self.bot)
+        robber_boost = effect_checker.get_combat_boost(self.robber_id)
+        victim_boost = effect_checker.get_combat_boost(self.victim_id)
+        effective_robber_combat = robber_combat + robber_boost
+        effective_victim_combat = victim_combat + victim_boost        
         # Similar damage calculation but robber wins
-        damage_to_victim = random.randint(10, 20) + (robber_combat // 2)
+        damage_to_victim = random.randint(10, 20) + (effective_robber_combat // 2)
         damage_to_robber = 0
         if random.random() < 0.3:  # 30% chance robber takes some damage
             damage_to_robber = random.randint(5, 10)
@@ -2501,6 +2550,12 @@ class NPCAttackSelectView(discord.ui.View):
                 description=f"Combat started! Use `/attack fight` to continue fighting.",
                 color=0xff4444
             )
+            if combat_boost > 0:
+                embed.add_field(
+                    name="💉 Combat Stims Active",
+                    value=f"+{combat_boost} combat effectiveness",
+                    inline=False
+                )
             await interaction.response.send_message(embed=embed, ephemeral=True)
     async def _send_reputation_feedback(self, interaction, location_id, rep_change, action, npc_alignment):
         """Send reputation change feedback to location channel"""
