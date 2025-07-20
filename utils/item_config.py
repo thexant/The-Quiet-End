@@ -16,15 +16,6 @@ class ItemConfig:
             "single_use": True,
             "rarity": "common"
         },
-        "Space Soda": {
-            "type": "consumable",
-            "description": "Sweet and fizzy space soda",
-            "base_value": 5,
-            "usage_type": "heal_hp",
-            "effect_value": 1,
-            "single_use": True,
-            "rarirty": "common"
-        },
         "Advanced Med Kit": {
             "type": "medical", 
             "description": "High-quality medical supplies for serious injuries",
@@ -34,42 +25,25 @@ class ItemConfig:
             "single_use": True,
             "rarity": "uncommon"
         },
-        "Combat Stims": {
-            "type": "medical",
-            "description": "Performance enhancing drugs that provide temporary benefits",
-            "base_value": 80,
-            "usage_type": "temp_boost",
-            "effect_value": 10,
-            "effect_duration": 3600,  # 1 hour in seconds
+
+
+        # Special Items
+        "Emergency Beacon": {
+            "type": "equipment",
+            "description": "One-time use distress signal broadcaster",
+            "base_value": 200,
+            "usage_type": "emergency_signal",
+            "effect_value": 1,
             "single_use": True,
             "rarity": "uncommon"
         },
-        "Radiation Treatment": {
-            "type": "medical",
-            "description": "Treats radiation exposure and poisoning",
+        "Personal Log": {
+            "type": "equipment",
+            "description": "A digital logbook for recording personal entries and memories",
             "base_value": 120,
-            "usage_type": "cure_condition",
-            "effect_value": "radiation",
-            "single_use": True,
-            "rarity": "rare"
-        },
-        "Basic Tools": {
-            "type": "equipment",
-            "description": "Standard repair tools for basic maintenance",
-            "base_value": 250,
-            "usage_type": "repair_hull",
-            "effect_value": 5,
-            "uses_remaining": 5,
-            "rarity": "common"
-        },
-
-        "Data Beacon": {
-            "type": "equipment",
-            "description": "Transmits data packets through radio networks",
-            "base_value": 150,
-            "usage_type": "data_beacon", 
+            "usage_type": "personal_log",
             "effect_value": 1,
-            "single_use": True,
+            "single_use": False,
             "rarity": "uncommon"
         },
 
@@ -92,16 +66,6 @@ class ItemConfig:
             "rarity": "rare"
         },
 
-        "Signal Booster": {
-            "type": "equipment", 
-            "description": "Temporarily amplifies radio transmission power",
-            "base_value": 250,
-            "usage_type": "signal_boost",
-            "effect_value": 50,  # +50% range
-            "effect_duration": 3600,  # 1 hour
-            "single_use": True,
-            "rarity": "uncommon"
-        },
         # Consumable Items
         "Emergency Rations": {
             "type": "consumable",
@@ -112,6 +76,15 @@ class ItemConfig:
             "single_use": True,
             "rarity": "common"
         },
+        "Space Soda": {
+            "type": "consumable",
+            "description": "Sweet and fizzy space soda",
+            "base_value": 5,
+            "usage_type": "heal_hp",
+            "effect_value": 1,
+            "single_use": True,
+            "rarirty": "common"
+        },
         "Protein Bars": {
             "type": "consumable",
             "description": "High-energy manufactured food",
@@ -121,18 +94,8 @@ class ItemConfig:
             "single_use": True,
             "rarity": "common"
         },
-        "Stimulant Pack": {
-            "type": "consumable",
-            "description": "Reduces fatigue and improves alertness temporarily",
-            "base_value": 45,
-            "usage_type": "temp_boost",
-            "effect_value": 5,
-            "effect_duration": 1800,  # 30 minutes
-            "single_use": True,
-            "rarity": "uncommon"
-        },
         
-        # Equipment Items
+        # Repair Items
         "Repair Kit": {
             "type": "equipment",
             "description": "Tools for repairing ship hull damage",
@@ -142,15 +105,16 @@ class ItemConfig:
             "uses_remaining": 3,
             "rarity": "common"
         },
-        "Emergency Beacon": {
+        "Basic Tools": {
             "type": "equipment",
-            "description": "One-time use distress signal broadcaster",
-            "base_value": 200,
-            "usage_type": "emergency_signal",
-            "effect_value": 1,
-            "single_use": True,
-            "rarity": "uncommon"
+            "description": "Standard repair tools for basic maintenance",
+            "base_value": 250,
+            "usage_type": "repair_hull",
+            "effect_value": 5,
+            "uses_remaining": 5,
+            "rarity": "common"
         },
+
         "Scanner Module": {
             "type": "equipment",
             "description": "Improves search effectiveness when used",
@@ -182,6 +146,7 @@ class ItemConfig:
             "rarity": "uncommon"
         },
         
+        # Trade / Generic Items
         "Data Chip": {
             "type": "trade",
             "description": "Contains valuable information or entertainment",
@@ -209,16 +174,7 @@ class ItemConfig:
             "single_use": False,
             "rarity": "legendary"
         },
-        # Add this entry to the ITEM_DEFINITIONS dictionary
-        "Personal Log": {
-            "type": "equipment",
-            "description": "A digital logbook for recording personal entries and memories",
-            "base_value": 120,
-            "usage_type": "personal_log",
-            "effect_value": 1,
-            "single_use": False,
-            "rarity": "uncommon"
-        },
+
         # Upgrade Items
         "Engine Booster": {
             "type": "upgrade",
@@ -393,6 +349,28 @@ class ItemConfig:
         }
     }
     
+    BLACK_MARKET_EXCLUSIVE = [
+        "Forged Transit Papers",
+        "Identity Scrubber", 
+        "Stolen Data Chips",
+        "Unmarked Credits",
+        "Weapon System Override",
+        "Neural Interface Hack"
+    ]
+
+    FEDERAL_DEPOT_EXCLUSIVE = [
+        "Federal ID Card",
+        "Military Rations",
+        "Federal Comm Codes",
+        "Loyalty Certification",
+        "Federal Permit",
+        "Military Scanner Array",
+        "Federal Security Override",
+        "Combat Stim Injector",
+        "Emergency Medical Pod"
+    ]
+    
+    
     # Rarity weights for search results
     RARITY_WEIGHTS = {
         "common": 0.60,
@@ -438,6 +416,29 @@ class ItemConfig:
     }
     
     @classmethod
+    def get_items_by_rarity(cls, rarity: str, exclude_exclusive: bool = True) -> list:
+        """Get all items of a specific rarity, optionally excluding exclusive items"""
+        items = []
+        for item_name, item_data in cls.ITEM_DEFINITIONS.items():
+            if item_data.get("rarity") == rarity:
+                # Skip exclusive items if requested
+                if exclude_exclusive:
+                    if item_name in cls.BLACK_MARKET_EXCLUSIVE or item_name in cls.FEDERAL_DEPOT_EXCLUSIVE:
+                        continue
+                items.append(item_name)
+        return items
+
+    @classmethod
+    def is_exclusive_item(cls, item_name: str) -> tuple[bool, str]:
+        """Check if an item is exclusive and return exclusivity type"""
+        if item_name in cls.BLACK_MARKET_EXCLUSIVE:
+            return True, "black_market"
+        elif item_name in cls.FEDERAL_DEPOT_EXCLUSIVE:
+            return True, "federal_depot"
+        return False, None
+    
+    
+    @classmethod
     def get_item_definition(cls, item_name: str) -> Dict[str, Any]:
         """Get item definition by name"""
         return cls.ITEM_DEFINITIONS.get(item_name, {})
@@ -448,11 +449,6 @@ class ItemConfig:
         return [name for name, data in cls.ITEM_DEFINITIONS.items() 
                 if data.get("type") == item_type]
     
-    @classmethod
-    def get_items_by_rarity(cls, rarity: str) -> List[str]:
-        """Get all item names of a specific rarity"""
-        return [name for name, data in cls.ITEM_DEFINITIONS.items()
-                if data.get("rarity") == rarity]
     
     @classmethod
     def generate_search_loot(cls, location_type: str, wealth_level: int) -> List[Tuple[str, int]]:

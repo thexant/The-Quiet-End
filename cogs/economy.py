@@ -213,7 +213,7 @@ class EconomyCog(commands.Cog):
         
         # Add random items based on location type and wealth
         for rarity in ["common", "uncommon", "rare", "legendary"]:
-            rarity_items = ItemConfig.get_items_by_rarity(rarity)
+            rarity_items = ItemConfig.get_items_by_rarity(rarity, exclude_exclusive=True)
             
             # Adjust spawn chance by rarity and wealth
             spawn_chances = {

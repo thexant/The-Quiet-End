@@ -192,6 +192,55 @@ class ItemUsageCog(commands.Cog):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
     
+    def check_active_effects(self, user_id: int, effect_type: str = None) -> dict:
+        """Check active effects stored in inventory"""
+        import json
+        from datetime import datetime
+        
+        # Get all effect items
+        query = '''SELECT item_name, metadata FROM inventory 
+                   WHERE owner_id = ? AND item_type IN ('effect', 'permit')'''
+        effects = self.db.execute_query(query, (user_id,), fetch='all')
+        
+        active_effects = {}
+        expired_items = []
+        
+        for item_name, metadata_str in effects:
+            if not metadata_str:
+                continue
+                
+            try:
+                metadata = json.loads(metadata_str)
+                
+                # Check if it's a temporary effect that expired
+                if 'active_until' in metadata:
+                    expire_time = datetime.fromisoformat(metadata['active_until'])
+                    if expire_time < datetime.utcnow():
+                        expired_items.append(item_name)
+                        continue
+                
+                # Extract effect type
+                if 'effect' in metadata:
+                    effect_name = metadata['effect']
+                    if not effect_type or effect_name == effect_type:
+                        active_effects[effect_name] = metadata
+                elif 'permanent_effect' in metadata:
+                    effect_name = metadata['permanent_effect']
+                    if not effect_type or effect_name == effect_type:
+                        active_effects[effect_name] = metadata
+                        
+            except:
+                continue
+        
+        # Clean up expired effects
+        for item in expired_items:
+            self.db.execute_query(
+                "DELETE FROM inventory WHERE owner_id = ? AND item_name = ?",
+                (user_id, item)
+            )
+        
+        return active_effects
+    
     async def _apply_item_effect(self, user_id: int, usage_type: str, metadata: Dict[str, Any], item_name: str, item_id: int) -> Dict[str, Any]:
         """Apply the effect of using an item"""
         effect_value = metadata.get("effect_value")
@@ -348,7 +397,266 @@ class ItemUsageCog(commands.Cog):
                 "embed": embed,
                 "view": view
             }
+        elif usage_type == "add_credits":
+            # Unmarked Credits - adds credits directly (WORKS WITH EXISTING characters TABLE)
+            self.db.execute_query(
+                "UPDATE characters SET credits = credits + ? WHERE user_id = ?",
+                (effect_value, user_id)
+            )
+            return {"success": True, "message": f"Added {effect_value:,} unmarked credits to your account"}
 
+        elif usage_type == "bypass_security":
+            # Forged Transit Papers - stores in inventory metadata as active effect
+            # We'll use the inventory table's metadata field to track active effects
+            import json
+            expire_time = (datetime.utcnow() + timedelta(hours=24)).isoformat()
+            
+            # Add a special inventory item to track the active effect
+            metadata = json.dumps({"active_until": expire_time, "effect": "bypass_security"})
+            
+            # Check if effect already exists
+            existing = self.db.execute_query(
+                "SELECT item_id FROM inventory WHERE owner_id = ? AND item_name = 'Active: Security Bypass'",
+                (user_id,), fetch='one'
+            )
+            
+            if existing:
+                self.db.execute_query(
+                    "UPDATE inventory SET metadata = ? WHERE item_id = ?",
+                    (metadata, existing[0])
+                )
+            else:
+                self.db.execute_query(
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                       VALUES (?, 'Active: Security Bypass', 'effect', 1, 'Bypassing security checks', 0, ?)''',
+                    (user_id, metadata)
+                )
+            
+            return {"success": True, "message": "Transit papers activated. Security checks bypassed for 24 hours."}
+
+        elif usage_type == "scrub_identity":
+            # Identity Scrubber - clears negative reputation (WORKS WITH EXISTING character_reputation TABLE)
+            # Get all negative reputations
+            negative_reps = self.db.execute_query(
+                "SELECT location_id FROM character_reputation WHERE user_id = ? AND reputation < 0",
+                (user_id,), fetch='all'
+            )
+            
+            # Set all negative reputations to 0
+            for loc in negative_reps:
+                self.db.execute_query(
+                    "UPDATE character_reputation SET reputation = 0 WHERE user_id = ? AND location_id = ?",
+                    (user_id, loc[0])
+                )
+            
+            count = len(negative_reps)
+            return {"success": True, "message": f"Identity scrubbed. Cleared negative reputation at {count} locations."}
+
+        elif usage_type == "federal_access":
+            # Federal ID Card - stores as permanent item in inventory with special metadata
+            import json
+            metadata = json.dumps({"permanent_effect": "federal_access", "acquired": datetime.utcnow().isoformat()})
+            
+            # Check if already has federal access
+            existing = self.db.execute_query(
+                "SELECT item_id FROM inventory WHERE owner_id = ? AND item_name = 'Active: Federal Access'",
+                (user_id,), fetch='one'
+            )
+            
+            if existing:
+                return {"success": False, "message": "You already have federal access!"}
+            
+            # Add permanent federal access
+            self.db.execute_query(
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, 'Active: Federal Access', 'permit', 1, 'Authorized federal personnel', 0, ?)''',
+                (user_id, metadata)
+            )
+            
+            return {"success": True, "message": "Federal ID activated. You now have permanent access to federal facilities."}
+
+        elif usage_type == "comm_access":
+            # Federal Comm Codes - adds to inventory as permanent communication access
+            if effect_value == "federal_channels":
+                import json
+                metadata = json.dumps({"comm_channels": ["federal", "emergency", "classified"]})
+                
+                existing = self.db.execute_query(
+                    "SELECT item_id FROM inventory WHERE owner_id = ? AND item_name = 'Active: Federal Comms'",
+                    (user_id,), fetch='one'
+                )
+                
+                if existing:
+                    return {"success": False, "message": "You already have federal communication access!"}
+                
+                self.db.execute_query(
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                       VALUES (?, 'Active: Federal Comms', 'permit', 1, 'Federal communication access', 0, ?)''',
+                    (user_id, metadata)
+                )
+                
+                return {"success": True, "message": "Federal communication channels unlocked. You can now access classified channels."}
+
+        elif usage_type == "reputation_boost":
+            # Loyalty Certification - boosts reputation (WORKS WITH character_reputation TABLE)
+            faction, boost_amount = str(effect_value).split(":")
+            boost_amount = int(boost_amount)
+            
+            if faction == "federal":
+                # Find all federal locations
+                federal_locations = self.db.execute_query(
+                    "SELECT location_id, name FROM locations WHERE has_federal_supplies = 1",
+                    fetch='all'
+                )
+                
+                updated_count = 0
+                for loc_id, loc_name in federal_locations:
+                    # Check existing reputation
+                    existing = self.db.execute_query(
+                        "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+                        (user_id, loc_id), fetch='one'
+                    )
+                    
+                    if existing:
+                        self.db.execute_query(
+                            "UPDATE character_reputation SET reputation = reputation + ? WHERE user_id = ? AND location_id = ?",
+                            (boost_amount, user_id, loc_id)
+                        )
+                    else:
+                        self.db.execute_query(
+                            "INSERT INTO character_reputation (user_id, location_id, reputation) VALUES (?, ?, ?)",
+                            (user_id, loc_id, boost_amount)
+                        )
+                    updated_count += 1
+                
+                return {"success": True, "message": f"Federal reputation increased by {boost_amount} at {updated_count} federal locations"}
+
+        elif usage_type == "permit_access":
+            # Federal Permit - stores as inventory item granting restricted zone access
+            import json
+            metadata = json.dumps({"zones": ["restricted", "classified", "military"], "clearance_level": 3})
+            
+            existing = self.db.execute_query(
+                "SELECT item_id FROM inventory WHERE owner_id = ? AND item_name = 'Active: Federal Permit'",
+                (user_id,), fetch='one'
+            )
+            
+            if existing:
+                return {"success": False, "message": "You already have a federal permit!"}
+            
+            self.db.execute_query(
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, 'Active: Federal Permit', 'permit', 1, 'Access to restricted zones', 0, ?)''',
+                (user_id, metadata)
+            )
+            
+            return {"success": True, "message": "Federal permit activated. Access to restricted zones granted."}
+
+        elif usage_type == "search_boost":
+            # Scanner Array - temporary effect stored in inventory with expiration
+            import json
+            expire_time = (datetime.utcnow() + timedelta(hours=2)).isoformat()
+            metadata = json.dumps({
+                "active_until": expire_time, 
+                "effect": "search_boost",
+                "boost_value": effect_value
+            })
+            
+            # Remove any existing search boost
+            self.db.execute_query(
+                "DELETE FROM inventory WHERE owner_id = ? AND item_name = 'Active: Scanner Boost'",
+                (user_id,)
+            )
+            
+            # Add new boost
+            self.db.execute_query(
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, 'Active: Scanner Boost', 'effect', 1, 'Enhanced scanning capability', 0, ?)''',
+                (user_id, metadata)
+            )
+            
+            return {"success": True, "message": f"Scanner array activated. +{effect_value}% search effectiveness for 2 hours."}
+
+        elif usage_type == "security_override":
+            # Federal Security Override - temporary federal bypass
+            if effect_value == "federal_bypass":
+                import json
+                expire_time = (datetime.utcnow() + timedelta(hours=4)).isoformat()
+                metadata = json.dumps({
+                    "active_until": expire_time,
+                    "effect": "federal_security_bypass"
+                })
+                
+                # Remove existing override
+                self.db.execute_query(
+                    "DELETE FROM inventory WHERE owner_id = ? AND item_name = 'Active: Security Override'",
+                    (user_id,)
+                )
+                
+                self.db.execute_query(
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                       VALUES (?, 'Active: Security Override', 'effect', 1, 'Federal security bypassed', 0, ?)''',
+                    (user_id, metadata)
+                )
+                
+                return {"success": True, "message": "Federal security override activated. Bypass federal security for 4 hours."}
+
+        elif usage_type == "combat_boost":
+            # Combat Stim - stores temporary combat boost in inventory
+            import json
+            duration = metadata.get("effect_duration", 1800)
+            expire_time = (datetime.utcnow() + timedelta(seconds=duration)).isoformat()
+            
+            boost_metadata = json.dumps({
+                "active_until": expire_time,
+                "effect": "combat_boost", 
+                "boost_value": effect_value
+            })
+            
+            # Remove existing combat boost
+            self.db.execute_query(
+                "DELETE FROM inventory WHERE owner_id = ? AND item_name = 'Active: Combat Stims'",
+                (user_id,)
+            )
+            
+            self.db.execute_query(
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, 'Active: Combat Stims', 'effect', 1, 'Enhanced combat effectiveness', 0, ?)''',
+                (user_id, boost_metadata)
+            )
+            
+            duration_minutes = duration // 60
+            return {"success": True, "message": f"Combat stimulants activated. +{effect_value} combat effectiveness for {duration_minutes} minutes."}
+
+        elif usage_type == "weapon_override":
+            # Weapon System Override - adds ship upgrade (WORKS WITH ship_upgrades TABLE)
+            ship_data = self.db.execute_query(
+                "SELECT ship_id FROM ships WHERE owner_id = ?",
+                (user_id,), fetch='one'
+            )
+            
+            if not ship_data:
+                return {"success": False, "message": "No ship found to upgrade!"}
+            
+            ship_id = ship_data[0]
+            
+            # Check if already has weapon override
+            existing = self.db.execute_query(
+                "SELECT upgrade_id FROM ship_upgrades WHERE ship_id = ? AND upgrade_type = 'weapon_override'",
+                (ship_id,), fetch='one'
+            )
+            
+            if existing:
+                return {"success": False, "message": "Ship already has illegal weapon modifications!"}
+            
+            # Add weapon override upgrade
+            self.db.execute_query(
+                '''INSERT INTO ship_upgrades (ship_id, upgrade_type, upgrade_name, bonus_value)
+                   VALUES (?, 'weapon_override', 'Illegal Weapon Protocol', 1)''',
+                (ship_id,)
+            )
+            
+            return {"success": True, "message": "Weapon systems overridden. Illegal weapon protocols activated."}
         elif usage_type == "news_beacon":
             # News beacon - inject data into news stream
             char_data = self.db.execute_query(
