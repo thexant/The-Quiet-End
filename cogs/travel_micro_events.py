@@ -73,13 +73,8 @@ class MicroEventView(ui.View):
                     from bot import bot  # Import bot instance
                     cog = bot.get_cog('TravelMicroEventsCog')
                     if cog:
-                        # Create a fake interaction for timeout handling
-                        fake_interaction = type('obj', (object,), {
-                            'user': type('obj', (object,), {'id': self.event_data['user_id']})(),
-                            'edit_original_response': self._message.edit,
-                            'followup': type('obj', (object,), {'send': self._message.channel.send})()
-                        })
-                        await cog.handle_response(fake_interaction, self.event_data, responded=False, timeout=True)
+                        # Apply timeout failure directly
+                        await cog.apply_timeout_failure(self._message.channel, self.event_data)
                         
                     await self._message.edit(view=self)
                 except Exception as e:
@@ -472,6 +467,57 @@ class TravelMicroEventsCog(commands.Cog):
         )
         
         await interaction.followup.send(embed=embed)
+    
+    async def apply_timeout_failure(self, channel: discord.TextChannel, event_data: dict):
+        """Apply failure consequences when user times out (30 seconds)"""
+        damage = event_data['damage']
+        damage_type = event_data.get('damage_type', 'hp')
+        user_id = event_data['user_id']
+        
+        # Update the event log
+        if 'event_log_id' in event_data:
+            self.db.execute_query(
+                """UPDATE travel_micro_events 
+                   SET responded = 0, success = 0, damage_taken = ?, damage_type = ?
+                   WHERE event_id = ?""",
+                (damage, damage_type, event_data['event_log_id'])
+            )
+        
+        # Apply damage based on type
+        if damage_type == 'hp':
+            self.db.execute_query(
+                "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
+                (damage, user_id)
+            )
+        elif damage_type == 'hull':
+            self.db.execute_query(
+                "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
+                (damage, user_id)
+            )
+        elif damage_type == 'fuel':
+            self.db.execute_query(
+                "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
+                (damage, user_id)
+            )
+        
+        # Send clear timeout message
+        embed = discord.Embed(
+            title="⏰ Response Timeout",
+            description=f"<@{user_id}> failed to respond within 30 seconds and suffered the consequences!",
+            color=0xff6600
+        )
+        embed.add_field(
+            name="Auto-Failure Consequence",
+            value=f"💔 -{damage} {damage_type.upper()} (same as ignoring)",
+            inline=True
+        )
+        embed.add_field(
+            name="⚡ Quick Tip",
+            value="Stay alert during travel - these events require fast responses!",
+            inline=False
+        )
+        
+        await channel.send(embed=embed)
         
     def get_low_danger_events(self) -> List[dict]:
         """Get low-danger micro-events (danger level 1-2)"""

@@ -50,6 +50,53 @@ def create_timeout_handler_with_cleanup(event_id: str, message):
     return on_timeout
 
 
+class BaseEventView(discord.ui.View):
+    """Base view for all events that tracks player responses and handles timeout cleanup"""
+    def __init__(self, bot, timeout=300):
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.player_responses = {}  # Track who has responded
+        self.message = None  # Store message reference for cleanup
+    
+    def has_responded(self, user_id: int) -> bool:
+        """Check if a user has already responded to this event"""
+        return user_id in self.player_responses
+    
+    def record_response(self, user_id: int, response: str):
+        """Record a user's response"""
+        self.player_responses[user_id] = response
+    
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Check if the interaction is valid"""
+        if self.has_responded(interaction.user.id):
+            await interaction.response.send_message(
+                "You've already responded to this event!", 
+                ephemeral=True
+            )
+            return False
+        return True
+    
+    async def on_timeout(self):
+        """Called when the view times out - updates the embed to show expiration"""
+        if self.message:
+            try:
+                # Create expired event embed
+                expired_embed = discord.Embed(
+                    title="⏰ Event Expired",
+                    description="This event has timed out and is no longer available.",
+                    color=0x808080,
+                    timestamp=datetime.now()
+                )
+                expired_embed.add_field(
+                    name="Status",
+                    value="Buttons are now disabled. Event interaction window has closed.",
+                    inline=False
+                )
+                await self.message.edit(embed=expired_embed, view=None)
+            except Exception as e:
+                print(f"Failed to cleanup event: {e}")
+
+
 class AutoCleanupView(discord.ui.View):
     """A view that automatically cleans itself up when it times out"""
     def __init__(self, timeout=299):  # 4m59s
@@ -5922,48 +5969,3 @@ async def setup(bot):
     await bot.add_cog(EnhancedEventsCog(bot))
     
 
-class BaseEventView(discord.ui.View):
-    """Base view for all events that tracks player responses and handles timeout cleanup"""
-    def __init__(self, bot, timeout=300):
-        super().__init__(timeout=timeout)
-        self.bot = bot
-        self.player_responses = {}  # Track who has responded
-        self.message = None  # Store message reference for cleanup
-    
-    def has_responded(self, user_id: int) -> bool:
-        """Check if a user has already responded to this event"""
-        return user_id in self.player_responses
-    
-    def record_response(self, user_id: int, response: str):
-        """Record a user's response"""
-        self.player_responses[user_id] = response
-    
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Check if the interaction is valid"""
-        if self.has_responded(interaction.user.id):
-            await interaction.response.send_message(
-                "You've already responded to this event!", 
-                ephemeral=True
-            )
-            return False
-        return True
-    
-    async def on_timeout(self):
-        """Called when the view times out - updates the embed to show expiration"""
-        if self.message:
-            try:
-                # Create expired event embed
-                expired_embed = discord.Embed(
-                    title="⏰ Event Expired",
-                    description="This event has timed out and is no longer available.",
-                    color=0x808080,
-                    timestamp=datetime.now()
-                )
-                expired_embed.add_field(
-                    name="Status",
-                    value="Buttons are now disabled. Event interaction window has closed.",
-                    inline=False
-                )
-                await self.message.edit(embed=expired_embed, view=None)
-            except Exception as e:
-                print(f"Failed to cleanup event: {e}")

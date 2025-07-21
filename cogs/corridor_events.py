@@ -55,7 +55,7 @@ class CorridorEventsCog(commands.Cog):
         if response_time < 30:
             return
         
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=random.randint(3, 8))
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=response_time)
         
         # Log event for debugging
         print(f"🚨 Triggering {event_type} event - Remaining travel: {remaining_travel_time}s, Response time: {response_time}s")

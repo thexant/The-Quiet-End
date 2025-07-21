@@ -829,9 +829,26 @@ class WebMapCog(commands.Cog):
                 </label>
             </div>
             <div class="control-group">
-                <input type="text" id="search-input" placeholder="Search locations..." class="search-input">
+                <div class="search-container">
+                    <input type="text" id="search-input" placeholder="Search locations..." class="search-input" autocomplete="off">
+                    <div id="search-dropdown" class="search-dropdown"></div>
+                </div>
                 <button class="control-button" onclick="galaxyMap.searchLocation()">Search</button>
                 <button class="control-button" onclick="galaxyMap.resetView()">Reset View</button>
+            </div>
+            <div class="control-group">
+                <span style="color: var(--primary-color); margin-right: 10px;">📍 Route Planning:</span>
+                <select id="route-start" class="search-input" style="max-width: 150px;">
+                    <option value="">Select Start</option>
+                </select>
+                <select id="route-end" class="search-input" style="max-width: 150px; margin-left: 10px;">
+                    <option value="">Select End</option>
+                </select>
+                <select id="route-midpoint" class="search-input" style="max-width: 150px; margin-left: 10px;">
+                    <option value="">Midpoint (Optional)</option>
+                </select>
+                <button class="control-button" onclick="galaxyMap.plotRouteFromControls()" style="margin-left: 10px;">Plot Route</button>
+                <button class="control-button" onclick="galaxyMap.clearPlottedRoute()" style="margin-left: 5px;">Clear</button>
             </div>
         </div>
         
@@ -893,6 +910,10 @@ class WebMapCog(commands.Cog):
         <div class="wiki-content">
             <div id="loading" class="loading-message">Loading database...</div>
             <div id="wiki-data" class="wiki-data"></div>
+        </div>
+        <div id="location-info" class="location-info-panel">
+            <button class="info-panel-close" onclick="document.getElementById('location-info').style.display='none'">×</button>
+            <!-- Content will be dynamically inserted here -->
         </div>
     </div>
     
@@ -1253,6 +1274,54 @@ class WebMapCog(commands.Cog):
         }
         
         .search-input::placeholder {
+            color: var(--text-secondary);
+        }
+        
+        .search-container {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .search-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: var(--secondary-bg);
+            border: 1px solid var(--border-color);
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+        
+        .search-dropdown-item {
+            padding: 0.5rem 0.75rem;
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .search-dropdown-item:last-child {
+            border-bottom: none;
+        }
+        
+        .search-dropdown-item:hover,
+        .search-dropdown-item.highlighted {
+            background-color: var(--primary-color);
+            color: var(--primary-bg);
+        }
+        
+        .search-dropdown-item.no-results {
+            color: var(--text-secondary);
+            cursor: default;
+        }
+        
+        .search-dropdown-item.no-results:hover {
+            background-color: transparent;
             color: var(--text-secondary);
         }
         
@@ -1656,6 +1725,11 @@ class WebMapCog(commands.Cog):
                 this.dragStartY = 0;
                 this.selectedLocation = null;
                 this.selectedCorridor = null;
+                
+                // Search autocomplete properties
+                this.searchTimeout = null;
+                this.highlightedIndex = -1;
+                this.currentSuggestions = [];
                 this.hoveredCorridor = null;
                 this.showLabels = false;
                 this.showPlayers = false;
@@ -1702,10 +1776,64 @@ class WebMapCog(commands.Cog):
                 this.canvas.addEventListener('touchmove', e => this.handleTouchMove(e));
                 this.canvas.addEventListener('touchend', e => this.handleTouchEnd(e));
                 
-                // Search input - Enter key support
-                document.getElementById('search-input').addEventListener('keypress', e => {
-                    if (e.key === 'Enter') {
-                        this.searchLocation();
+                // Search input - autocomplete support
+                const searchInput = document.getElementById('search-input');
+                const searchDropdown = document.getElementById('search-dropdown');
+                
+                searchInput.addEventListener('input', e => {
+                    clearTimeout(this.searchTimeout);
+                    const searchTerm = e.target.value.trim().toLowerCase();
+                    
+                    if (!searchTerm) {
+                        this.hideSearchDropdown();
+                        return;
+                    }
+                    
+                    // Debounce search to avoid excessive filtering
+                    this.searchTimeout = setTimeout(() => {
+                        this.showSearchSuggestions(searchTerm);
+                    }, 150);
+                });
+                
+                searchInput.addEventListener('keydown', e => {
+                    if (!searchDropdown.style.display || searchDropdown.style.display === 'none') {
+                        if (e.key === 'Enter') {
+                            this.searchLocation();
+                        }
+                        return;
+                    }
+                    
+                    switch (e.key) {
+                        case 'ArrowDown':
+                            e.preventDefault();
+                            this.highlightedIndex = Math.min(this.highlightedIndex + 1, this.currentSuggestions.length - 1);
+                            this.updateHighlight();
+                            break;
+                        case 'ArrowUp':
+                            e.preventDefault();
+                            this.highlightedIndex = Math.max(this.highlightedIndex - 1, -1);
+                            this.updateHighlight();
+                            break;
+                        case 'Enter':
+                            e.preventDefault();
+                            if (this.highlightedIndex >= 0 && this.currentSuggestions[this.highlightedIndex]) {
+                                this.selectSuggestion(this.currentSuggestions[this.highlightedIndex]);
+                            }
+                            break;
+                        case 'Escape':
+                            this.hideSearchDropdown();
+                            break;
+                    }
+                });
+                
+                searchInput.addEventListener('blur', e => {
+                    // Delay hiding to allow click events on dropdown items
+                    setTimeout(() => this.hideSearchDropdown(), 150);
+                });
+                
+                searchInput.addEventListener('focus', e => {
+                    if (e.target.value.trim()) {
+                        this.showSearchSuggestions(e.target.value.trim().toLowerCase());
                     }
                 });
                 
@@ -1736,6 +1864,7 @@ class WebMapCog(commands.Cog):
                     const response = await fetch('/api/map-data');
                     this.data = await response.json();
                     this.updateLastUpdate();
+                    this.populateRouteDropdowns();
                     this.render();
                 } catch (error) {
                     console.error('Failed to load map data:', error);
@@ -2513,13 +2642,11 @@ class WebMapCog(commands.Cog):
                 const searchTerm = searchInput.value.trim().toLowerCase();
                 
                 if (!searchTerm) {
-                    alert('Please enter a location name to search for.');
-                    return;
+                    return; // No alert needed, user can see empty input
                 }
                 
                 if (!this.data || !this.data.locations) {
-                    alert('Location data not loaded yet. Please wait a moment and try again.');
-                    return;
+                    return; // Data will load, no need to interrupt user
                 }
                 
                 // Search for matching locations
@@ -2530,18 +2657,71 @@ class WebMapCog(commands.Cog):
                 );
                 
                 if (matches.length === 0) {
-                    alert(`No locations found matching "${searchTerm}"`);
+                    return; // No matches, dropdown will show "No results"
+                }
+                
+                // Focus on the first match
+                const firstMatch = matches[0];
+                this.selectSuggestion(firstMatch);
+            }
+            
+            showSearchSuggestions(searchTerm) {
+                if (!this.data || !this.data.locations) {
                     return;
                 }
                 
-                // If multiple matches, focus on the first one and show all in tooltip
-                const firstMatch = matches[0];
-                this.focusOnLocation(firstMatch);
+                const searchDropdown = document.getElementById('search-dropdown');
+                const matches = Object.values(this.data.locations).filter(location => 
+                    location.name.toLowerCase().includes(searchTerm) ||
+                    location.system.toLowerCase().includes(searchTerm) ||
+                    location.type.toLowerCase().includes(searchTerm)
+                );
                 
-                if (matches.length > 1) {
-                    const matchNames = matches.map(loc => loc.name).join(', ');
-                    alert(`Found ${matches.length} matches: ${matchNames}. Focusing on "${firstMatch.name}".`);
+                this.currentSuggestions = matches.slice(0, 8); // Limit to 8 suggestions
+                this.highlightedIndex = -1;
+                
+                if (matches.length === 0) {
+                    searchDropdown.innerHTML = '<div class="search-dropdown-item no-results">No locations found</div>';
+                } else {
+                    searchDropdown.innerHTML = matches.slice(0, 8).map(location => 
+                        `<div class="search-dropdown-item" data-location-id="${location.id}">
+                            <strong>${location.name}</strong> - ${location.system} (${location.type})
+                        </div>`
+                    ).join('');
+                    
+                    // Add click handlers to dropdown items
+                    searchDropdown.querySelectorAll('.search-dropdown-item:not(.no-results)').forEach((item, index) => {
+                        item.addEventListener('click', () => {
+                            this.selectSuggestion(matches[index]);
+                        });
+                    });
                 }
+                
+                searchDropdown.style.display = 'block';
+            }
+            
+            hideSearchDropdown() {
+                const searchDropdown = document.getElementById('search-dropdown');
+                searchDropdown.style.display = 'none';
+                this.highlightedIndex = -1;
+            }
+            
+            updateHighlight() {
+                const items = document.querySelectorAll('.search-dropdown-item:not(.no-results)');
+                items.forEach((item, index) => {
+                    if (index === this.highlightedIndex) {
+                        item.classList.add('highlighted');
+                    } else {
+                        item.classList.remove('highlighted');
+                    }
+                });
+            }
+            
+            selectSuggestion(location) {
+                const searchInput = document.getElementById('search-input');
+                searchInput.value = location.name;
+                this.hideSearchDropdown();
+                this.focusOnLocation(location);
             }
             
             focusOnLocation(location) {
@@ -2557,6 +2737,116 @@ class WebMapCog(commands.Cog):
                 
                 // Show location info panel
                 this.selectLocation(location.id, location);
+            }
+            
+            populateRouteDropdowns() {
+                if (!this.data || !this.data.locations) return;
+                
+                const startSelect = document.getElementById('route-start');
+                const endSelect = document.getElementById('route-end');
+                const midpointSelect = document.getElementById('route-midpoint');
+                
+                // Save current selected values
+                const currentStart = startSelect.value;
+                const currentEnd = endSelect.value;
+                const currentMidpoint = midpointSelect.value;
+                
+                // Clear existing options (except first default option)
+                while (startSelect.children.length > 1) {
+                    startSelect.removeChild(startSelect.lastChild);
+                }
+                while (endSelect.children.length > 1) {
+                    endSelect.removeChild(endSelect.lastChild);
+                }
+                while (midpointSelect.children.length > 1) {
+                    midpointSelect.removeChild(midpointSelect.lastChild);
+                }
+                
+                // Sort locations by name
+                const sortedLocations = Object.values(this.data.locations).sort((a, b) => a.name.localeCompare(b.name));
+                
+                // Add options for each location
+                sortedLocations.forEach(location => {
+                    const option1 = document.createElement('option');
+                    option1.value = location.id;
+                    option1.textContent = location.name;
+                    startSelect.appendChild(option1);
+                    
+                    const option2 = document.createElement('option');
+                    option2.value = location.id;
+                    option2.textContent = location.name;
+                    endSelect.appendChild(option2);
+                    
+                    const option3 = document.createElement('option');
+                    option3.value = location.id;
+                    option3.textContent = location.name;
+                    midpointSelect.appendChild(option3);
+                });
+                
+                // Restore previously selected values
+                if (currentStart && this.data.locations[currentStart]) {
+                    startSelect.value = currentStart;
+                }
+                if (currentEnd && this.data.locations[currentEnd]) {
+                    endSelect.value = currentEnd;
+                }
+                if (currentMidpoint && this.data.locations[currentMidpoint]) {
+                    midpointSelect.value = currentMidpoint;
+                }
+            }
+            
+            plotRouteFromControls() {
+                console.log('Plot route button clicked');
+                
+                const startId = document.getElementById('route-start').value;
+                const endId = document.getElementById('route-end').value;
+                const midpointId = document.getElementById('route-midpoint').value;
+                
+                console.log('Route values:', { startId, endId, midpointId });
+                
+                if (!startId || !endId) {
+                    alert('Please select both start and end locations.');
+                    return;
+                }
+                
+                if (startId === endId) {
+                    alert('Start and end locations cannot be the same.');
+                    return;
+                }
+                
+                console.log('Plotting route from', startId, 'to', endId);
+                
+                // If midpoint is specified, plot route via midpoint
+                if (midpointId && midpointId !== startId && midpointId !== endId) {
+                    // Plot route from start to midpoint, then midpoint to end
+                    console.log('Using midpoint:', midpointId);
+                    this.plotRoute(startId, midpointId);
+                    setTimeout(() => {
+                        this.plotRoute(midpointId, endId);
+                    }, 100);
+                } else {
+                    // Direct route
+                    this.plotRoute(startId, endId);
+                }
+                
+                // Focus on start location
+                const startLocation = this.data.locations[startId];
+                if (startLocation) {
+                    this.focusOnLocation(startLocation);
+                }
+            }
+            
+            clearPlottedRoute() {
+                this.routePlanningMode = false;
+                this.routeStartLocation = null;
+                this.currentRoute = null;
+                
+                // Clear the dropdowns
+                document.getElementById('route-start').value = '';
+                document.getElementById('route-end').value = '';
+                document.getElementById('route-midpoint').value = '';
+                
+                this.render();
             }
             
             startRoutePlanning(fromLocationId) {
@@ -2603,7 +2893,9 @@ class WebMapCog(commands.Cog):
             }
             
             plotRoute(fromId, toId) {
+                console.log('Plotting route from', fromId, 'to', toId);
                 const route = this.findShortestPath(fromId, toId);
+                console.log('Found route:', route);
                 if (route && route.length > 1) {
                     this.plannedRoute = route;
                     this.routePlanningMode = false;
@@ -3023,10 +3315,6 @@ class WebMapCog(commands.Cog):
                     <div class="location-detail" style="margin-top: 10px; font-size: 0.8rem; color: var(--text-secondary);">
                         🌌 = Local Space | 🔵 = Gated | ⭕ = Ungated
                     </div>
-                    <div class="location-detail" style="margin-top: 15px;">
-                        <button class="control-button" onclick="galaxyMap.startRoutePlanning('${id}')">📍 Plot Route</button>
-                        <span id="route-planning-status" style="margin-left: 10px; font-size: 0.8rem; color: var(--text-secondary);"></span>
-                    </div>
                 `;
                 
                 this.locationInfo.style.display = 'block';
@@ -3104,7 +3392,7 @@ class WebMapCog(commands.Cog):
 
         // Initialize map when page loads
         document.addEventListener('DOMContentLoaded', () => {
-            const map = new GalaxyMap();
+            window.galaxyMap = new GalaxyMap();
         });
         '''
     
@@ -3384,17 +3672,31 @@ class WebMapCog(commands.Cog):
             }
             
             showLocationInfoFromWiki(locationId) {
-                // Find the location data
-                const location = this.data.locations.find(loc => loc.id === locationId);
-                if (!location) return;
+                console.log('Wiki: Attempting to show location info for:', locationId);
+                console.log('Wiki: Data available:', !!this.data);
+                console.log('Wiki: Locations available:', !!this.data?.locations);
+                
+                // Find the location data - locations is an array in wiki data
+                const location = this.data.locations.find(loc => loc.id == locationId);
+                console.log('Wiki: Found location:', location);
+                if (!location) {
+                    console.error('Wiki: Location not found:', locationId);
+                    return;
+                }
                 
                 // Count players and NPCs at this location
-                const playerCount = this.data.players.filter(p => p.location === locationId).length;
-                const npcCount = this.data.npcs.filter(n => n.location === locationId).length;
+                const players = this.data.players || Object.values(this.data.players || {});
+                const npcs = this.data.npcs || Object.values(this.data.npcs || {});
+                const playerCount = (Array.isArray(players) ? players : Object.values(players)).filter(p => p.location === locationId).length;
+                const npcCount = (Array.isArray(npcs) ? npcs : Object.values(npcs)).filter(n => n.location === locationId).length;
                 
                 // Get info panel element
                 const locationInfo = document.getElementById('location-info');
-                if (!locationInfo) return;
+                console.log('Wiki: Location info panel element:', locationInfo);
+                if (!locationInfo) {
+                    console.error('Wiki: Location info panel element not found');
+                    return;
+                }
                 
                 // Populate info panel with location details
                 locationInfo.innerHTML = `
@@ -3428,13 +3730,23 @@ class WebMapCog(commands.Cog):
                 `;
                 
                 // Show the info panel
+                console.log('Wiki: Setting location info panel display to block');
                 locationInfo.style.display = 'block';
+                console.log('Wiki: Location info panel display style is now:', locationInfo.style.display);
             }
             
             showRouteInfoFromWiki(routeId) {
-                // Find the route data
-                const route = this.data.routes.find(r => r.id === routeId);
-                if (!route) return;
+                console.log('Wiki: Attempting to show route info for:', routeId);
+                console.log('Wiki: Data available:', !!this.data);
+                console.log('Wiki: Routes available:', !!this.data?.routes);
+                
+                // Find the route data - routes is an array in wiki data
+                const route = this.data.routes.find(r => r.id == routeId);
+                console.log('Wiki: Found route:', route);
+                if (!route) {
+                    console.error('Wiki: Route not found:', routeId);
+                    return;
+                }
                 
                 // Calculate travel time string
                 const minutes = Math.floor(route.travel_time / 60);
@@ -3442,11 +3754,16 @@ class WebMapCog(commands.Cog):
                 const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
                 
                 // Count travelers on this route
-                const travelers = this.data.players.filter(p => p.traveling && p.corridor_id === routeId);
+                const players = this.data.players || Object.values(this.data.players || {});
+                const travelers = (Array.isArray(players) ? players : Object.values(players)).filter(p => p.traveling && p.corridor_id === routeId);
                 
                 // Get info panel element  
                 const locationInfo = document.getElementById('location-info');
-                if (!locationInfo) return;
+                console.log('Wiki: Route info panel element:', locationInfo);
+                if (!locationInfo) {
+                    console.error('Wiki: Route info panel element not found');
+                    return;
+                }
                 
                 // Populate info panel with route details
                 locationInfo.innerHTML = `
@@ -3479,7 +3796,9 @@ class WebMapCog(commands.Cog):
                 `;
                 
                 // Show the info panel
+                console.log('Wiki: Setting route info panel display to block');
                 locationInfo.style.display = 'block';
+                console.log('Wiki: Route info panel display style is now:', locationInfo.style.display);
             }
         }
         
