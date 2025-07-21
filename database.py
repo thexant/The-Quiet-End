@@ -332,7 +332,7 @@ class Database:
                 engineering INTEGER DEFAULT 5,
                 navigation INTEGER DEFAULT 5,
                 combat INTEGER DEFAULT 5,
-                medical INTEGER DEFAULT 15,
+                medical INTEGER DEFAULT 5,
                 current_location INTEGER,
                 ship_id INTEGER,
                 group_id INTEGER,
@@ -1452,6 +1452,26 @@ class Database:
                 requirements TEXT,
                 is_available BOOLEAN DEFAULT 1,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            # Travel micro-events tracking
+            '''CREATE TABLE IF NOT EXISTS travel_micro_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                travel_session_id INTEGER,
+                transit_channel_id INTEGER,
+                user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                corridor_id INTEGER,
+                triggered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                responded BOOLEAN DEFAULT 0,
+                skill_used TEXT,
+                roll_result INTEGER,
+                difficulty INTEGER,
+                success BOOLEAN,
+                xp_awarded INTEGER DEFAULT 0,
+                damage_taken INTEGER DEFAULT 0,
+                damage_type TEXT,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                FOREIGN KEY (corridor_id) REFERENCES corridors (corridor_id)
             )'''
         ]
         

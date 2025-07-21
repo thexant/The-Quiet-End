@@ -114,34 +114,44 @@ class CharacterCog(commands.Cog):
         )
         
         # Location/Transit Information Section
-        if location_status == "traveling":
-            # Get travel session info
+        if location_status == "traveling" or not current_location:
+            # Get travel session info - either status is traveling or no current location
             travel_info = self.db.execute_query(
-                """SELECT destination_location, arrival_time, 
-                   julianday(arrival_time) - julianday('now') as time_remaining
-                   FROM travel_sessions 
-                   WHERE user_id = ? AND status = 'traveling'""",
+                """SELECT ts.origin_location, ts.destination_location, ts.corridor_id,
+                          ts.end_time, ts.temp_channel_id,
+                          ol.name as origin_name, dl.name as dest_name, 
+                          c.name as corridor_name,
+                          julianday(ts.end_time) - julianday('now') as time_remaining
+                   FROM travel_sessions ts
+                   JOIN locations ol ON ts.origin_location = ol.location_id
+                   JOIN locations dl ON ts.destination_location = dl.location_id
+                   JOIN corridors c ON ts.corridor_id = c.corridor_id
+                   WHERE ts.user_id = ? AND ts.status = 'traveling'""",
                 (interaction.user.id,),
                 fetch='one'
             )
             
             if travel_info:
-                dest_id, arrival_time, time_remaining = travel_info
-                dest_info = self.db.execute_query(
-                    "SELECT name FROM locations WHERE location_id = ?",
-                    (dest_id,),
-                    fetch='one'
-                )
-                dest_name = dest_info[0] if dest_info else "Unknown"
+                origin_id, dest_id, corridor_id, end_time, temp_channel_id, \
+                origin_name, dest_name, corridor_name, time_remaining = travel_info
                 
                 # Convert time remaining to hours and minutes
-                hours_remaining = int(time_remaining * 24)
-                minutes_remaining = int((time_remaining * 24 - hours_remaining) * 60)
+                if time_remaining and time_remaining > 0:
+                    hours_remaining = int(time_remaining * 24)
+                    minutes_remaining = int((time_remaining * 24 - hours_remaining) * 60)
+                    time_str = f"{hours_remaining}h {minutes_remaining}m"
+                else:
+                    time_str = "Arriving soon..."
+                
+                # Build transit status with corridor info
+                transit_value = f"**From:** {origin_name}\n"
+                transit_value += f"**To:** {dest_name}\n"
+                transit_value += f"**Via:** {corridor_name}\n"
+                transit_value += f"**ETA:** {time_str}"
                 
                 embed.add_field(
                     name="🚀 Transit Status",
-                    value=f"**En Route to:** {dest_name}\n"
-                          f"**Time Remaining:** {hours_remaining}h {minutes_remaining}m",
+                    value=transit_value,
                     inline=True
                 )
             else:
@@ -708,11 +718,73 @@ class CharacterCog(commands.Cog):
         user_id, current_location, location_status = char_data
         
         if not current_location:
-            await interaction.response.send_message(
-                "You're not at a location!",
-                ephemeral=True
+            # Check if user is in transit
+            travel_data = self.db.execute_query(
+                """SELECT ts.origin_location, ts.destination_location, ts.corridor_id, 
+                          ts.start_time, ts.end_time, ts.temp_channel_id,
+                          ol.name as origin_name, dl.name as dest_name, 
+                          c.name as corridor_name, c.travel_time
+                   FROM travel_sessions ts
+                   JOIN locations ol ON ts.origin_location = ol.location_id
+                   JOIN locations dl ON ts.destination_location = dl.location_id
+                   JOIN corridors c ON ts.corridor_id = c.corridor_id
+                   WHERE ts.user_id = ? AND ts.status = 'traveling'""",
+                (interaction.user.id,),
+                fetch='one'
             )
-            return
+            
+            if travel_data:
+                # User is in transit - show transit information
+                origin_id, dest_id, corridor_id, start_time, end_time, temp_channel_id, \
+                origin_name, dest_name, corridor_name, travel_time = travel_data
+                
+                # Calculate time remaining
+                from datetime import datetime
+                try:
+                    end_dt = datetime.fromisoformat(end_time)
+                    now = datetime.utcnow()
+                    time_remaining = (end_dt - now).total_seconds()
+                    
+                    if time_remaining > 0:
+                        hours, remainder = divmod(int(time_remaining), 3600)
+                        minutes, seconds = divmod(remainder, 60)
+                        time_str = f"{hours}h {minutes}m {seconds}s" if hours > 0 else f"{minutes}m {seconds}s"
+                    else:
+                        time_str = "Arriving soon..."
+                except:
+                    time_str = "Unknown"
+                
+                # Create transit embed
+                embed = discord.Embed(
+                    title="🚀 In Transit",
+                    description=f"You are currently traveling through space.",
+                    color=0x4169E1
+                )
+                
+                embed.add_field(name="Corridor", value=corridor_name, inline=False)
+                embed.add_field(name="Origin", value=origin_name, inline=True)
+                embed.add_field(name="Destination", value=dest_name, inline=True)
+                embed.add_field(name="Time Remaining", value=time_str, inline=True)
+                
+                # Add travel channel link if available
+                if temp_channel_id:
+                    embed.add_field(
+                        name="Travel Channel",
+                        value=f"<#{temp_channel_id}>",
+                        inline=False
+                    )
+                
+                embed.set_footer(text="Use /travel status for more details")
+                
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                return
+            else:
+                # Not in transit and no location - show original message
+                await interaction.response.send_message(
+                    "You're not at a location!",
+                    ephemeral=True
+                )
+                return
         
         # Get location info
         location_info = self.db.execute_query(

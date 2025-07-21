@@ -2115,7 +2115,7 @@ class WebMapCog(commands.Cog):
             
             zoom(factor) {
                 const newScale = this.scale * factor;
-                if (newScale >= 0.5 && newScale <= 20) {
+                if (newScale >= 0.5 && newScale <= 50) {
                     this.scale = newScale;
                     this.render();
                 }
