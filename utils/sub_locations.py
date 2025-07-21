@@ -6,6 +6,7 @@ from typing import Optional, List, Dict, Tuple
 from discord import app_commands
 from discord.ext import commands
 import random
+from utils.leave_button import UniversalLeaveView
 
 class SubLocationManager:
     """Manages sub-locations within main locations using Discord threads"""
@@ -435,6 +436,13 @@ class SubLocationManager:
             # Send buttons in a separate message
             if sub_type:
                 view = SubLocationServiceView(sub_type, location_id, self.bot)
+                
+                # Add universal leave button to the view
+                leave_view = UniversalLeaveView(self.bot)
+                # Transfer the leave button to the main view
+                for item in leave_view.children:
+                    view.add_item(item)
+                
                 if len(view.children) > 0:  # Check if buttons were actually added
                     button_embed = discord.Embed(
                         title="🔧 Available Services",
@@ -446,7 +454,15 @@ class SubLocationManager:
                 else:
                     print(f"⚠️ No buttons were added for sub_type '{sub_type}'")
             else:
-                print(f"⚠️ No sub_type found for {sub_data['name']}")
+                # Even if no sub_type, still add the leave button
+                leave_view = UniversalLeaveView(self.bot)
+                button_embed = discord.Embed(
+                    title="🔧 Available Services",
+                    description="Click the button below to leave this area:",
+                    color=0x00ff88
+                )
+                await thread.send(embed=button_embed, view=leave_view)
+                print(f"⚠️ No sub_type found for {sub_data['name']}, but leave button added")
                 
         except Exception as e:
             print(f"❌ Failed to send sub-location welcome: {e}")

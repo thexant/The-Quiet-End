@@ -371,7 +371,64 @@ class CharacterCog(commands.Cog):
 
     @app_commands.command(name="here", description="Quick access to location panel and interactions")
     async def here_shorthand(self, interaction: discord.Interaction):
-        # Call the existing location info logic
+        # Check if user is in a ship interior
+        ship_check = self.db.execute_query(
+            "SELECT current_ship_id FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if ship_check and ship_check[0]:
+            # User is in ship interior, use ShipInteriorView
+            from utils.views import ShipInteriorView
+            view = ShipInteriorView(self.bot, interaction.user.id)
+            
+            # Get ship info
+            ship_info = self.db.execute_query(
+                '''SELECT s.name, s.ship_type, s.interior_description, s.owner_id
+                   FROM ships s 
+                   JOIN characters c ON c.current_ship_id = s.ship_id
+                   WHERE c.user_id = ?''',
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if ship_info:
+                ship_name, ship_type, interior_desc, owner_id = ship_info
+                
+                embed = discord.Embed(
+                    title="🚀 Ship Interior Panel",
+                    description=f"**{ship_name}** ({ship_type}) - Ship Control Panel",
+                    color=0x1f2937
+                )
+                
+                if interior_desc:
+                    embed.add_field(
+                        name="Interior Description",
+                        value=interior_desc[:1000] + ("..." if len(interior_desc) > 1000 else ""),
+                        inline=False
+                    )
+                
+                # Show if user is owner or visitor
+                status = "Owner" if owner_id == interaction.user.id else "Visitor"
+                embed.add_field(
+                    name="Status",
+                    value=f"⚡ {status}",
+                    inline=True
+                )
+                
+                embed.add_field(
+                    name="Available Actions",
+                    value="Use the buttons below to interact with the ship",
+                    inline=False
+                )
+                
+                embed.set_footer(text="Use the buttons to control ship functions!")
+                
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+                return
+        
+        # Fall back to normal location panel
         await self.location_info.callback(self, interaction)
     
 
@@ -1811,6 +1868,28 @@ class CharacterCog(commands.Cog):
                 fetch='one'
             )[0]
         
+        else:
+            # Character has no location (likely from galaxy reset) - spawn at random colony
+            colony_locations = self.db.execute_query(
+                """SELECT location_id, name FROM locations 
+                   WHERE location_type = 'colony' 
+                   ORDER BY RANDOM() LIMIT 1""", 
+                fetch='one'
+            )
+            
+            if colony_locations:
+                colony_id, colony_name = colony_locations
+                # Set character location to the colony
+                self.db.execute_query(
+                    "UPDATE characters SET current_location = ? WHERE user_id = ?",
+                    (colony_id, interaction.user.id)
+                )
+                # Grant access to the colony
+                await channel_manager.restore_user_location_on_login(interaction.user, colony_id)
+                location_name = f"{colony_name} (Auto-spawned after galaxy reset)"
+            else:
+                location_name = "Deep Space (No colonies available)"
+        
         # Handle group rejoining
         group_status = ""
         if group_id:
@@ -3198,6 +3277,82 @@ class CharacterPanelView(discord.ui.View):
         char_cog = self.bot.get_cog('CharacterCog')
         if char_cog:
             await char_cog.view_skills.callback(char_cog, interaction)
+    
+    @discord.ui.button(label="Enter Ship", style=discord.ButtonStyle.secondary, emoji="🚀", row=1)
+    async def enter_ship_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Enter your ship interior"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        # Check if already in a ship
+        current_ship = self.bot.db.execute_query(
+            "SELECT current_ship_id FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if current_ship and current_ship[0]:
+            await interaction.followup.send("You are already inside a ship! Use the leave button in the ship interior first.", ephemeral=True)
+            return
+        
+        # Get character location and status
+        char_info = self.bot.db.execute_query(
+            "SELECT current_location, location_status, active_ship_id FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info or char_info[1] != 'docked':
+            await interaction.followup.send("You must be docked at a location to enter your ship!", ephemeral=True)
+            return
+        
+        location_id, location_status, active_ship_id = char_info
+        
+        if not active_ship_id:
+            await interaction.followup.send("You don't have an active ship!", ephemeral=True)
+            return
+        
+        # Get ship info
+        ship_info = self.bot.db.execute_query(
+            '''SELECT ship_id, name, ship_type, interior_description, channel_id
+               FROM ships WHERE ship_id = ?''',
+            (active_ship_id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            await interaction.followup.send("Ship not found!", ephemeral=True)
+            return
+        
+        # Create ship interior channel and give access
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        
+        ship_channel = await channel_manager.get_or_create_ship_channel(
+            interaction.guild,
+            ship_info,
+            interaction.user
+        )
+        
+        if ship_channel:
+            # Update character to be inside ship
+            self.bot.db.execute_query(
+                "UPDATE characters SET current_ship_id = ? WHERE user_id = ?",
+                (active_ship_id, interaction.user.id)
+            )
+            
+            # Remove from location channel
+            await channel_manager.remove_user_location_access(interaction.user, location_id)
+            
+            await interaction.followup.send(
+                f"You've entered your ship. Head to {ship_channel.mention}",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send("Failed to create ship interior.", ephemeral=True)
     
     @discord.ui.button(label="Radio", style=discord.ButtonStyle.primary, emoji="📡", row=1)
     async def radio_button(self, interaction: discord.Interaction, button: discord.ui.Button):

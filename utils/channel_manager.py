@@ -1625,11 +1625,13 @@ class ChannelManager:
             if isinstance(target, discord.Member) and overwrite.read_messages:
                 travelers.append(target)
                 
-                # Get their ship info
+                # Get their ship info with customizations
                 ship_info = self.db.execute_query(
-                    '''SELECT s.ship_id, s.name, s.ship_type, s.interior_description
+                    '''SELECT s.ship_id, s.name, s.ship_type, s.interior_description, 
+                              sc.paint_job, sc.decals, sc.interior_style, sc.name_plate
                        FROM characters c
                        JOIN ships s ON c.active_ship_id = s.ship_id
+                       LEFT JOIN ship_customization sc ON s.ship_id = sc.ship_id
                        WHERE c.user_id = ?''',
                     (target.id,),
                     fetch='one'
@@ -1660,11 +1662,26 @@ class ChannelManager:
         
         # If single traveler, show their ship info
         if len(travelers) == 1 and travelers[0].id in member_ships:
-            ship_id, ship_name, ship_type, interior_desc = member_ships[travelers[0].id]
+            ship_data = member_ships[travelers[0].id]
+            ship_id, ship_name, ship_type, interior_desc = ship_data[:4]
+            paint_job, decals, interior_style, name_plate = ship_data[4:8] if len(ship_data) >= 8 else (None, None, None, None)
+            
+            # Build ship info with customizations
+            ship_info_parts = [f"**{ship_name}** ({ship_type})"]
+            
+            # Add customizations if they exist and aren't default values
+            if paint_job and paint_job != 'Default':
+                ship_info_parts.append(f"🎨 Paint: {paint_job}")
+            if decals and decals != 'None':
+                ship_info_parts.append(f"⭐ Decals: {decals}")
+            if interior_style and interior_style != 'Standard':
+                ship_info_parts.append(f"🏠 Interior: {interior_style}")
+            if name_plate and name_plate != 'Standard':
+                ship_info_parts.append(f"📋 Name Plate: {name_plate}")
             
             embed.add_field(
                 name="🚀 Your Ship",
-                value=f"**{ship_name}** ({ship_type})",
+                value="\n".join(ship_info_parts),
                 inline=False
             )
             
@@ -1679,13 +1696,22 @@ class ChannelManager:
             ship_list = []
             for traveler in travelers[:5]:  # Limit display
                 if traveler.id in member_ships:
-                    _, ship_name, ship_type, _ = member_ships[traveler.id]
+                    ship_data = member_ships[traveler.id]
+                    _, ship_name, ship_type, _ = ship_data[:4]
+                    paint_job = ship_data[4] if len(ship_data) >= 5 else None
+                    
                     char_name = self.db.execute_query(
                         "SELECT name FROM characters WHERE user_id = ?",
                         (traveler.id,),
                         fetch='one'
                     )[0]
-                    ship_list.append(f"• **{char_name}** - {ship_name} ({ship_type})")
+                    
+                    # Add paint job info if customized
+                    ship_info = f"{ship_name} ({ship_type})"
+                    if paint_job and paint_job != 'Default':
+                        ship_info += f" - {paint_job}"
+                    
+                    ship_list.append(f"• **{char_name}** - {ship_info}")
             
             if ship_list:
                 embed.add_field(
@@ -1724,7 +1750,8 @@ class ChannelManager:
             
             # Send ship activity buttons for single traveler
             if len(travelers) == 1 and travelers[0].id in member_ships:
-                ship_id, ship_name, _, _ = member_ships[travelers[0].id]
+                ship_data = member_ships[travelers[0].id]
+                ship_id, ship_name, _, _ = ship_data[:4]
                 char_name = self.db.execute_query(
                     "SELECT name FROM characters WHERE user_id = ?",
                     (travelers[0].id,),

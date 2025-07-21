@@ -6033,3 +6033,191 @@ class HomesView(discord.ui.View):
         
         view = HomeInvitePlayerSelect(self.bot, interaction.user.id)
         await interaction.response.send_message("Select a player to invite to your home:", view=view, ephemeral=True)
+
+
+class ShipInteriorView(discord.ui.View):
+    """View for ship interior interactions, replacing the normal /here panel when in a ship"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+    
+    @discord.ui.button(label="Ship Activities", style=discord.ButtonStyle.primary, emoji="🎯")
+    async def ship_activities_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Access ship activities"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get current ship
+        ship_info = self.bot.db.execute_query(
+            '''SELECT s.ship_id, s.name, s.ship_type
+               FROM characters c
+               JOIN ships s ON c.current_ship_id = s.ship_id
+               WHERE c.user_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            await interaction.response.send_message("You are not in a ship!", ephemeral=True)
+            return
+        
+        ship_id, ship_name, ship_type = ship_info
+        
+        # Get ship activities
+        try:
+            from utils.ship_activities import ShipActivityManager, ShipActivityView
+            activity_manager = ShipActivityManager(self.bot)
+            activities = activity_manager.get_ship_activities(ship_id)
+            
+            if activities:
+                # Get character name for the view
+                char_name = self.bot.db.execute_query(
+                    "SELECT name FROM characters WHERE user_id = ?",
+                    (interaction.user.id,),
+                    fetch='one'
+                )[0]
+                
+                activity_view = ShipActivityView(self.bot, ship_id, ship_name, char_name)
+                activity_embed = discord.Embed(
+                    title="🎯 Ship Activities",
+                    description="Choose an activity to engage with on your ship:",
+                    color=0x00ff88
+                )
+                
+                activity_list = []
+                for activity in activities[:10]:  # Limit display
+                    activity_list.append(f"{activity['icon']} {activity['name']}")
+                
+                activity_embed.add_field(
+                    name="Available Activities",
+                    value="\n".join(activity_list),
+                    inline=False
+                )
+                
+                await interaction.response.send_message(embed=activity_embed, view=activity_view, ephemeral=True)
+            else:
+                await interaction.response.send_message("No activities available on this ship.", ephemeral=True)
+        except ImportError:
+            await interaction.response.send_message("Ship activities system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Ship Status", style=discord.ButtonStyle.secondary, emoji="🚀")
+    async def ship_status_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """View ship status and information"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Call the existing ship status command
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.view_ship.callback(char_cog, interaction)
+        else:
+            await interaction.response.send_message("Character system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Invite Player", style=discord.ButtonStyle.success, emoji="📨")
+    async def invite_player_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Invite someone to your ship"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Check if user owns the ship
+        ship_owner = self.bot.db.execute_query(
+            '''SELECT s.owner_id
+               FROM characters c
+               JOIN ships s ON c.current_ship_id = s.ship_id
+               WHERE c.user_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_owner or ship_owner[0] != interaction.user.id:
+            await interaction.response.send_message("You can only invite players to your own ship!", ephemeral=True)
+            return
+        
+        # Get players at the same location
+        location_info = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not location_info:
+            await interaction.response.send_message("Location not found!", ephemeral=True)
+            return
+        
+        location_id = location_info[0]
+        
+        # Get other players at this location who are docked
+        other_players = self.bot.db.execute_query(
+            '''SELECT c.user_id, c.name
+               FROM characters c
+               WHERE c.current_location = ? AND c.user_id != ? 
+               AND c.location_status = 'docked' AND c.is_logged_in = 1''',
+            (location_id, interaction.user.id),
+            fetch='all'
+        )
+        
+        if not other_players:
+            await interaction.response.send_message("No other players are docked at this location to invite.", ephemeral=True)
+            return
+        
+        # Create a simple selection view (we'll use the first available player for simplicity)
+        # In a full implementation, you'd create a proper selection menu
+        target_user_id, target_name = other_players[0]
+        target_member = interaction.guild.get_member(target_user_id)
+        
+        if target_member:
+            ship_interior_cog = self.bot.get_cog('ShipInteriorCog')
+            if ship_interior_cog:
+                # Manually call the invite function with the target member
+                await ship_interior_cog.invite_to_ship.callback(ship_interior_cog, interaction, target_member)
+            else:
+                await interaction.response.send_message("Ship interior system unavailable.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Target player not found.", ephemeral=True)
+    
+    @discord.ui.button(label="Leave Ship", style=discord.ButtonStyle.danger, emoji="🚪", row=1)
+    async def leave_ship_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Leave the ship interior"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        ship_interior_cog = self.bot.get_cog('ShipInteriorCog')
+        if ship_interior_cog:
+            await ship_interior_cog.leave_ship.callback(ship_interior_cog, interaction)
+        else:
+            await interaction.response.send_message("Ship interior system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Radio", style=discord.ButtonStyle.primary, emoji="📡", row=1)
+    async def radio_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Access ship's radio systems"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Check if character is logged in
+        char_data = self.bot.db.execute_query(
+            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data or not char_data[0]:
+            await interaction.response.send_message(
+                "You must be logged in to use the radio!",
+                ephemeral=True
+            )
+            return
+        
+        # Import and open the radio modal
+        try:
+            from cogs.character import RadioModal
+            modal = RadioModal(self.bot)
+            await interaction.response.send_modal(modal)
+        except ImportError:
+            await interaction.response.send_message("Radio system unavailable.", ephemeral=True)

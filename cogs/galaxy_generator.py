@@ -312,11 +312,25 @@ class GalaxyGeneratorCog(commands.Cog):
             
             while not self.bot.is_closed():
                 try:
-                    # Check if galaxy exists
-                    location_count = self.db.execute_query(
-                        "SELECT COUNT(*) FROM locations",
-                        fetch='one'
-                    )[0]
+                    # Check if galaxy exists with timeout protection
+                    try:
+                        location_count = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                self.db.execute_query,
+                                "SELECT COUNT(*) FROM locations",
+                                fetch='one'
+                            ),
+                            timeout=10.0  # 10 second timeout
+                        )
+                        location_count = location_count[0] if location_count else 0
+                    except asyncio.TimeoutError:
+                        print("⚠️ Database query timeout in auto-shift, skipping this cycle")
+                        await asyncio.sleep(3600)  # Wait 1 hour and try again
+                        continue
+                    except Exception as e:
+                        print(f"⚠️ Database error in auto-shift: {e}")
+                        await asyncio.sleep(3600)  # Wait 1 hour and try again
+                        continue
                     
                     if location_count > 0:
                         await self._execute_automatic_shift()
@@ -2018,6 +2032,10 @@ class GalaxyGeneratorCog(commands.Cog):
 
         num_locs = len(major_locations)
         print(f"🛣️ Planning routes for {num_locs} locations using spatial grid optimization...")
+        
+        # Progress reporting for large galaxies
+        if num_locs > 200:
+            print(f"📊 Large galaxy detected - route planning may take several minutes")
 
         # Step 0: Create the spatial grid for efficient lookups.
         grid_size = 75
@@ -2027,6 +2045,10 @@ class GalaxyGeneratorCog(commands.Cog):
         # Use a set to track created connections (as pairs of sorted IDs) to avoid duplicates.
         connected_pairs = set()
         routes = []
+        
+        # Progress tracking for user feedback
+        import time
+        start_time = time.time()
 
         # Step tracking variables
         total_steps = 5
@@ -2034,54 +2056,71 @@ class GalaxyGeneratorCog(commands.Cog):
 
         # Step 1: Create a Minimum Spanning Tree (MST) to ensure base connectivity.
         current_step += 1
+        step_start = time.time()
         print("  - Step 1/5: Building Minimum Spanning Tree...")
         mst_routes = await self._create_mst_optimized(major_locations, location_map, connected_pairs)
         routes.extend(mst_routes)
         
-        # Yield and progress for Step 1
-        await asyncio.sleep(0.2)
-        if num_locs > 100:
-            print(f"  ✓ Step 1/5 complete - {len(mst_routes)} MST routes created")
+        # Progress reporting
+        step_time = time.time() - step_start
+        print(f"  ✓ Step 1/5 complete - {len(mst_routes)} MST routes created in {step_time:.1f}s")
+        
+        # Yield control
+        await asyncio.sleep(0.1)
             
         # Step 2: Add hub connections (stations to high-value colonies).
         current_step += 1
+        step_start = time.time()
         print("  - Step 2/5: Creating hub connections...")
         hub_routes = await self._create_hub_connections_optimized(major_locations, location_map, spatial_grid, grid_size, connected_pairs)
         routes.extend(hub_routes)
         
-        # Yield and progress for Step 2
-        await asyncio.sleep(0.15)
-        if num_locs > 100:
-            print(f"  ✓ Step 2/5 complete - {len(hub_routes)} hub routes created")
+        # Progress reporting
+        step_time = time.time() - step_start
+        print(f"  ✓ Step 2/5 complete - {len(hub_routes)} hub routes created in {step_time:.1f}s")
+        
+        # Yield control
+        await asyncio.sleep(0.1)
             
         # Step 3: Add redundant connections for resilience.
         current_step += 1
+        step_start = time.time()
         print("  - Step 3/5: Adding redundant connections...")
         redundant_routes = await self._add_redundant_connections_optimized(major_locations, location_map, spatial_grid, grid_size, connected_pairs)
         routes.extend(redundant_routes)
         
-        # Yield and progress for Step 3
-        await asyncio.sleep(0.15)
-        if num_locs > 100:
-            print(f"  ✓ Step 3/5 complete - {len(redundant_routes)} redundant routes created")
+        # Progress reporting
+        step_time = time.time() - step_start
+        print(f"  ✓ Step 3/5 complete - {len(redundant_routes)} redundant routes created in {step_time:.1f}s")
+        
+        # Yield control
+        await asyncio.sleep(0.1)
             
         # Step 4: Create long-range "bridge" connections to link distant regions.
         current_step += 1
+        step_start = time.time()
         print("  - Step 4/5: Forging long-range bridges...")
         bridge_routes = await self._create_regional_bridges_optimized(major_locations, location_map, spatial_grid, connected_pairs)
         routes.extend(bridge_routes)
         
-        # Yield and progress for Step 4
+        # Progress reporting
+        step_time = time.time() - step_start
+        print(f"  ✓ Step 4/5 complete - {len(bridge_routes)} bridge routes created in {step_time:.1f}s")
+        
+        # Yield control
         await asyncio.sleep(0.1)
-        if num_locs > 100:
-            print(f"  ✓ Step 4/5 complete - {len(bridge_routes)} bridge routes created")
             
         # Step 5: Final validation and fixing of any isolated clusters.
         current_step += 1
+        step_start = time.time()
         print("  - Step 5/5: Validating and fixing connectivity...")
         final_routes = await self._validate_and_fix_connectivity_optimized(major_locations, routes, location_map)
         
-        print(f"✅ Route planning complete. Total unique routes planned: {len(final_routes)}")
+        # Final progress reporting
+        total_time = time.time() - start_time
+        step_time = time.time() - step_start
+        print(f"  ✓ Step 5/5 complete - connectivity validated in {step_time:.1f}s")
+        print(f"✅ Route planning complete. Total unique routes planned: {len(final_routes)} in {total_time:.1f}s")
         return final_routes
 
     def _create_spatial_grid(self, locations: List[Dict], grid_size: int) -> Dict[Tuple[int, int], List[Dict]]:
@@ -2114,14 +2153,26 @@ class GalaxyGeneratorCog(commands.Cog):
             return []
         
         import heapq
+        import time
 
         routes = []
         start_node_id = locations[0]['id']
         nodes_to_visit = [(0, start_node_id, start_node_id)]
         visited = set()
         nodes_processed = 0
+        max_iterations = len(locations) * 10  # Safety limit to prevent infinite loops
+        iterations = 0
+        start_time = time.time()
+        timeout_seconds = 30  # 30 second timeout
 
-        while nodes_to_visit and len(visited) < len(locations):
+        while nodes_to_visit and len(visited) < len(locations) and iterations < max_iterations:
+            iterations += 1
+            
+            # Timeout protection
+            if time.time() - start_time > timeout_seconds:
+                print(f"⚠️ MST creation timed out after {timeout_seconds}s, using partial tree")
+                break
+                
             distance, current_node_id, from_node_id = heapq.heappop(nodes_to_visit)
 
             if current_node_id in visited:
@@ -2145,16 +2196,26 @@ class GalaxyGeneratorCog(commands.Cog):
                     })
                     connected_pairs.add(pair)
 
-            # Find neighbors and add them to the priority queue
+            # Only check unvisited locations to avoid O(n²) complexity
             current_loc = location_map[current_node_id]
-            for other_loc in locations:
-                if other_loc['id'] not in visited:
-                    dist = self._calculate_distance(current_loc, other_loc)
-                    heapq.heappush(nodes_to_visit, (dist, other_loc['id'], current_node_id))
+            unvisited_locs = [loc for loc in locations if loc['id'] not in visited]
             
-            # Yield control periodically
-            if nodes_processed % 5 == 0:
+            # Limit neighbor checks for very large galaxies
+            if len(unvisited_locs) > 50:
+                # For large galaxies, only check nearest neighbors
+                unvisited_locs.sort(key=lambda loc: self._calculate_distance(current_loc, loc))
+                unvisited_locs = unvisited_locs[:20]  # Only check 20 nearest
+            
+            for other_loc in unvisited_locs:
+                dist = self._calculate_distance(current_loc, other_loc)
+                heapq.heappush(nodes_to_visit, (dist, other_loc['id'], current_node_id))
+            
+            # Yield control more frequently for large galaxies
+            if nodes_processed % 3 == 0 or len(locations) > 100:
                 await asyncio.sleep(0)
+        
+        if iterations >= max_iterations:
+            print(f"⚠️ MST hit iteration limit ({max_iterations}), using partial tree")
         
         return routes
 

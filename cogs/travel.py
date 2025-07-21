@@ -513,8 +513,6 @@ class TravelCog(commands.Cog):
                 # Determine travel type
                 if "Approach" in cname:
                     travel_type = "🌌 LOCAL"
-                elif dest_type == "gate":
-                    travel_type = "🔵 GATED"
                 elif "Ungated" in cname:
                     travel_type = "⭕ UNGATED"
                 else:
@@ -2248,8 +2246,6 @@ class JobCancellationConfirmView(discord.ui.View):
             # Determine travel type
             if "Approach" in cname:
                 travel_type = "🌌 LOCAL"
-            elif dest_type == "gate":
-                travel_type = "🔵 GATED"
             elif "Ungated" in cname:
                 travel_type = "⭕ UNGATED"
             else:
@@ -2433,8 +2429,6 @@ class PaginatedCorridorSelectView(discord.ui.View):
             # Determine travel type
             if "Approach" in cname:
                 travel_type = "🌌 LOCAL"
-            elif dest_type == "gate":
-                travel_type = "🔵 GATED"
             elif "Ungated" in cname:
                 travel_type = "⭕ UNGATED"
             else:

@@ -1472,6 +1472,28 @@ class Database:
                 damage_type TEXT,
                 FOREIGN KEY (user_id) REFERENCES characters (user_id),
                 FOREIGN KEY (corridor_id) REFERENCES corridors (corridor_id)
+            )''',
+            
+            # Ship interior system tables
+            '''CREATE TABLE IF NOT EXISTS ship_interiors (
+                ship_id INTEGER PRIMARY KEY,
+                channel_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (ship_id) REFERENCES ships (ship_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS ship_invitations (
+                invitation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ship_id INTEGER NOT NULL,
+                inviter_id INTEGER NOT NULL,
+                invitee_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                FOREIGN KEY (ship_id) REFERENCES ships (ship_id),
+                FOREIGN KEY (inviter_id) REFERENCES characters (user_id),
+                FOREIGN KEY (invitee_id) REFERENCES characters (user_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )'''
         ]
         

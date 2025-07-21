@@ -1448,21 +1448,16 @@ class CosmeticView(discord.ui.View):
         
         # Show available paint jobs with stat effects
         for paint in paint_jobs[:10]:  # Show first 10
-            stat_effect = self._get_paint_stat_effect(paint['name'])
-            effect_text = f" ({stat_effect})" if stat_effect else ""
-            
             embed.add_field(
-                name=f"{paint['name']}{effect_text}",
+                name=paint['name'],
                 value=f"{paint['description']}\n**Cost:** {paint['cost']:,} credits",
                 inline=True
             )
         
         embed.add_field(
-            name="💡 Paint Effects",
-            value="• Dark colors: +5% stealth detection avoidance\n"
-                  "• Bright colors: +3% scan range\n"
-                  "• Military colors: +2% intimidation factor\n"
-                  "• Chrome finish: +10% trade value when selling",
+            name="🎨 Cosmetic Options",
+            value="Paint jobs are purely cosmetic and allow you to personalize your ship's appearance. "
+                  "Choose from a variety of colors and finishes to make your vessel unique in the galaxy.",
             inline=False
         )
         
@@ -1530,16 +1525,6 @@ class CosmeticView(discord.ui.View):
         view = InteriorThemeView(self.bot, self.user_id, self.ship_id, themes, self.money)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
-    def _get_paint_stat_effect(self, paint_name: str) -> str:
-        """Get stat effect description for paint job"""
-        effects = {
-            'Midnight Black': '+5% stealth',
-            'Military Green': '+2% intimidation',
-            'Chrome Finish': '+10% resale value',
-            'Hazard Orange': '+3% visibility',
-            'Deep Space Blue': '+3% scan range'
-        }
-        return effects.get(paint_name, '')
     
     def _get_interior_effect(self, theme_name: str) -> str:
         """Get effect description for interior theme"""

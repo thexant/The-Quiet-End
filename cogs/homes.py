@@ -5,6 +5,7 @@ from discord import app_commands
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 import asyncio
+from utils.leave_button import UniversalLeaveView
 
 
 class HomeBuyView(discord.ui.View):
@@ -2154,12 +2155,28 @@ class HomesCog(commands.Cog):
             # Send activity buttons
             if activities and HomeActivityView:
                 view = HomeActivityView(self.bot, home_id, home_name, char_name)
+                
+                # Add universal leave button to the view
+                leave_view = UniversalLeaveView(self.bot)
+                # Transfer the leave button to the main view
+                for item in leave_view.children:
+                    view.add_item(item)
+                
                 activity_embed = discord.Embed(
                     title="🎯 Home Activities",
                     description="Choose an activity:",
                     color=0x00ff88
                 )
                 await thread.send(embed=activity_embed, view=view)
+            else:
+                # No activities, but still show the leave button
+                leave_view = UniversalLeaveView(self.bot)
+                activity_embed = discord.Embed(
+                    title="🎯 Home Controls",
+                    description="Use the button below to leave your home:",
+                    color=0x00ff88
+                )
+                await thread.send(embed=activity_embed, view=leave_view)
             
             # Update database
             self.db.execute_query(

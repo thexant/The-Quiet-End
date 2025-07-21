@@ -1653,6 +1653,7 @@ class AdminCog(commands.Cog):
     )
     @app_commands.choices(reset_type=[
         app_commands.Choice(name="Full Reset (Everything)", value="full"),
+        app_commands.Choice(name="Galaxy Reset (Auto-Logout + Preserve Characters)", value="galaxy_with_logout"),
         app_commands.Choice(name="Galaxy Only (Locations & Corridors)", value="galaxy"),
         app_commands.Choice(name="Characters Only", value="characters"),
         app_commands.Choice(name="Economy (Jobs, Shop Items, Inventory)", value="economy"),
@@ -1754,6 +1755,7 @@ class AdminCog(commands.Cog):
         """Get detailed description of what each reset type will delete"""
         details = {
             "full": "• All player characters and ships\n• All locations and corridors\n• All location channels\n• All jobs and shop items\n• All player inventory\n• All groups and travel sessions",
+            "galaxy_with_logout": "• All locations (colonies, stations, outposts, gates)\n• All corridors between locations\n• All location channels\n• All jobs and economy data\n• All homes and properties (with credit refunds)\n• All NPCs and travel sessions\n• Auto-logout all users\n\n✅ **PRESERVES:** Characters, ships, inventory, XP, reputation",
             "galaxy": "• All locations (colonies, stations, outposts, gates)\n• All corridors between locations\n• All location channels\n• All jobs at locations\n• All shop items",
             "characters": "• All player characters\n• All player ships\n• All player inventory\n• All groups (crews)",
             "economy": "• All jobs at all locations\n• All shop items and stock\n• All player inventory items",
@@ -1766,6 +1768,7 @@ class AdminCog(commands.Cog):
         """Get recommended next steps after each reset type"""
         steps = {
             "full": "• Run `/admin setup` to reconfigure server\n• Run `/galaxy generate` to create new galaxy\n• Players can `/character create` to restart",
+            "galaxy_with_logout": "• Run `/galaxy generate` to create new galaxy\n• Players can `/character login` to respawn at colonies\n• All character data, ships, and inventory preserved",
             "galaxy": "• Run `/galaxy generate` to create new galaxy\n• Existing characters will need to be moved to new locations",
             "characters": "• Players can `/character create` to make new characters\n• Galaxy and economy remain intact",
             "economy": "• Jobs and shop items will regenerate automatically\n• Players keep characters but lose inventory",
@@ -1919,6 +1922,110 @@ class AdminCog(commands.Cog):
                 self.db.execute_query("DELETE FROM characters")
                 self.db.execute_query("DELETE FROM ships")
                 self.db.execute_query("DELETE FROM inventory")
+
+            # ————— Galaxy Reset with Character Preservation —————
+            if reset_type in ["galaxy_with_logout"]:
+                # Step 1: Force logout all logged in users
+                logged_in_users = self.db.execute_query(
+                    "SELECT user_id FROM characters WHERE is_logged_in = 1", 
+                    fetch='all'
+                )
+                
+                reset_counts["Users Logged Out"] = len(logged_in_users)
+                
+                # Force logout all logged in users
+                character_cog = self.bot.get_cog('Character')
+                if character_cog:
+                    for (user_id,) in logged_in_users:
+                        try:
+                            # Use the auto-logout method designed for system-initiated logouts
+                            await character_cog._execute_auto_logout(user_id, "Galaxy reset")
+                        except Exception as e:
+                            print(f"Warning: Could not logout user {user_id}: {e}")
+                
+                # Step 2: Start transaction for database operations
+                try:
+                    self.db.execute_query("BEGIN TRANSACTION")
+                    
+                    # Calculate and refund home values
+                    home_refunds = self.db.execute_query("""
+                        SELECT lh.owner_id, SUM(lh.purchase_price + COALESCE(lh.upgrade_cost, 0)) as total_value
+                        FROM location_homes lh 
+                        WHERE lh.owner_id IS NOT NULL 
+                        GROUP BY lh.owner_id
+                    """, fetch='all')
+                    
+                    total_refunds = 0
+                    for owner_id, home_value in home_refunds:
+                        # Add credits to character account
+                        self.db.execute_query(
+                            "UPDATE characters SET credits = credits + ? WHERE user_id = ?",
+                            (home_value, owner_id)
+                        )
+                        total_refunds += home_value
+                    
+                    reset_counts["Home Refund Credits"] = total_refunds
+                    reset_counts["Players Refunded"] = len(home_refunds)
+                
+                    # Step 3: Count what will be deleted
+                    reset_counts["Locations"] = self.db.execute_query(
+                        "SELECT COUNT(*) FROM locations", fetch='one'
+                    )[0]
+                    reset_counts["Corridors"] = self.db.execute_query(
+                        "SELECT COUNT(*) FROM corridors", fetch='one'
+                    )[0]
+                    reset_counts["Homes"] = self.db.execute_query(
+                        "SELECT COUNT(*) FROM location_homes", fetch='one'
+                    )[0]
+
+                    # Get location channels before deletion
+                    location_channels = self.db.execute_query(
+                        "SELECT channel_id FROM locations WHERE channel_id IS NOT NULL",
+                        fetch='all'
+                    )
+
+                    # Get temporary travel channels
+                    temp_channels = self.db.execute_query(
+                        "SELECT DISTINCT temp_channel_id FROM travel_sessions WHERE temp_channel_id IS NOT NULL",
+                        fetch='all'
+                    )
+
+                    # Step 4: Clear galaxy data using comprehensive method
+                    await self._clear_comprehensive_galaxy_data()
+
+                    # Step 5: Set character locations to NULL so they'll respawn at colonies
+                    self.db.execute_query("UPDATE characters SET current_location = NULL, docked_at_location = NULL")
+                    
+                    # Commit the transaction
+                    self.db.execute_query("COMMIT")
+                    
+                except Exception as e:
+                    # Rollback on error
+                    self.db.execute_query("ROLLBACK")
+                    print(f"Database transaction failed during galaxy reset: {e}")
+                    raise e
+
+                # Step 6: Delete Discord channels (outside transaction)
+                channels_deleted = 0
+                for (channel_id,) in location_channels:
+                    channel = guild.get_channel(channel_id)
+                    if channel:
+                        try:
+                            await channel.delete(reason="Galaxy reset with character preservation")
+                            channels_deleted += 1
+                        except:
+                            pass
+
+                for (channel_id,) in temp_channels:
+                    channel = guild.get_channel(channel_id)
+                    if channel:
+                        try:
+                            await channel.delete(reason="Galaxy reset with character preservation")
+                            channels_deleted += 1
+                        except:
+                            pass
+
+                reset_counts["Location Channels Deleted"] = channels_deleted
 
             # ————— Galaxy data —————
             if reset_type in ["galaxy"]:
