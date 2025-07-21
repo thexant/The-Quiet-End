@@ -26,6 +26,29 @@ def clear_event_responses(event_id: str):
     if event_id in ACTIVE_EVENT_RESPONSES:
         del ACTIVE_EVENT_RESPONSES[event_id]
 
+def create_timeout_handler_with_cleanup(event_id: str, message):
+    """Create a timeout handler that both clears responses AND updates the embed"""
+    async def on_timeout():
+        clear_event_responses(event_id)
+        if message:
+            try:
+                # Create expired event embed
+                expired_embed = discord.Embed(
+                    title="⏰ Event Expired",
+                    description="This event has timed out and is no longer available.",
+                    color=0x808080,
+                    timestamp=datetime.now()
+                )
+                expired_embed.add_field(
+                    name="Status",
+                    value="Buttons are now disabled. Event interaction window has closed.",
+                    inline=False
+                )
+                await message.edit(embed=expired_embed, view=None)
+            except Exception as e:
+                print(f"Failed to cleanup event {event_id}: {e}")
+    return on_timeout
+
 
 class AutoCleanupView(discord.ui.View):
     """A view that automatically cleans itself up when it times out"""
@@ -50,10 +73,9 @@ class AutoCleanupView(discord.ui.View):
 
 
 
-class FugitiveAlertView(discord.ui.View):
+class FugitiveAlertView(BaseEventView):
     def __init__(self, bot, players, location_id):
-        super().__init__(timeout=300)
-        self.bot = bot
+        super().__init__(bot, timeout=300)
         self.players = players
         self.location_id = location_id
         self.responded_users = []
@@ -818,7 +840,7 @@ class EnhancedEventsCog(commands.Cog):
         
         view = FugitiveAlertView(self.bot, player_ids, location_id)
         
-        await channel.send(embed=embed, view=view)
+        message = await channel.send(embed=embed, view=view)
         view.message = message        
     async def _handle_security_encounter(self, location_id, players, location_name, event_name, description, color):
         """Handle corporate security patrol encounter during travel"""
@@ -1601,11 +1623,7 @@ class EnhancedEventsCog(commands.Cog):
         async def wait_callback(interaction: discord.Interaction):
             char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
             await interaction.response.send_message(f"⏳ **{char_name}** decides to wait out the delay. The convoy eventually passes, and normal traffic resumes.", ephemeral=False)
-            # Set up timeout to clear tracking
-        async def on_timeout():
-            clear_event_responses(event_id)
         
-        view.on_timeout = on_timeout
         assist_button.callback = assist_callback
         scan_button.callback = scan_callback
         wait_button.callback = wait_callback
@@ -1615,6 +1633,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(wait_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
     async def _handle_gate_energy_surge(self, channel, players, event_data):
         """Handle gate energy surge event"""
@@ -1670,12 +1689,8 @@ class EnhancedEventsCog(commands.Cog):
             char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
             await interaction.response.send_message(f"🏃 **{char_name}** wisely moves their ship to a safe distance to watch the events unfold.", ephemeral=False)
         
-        async def on_timeout():
-            clear_event_responses(event_id)
-    
-        view.on_timeout = on_timeout
         contain_button.callback = contain_callback
-        shields_button.callback = shields_callback
+        shields_button.callback = shields_button
         evacuate_button.callback = evacuate_callback
 
         view.add_item(contain_button)
@@ -1683,6 +1698,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(evacuate_button)
 
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
         
     async def _handle_spacetime_echo(self, channel, players, event_data):
@@ -1739,10 +1755,6 @@ class EnhancedEventsCog(commands.Cog):
             else: # 65% chance of nothing
                 await interaction.response.send_message(f"💨 **{char_name}** flies through the echo. The ship feels momentarily cold, but nothing else happens.", ephemeral=False)
 
-        async def on_timeout():
-            clear_event_responses(event_id)
-    
-        view.on_timeout = on_timeout
         analyze_button.callback = analyze_callback
         hail_button.callback = hail_callback
         fly_button.callback = fly_callback
@@ -1752,6 +1764,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(fly_button)
 
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
 
@@ -1897,10 +1910,6 @@ class EnhancedEventsCog(commands.Cog):
                 f"🚁 **{char_name}** coordinates evacuation procedures. Earned {reward} credits for leadership.",
                 ephemeral=False
             )
-        async def on_timeout():
-            clear_event_responses(event_id)
-    
-        view.on_timeout = on_timeout        
         medical_button.callback = medical_callback
         repair_button.callback = repair_callback
         evacuate_button.callback = evacuate_callback
@@ -1910,6 +1919,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(evacuate_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_worker_strike(self, channel, players, event_data):
@@ -2032,10 +2042,6 @@ class EnhancedEventsCog(commands.Cog):
                 f"🏢 **{char_name}** assists management with strike-breaking efforts. Earned {reward} credits, but worker relations suffer.",
                 ephemeral=False
             )
-        async def on_timeout():
-            clear_event_responses(event_id)
-    
-        view.on_timeout = on_timeout              
         negotiate_button.callback = negotiate_callback
         support_workers_button.callback = support_workers_callback
         support_management_button.callback = support_management_callback
@@ -2045,6 +2051,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(support_management_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_scavenger_swarm(self, channel, user_id, event_data):
@@ -2150,10 +2157,6 @@ class EnhancedEventsCog(commands.Cog):
                     f"🤖 **{char_name}** burns {fuel_lost} extra fuel trying to escape the persistent drones!",
                     ephemeral=False
                 )
-        async def on_timeout():
-            clear_event_responses(event_id)
-    
-        view.on_timeout = on_timeout            
         defend_button.callback = defend_callback
         outrun_button.callback = outrun_callback
         
@@ -2161,6 +2164,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(outrun_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_corporate_ambush(self, channel, user_id, event_data):
@@ -2320,10 +2324,6 @@ class EnhancedEventsCog(commands.Cog):
                     f"💥 **{char_name}** is overwhelmed by corporate security! Lost {damage} health and {credits_lost} credits in fines and 'damages'.",
                     ephemeral=False
                 )
-        async def on_timeout():
-            clear_event_responses(event_id)
-    
-        view.on_timeout = on_timeout         
         submit_button.callback = submit_callback
         bribe_button.callback = bribe_callback
         fight_button.callback = fight_callback
@@ -2333,6 +2333,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(fight_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_debris_field(self, channel, user_id, event_data):
@@ -2444,10 +2445,6 @@ class EnhancedEventsCog(commands.Cog):
                     f"💥 **{char_name}**'s reckless speed causes multiple collisions! Hull damage: {damage}, Fuel lost: {fuel_loss}",
                     ephemeral=False
                 )
-        async def on_timeout():
-            clear_event_responses(event_id)
-    
-        view.on_timeout = on_timeout         
         careful_button.callback = careful_callback
         speed_button.callback = speed_callback
         
@@ -2455,6 +2452,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(speed_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_distress_signal(self, channel, user_id, event_data):
@@ -2576,10 +2574,6 @@ class EnhancedEventsCog(commands.Cog):
                 f"➡️ **{char_name}** decides not to investigate the signal and continues on course.",
                 ephemeral=False
             )
-        async def on_timeout():
-            clear_event_responses(event_id)
-    
-        view.on_timeout = on_timeout         
         investigate_button.callback = investigate_callback
         ignore_button.callback = ignore_callback
         
@@ -2587,6 +2581,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(ignore_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
     # Add these methods to the EnhancedEventsCog class in enhanced_events.py
 
@@ -3744,10 +3739,6 @@ class EnhancedEventsCog(commands.Cog):
                     f"🚨 **{char_name}** is caught avoiding inspection. Heavy fine of {fine} credits imposed!",
                     ephemeral=False
                 )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout        
         comply_button.callback = comply_callback
         partial_button.callback = partial_callback
         avoid_button.callback = avoid_callback
@@ -3757,6 +3748,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(avoid_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_equipment_malfunction(self, channel, players, event_data):
@@ -3879,10 +3871,6 @@ class EnhancedEventsCog(commands.Cog):
                 f"🚨 **{char_name}** coordinates evacuation procedures, ensuring everyone's safety. Earned {reward} credits.",
                 ephemeral=False
             )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout            
         repair_button.callback = repair_callback
         diagnose_button.callback = diagnose_callback
         evacuate_button.callback = evacuate_callback
@@ -3892,6 +3880,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(evacuate_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_refugee_arrival(self, channel, players, event_data):
@@ -4015,10 +4004,6 @@ class EnhancedEventsCog(commands.Cog):
                 f"👋 **{char_name}** chooses not to get involved. The refugees continue searching for sanctuary elsewhere.",
                 ephemeral=False
             )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout          
         aid_button.callback = aid_callback
         medical_button.callback = medical_callback
         ignore_button.callback = ignore_callback
@@ -4028,6 +4013,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(ignore_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_celebration(self, channel, players, event_data):
@@ -4145,11 +4131,6 @@ class EnhancedEventsCog(commands.Cog):
                 ephemeral=False
             )
         
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout
-        
         participate_button.callback = participate_callback
         organize_button.callback = organize_callback
         trade_button.callback = trade_callback
@@ -4159,6 +4140,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(trade_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
         
     # Add handlers for station events
@@ -4243,10 +4225,6 @@ class EnhancedEventsCog(commands.Cog):
                 f"🎯 **{char_name}** provides manual docking assistance to stranded ships. Earned {reward} credits.",
                 ephemeral=False
             )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout        
         assist_button.callback = assist_callback
         manual_dock_button.callback = manual_callback
         
@@ -4254,6 +4232,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(manual_dock_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_trade_convoy(self, channel, players, event_data):
@@ -4339,10 +4318,6 @@ class EnhancedEventsCog(commands.Cog):
                 f"🤝 **{char_name}** negotiates favorable trade agreements for the station. Earned {reward} credits in commission!",
                 ephemeral=False
             )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout          
         trade_button.callback = trade_callback
         negotiate_button.callback = negotiate_callback
         
@@ -4350,6 +4325,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(negotiate_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_vip_arrival(self, channel, players, event_data):
@@ -4442,10 +4418,6 @@ class EnhancedEventsCog(commands.Cog):
                     f"💸 **{char_name}** lacks the credits to provide the luxury services the VIP expects.",
                     ephemeral=False
                 )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout          
         security_button.callback = security_callback
         service_button.callback = service_callback
         
@@ -4453,6 +4425,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(service_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     # Add handlers for outpost events
@@ -4543,10 +4516,6 @@ class EnhancedEventsCog(commands.Cog):
                     f"🚚 **{char_name}** offers to help but lacks the navigation skills for emergency supply runs.",
                     ephemeral=False
                 )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout         
         donate_button.callback = donate_callback
         emergency_run_button.callback = emergency_callback
         
@@ -4554,6 +4523,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(emergency_run_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_salvage_discovery(self, channel, players, event_data):
@@ -4640,10 +4610,6 @@ class EnhancedEventsCog(commands.Cog):
                     f"💸 **{char_name}** lacks the credits to file proper salvage claims.",
                     ephemeral=False
                 )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout       
         investigate_button.callback = investigate_callback
         claim_button.callback = claim_callback
         
@@ -4651,6 +4617,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(claim_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_comm_blackout(self, channel, players, event_data):
@@ -4740,10 +4707,6 @@ class EnhancedEventsCog(commands.Cog):
                 f"💡 **{char_name}** creates an improvised communication solution using ship systems! Earned {reward} credits.",
                 ephemeral=False
             )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout          
         repair_button.callback = repair_callback
         improvise_button.callback = improvise_callback
         
@@ -4751,6 +4714,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(improvise_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
     async def _handle_mysterious_signal(self, channel, players, event_data):
@@ -4887,10 +4851,6 @@ class EnhancedEventsCog(commands.Cog):
                 f"🚫 **{char_name}** decides not to investigate the mysterious signal. Sometimes discretion is the better part of valor.",
                 ephemeral=False
             )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout         
         investigate_button.callback = investigate_callback
         decode_button.callback = decode_callback
         ignore_button.callback = ignore_callback
@@ -4900,6 +4860,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(ignore_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
     
     # Travel Event Handlers (different signature from location handlers)
@@ -5489,10 +5450,6 @@ class EnhancedEventsCog(commands.Cog):
                 f"👋 **{char_name}** politely declines the trade offer and continues on course.",
                 ephemeral=False
             )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout        
         trade_button.callback = trade_callback
         ignore_button.callback = ignore_callback
         
@@ -5500,6 +5457,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(ignore_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
     async def _handle_energy_readings(self, channel, user_id, event_data):
         """Handle unknown energy signature encounter"""
@@ -5591,10 +5549,6 @@ class EnhancedEventsCog(commands.Cog):
                 f"➡️ **{char_name}** decides discretion is the better part of valor and continues on course.",
                 ephemeral=False
             )
-        async def on_timeout():
-            clear_event_responses(event_id)
-        
-        view.on_timeout = on_timeout          
         investigate_button.callback = investigate_callback
         avoid_button.callback = avoid_callback
         
@@ -5602,6 +5556,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(avoid_button)
         
         message = await channel.send(embed=embed, view=view)
+        view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
     async def _handle_travel_pirates(self, channel, user_id, event_data):
         """Handle pirate encounter during travel"""
@@ -5693,10 +5648,9 @@ class EnhancedEventsCog(commands.Cog):
             
             char_name, nav_skill = char_data
             
-class PirateEncounterView(discord.ui.View):
+class PirateEncounterView(BaseEventView):
     def __init__(self, bot, encounter_id, players, pirate_ships):
-        super().__init__(timeout=300)
-        self.bot = bot
+        super().__init__(bot, timeout=300)
         self.encounter_id = encounter_id
         self.players = players
         self.pirate_ships = pirate_ships
@@ -5799,10 +5753,9 @@ class PirateEncounterView(discord.ui.View):
         await channel.send(embed=embed)
 
 
-class AsteroidFieldView(discord.ui.View):
+class AsteroidFieldView(BaseEventView):
     def __init__(self, bot, players):
-        super().__init__(timeout=180)
-        self.bot = bot
+        super().__init__(bot, timeout=180)
         self.players = players
         self.player_choices = {}
     
@@ -5867,10 +5820,9 @@ class AsteroidFieldView(discord.ui.View):
 
 
 
-class ReputationEventView(discord.ui.View):
+class ReputationEventView(BaseEventView):
     def __init__(self, bot, event_data, players_present, location_id):
-        super().__init__(timeout=300)
-        self.bot = bot
+        super().__init__(bot, timeout=300)
         self.event_data = event_data
         self.players_present = players_present
         self.location_id = location_id
@@ -5971,11 +5923,12 @@ async def setup(bot):
     
 
 class BaseEventView(discord.ui.View):
-    """Base view for all events that tracks player responses"""
+    """Base view for all events that tracks player responses and handles timeout cleanup"""
     def __init__(self, bot, timeout=300):
         super().__init__(timeout=timeout)
         self.bot = bot
         self.player_responses = {}  # Track who has responded
+        self.message = None  # Store message reference for cleanup
     
     def has_responded(self, user_id: int) -> bool:
         """Check if a user has already responded to this event"""
@@ -5994,3 +5947,23 @@ class BaseEventView(discord.ui.View):
             )
             return False
         return True
+    
+    async def on_timeout(self):
+        """Called when the view times out - updates the embed to show expiration"""
+        if self.message:
+            try:
+                # Create expired event embed
+                expired_embed = discord.Embed(
+                    title="⏰ Event Expired",
+                    description="This event has timed out and is no longer available.",
+                    color=0x808080,
+                    timestamp=datetime.now()
+                )
+                expired_embed.add_field(
+                    name="Status",
+                    value="Buttons are now disabled. Event interaction window has closed.",
+                    inline=False
+                )
+                await self.message.edit(embed=expired_embed, view=None)
+            except Exception as e:
+                print(f"Failed to cleanup event: {e}")
