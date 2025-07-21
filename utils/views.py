@@ -3287,31 +3287,6 @@ class ServicesView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @discord.ui.button(label="Ship Upgrades", style=discord.ButtonStyle.primary, emoji="⬆️")
-    async def ship_upgrades(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This is not your panel!", ephemeral=True)
-            return
-        
-        # Check if location has upgrades
-        location_info = self.bot.db.execute_query(
-            '''SELECT l.has_upgrades, l.name FROM characters c
-               JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not location_info or not location_info[0]:
-            await interaction.response.send_message("This location doesn't offer ship upgrade services.", ephemeral=True)
-            return
-        
-        # Call the ship upgrade command from ShipSystemsCog
-        ship_cog = self.bot.get_cog('ShipSystemsCog')
-        if ship_cog:
-            await ship_cog.ship_upgrade.callback(ship_cog, interaction)
-        else:
-            await interaction.response.send_message("Ship upgrade system unavailable.", ephemeral=True)
 
     @discord.ui.button(label="Logbook", style=discord.ButtonStyle.secondary, emoji="📜")
     async def logbook(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -4790,6 +4765,21 @@ class TQEOverviewView(discord.ui.View):
             await contacts_cog.contacts.callback(contacts_cog, interaction)
         else:
             await interaction.response.send_message("Contacts system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Extras", style=discord.ButtonStyle.secondary, emoji="⚙️", row=1)
+    async def extras_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open the extras panel with secondary features"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        view = ExtrasMenuView(self.bot, interaction.user.id)
+        embed = discord.Embed(
+            title="⚙️ Extras Menu",
+            description="Access additional features and management panels",
+            color=0x95a5a6
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.success, emoji="🔄")
@@ -5474,4 +5464,572 @@ class PlayerSelectView(discord.ui.View):
         if self.action == "attack":
             await combat_cog.attack_player.callback(combat_cog, interaction, target_member)
         else:  # rob
-            await combat_cog.rob_group.player.callback(combat_cog, interaction, target_member)        
+            await combat_cog.rob_group.player.callback(combat_cog, interaction, target_member)
+
+
+class ExtrasMenuView(discord.ui.View):
+    """Main extras menu panel with buttons for secondary features"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+    
+    @discord.ui.button(label="Factions & Reputation", style=discord.ButtonStyle.primary, emoji="🏛️")
+    async def factions_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open factions and reputation panel"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        view = FactionsRepView(self.bot, interaction.user.id)
+        embed = discord.Embed(
+            title="🏛️ Factions & Reputation",
+            description="Manage your faction membership and reputation",
+            color=0x3498db
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Bounties", style=discord.ButtonStyle.danger, emoji="💀")
+    async def bounties_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open bounties panel"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        view = BountiesView(self.bot, interaction.user.id)
+        embed = discord.Embed(
+            title="💀 Bounty Management",
+            description="View and manage bounties",
+            color=0xe74c3c
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Homes", style=discord.ButtonStyle.success, emoji="🏠")
+    async def homes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open homes panel"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        view = HomesView(self.bot, interaction.user.id)
+        embed = discord.Embed(
+            title="🏠 Home Management",
+            description="Manage your homes and properties",
+            color=0x2ecc71
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class FactionCreateModal(discord.ui.Modal, title="Create New Faction"):
+    """Modal for creating a new faction"""
+    
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+    
+    faction_name = discord.ui.TextInput(
+        label="Faction Name",
+        placeholder="Enter your faction name...",
+        required=True,
+        max_length=50
+    )
+    
+    faction_emoji = discord.ui.TextInput(
+        label="Faction Emoji",
+        placeholder="Enter an emoji for your faction...",
+        required=True,
+        max_length=10
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        factions_cog = self.bot.get_cog('FactionsCog')
+        if factions_cog:
+            # Temporarily set the modal values as attributes for the cog to access
+            self.bot._temp_faction_name = self.faction_name.value
+            self.bot._temp_faction_emoji = self.faction_emoji.value
+            await factions_cog.faction_create.callback(factions_cog, interaction)
+            # Clean up temp values
+            delattr(self.bot, '_temp_faction_name')
+            delattr(self.bot, '_temp_faction_emoji')
+        else:
+            await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
+
+
+class FactionsRepView(discord.ui.View):
+    """Panel for faction and reputation management"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.is_faction_leader = False
+        self._check_faction_leader()
+        
+        # Add conditional payout button for faction leaders
+        if self.is_faction_leader:
+            payout_button = discord.ui.Button(
+                label="Faction Payout",
+                style=discord.ButtonStyle.primary,
+                emoji="💎",
+                row=2
+            )
+            payout_button.callback = self.faction_payout_button
+            self.add_item(payout_button)
+    
+    def _check_faction_leader(self):
+        """Check if user is a faction leader for conditional button display"""
+        try:
+            from database import Database
+            db = Database()
+            result = db.execute_query(
+                "SELECT faction_id FROM factions WHERE leader_id = ?",
+                (self.user_id,),
+                fetch='one'
+            )
+            self.is_faction_leader = result is not None
+        except Exception:
+            self.is_faction_leader = False
+    
+    @discord.ui.button(label="Faction Info", style=discord.ButtonStyle.primary, emoji="ℹ️")
+    async def faction_info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """View current faction information"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        factions_cog = self.bot.get_cog('FactionsCog')
+        if factions_cog:
+            await factions_cog.faction_info.callback(factions_cog, interaction)
+        else:
+            await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Join Faction", style=discord.ButtonStyle.success, emoji="➕")
+    async def faction_join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Join an available faction"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        factions_cog = self.bot.get_cog('FactionsCog')
+        if factions_cog:
+            await factions_cog.faction_join.callback(factions_cog, interaction)
+        else:
+            await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Leave Faction", style=discord.ButtonStyle.danger, emoji="➖")
+    async def faction_leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Leave current faction"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        factions_cog = self.bot.get_cog('FactionsCog')
+        if factions_cog:
+            await factions_cog.faction_leave.callback(factions_cog, interaction)
+        else:
+            await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Members", style=discord.ButtonStyle.secondary, emoji="👥")
+    async def faction_members_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """View faction members"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        factions_cog = self.bot.get_cog('FactionsCog')
+        if factions_cog:
+            await factions_cog.faction_members.callback(factions_cog, interaction)
+        else:
+            await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Create Faction", style=discord.ButtonStyle.success, emoji="🏗️", row=1)
+    async def create_faction_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Create a new faction"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = FactionCreateModal(self.bot)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="View Reputation", style=discord.ButtonStyle.secondary, emoji="⭐", row=1)
+    async def view_reputation_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """View your reputation standings"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        reputation_cog = self.bot.get_cog('ReputationCog')
+        if reputation_cog:
+            await reputation_cog.view_reputation.callback(reputation_cog, interaction)
+        else:
+            await interaction.response.send_message("Reputation system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Donate to Faction", style=discord.ButtonStyle.success, emoji="💰", row=2)
+    async def donate_faction_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Donate credits to your faction"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = FactionDonateModal(self.bot)
+        await interaction.response.send_modal(modal)
+    
+    async def faction_payout_button(self, interaction: discord.Interaction):
+        """Distribute faction bank funds equally to all members"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        factions_cog = self.bot.get_cog('FactionsCog')
+        if factions_cog:
+            await factions_cog.faction_payout.callback(factions_cog, interaction)
+        else:
+            await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
+
+
+class PayBountyModal(discord.ui.Modal, title="Pay Bounty"):
+    """Modal for paying bounties"""
+    
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+    
+    amount = discord.ui.TextInput(
+        label="Amount to Pay",
+        placeholder="Enter amount to pay towards your bounties...",
+        required=True
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            amount_val = int(self.amount.value)
+            bounty_cog = self.bot.get_cog('BountyCog')
+            if bounty_cog:
+                await bounty_cog.pay_bounty.callback(bounty_cog, interaction, amount_val)
+            else:
+                await interaction.response.send_message("Bounty system unavailable.", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("Please enter a valid number for the amount.", ephemeral=True)
+
+
+class FactionDonateModal(discord.ui.Modal, title="Donate to Faction"):
+    """Modal for donating credits to faction"""
+    
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+    
+    amount = discord.ui.TextInput(
+        label="Donation Amount",
+        placeholder="Enter amount to donate to your faction...",
+        required=True
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            amount_val = int(self.amount.value)
+            if amount_val <= 0:
+                await interaction.response.send_message("Please enter a positive amount.", ephemeral=True)
+                return
+                
+            factions_cog = self.bot.get_cog('FactionsCog')
+            if factions_cog:
+                await factions_cog.faction_donate.callback(factions_cog, interaction, amount_val)
+            else:
+                await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("Please enter a valid number for the amount.", ephemeral=True)
+
+
+class PostBountyModal(discord.ui.Modal, title="Post Bounty"):
+    """Modal for posting bounties"""
+    
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+    
+    amount = discord.ui.TextInput(
+        label="Bounty Amount",
+        placeholder="Enter bounty amount...",
+        required=True
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # This will need to be followed by a player selection menu
+        try:
+            amount_val = int(self.amount.value)
+            view = PostBountyPlayerSelect(self.bot, interaction.user.id, amount_val)
+            await interaction.response.send_message("Select a player to put a bounty on:", view=view, ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("Please enter a valid number for the bounty amount.", ephemeral=True)
+
+
+class PostBountyPlayerSelect(discord.ui.View):
+    """View for selecting player to put bounty on"""
+    
+    def __init__(self, bot, user_id: int, amount: int):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        self.amount = amount
+        
+        # Create select menu with guild members
+        options = []
+        guild = bot.get_guild(bot.config.ALLOWED_GUILD_ID) if hasattr(bot, 'config') else None
+        if guild:
+            for member in guild.members[:25]:  # Discord limit is 25 options
+                if member.id != user_id and not member.bot:
+                    options.append(discord.SelectOption(
+                        label=member.display_name,
+                        value=str(member.id),
+                        description=f"User: {member.name}"
+                    ))
+        
+        if options:
+            select = discord.ui.Select(placeholder="Choose a player...", options=options)
+            select.callback = self.player_selected
+            self.add_item(select)
+    
+    async def player_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        target_id = int(interaction.data['values'][0])
+        target_member = interaction.guild.get_member(target_id)
+        
+        if not target_member:
+            await interaction.response.send_message("Player not found!", ephemeral=True)
+            return
+        
+        bounty_cog = self.bot.get_cog('BountyCog')
+        if bounty_cog:
+            await bounty_cog.post_bounty.callback(bounty_cog, interaction, target_member, self.amount)
+        else:
+            await interaction.response.send_message("Bounty system unavailable!", ephemeral=True)
+
+
+class BountiesView(discord.ui.View):
+    """Panel for bounty management"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+    
+    @discord.ui.button(label="Bounty Status", style=discord.ButtonStyle.primary, emoji="📊")
+    async def bounty_status_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """View your bounty status"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        bounty_cog = self.bot.get_cog('BountyCog')
+        if bounty_cog:
+            await bounty_cog.bounty_status.callback(bounty_cog, interaction)
+        else:
+            await interaction.response.send_message("Bounty system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Pay Bounties", style=discord.ButtonStyle.success, emoji="💰")
+    async def pay_bounty_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Pay off your bounties"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = PayBountyModal(self.bot)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="View Bounties", style=discord.ButtonStyle.secondary, emoji="👁️")
+    async def view_bounties_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """View available bounties"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        bounty_cog = self.bot.get_cog('BountyCog')
+        if bounty_cog:
+            await bounty_cog.view_local_bounties.callback(bounty_cog, interaction)
+        else:
+            await interaction.response.send_message("Bounty system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Post Bounty", style=discord.ButtonStyle.danger, emoji="🎯", row=1)
+    async def post_bounty_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Post a bounty on another player"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = PostBountyModal(self.bot)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Claim Bounty", style=discord.ButtonStyle.danger, emoji="⚔️", row=1)
+    async def claim_bounty_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Attempt to capture a bounty target"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        view = ClaimBountyPlayerSelect(self.bot, interaction.user.id)
+        await interaction.response.send_message("Select a player to attempt to capture:", view=view, ephemeral=True)
+
+
+class ClaimBountyPlayerSelect(discord.ui.View):
+    """View for selecting player to attempt bounty capture on"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        
+        # Create select menu with guild members
+        options = []
+        guild = bot.get_guild(bot.config.ALLOWED_GUILD_ID) if hasattr(bot, 'config') else None
+        if guild:
+            for member in guild.members[:25]:  # Discord limit is 25 options
+                if member.id != user_id and not member.bot:
+                    options.append(discord.SelectOption(
+                        label=member.display_name,
+                        value=str(member.id),
+                        description=f"User: {member.name}"
+                    ))
+        
+        if options:
+            select = discord.ui.Select(placeholder="Choose a player to capture...", options=options)
+            select.callback = self.player_selected
+            self.add_item(select)
+    
+    async def player_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        target_id = int(interaction.data['values'][0])
+        target_member = interaction.guild.get_member(target_id)
+        
+        if not target_member:
+            await interaction.response.send_message("Player not found!", ephemeral=True)
+            return
+        
+        bounty_cog = self.bot.get_cog('BountyCog')
+        if bounty_cog:
+            await bounty_cog.capture_bounty_target.callback(bounty_cog, interaction, target_member)
+        else:
+            await interaction.response.send_message("Bounty system unavailable!", ephemeral=True)
+
+
+class HomeInvitePlayerSelect(discord.ui.View):
+    """View for selecting player to invite to home"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        
+        # Create select menu with guild members
+        options = []
+        guild = bot.get_guild(bot.config.ALLOWED_GUILD_ID) if hasattr(bot, 'config') else None
+        if guild:
+            for member in guild.members[:25]:  # Discord limit is 25 options
+                if member.id != user_id and not member.bot:
+                    options.append(discord.SelectOption(
+                        label=member.display_name,
+                        value=str(member.id),
+                        description=f"User: {member.name}"
+                    ))
+        
+        if options:
+            select = discord.ui.Select(placeholder="Choose a player to invite...", options=options)
+            select.callback = self.player_selected
+            self.add_item(select)
+    
+    async def player_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        target_id = int(interaction.data['values'][0])
+        target_member = interaction.guild.get_member(target_id)
+        
+        if not target_member:
+            await interaction.response.send_message("Player not found!", ephemeral=True)
+            return
+        
+        homes_cog = self.bot.get_cog('HomesCog')
+        if homes_cog:
+            await homes_cog.invite_to_home.callback(homes_cog, interaction, target_member)
+        else:
+            await interaction.response.send_message("Homes system unavailable!", ephemeral=True)
+
+
+class HomesView(discord.ui.View):
+    """Panel for home management"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+    
+    @discord.ui.button(label="Enter Home", style=discord.ButtonStyle.primary, emoji="🏠")
+    async def enter_home_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Enter your home"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        homes_cog = self.bot.get_cog('HomesCog')
+        if homes_cog:
+            await homes_cog.enter_home.callback(homes_cog, interaction)
+        else:
+            await interaction.response.send_message("Homes system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Buy Home", style=discord.ButtonStyle.success, emoji="💰")
+    async def buy_home_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Purchase a home"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        homes_cog = self.bot.get_cog('HomesCog')
+        if homes_cog:
+            await homes_cog.buy_home.callback(homes_cog, interaction)
+        else:
+            await interaction.response.send_message("Homes system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Accept Invitation", style=discord.ButtonStyle.success, emoji="✅")
+    async def accept_invitation_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Accept a home invitation"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        homes_cog = self.bot.get_cog('HomesCog')
+        if homes_cog:
+            await homes_cog.accept_home_invitation.callback(homes_cog, interaction)
+        else:
+            await interaction.response.send_message("Homes system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Leave Home", style=discord.ButtonStyle.danger, emoji="🚪", row=1)
+    async def leave_home_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Leave current home"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        homes_cog = self.bot.get_cog('HomesCog')
+        if homes_cog:
+            await homes_cog.leave_home.callback(homes_cog, interaction)
+        else:
+            await interaction.response.send_message("Homes system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Invite Player", style=discord.ButtonStyle.secondary, emoji="📨", row=1)
+    async def invite_player_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Invite someone to your home"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        view = HomeInvitePlayerSelect(self.bot, interaction.user.id)
+        await interaction.response.send_message("Select a player to invite to your home:", view=view, ephemeral=True)

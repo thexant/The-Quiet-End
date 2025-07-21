@@ -153,7 +153,7 @@ class TimeSystem:
         date_str = dt.strftime("%d-%m-%Y")
         time_str = dt.strftime("%H:%M")
         
-        return f"**{date_str}** at **{time_str} ISST**"
+        return f"{date_str} at {time_str} ISST"
     
     def get_days_elapsed(self) -> Optional[int]:
         """Get number of in-game days elapsed since galaxy start"""

@@ -41,10 +41,10 @@ class SubLocationManager:
                 'icon': '🛡️',
                 'location_types': ['colony', 'space_station']
             },
-            'hangar': {
-                'name': 'Hangar Bay',
-                'description': 'Large docking area where ships are serviced and stored.',
-                'icon': '🚁',
+            'observatory': {
+                'name': 'Observatory',
+                'description': 'High-tech facility for stellar observation and navigation data.',
+                'icon': '🔭',
                 'location_types': ['space_station', 'colony']
             },
             'lounge': {
@@ -330,12 +330,12 @@ class SubLocationManager:
                 "👮 Law enforcement services",
                 "🔒 Secure communications"
             ])
-        elif sub_data['name'] == 'Hangar Bay':
+        elif sub_data['name'] == 'Observatory':
             features.extend([
-                "🚁 Ship docking and storage",
-                "⛽ Fuel and supply services",
-                "🔧 Ship modifications",
-                "📦 Cargo handling"
+                "🔭 Stellar observation",
+                "🗺️ Navigation charts",
+                "📡 Deep space monitoring",
+                "🌌 Astronomical research"
             ])
         elif sub_data['name'] == 'Common Lounge':
             features.extend([
@@ -715,24 +715,24 @@ class SubLocationServiceView(discord.ui.View):
                 service_type="equipment_mods"
             ))
             
-        elif self.sub_type == 'hangar':
+        elif self.sub_type == 'observatory':
             self.add_item(SubLocationButton(
-                label="Refuel Ship", 
-                emoji="⛽", 
+                label="Stellar Charts", 
+                emoji="🗺️", 
                 style=discord.ButtonStyle.success,
-                service_type="refuel_ship"
+                service_type="stellar_charts"
             ))
             self.add_item(SubLocationButton(
-                label="Ship Storage", 
-                emoji="🚁", 
+                label="Deep Space Scan", 
+                emoji="📡", 
                 style=discord.ButtonStyle.secondary,
-                service_type="ship_storage"
+                service_type="deep_space_scan"
             ))
             self.add_item(SubLocationButton(
-                label="Cargo Services", 
-                emoji="📦", 
+                label="Navigation Data", 
+                emoji="🧭", 
                 style=discord.ButtonStyle.primary,
-                service_type="cargo_services"
+                service_type="navigation_data"
             ))
             
         elif self.sub_type == 'lounge':
@@ -827,10 +827,10 @@ class SubLocationServiceView(discord.ui.View):
                 service_type="security_consult"
             ))
             self.add_item(SubLocationButton(
-                label="Request Escort", 
-                emoji="👮", 
+                label="Information Desk", 
+                emoji="ℹ️", 
                 style=discord.ButtonStyle.primary,
-                service_type="request_escort"
+                service_type="info_desk"
             ))
             self.add_item(SubLocationButton(
                 label="File Complaint", 
@@ -963,10 +963,10 @@ class SubLocationServiceView(discord.ui.View):
                 service_type="tour_gardens"
             ))
             self.add_item(SubLocationButton(
-                label="Fresh Produce", 
-                emoji="🥬", 
+                label="Market Information", 
+                emoji="📊", 
                 style=discord.ButtonStyle.primary,
-                service_type="fresh_produce"
+                service_type="market_info"
             ))
             self.add_item(SubLocationButton(
                 label="Learn Techniques", 
@@ -1003,7 +1003,7 @@ class SubLocationServiceView(discord.ui.View):
             
         elif self.sub_type == 'communications':
             self.add_item(SubLocationButton(
-                label="Send Message", 
+                label="Send Message (10-25 credits)", 
                 emoji="📡", 
                 style=discord.ButtonStyle.primary,
                 service_type="send_message"
@@ -1202,8 +1202,8 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_health_checkup(interaction, char_name, hp, max_hp)
         elif service_type == "repair_ship":
             await self._handle_repair_ship(interaction, char_name, money)
-        elif service_type == "refuel_ship":
-            await self._handle_refuel_ship(interaction, char_name, money)
+        elif service_type == "stellar_charts":
+            await self._handle_stellar_charts(interaction, char_name)
         elif service_type == "ship_diagnostics":
             await self._handle_ship_diagnostics(interaction, char_name)
         elif service_type == "order_drink":
@@ -1222,8 +1222,8 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_browse_shops(interaction, char_name)
         elif service_type == "apply_permits":
             await self._handle_apply_permits(interaction, char_name, money)
-        elif service_type == "request_escort":
-            await self._handle_request_escort(interaction, char_name, money)
+        elif service_type == "info_desk":
+            await self._handle_info_desk(interaction, char_name)
         elif service_type == "file_complaint":
             await self._handle_file_complaint(interaction, char_name)
         elif service_type == "check_traffic":
@@ -1231,7 +1231,7 @@ class SubLocationServiceView(discord.ui.View):
         elif service_type == "corridor_status":
             await self._handle_corridor_status(interaction, char_name)
         elif service_type == "rest_recuperate":
-            await self._handle_rest_recuperate(interaction, char_name, money)
+            await self._handle_rest_recuperate(interaction, char_name)
         elif service_type == "travel_info":
             await self._handle_traveler_info(interaction, char_name)
         elif service_type == "security_scan":
@@ -1254,10 +1254,10 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_emergency_medical(interaction, char_name, money)
         elif service_type == "equipment_mods":
             await self._handle_equipment_mods(interaction, char_name, money)
-        elif service_type == "ship_storage":
-            await self._handle_ship_storage(interaction, char_name, money)
-        elif service_type == "cargo_services":
-            await self._handle_cargo_services(interaction, char_name, money)
+        elif service_type == "deep_space_scan":
+            await self._handle_deep_space_scan(interaction, char_name)
+        elif service_type == "navigation_data":
+            await self._handle_navigation_data(interaction, char_name)
         elif service_type == "check_prices":
             await self._handle_check_prices(interaction, char_name)
         elif service_type == "specialty_vendors":
@@ -1278,8 +1278,8 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_collaborate(interaction, char_name)
         elif service_type == "tour_gardens":
             await self._handle_tour_gardens(interaction, char_name)
-        elif service_type == "fresh_produce":
-            await self._handle_fresh_produce(interaction, char_name, money)
+        elif service_type == "market_info":
+            await self._handle_market_info(interaction, char_name)
         elif service_type == "learn_techniques":
             await self._handle_learn_techniques(interaction, char_name)
         elif service_type == "play_games":
@@ -1444,60 +1444,33 @@ class SubLocationServiceView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     
-    async def _handle_rest_recuperate(self, interaction: discord.Interaction, char_name: str, money: int):
-        """Handle rest and recuperation at truck stop"""
-        cost = 30
+    async def _handle_rest_recuperate(self, interaction: discord.Interaction, char_name: str):
+        """Handle rest and recuperation at truck stop (free, no HP restoration)"""
+        import random
         
-        if money < cost:
-            embed = discord.Embed(
-                title="😴 Traveler Services",
-                description=f"**{char_name}**, a rest pod costs {cost} credits.",
-                color=0xff6600
-            )
-            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
-            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=False)
-            return
+        rest_quality = [
+            "The public rest area's benches are surprisingly comfortable for a brief nap.",
+            "You find a quiet corner and take a moment to collect your thoughts.",
+            "The gentle hum of station systems provides a relaxing atmosphere.",
+            "A comfortable chair by the viewport offers a peaceful place to rest."
+        ]
         
-        # Check current HP to determine rest quality
-        char_data = self.db.execute_query(
-            "SELECT hp, max_hp FROM characters WHERE user_id = ?",
-            (interaction.user.id,),
-            fetch='one'
+        rest_activities = [
+            "You watch the flow of travelers through the corridor while relaxing.",
+            "The ambient lighting creates a calming environment for contemplation.",
+            "You observe the occasional ship passing by through the large windows.",
+            "The comfortable seating area provides a welcome break from travel."
+        ]
+        
+        embed = discord.Embed(
+            title="😴 Rest & Recuperation",
+            description=f"**{char_name}** takes time to rest in the common lounge area.",
+            color=0x9370db
         )
-        
-        if char_data:
-            hp, max_hp = char_data
-            hp_restored = min(max_hp - hp, random.randint(20, 35))
-            
-            # Apply healing and charge
-            self.db.execute_query(
-                "UPDATE characters SET hp = hp + ?, money = money - ? WHERE user_id = ?",
-                (hp_restored, cost, interaction.user.id)
-            )
-            
-            rest_quality = [
-                "The sleep pod's white noise generator blocks out all corridor traffic sounds.",
-                "Temperature-controlled environment and memory foam help you achieve deep sleep.",
-                "You wake feeling refreshed after the pod's circadian rhythm light therapy.",
-                "The isolation from ship vibrations provides the best rest you've had in weeks."
-            ]
-            
-            embed = discord.Embed(
-                title="😴 Rest Pod Session",
-                description=f"**{char_name}** rents a premium rest pod for recuperation.",
-                color=0x9370db
-            )
-            embed.add_field(name="🛏️ Rest Quality", value=random.choice(rest_quality), inline=False)
-            embed.add_field(name="💚 Health Restored", value=f"+{hp_restored} HP", inline=True)
-            embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
-            embed.add_field(name="⏱️ Duration", value="4 hour session", inline=True)
-        else:
-            embed = discord.Embed(
-                title="❌ Error",
-                description="Could not process rest session.",
-                color=0xff0000
-            )
+        embed.add_field(name="🛋️ Rest Experience", value=random.choice(rest_quality), inline=False)
+        embed.add_field(name="✨ Activity", value=random.choice(rest_activities), inline=False)
+        embed.add_field(name="💰 Cost", value="Free service", inline=True)
+        embed.add_field(name="⏱️ Duration", value="Relaxing break", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
         
@@ -1691,121 +1664,110 @@ class SubLocationServiceView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, ephemeral=False)  
         
-    async def _handle_ship_storage(self, interaction: discord.Interaction, char_name: str, money: int):
-        """Handle ship storage services"""
+    async def _handle_stellar_charts(self, interaction: discord.Interaction, char_name: str):
+        """Handle stellar chart viewing (free activity)"""
         import random
         
-        storage_options = [
-            ("Short-term Storage", 25, "Secure storage for up to 30 days"),
-            ("Extended Storage", 60, "Long-term storage with maintenance included"),
-            ("Premium Storage", 100, "Climate-controlled with full security monitoring"),
-            ("Maintenance Storage", 150, "Storage with routine maintenance and inspections")
+        chart_types = [
+            ("Local System Map", "Detailed navigation data for nearby sectors"),
+            ("Trade Route Atlas", "Commercial shipping lanes and waypoints"),
+            ("Hazard Charts", "Known dangers: asteroid fields, solar storms"),
+            ("Deep Space Survey", "Uncharted regions and exploration opportunities"),
+            ("Historical Charts", "Ancient trade routes and forgotten settlements")
         ]
         
-        storage_type, cost, description = random.choice(storage_options)
+        chart_name, description = random.choice(chart_types)
         
-        if money < cost:
-            embed = discord.Embed(
-                title="❌ Insufficient Credits",
-                description=f"**{char_name}** cannot afford {storage_type} services.",
-                color=0xff4500
-            )
-            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
-            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=False)
-            return
-        
-        # Check if user has a ship
-        ship_info = self.db.execute_query(
-            "SELECT name FROM ships WHERE owner_id = ?",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not ship_info:
-            embed = discord.Embed(
-                title="❌ No Ship Found",
-                description="Storage services require a registered vessel.",
-                color=0xff0000
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=False)
-            return
-        
-        ship_name = ship_info[0]
-        
-        # Deduct cost
-        self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
-            (cost, interaction.user.id)
-        )
-        
-        bay_numbers = [f"Bay {random.randint(1, 50)}-{random.choice(['A', 'B', 'C'])}" for _ in range(1)]
+        discoveries = [
+            "You notice an unmarked asteroid field that could contain valuable minerals",
+            "Ancient beacon signals are marked on routes through this sector", 
+            "Trade opportunities between distant systems become apparent",
+            "A previously unknown jump gate appears on the deep range scans",
+            "Navigation warnings highlight recent pirate activity zones"
+        ]
         
         embed = discord.Embed(
-            title="🚁 Ship Storage Service",
-            description=f"**{char_name}** arranges storage for the {ship_name}.",
-            color=0x708090
+            title="🗺️ Stellar Navigation Charts",
+            description=f"**{char_name}** studies the comprehensive star charts.",
+            color=0x1e90ff
         )
-        embed.add_field(name="📦 Storage Type", value=storage_type, inline=True)
-        embed.add_field(name="🏢 Location", value=random.choice(bay_numbers), inline=True)
-        embed.add_field(name="📋 Details", value=description, inline=False)
-        embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
-        embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
-        embed.add_field(name="🔒 Security", value="Your vessel is now safely stored and monitored.", inline=False)
+        embed.add_field(name="📊 Chart Type", value=chart_name, inline=True)
+        embed.add_field(name="🔍 Status", value="Access Granted", inline=True)
+        embed.add_field(name="📋 Information", value=description, inline=False)
+        embed.add_field(name="✨ Discovery", value=random.choice(discoveries), inline=False)
+        embed.add_field(name="💰 Cost", value="Complimentary service", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
     
-    async def _handle_cargo_services(self, interaction: discord.Interaction, char_name: str, money: int):
-        """Handle cargo handling services"""
+    async def _handle_deep_space_scan(self, interaction: discord.Interaction, char_name: str):
+        """Handle deep space scanning (free activity)"""
         import random
         
-        cargo_services = [
-            ("Cargo Loading", 40, "Professional loading of goods and materials"),
-            ("Cargo Unloading", 35, "Safe unloading and inventory verification"),
-            ("Cargo Inspection", 20, "Detailed inspection and documentation"),
-            ("Cargo Securing", 30, "Proper restraint and safety protocols"),
-            ("Hazmat Handling", 80, "Specialized dangerous goods handling"),
-            ("Bulk Transfer", 60, "Large volume cargo transfer operations")
+        scan_results = [
+            ("Anomalous Signals", "Long-range sensors detect unusual energy readings"),
+            ("Stellar Activity", "Solar flare warnings issued for nearby systems"),
+            ("Ship Traffic", "Multiple vessels detected on common trade routes"),
+            ("Cosmic Phenomena", "Interesting nebula formations spotted in outer systems"),
+            ("Debris Fields", "Scattered wreckage from old conflicts identified")
         ]
         
-        service_name, cost, description = random.choice(cargo_services)
+        result_type, description = random.choice(scan_results)
         
-        if money < cost:
-            embed = discord.Embed(
-                title="❌ Insufficient Credits",
-                description=f"**{char_name}** cannot afford {service_name} services.",
-                color=0xff4500
-            )
-            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
-            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=False)
-            return
-        
-        # Deduct cost
-        self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
-            (cost, interaction.user.id)
-        )
-        
-        service_details = [
-            "Certified cargo handlers ensure safe transport",
-            "All procedures follow galactic safety standards",
-            "Documentation provided for insurance purposes",
-            "Expert crew handles delicate and valuable items",
-            "Advanced equipment ensures efficient operations"
+        technical_details = [
+            "Quantum sensors operating at maximum sensitivity",
+            "Multi-spectrum analysis reveals detailed compositions",
+            "Advanced algorithms filter out background radiation",
+            "Cross-referencing with galactic databases for verification",
+            "Real-time monitoring provides up-to-date information"
         ]
         
         embed = discord.Embed(
-            title="📦 Cargo Services",
-            description=f"**{char_name}** arranges professional cargo handling.",
-            color=0x4682b4
+            title="📡 Deep Space Monitoring",
+            description=f"**{char_name}** accesses the station's deep space sensors.",
+            color=0x4169e1
         )
-        embed.add_field(name="🚛 Service", value=service_name, inline=True)
-        embed.add_field(name="👷 Crew", value="Professional handlers", inline=True)
-        embed.add_field(name="📋 Description", value=description, inline=False)
-        embed.add_field(name="🔧 Details", value=random.choice(service_details), inline=False)
-        embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
-        embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
+        embed.add_field(name="🔭 Scan Type", value="Long-Range Survey", inline=True)
+        embed.add_field(name="📊 Status", value="Scan Complete", inline=True)
+        embed.add_field(name="🎯 Detection", value=result_type, inline=False)
+        embed.add_field(name="📋 Details", value=description, inline=False)
+        embed.add_field(name="⚙️ Technology", value=random.choice(technical_details), inline=False)
+        embed.add_field(name="💰 Cost", value="Public access terminal", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_navigation_data(self, interaction: discord.Interaction, char_name: str):
+        """Handle navigation data access (free activity)"""
+        import random
+        
+        data_types = [
+            ("Jump Gate Network", "Current status and routing information for all gates"),
+            ("Fuel Station Directory", "Locations and prices of refueling stations"),
+            ("Weather Patterns", "Solar wind and space weather forecasts"),
+            ("Traffic Control", "Optimal routes to avoid congestion"),
+            ("Emergency Services", "Rescue and repair service locations")
+        ]
+        
+        data_name, info = random.choice(data_types)
+        
+        insights = [
+            "Several faster routes are available during off-peak hours",
+            "Fuel prices vary significantly between different sectors",
+            "Emergency beacon frequencies are clearly marked",
+            "Alternative routes can save time during heavy traffic periods",
+            "Station facilities and services are comprehensively catalogued"
+        ]
+        
+        embed = discord.Embed(
+            title="🧭 Navigation Database",
+            description=f"**{char_name}** accesses the central navigation database.",
+            color=0x32cd32
+        )
+        embed.add_field(name="📂 Data Category", value=data_name, inline=True)
+        embed.add_field(name="📡 Coverage", value="Sector-wide", inline=True)
+        embed.add_field(name="ℹ️ Information", value=info, inline=False)
+        embed.add_field(name="💡 Insight", value=random.choice(insights), inline=False)
+        embed.add_field(name="🕒 Last Updated", value="Real-time data feed", inline=False)
+        embed.add_field(name="💰 Cost", value="Free public service", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
         
@@ -2850,40 +2812,42 @@ class SubLocationServiceView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def _handle_request_escort(self, interaction: discord.Interaction, char_name: str, money: int):
-        """Handle requesting a security escort for a fee."""
+    async def _handle_info_desk(self, interaction: discord.Interaction, char_name: str):
+        """Handle information desk services (free)"""
         import random
         
-        cost = 20
-
-        if money < cost:
-            embed = discord.Embed(
-                title="❌ Insufficient Credits",
-                description=f"**{char_name}**, you cannot afford a security escort.",
-                color=0xff4500
-            )
-            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
-            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=False)
-            return
-
-        # Deduct cost
-        self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
-            (cost, interaction.user.id)
-        )
-
-        officer_names = ["Officer Jax", "Sergeant Valerius", "Corporal Thorne", "Enforcer Kade"]
-        officer = random.choice(officer_names)
-
+        info_categories = [
+            ("Station Directory", "Complete list of facilities, services, and personnel"),
+            ("Transportation Guide", "Schedules, routes, and connection information"),
+            ("Emergency Procedures", "Safety protocols and evacuation procedures"),
+            ("Local Regulations", "Station rules, customs, and legal requirements"),
+            ("Visitor Services", "Tourist information and recreational activities")
+        ]
+        
+        category, description = random.choice(info_categories)
+        
+        helpful_details = [
+            "Staff member provides detailed maps and printed guides",
+            "Digital displays show real-time updates and announcements",
+            "Multi-language support ensures clear communication",
+            "Emergency contact numbers and locations clearly marked",
+            "Helpful staff eager to assist with any questions"
+        ]
+        
+        desk_staff = ["Clerk Martinez", "Info Specialist Chen", "Assistant Director Vale", "Service Coordinator Ross"]
+        staff_member = random.choice(desk_staff)
+        
         embed = discord.Embed(
-            title="🛡️ Security Escort Requested",
-            description=f"**{char_name}** requests and pays for a security escort.",
-            color=0x00bfff
+            title="ℹ️ Information Services",
+            description=f"**{char_name}** approaches the information desk for assistance.",
+            color=0x4169e1
         )
-        embed.add_field(name="👮 Assigned Officer", value=f"{officer} is on their way to meet you.", inline=False)
-        embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
-        embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
+        embed.add_field(name="📋 Information Type", value=category, inline=True)
+        embed.add_field(name="👨‍💼 Staff Member", value=staff_member, inline=True)
+        embed.add_field(name="📄 Details", value=description, inline=False)
+        embed.add_field(name="✨ Service Quality", value=random.choice(helpful_details), inline=False)
+        embed.add_field(name="🕒 Availability", value="24/7 public service", inline=True)
+        embed.add_field(name="💰 Cost", value="Free information service", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
     async def _handle_relax(self, interaction: discord.Interaction, char_name: str):
@@ -3377,44 +3341,47 @@ class SubLocationServiceView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def _handle_fresh_produce(self, interaction, char_name: str, money: int):
-        """Handle buying fresh produce"""
+    async def _handle_market_info(self, interaction, char_name: str):
+        """Handle market information access (free activity)"""
         import random
         
-        cost = random.randint(15, 35)
+        market_reports = [
+            ("Trade Route Analysis", "Current shipping lanes showing highest profitability"),
+            ("Supply Demand Report", "Critical shortages and surplus goods across sectors"),  
+            ("Market Volatility Alert", "Price fluctuations and market stability predictions"),
+            ("Commodity Tracking", "Real-time pricing for essential goods and materials"),
+            ("Economic Forecast", "Projected market trends for the upcoming quarter")
+        ]
         
-        if money < cost:
-            embed = discord.Embed(
-                title="❌ Insufficient Funds",
-                description=f"**{char_name}** cannot afford fresh produce right now.",
-                color=0xff4500
-            )
-            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
-            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
-        else:
-            produce_items = [
-                "fresh leafy greens",
-                "ripe hydroponic tomatoes", 
-                "crisp vegetables",
-                "exotic fruits",
-                "aromatic herbs"
-            ]
-            
-            item = random.choice(produce_items)
-            
-            self.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
-                (cost, interaction.user.id)
-            )
-            
-            embed = discord.Embed(
-                title="🥬 Fresh Produce",
-                description=f"**{char_name}** purchases some {item}.",
-                color=0x9acd32
-            )
-            embed.add_field(name="🌱 Quality", value="Freshly harvested and nutrient-rich", inline=False)
-            embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
-            embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
+        report_type, description = random.choice(market_reports)
+        
+        insights = [
+            "Electronics are seeing a price surge due to increased demand in outer systems",
+            "Fuel prices are stabilizing after recent supply chain disruptions",
+            "Rare materials from mining operations are commanding premium prices", 
+            "Food imports are in high demand at frontier colonies",
+            "Luxury goods markets are experiencing seasonal fluctuations"
+        ]
+        
+        trader_tips = [
+            "Best profit margins are on routes avoiding high-traffic corridors",
+            "Independent traders can capitalize on gaps in major shipping schedules",
+            "Bulk purchases often qualify for significant volume discounts",
+            "Market timing is crucial - prices can shift within hours",
+            "Local specialties often have the highest profit potential"
+        ]
+        
+        embed = discord.Embed(
+            title="📊 Market Information Center",
+            description=f"**{char_name}** accesses comprehensive market data.",
+            color=0x4169e1
+        )
+        embed.add_field(name="📈 Report Type", value=report_type, inline=True)
+        embed.add_field(name="📱 Access Level", value="Public Terminal", inline=True)
+        embed.add_field(name="📋 Overview", value=description, inline=False)
+        embed.add_field(name="💡 Market Insight", value=random.choice(insights), inline=False)
+        embed.add_field(name="💼 Trading Tip", value=random.choice(trader_tips), inline=False)
+        embed.add_field(name="💰 Cost", value="Free information service", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 

@@ -1128,6 +1128,37 @@ class UpgradeWorkshopView(discord.ui.View):
             })
         
         return mods
+    
+    def _validate_ship_name(self, name: str) -> dict:
+        """Validate ship name with various criteria"""
+        # Basic length check
+        if len(name) < 2:
+            return {'valid': False, 'reason': 'Name must be at least 2 characters long'}
+        
+        if len(name) > 50:
+            return {'valid': False, 'reason': 'Name cannot exceed 50 characters'}
+        
+        # Character validation - allow letters, numbers, spaces, and basic punctuation
+        import re
+        if not re.match(r'^[a-zA-Z0-9\s\'\-\.\_\(\)\[\]]+$', name):
+            return {'valid': False, 'reason': 'Name contains invalid characters'}
+        
+        # Basic profanity filter (simple word list - in production would use a proper filter)
+        profanity_words = ['fuck', 'shit', 'damn', 'hell', 'ass', 'bitch', 'bastard']  # Basic list
+        name_lower = name.lower()
+        for word in profanity_words:
+            if word in name_lower:
+                return {'valid': False, 'reason': 'Name contains inappropriate content'}
+        
+        # Prevent all caps (except for acronyms)
+        if name.isupper() and len(name) > 5:
+            return {'valid': False, 'reason': 'Name cannot be all capital letters'}
+        
+        # Prevent excessive whitespace
+        if '  ' in name or name.startswith(' ') or name.endswith(' '):
+            return {'valid': False, 'reason': 'Name has excessive whitespace'}
+        
+        return {'valid': True, 'reason': 'Valid name'}
 
 
 class ComponentUpgradeView(discord.ui.View):
@@ -1324,6 +1355,7 @@ class CosmeticView(discord.ui.View):
         
         # Add category buttons
         categories = [
+            ('Rename Ship', '✏️', 'rename_ship'),
             ('Paint Job', '🎨', 'paint_job'),
             ('Decals', '🏷️', 'decals'),
             ('Interior', '🛋️', 'interior_style')
@@ -1340,14 +1372,185 @@ class CosmeticView(discord.ui.View):
     
     def _create_category_callback(self, category: str):
         async def callback(interaction: discord.Interaction):
-            # Show options for this category
-            # Implementation would show specific customization options
-            await interaction.response.send_message(
-                f"Customization options for {category} coming soon!",
-                ephemeral=True
-            )
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("This isn't your customization panel!", ephemeral=True)
+                return
+            
+            if category == 'rename_ship':
+                await self._show_ship_rename(interaction)
+            elif category == 'paint_job':
+                await self._show_paint_jobs(interaction)
+            elif category == 'decals':
+                await self._show_decals(interaction)
+            elif category == 'interior_style':
+                await self._show_interior_themes(interaction)
         
         return callback
+    
+    async def _show_ship_rename(self, interaction: discord.Interaction):
+        """Show ship renaming interface"""
+        # Get current ship name
+        ship_info = self.bot.db.execute_query(
+            "SELECT name, ship_type FROM ships WHERE ship_id = ?",
+            (self.ship_id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            await interaction.response.send_message("Ship not found!", ephemeral=True)
+            return
+        
+        current_name, ship_type = ship_info
+        
+        embed = discord.Embed(
+            title="✏️ Rename Your Ship",
+            description=f"Current name: **{current_name}**",
+            color=0x4169e1
+        )
+        
+        embed.add_field(name="Ship Type", value=ship_type, inline=True)
+        embed.add_field(name="Cost", value="1,000 credits", inline=True)
+        embed.add_field(name="Your Credits", value=f"{self.money:,}", inline=True)
+        
+        embed.add_field(
+            name="📝 Naming Rules",
+            value="• 2-50 characters long\n"
+                  "• Letters, numbers, spaces, and basic punctuation\n"
+                  "• No inappropriate content\n"
+                  "• Cannot duplicate your existing ship names",
+            inline=False
+        )
+        
+        # Create rename modal
+        view = ShipRenameView(self.bot, self.user_id, self.ship_id, self.money, current_name)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    async def _show_paint_jobs(self, interaction: discord.Interaction):
+        """Show available paint job options"""
+        from utils.ship_data import COSMETIC_OPTIONS
+        
+        # Get current paint job
+        current_custom = self.bot.db.execute_query(
+            "SELECT paint_job FROM ship_customization WHERE ship_id = ?",
+            (self.ship_id,),
+            fetch='one'
+        )
+        
+        current_paint = current_custom[0] if current_custom else "Default"
+        
+        embed = discord.Embed(
+            title="🎨 Ship Paint Jobs",
+            description=f"Current paint: **{current_paint}**",
+            color=0xff69b4
+        )
+        
+        paint_jobs = COSMETIC_OPTIONS['paint_jobs']
+        
+        # Show available paint jobs with stat effects
+        for paint in paint_jobs[:10]:  # Show first 10
+            stat_effect = self._get_paint_stat_effect(paint['name'])
+            effect_text = f" ({stat_effect})" if stat_effect else ""
+            
+            embed.add_field(
+                name=f"{paint['name']}{effect_text}",
+                value=f"{paint['description']}\n**Cost:** {paint['cost']:,} credits",
+                inline=True
+            )
+        
+        embed.add_field(
+            name="💡 Paint Effects",
+            value="• Dark colors: +5% stealth detection avoidance\n"
+                  "• Bright colors: +3% scan range\n"
+                  "• Military colors: +2% intimidation factor\n"
+                  "• Chrome finish: +10% trade value when selling",
+            inline=False
+        )
+        
+        view = PaintJobSelectionView(self.bot, self.user_id, self.ship_id, paint_jobs, self.money)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    async def _show_decals(self, interaction: discord.Interaction):
+        """Show available decal options"""
+        from utils.ship_data import COSMETIC_OPTIONS
+        
+        current_custom = self.bot.db.execute_query(
+            "SELECT decals FROM ship_customization WHERE ship_id = ?",
+            (self.ship_id,),
+            fetch='one'
+        )
+        
+        current_decals = current_custom[0] if current_custom else "None"
+        
+        embed = discord.Embed(
+            title="🏷️ Ship Decals",
+            description=f"Current decals: **{current_decals}**",
+            color=0x4169e1
+        )
+        
+        decals = COSMETIC_OPTIONS['decals']
+        
+        for decal in decals[:12]:  # Show first 12
+            embed.add_field(
+                name=decal['name'],
+                value=f"{decal['description']}\n**Cost:** {decal['cost']:,} credits",
+                inline=True
+            )
+        
+        view = DecalSelectionView(self.bot, self.user_id, self.ship_id, decals, self.money)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    async def _show_interior_themes(self, interaction: discord.Interaction):
+        """Show available interior theme options"""
+        from utils.ship_data import COSMETIC_OPTIONS
+        
+        current_custom = self.bot.db.execute_query(
+            "SELECT interior_style FROM ship_customization WHERE ship_id = ?",
+            (self.ship_id,),
+            fetch='one'
+        )
+        
+        current_interior = current_custom[0] if current_custom else "Standard"
+        
+        embed = discord.Embed(
+            title="🛋️ Interior Themes",
+            description=f"Current theme: **{current_interior}**",
+            color=0x8B4513
+        )
+        
+        themes = COSMETIC_OPTIONS['interior_themes']
+        
+        for theme in themes:
+            effect_text = self._get_interior_effect(theme['name'])
+            embed.add_field(
+                name=theme['name'],
+                value=f"{theme['description']}\n{effect_text}\n**Cost:** {theme['cost']:,} credits",
+                inline=True
+            )
+        
+        view = InteriorThemeView(self.bot, self.user_id, self.ship_id, themes, self.money)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    def _get_paint_stat_effect(self, paint_name: str) -> str:
+        """Get stat effect description for paint job"""
+        effects = {
+            'Midnight Black': '+5% stealth',
+            'Military Green': '+2% intimidation',
+            'Chrome Finish': '+10% resale value',
+            'Hazard Orange': '+3% visibility',
+            'Deep Space Blue': '+3% scan range'
+        }
+        return effects.get(paint_name, '')
+    
+    def _get_interior_effect(self, theme_name: str) -> str:
+        """Get effect description for interior theme"""
+        effects = {
+            'Luxury': '+10% crew morale, +5% passenger comfort',
+            'Military Spec': '+15% durability, +5% repair speed',
+            'Minimalist': '+5% fuel efficiency, +3% system reliability',
+            'Retro-Future': '+5% charm factor, +3% negotiation bonus',
+            'Alien-Inspired': '+10% curiosity factor, +5% research speed'
+        }
+        return effects.get(theme_name, 'Aesthetic enhancement only')
 
 
 class ItemApplicationView(discord.ui.View):
@@ -1706,6 +1909,351 @@ class SaleConfirmView(discord.ui.View):
             embed=None,
             view=None
         )
+
+
+class PaintJobSelectionView(discord.ui.View):
+    """Handle paint job selection and purchase"""
+    def __init__(self, bot, user_id: int, ship_id: int, paint_jobs: list, money: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.ship_id = ship_id
+        self.money = money
+        
+        # Create selection dropdown
+        options = []
+        for paint in paint_jobs[:25]:  # Discord limit is 25 options
+            options.append(
+                discord.SelectOption(
+                    label=f"{paint['name']} - {paint['cost']:,} cr",
+                    description=paint['description'][:50],  # Truncate if too long
+                    value=paint['name']
+                )
+            )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder="Choose a paint job...",
+                options=options
+            )
+            select.callback = self.paint_selected
+            self.add_item(select)
+    
+    async def paint_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your customization panel!", ephemeral=True)
+            return
+        
+        from utils.ship_data import COSMETIC_OPTIONS
+        paint_name = interaction.data['values'][0]
+        paint_data = next(p for p in COSMETIC_OPTIONS['paint_jobs'] if p['name'] == paint_name)
+        
+        if self.money < paint_data['cost']:
+            await interaction.response.send_message("❌ Insufficient credits!", ephemeral=True)
+            return
+        
+        # Apply paint job
+        await self._apply_paint_job(paint_name, paint_data['cost'])
+        
+        await interaction.response.send_message(
+            f"✅ Applied **{paint_name}** paint job to your ship! (-{paint_data['cost']:,} credits)",
+            ephemeral=True
+        )
+    
+    async def _apply_paint_job(self, paint_name: str, cost: int):
+        """Apply the paint job and deduct credits"""
+        # Ensure customization record exists
+        self.bot.db.execute_query(
+            '''INSERT OR IGNORE INTO ship_customization (ship_id, paint_job, decals, interior_style)
+               VALUES (?, ?, ?, ?)''',
+            (self.ship_id, 'Default', 'None', 'Standard')
+        )
+        
+        # Update paint job
+        self.bot.db.execute_query(
+            "UPDATE ship_customization SET paint_job = ? WHERE ship_id = ?",
+            (paint_name, self.ship_id)
+        )
+        
+        # Deduct credits
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, self.user_id)
+        )
+
+
+class DecalSelectionView(discord.ui.View):
+    """Handle decal selection and purchase"""
+    def __init__(self, bot, user_id: int, ship_id: int, decals: list, money: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.ship_id = ship_id
+        self.money = money
+        
+        # Create selection dropdown
+        options = []
+        for decal in decals[:25]:  # Discord limit is 25 options
+            options.append(
+                discord.SelectOption(
+                    label=f"{decal['name']} - {decal['cost']:,} cr",
+                    description=decal['description'][:50],
+                    value=decal['name']
+                )
+            )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder="Choose decals...",
+                options=options
+            )
+            select.callback = self.decal_selected
+            self.add_item(select)
+    
+    async def decal_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your customization panel!", ephemeral=True)
+            return
+        
+        from utils.ship_data import COSMETIC_OPTIONS
+        decal_name = interaction.data['values'][0]
+        decal_data = next(d for d in COSMETIC_OPTIONS['decals'] if d['name'] == decal_name)
+        
+        if self.money < decal_data['cost']:
+            await interaction.response.send_message("❌ Insufficient credits!", ephemeral=True)
+            return
+        
+        # Apply decals
+        await self._apply_decals(decal_name, decal_data['cost'])
+        
+        await interaction.response.send_message(
+            f"✅ Applied **{decal_name}** decals to your ship! (-{decal_data['cost']:,} credits)",
+            ephemeral=True
+        )
+    
+    async def _apply_decals(self, decal_name: str, cost: int):
+        """Apply the decals and deduct credits"""
+        # Ensure customization record exists
+        self.bot.db.execute_query(
+            '''INSERT OR IGNORE INTO ship_customization (ship_id, paint_job, decals, interior_style)
+               VALUES (?, ?, ?, ?)''',
+            (self.ship_id, 'Default', 'None', 'Standard')
+        )
+        
+        # Update decals
+        self.bot.db.execute_query(
+            "UPDATE ship_customization SET decals = ? WHERE ship_id = ?",
+            (decal_name, self.ship_id)
+        )
+        
+        # Deduct credits
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, self.user_id)
+        )
+
+
+class InteriorThemeView(discord.ui.View):
+    """Handle interior theme selection and purchase"""
+    def __init__(self, bot, user_id: int, ship_id: int, themes: list, money: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.ship_id = ship_id
+        self.money = money
+        
+        # Create selection dropdown
+        options = []
+        for theme in themes:
+            options.append(
+                discord.SelectOption(
+                    label=f"{theme['name']} - {theme['cost']:,} cr",
+                    description=theme['description'][:50],
+                    value=theme['name']
+                )
+            )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder="Choose interior theme...",
+                options=options
+            )
+            select.callback = self.theme_selected
+            self.add_item(select)
+    
+    async def theme_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your customization panel!", ephemeral=True)
+            return
+        
+        from utils.ship_data import COSMETIC_OPTIONS
+        theme_name = interaction.data['values'][0]
+        theme_data = next(t for t in COSMETIC_OPTIONS['interior_themes'] if t['name'] == theme_name)
+        
+        if self.money < theme_data['cost']:
+            await interaction.response.send_message("❌ Insufficient credits!", ephemeral=True)
+            return
+        
+        # Apply interior theme
+        await self._apply_theme(theme_name, theme_data['cost'])
+        
+        await interaction.response.send_message(
+            f"✅ Applied **{theme_name}** interior theme to your ship! (-{theme_data['cost']:,} credits)",
+            ephemeral=True
+        )
+    
+    async def _apply_theme(self, theme_name: str, cost: int):
+        """Apply the interior theme and deduct credits"""
+        # Ensure customization record exists
+        self.bot.db.execute_query(
+            '''INSERT OR IGNORE INTO ship_customization (ship_id, paint_job, decals, interior_style)
+               VALUES (?, ?, ?, ?)''',
+            (self.ship_id, 'Default', 'None', 'Standard')
+        )
+        
+        # Update interior theme
+        self.bot.db.execute_query(
+            "UPDATE ship_customization SET interior_style = ? WHERE ship_id = ?",
+            (theme_name, self.ship_id)
+        )
+        
+        # Deduct credits
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, self.user_id)
+        )
+
+
+class ShipRenameView(discord.ui.View):
+    """Handle ship renaming with modal input"""
+    def __init__(self, bot, user_id: int, ship_id: int, money: int, current_name: str):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.ship_id = ship_id
+        self.money = money
+        self.current_name = current_name
+    
+    @discord.ui.button(label="Enter New Name", style=discord.ButtonStyle.primary, emoji="✏️")
+    async def enter_name(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your ship!", ephemeral=True)
+            return
+        
+        # Show modal for name input
+        modal = ShipRenameModal(self.bot, self.user_id, self.ship_id, self.money, self.current_name)
+        await interaction.response.send_modal(modal)
+
+
+class ShipRenameModal(discord.ui.Modal, title="Rename Your Ship"):
+    """Modal for entering new ship name"""
+    def __init__(self, bot, user_id: int, ship_id: int, money: int, current_name: str):
+        super().__init__()
+        self.bot = bot
+        self.user_id = user_id
+        self.ship_id = ship_id
+        self.money = money
+        self.current_name = current_name
+    
+    new_name = discord.ui.TextInput(
+        label="New Ship Name",
+        placeholder="Enter your ship's new name...",
+        max_length=50,
+        min_length=2
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        new_name = self.new_name.value.strip()
+        
+        # Validation
+        validation_result = self._validate_ship_name(new_name)
+        if not validation_result['valid']:
+            await interaction.response.send_message(
+                f"❌ Invalid name: {validation_result['reason']}",
+                ephemeral=True
+            )
+            return
+        
+        # Check if name is already in use by this player
+        existing = self.bot.db.execute_query(
+            '''SELECT COUNT(*) FROM ships s
+               JOIN player_ships ps ON s.ship_id = ps.ship_id
+               WHERE ps.owner_id = ? AND s.name = ? AND s.ship_id != ?''',
+            (self.user_id, new_name, self.ship_id),
+            fetch='one'
+        )[0]
+        
+        if existing > 0:
+            await interaction.response.send_message(
+                "❌ You already have a ship with that name!",
+                ephemeral=True
+            )
+            return
+        
+        # Check credits
+        cost = 1000
+        if self.money < cost:
+            await interaction.response.send_message(
+                f"❌ Insufficient credits! Need {cost:,} credits",
+                ephemeral=True
+            )
+            return
+        
+        # Update ship name
+        self.bot.db.execute_query(
+            "UPDATE ships SET name = ? WHERE ship_id = ?",
+            (new_name, self.ship_id)
+        )
+        
+        # Deduct credits
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, self.user_id)
+        )
+        
+        # Success response
+        embed = discord.Embed(
+            title="✅ Ship Renamed!",
+            description=f"**{self.current_name}** is now called **{new_name}**",
+            color=0x00ff00
+        )
+        
+        embed.add_field(name="Old Name", value=self.current_name, inline=True)
+        embed.add_field(name="New Name", value=new_name, inline=True)
+        embed.add_field(name="Cost", value=f"{cost:,} credits", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    def _validate_ship_name(self, name: str) -> dict:
+        """Validate ship name with various criteria"""
+        # Basic length check
+        if len(name) < 2:
+            return {'valid': False, 'reason': 'Name must be at least 2 characters long'}
+        
+        if len(name) > 50:
+            return {'valid': False, 'reason': 'Name cannot exceed 50 characters'}
+        
+        # Character validation - allow letters, numbers, spaces, and basic punctuation
+        import re
+        if not re.match(r'^[a-zA-Z0-9\s\'\-\.\_\(\)\[\]]+$', name):
+            return {'valid': False, 'reason': 'Name contains invalid characters'}
+        
+        # Basic profanity filter (simple word list - in production would use a proper filter)
+        profanity_words = ['fuck', 'shit', 'damn', 'hell', 'ass', 'bitch', 'bastard']  # Basic list
+        name_lower = name.lower()
+        for word in profanity_words:
+            if word in name_lower:
+                return {'valid': False, 'reason': 'Name contains inappropriate content'}
+        
+        # Prevent all caps (except for acronyms)
+        if name.isupper() and len(name) > 5:
+            return {'valid': False, 'reason': 'Name cannot be all capital letters'}
+        
+        # Prevent excessive whitespace
+        if '  ' in name or name.startswith(' ') or name.endswith(' '):
+            return {'valid': False, 'reason': 'Name has excessive whitespace'}
+        
+        return {'valid': True, 'reason': 'Valid name'}
 
 
 async def setup(bot):

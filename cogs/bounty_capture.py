@@ -1848,7 +1848,7 @@ class BountyCog(commands.Cog):
         
         # Check active cooldowns
         cooldowns = self.db.execute_query(
-            """SELECT c.name, cc.attempt_time 
+            """SELECT c.name, cd.attempt_time 
                FROM capture_cooldowns cd
                JOIN characters c ON cd.target_id = c.user_id
                WHERE cd.attacker_id = ?""",
