@@ -957,13 +957,6 @@ class TravelCog(commands.Cog):
                 return
             dest_name, faction = location_info
         except sqlite3.OperationalError as e:
-            # Check if user has active Forged Transit Papers
-        effect_checker = ItemEffectChecker(self.db)
-        if effect_checker.has_security_bypass(user_id):
-            # User has active transit papers - bypass all security checks
-            message = f"🎫 Your forged transit papers get you through security without question. Welcome to {dest_name}!"
-            await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, message)
-            return
             if "no such column: faction" in str(e):
                 # Fallback to just getting name, assume neutral faction
                 location_info = self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (dest_location_id,), fetch='one')
@@ -975,6 +968,34 @@ class TravelCog(commands.Cog):
                 print(f"⚠️ Faction column missing, using default 'neutral' for {dest_name}")
             else:
                 raise e
+
+        # Import the item effects checker
+        effect_checker = ItemEffectChecker(self.db)
+        
+        # Check if user has active Forged Transit Papers (existing check)
+        if effect_checker.has_security_bypass(user_id):
+            # User has active transit papers - bypass all security checks
+            message = f"🎫 Your forged transit papers get you through security without question. Welcome to {dest_name}!"
+            await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, message)
+            return
+
+        # NEW: Check if user has Federal ID Card
+        has_federal_id = effect_checker.has_federal_access(user_id)
+        
+        # Check if this is a federal location
+        is_federal_location = self.db.execute_query(
+            "SELECT has_federal_supplies FROM locations WHERE location_id = ?",
+            (dest_location_id,),
+            fetch='one'
+        )
+        is_federal = is_federal_location and is_federal_location[0]
+
+        # Federal ID Card provides special access to government/federal locations
+        if has_federal_id and (faction == 'government' or is_federal):
+            message = f"🆔 Federal ID verified. Welcome to {dest_name}, Agent. You have been granted priority clearance."
+            await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, message)
+            return
+
         # Add this check BEFORE the existing faction logic (government/bandit):
         # Check if location is owned by a faction
         faction_ownership = self.db.execute_query(
@@ -994,18 +1015,26 @@ class TravelCog(commands.Cog):
                 # Member of the owning faction - free access
                 access_granted = True
                 message = f"{faction_emoji} Welcome to {dest_name}, {faction_name} member!"
+            elif has_federal_id and is_federal:
+                # Federal ID provides reduced fees at federal locations
+                reduced_fee = max(0, docking_fee // 2) if docking_fee else 0
+                if reduced_fee > 0:
+                    message = f"🆔 {dest_name} is controlled by **{faction_name}**. Your Federal ID grants a reduced docking fee of **{reduced_fee:,} credits** (50% discount)."
+                    view = DockingFeeView(self.bot, user_id, dest_location_id, reduced_fee, origin_location_id)
+                else:
+                    access_granted = True
+                    message = f"🆔 Federal ID recognized. Welcome to {dest_name}, federal personnel."
             elif docking_fee and docking_fee > 0:
                 # Non-member with docking fee
                 message = f"{faction_emoji} {dest_name} is controlled by **{faction_name}**. A docking fee of **{docking_fee:,} credits** is required for non-members."
                 view = DockingFeeView(self.bot, user_id, dest_location_id, docking_fee, origin_location_id)
-                
-                # The DockingFeeView will handle payment to faction bank
             else:
                 # Non-member but no fee set
                 access_granted = True
                 message = f"{faction_emoji} Welcome to {dest_name}, controlled by {faction_name}."
         else:
-            # FIXED: This code should NOT be inside the except block!
+            # ... rest of existing faction logic with Federal ID enhancement ...
+            
             rep_cog = self.bot.get_cog('ReputationCog')
             if not rep_cog:
                 print("ReputationCog not found, granting standard access.")
@@ -1020,38 +1049,50 @@ class TravelCog(commands.Cog):
             message = ""
             view = None
 
-        # Faction Logic
-        if faction == 'government':
-            if rep_tier in ['Heroic', 'Good']:
+            # Enhanced Faction Logic with Federal ID Card support
+            if faction == 'government':
+                if has_federal_id:
+                    # Federal ID grants access regardless of reputation
+                    access_granted = True
+                    message = f"🆔 Federal credentials verified. Welcome to the government facility of {dest_name}, Agent."
+                elif rep_tier in ['Heroic', 'Good']:
+                    access_granted = True
+                    message = f"Welcome to the secure government area of {dest_name}, your reputation precedes you."
+                elif rep_tier == 'Neutral':
+                    fee = max(100, (50 - reputation) * 10)  # Minimum 100 credits
+                    message = f"{dest_name} is a secure government area. Due to your neutral reputation, a docking fee of **{fee:,} credits** is required."
+                    view = DockingFeeView(self.bot, user_id, dest_location_id, fee, origin_location_id)
+                else:  # Bad or Evil
+                    message = f"🚨 **HOSTILE DETECTED!** 🚨\nYour criminal reputation is known here. {dest_name} security forces engage on sight! You are forced to retreat."
+                    await self._force_retreat(user_id, origin_location_id, guild, transit_chan, message)
+                    return
+
+            elif faction == 'bandit':
+                if has_federal_id:
+                    # Federal ID is actually BAD at bandit locations
+                    message = f"💀 **FEDERAL AGENT DETECTED!** 💀\nYour federal credentials mark you as an enemy here. {dest_name} opens fire immediately!"
+                    await self._force_retreat(user_id, origin_location_id, guild, transit_chan, message)
+                    return
+                elif rep_tier in ['Evil', 'Bad']:
+                    access_granted = True
+                    message = f"Welcome to {dest_name}, friend. We don't ask questions here."
+                elif rep_tier == 'Neutral':
+                    fee = (50 + reputation) * 10
+                    message = f"{dest_name} is a haven for those outside the law. To prove you're not a spy, a 'contribution' of **{fee:,} credits** is required to dock."
+                    view = DockingFeeView(self.bot, user_id, dest_location_id, fee, origin_location_id)
+                else:  # Good or Heroic
+                    message = f"⚔️ **LAWMAN DETECTED!** ⚔️\nYour kind isn't welcome at {dest_name}. The locals open fire, forcing you to retreat!"
+                    await self._force_retreat(user_id, origin_location_id, guild, transit_chan, message)
+                    return
+
+            else:  # Neutral faction
                 access_granted = True
-                message = f"Welcome to the secure government area of {dest_name}, your reputation precedes you."
-            elif rep_tier == 'Neutral':
-                fee = (50 - reputation) * 10
-                message = f"{dest_name} is a secure government area. Due to your neutral reputation, a docking fee of **{fee:,} credits** is required."
-                view = DockingFeeView(self.bot, user_id, dest_location_id, fee, origin_location_id)
-            else: # Bad or Evil
-                message = f"🚨 **HOSTILE DETECTED!** 🚨\nYour criminal reputation is known here. {dest_name} security forces engage on sight! You are forced to retreat."
-                await self._force_retreat(user_id, origin_location_id, guild, transit_chan, message)
-                return
+                if has_federal_id and is_federal:
+                    message = f"🆔 Federal ID recognized. Welcome to {dest_name}."
+                else:
+                    message = f"You have arrived at {dest_name}."
 
-        elif faction == 'bandit':
-            if rep_tier in ['Evil', 'Bad']:
-                access_granted = True
-                message = f"Welcome to {dest_name}, friend. We don't ask questions here."
-            elif rep_tier == 'Neutral':
-                fee = (50 + reputation) * 10
-                message = f"{dest_name} is a haven for those outside the law. To prove you're not a spy, a 'contribution' of **{fee:,} credits** is required to dock."
-                view = DockingFeeView(self.bot, user_id, dest_location_id, fee, origin_location_id)
-            else: # Good or Heroic
-                message = f"⚔️ **LAWMAN DETECTED!** ⚔️\nYour kind isn't welcome at {dest_name}. The locals open fire, forcing you to retreat!"
-                await self._force_retreat(user_id, origin_location_id, guild, transit_chan, message)
-                return
-
-        else: # Neutral faction
-            access_granted = True
-            message = f"You have arrived at {dest_name}."
-
-        # Process access
+        # Process access (existing logic continues)
         if access_granted:
             await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, message)
         elif view:
@@ -1060,9 +1101,13 @@ class TravelCog(commands.Cog):
                 await transit_chan.send(message, view=view)
             decision = await view.wait_for_decision()
             if decision == 'pay':
-                await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, f"Docking fees paid. You are cleared to land at {dest_name}.")
-            else: # Leave
+                payment_msg = f"Docking fees paid. You are cleared to land at {dest_name}."
+                if has_federal_id:
+                    payment_msg = f"🆔 Federal discount applied. You are cleared to land at {dest_name}."
+                await self._grant_final_access(user_id, dest_location_id, guild, transit_chan, payment_msg)
+            else:  # Leave
                 await self._force_retreat(user_id, origin_location_id, guild, transit_chan, f"You refused to pay the fee and have returned to your previous location.")
+
 
     async def _grant_final_access(self, user_id: int, dest_location_id: int, guild: discord.Guild, transit_chan: discord.TextChannel, arrival_message: str = ""):
         """Finalizes arrival, updates DB and channels, and cleans up."""

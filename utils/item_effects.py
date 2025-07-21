@@ -2,16 +2,15 @@
 # Add this new file to your utils folder
 
 import json
-from datetime import datetime
-
+from datetime import datetime, timezone, timedelta
 class ItemEffectChecker:
     """Helper class to check for active item effects"""
     
     def __init__(self, db):
         self.db = db
-    
+    LOCAL_TZ = timezone(timedelta(hours=-6))
     def has_security_bypass(self, user_id):
-        """Check if user has active Forged Transit Papers"""
+        """Check if user has active Forged Transit Papers - Fixed timezone"""
         bypass_check = self.db.execute_query(
             """SELECT metadata FROM inventory 
                WHERE owner_id = ? AND item_name = 'Active: Security Bypass'
@@ -24,7 +23,13 @@ class ItemEffectChecker:
             metadata = json.loads(bypass_check[0])
             if 'active_until' in metadata:
                 expire_time = datetime.fromisoformat(metadata['active_until'])
-                return expire_time > datetime.now()  # Compare with server local time
+                # Ensure timezone awareness
+                if expire_time.tzinfo is None:
+                    expire_time = expire_time.replace(tzinfo=timezone.utc)
+                
+                # Compare with local time
+                current_time = datetime.now(LOCAL_TZ)
+                return expire_time > current_time
         return False
     
     def has_federal_access(self, user_id):
