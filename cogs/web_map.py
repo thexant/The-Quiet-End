@@ -683,72 +683,73 @@ class WebMapCog(commands.Cog):
 </html>'''
     
     def get_map_html(self):
-        """Get map page HTML"""
-        return '''<!DOCTYPE html>
+        """Get map page HTML with enhanced info panel"""
+        return f'''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>The Quiet End - Galaxy Map</title>
-    <link href="https://fonts.googleapis.com/css2?family=Tektur:wght@400;700;900&display=swap" rel="stylesheet">
-    <style>''' + self.get_shared_css() + self.get_map_css() + '''</style>
+    <title>Galaxy Map - {self.bot.user.name if self.bot.user else "Space RPG"}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tektur:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        {self.get_shared_css()}
+        {self.get_map_css()}
+    </style>
 </head>
-<body class="theme-blue">
+<body>
     <div class="static-overlay"></div>
     <div class="scanlines"></div>
     
     <div class="map-container">
-        <header class="map-header">
+        <div class="map-header">
             <div class="header-section">
-                <h1 class="map-title">GALAXY MAP</h1>
+                <h1 class="map-title">Galaxy Map</h1>
                 <div class="map-status">
-                    <div class="status-indicator online"></div>
-                    <span id="last-update">LOADING...</span>
+                    <span class="status-indicator"></span>
+                    <span id="last-update">Loading...</span>
                 </div>
             </div>
             <div class="header-controls">
-                <a href="/" class="nav-button">HOME</a>
-                <a href="/wiki" class="nav-button">WIKI</a>
+                <a href="/wiki" class="nav-button">Wiki</a>
+                <a href="/" class="nav-button">Home</a>
             </div>
-        </header>
+        </div>
         
         <div class="map-controls">
             <div class="control-group">
                 <label class="toggle-control">
                     <input type="checkbox" id="toggle-labels">
-                    <span class="toggle-label">Show Labels</span>
+                    <span>Show Labels</span>
+                </label>
+                <label class="toggle-control">
+                    <input type="checkbox" id="toggle-routes" checked>
+                    <span>Show Routes</span>
                 </label>
                 <label class="toggle-control">
                     <input type="checkbox" id="toggle-players">
-                    <span class="toggle-label">Show Players</span>
+                    <span>Show Players</span>
                 </label>
                 <label class="toggle-control">
                     <input type="checkbox" id="toggle-npcs">
-                    <span class="toggle-label">Show NPCs</span>
-                </label>
-                <label class="toggle-control">
-                    <input type="checkbox" id="toggle-routes">
-                    <span class="toggle-label">Show Routes</span>
+                    <span>Show NPCs</span>
                 </label>
             </div>
             <div class="control-group">
-                <button id="zoom-in" class="control-button">+</button>
-                <button id="zoom-out" class="control-button">-</button>
-                <button id="zoom-reset" class="control-button">Reset</button>
+                <button class="control-button" onclick="galaxyMap.resetView()">Reset View</button>
             </div>
         </div>
         
         <div class="map-viewport">
             <canvas id="galaxy-map"></canvas>
             <div id="tooltip" class="map-tooltip"></div>
-        </div>
-        
-        <div id="location-info" class="location-info-panel">
-            <h3>Select a location for details</h3>
+            <div id="location-info" class="location-info-panel">
+                <button class="info-panel-close" onclick="document.getElementById('location-info').style.display='none'">×</button>
+                <!-- Content will be dynamically inserted here -->
+            </div>
         </div>
     </div>
     
-    <script>''' + self.get_map_script() + '''</script>
+    <script>{self.get_map_script()}</script>
 </body>
 </html>'''
     
@@ -1107,12 +1108,16 @@ class WebMapCog(commands.Cog):
             color: var(--text-primary);
         }
         
-        .toggle-control input {
-            width: 16px;
-            height: 16px;
+        .toggle-control input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
             accent-color: var(--primary-color);
+            cursor: pointer;
         }
         
+        .toggle-control input[type="checkbox"]:checked {
+            box-shadow: 0 0 5px var(--glow-primary);
+        }
         .control-button {
             padding: 0.5rem 1rem;
             background: var(--accent-bg);
@@ -1154,16 +1159,22 @@ class WebMapCog(commands.Cog):
             background: var(--gradient-panel);
             border: 1px solid var(--primary-color);
             border-radius: 4px;
-            padding: 0.5rem 1rem;
-            font-size: 0.8rem;
+            padding: 0.75rem 1rem;
+            font-size: 0.85rem;
             pointer-events: none;
             opacity: 0;
             transition: opacity 0.2s ease;
             z-index: 100;
-            max-width: 250px;
+            max-width: 300px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
         }
-        
+        .map-tooltip strong {
+            color: var(--primary-color);
+            display: block;
+            margin-bottom: 0.25rem;
+            font-size: 0.95rem;
+        }
         .map-tooltip.visible {
             opacity: 1;
         }
@@ -1172,32 +1183,65 @@ class WebMapCog(commands.Cog):
             position: absolute;
             right: 2rem;
             bottom: 2rem;
-            width: 300px;
+            width: 350px;
+            max-height: 70vh;
+            overflow-y: auto;
             background: var(--gradient-panel);
             border: 2px solid var(--primary-color);
             border-radius: 8px;
             padding: 1.5rem;
             box-shadow: 0 0 30px var(--glow-primary);
             z-index: 50;
+            display: none;
+            backdrop-filter: blur(10px);
         }
-        
+
+        .location-info-panel::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .location-info-panel::-webkit-scrollbar-track {
+            background: var(--secondary-bg);
+            border-radius: 4px;
+        }
+
+        .location-info-panel::-webkit-scrollbar-thumb {
+            background: var(--primary-color);
+            border-radius: 4px;
+        }
+
         .location-info-panel h3 {
             color: var(--primary-color);
             margin-bottom: 1rem;
-            font-size: 1.1rem;
+            font-size: 1.3rem;
             text-shadow: 0 0 10px var(--glow-primary);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
         }
-        
+
         .location-detail {
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.75rem;
             font-size: 0.9rem;
             color: var(--text-secondary);
+            line-height: 1.4;
         }
-        
+
         .location-detail strong {
             color: var(--text-primary);
+            display: inline-block;
+            margin-right: 0.5rem;
         }
-        
+        .route-type-local {
+            color: #88ff88;
+        }
+
+        .route-type-gated {
+            color: #00cccc;
+        }
+
+        .route-type-ungated {
+            color: #ff6600;
+        }
         /* Map object styles */
         .location-colony { fill: #00ff88; }
         .location-space_station { fill: #00ffff; }
@@ -1210,7 +1254,83 @@ class WebMapCog(commands.Cog):
             fill: none;
             opacity: 0.5;
         }
-        
+        /* Map controls responsive adjustments */
+        @media (max-width: 768px) {
+            .map-controls {
+                flex-direction: column;
+                gap: 1rem;
+                padding: 0.75rem 1rem;
+            }
+            
+            .control-group {
+                width: 100%;
+                justify-content: space-between;
+                flex-wrap: wrap;
+            }
+            
+            .location-info-panel {
+                position: fixed;
+                bottom: 0;
+                right: 0;
+                left: 0;
+                width: 100%;
+                max-height: 50vh;
+                border-radius: 8px 8px 0 0;
+            }
+        }
+        /* Route visualization enhancements */
+        .route-highlight {
+            animation: route-pulse 2s infinite;
+        }
+
+        @keyframes route-pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+
+        /* Location type specific styling */
+        .location-colony {
+            --location-color: #00ff88;
+        }
+
+        .location-space_station {
+            --location-color: #00ffff;
+        }
+
+        .location-outpost {
+            --location-color: #ffaa00;
+        }
+
+        .location-gate {
+            --location-color: #ff00ff;
+        }
+
+        /* Danger level indicators */
+        .danger-level-1 { color: #00ff00; }
+        .danger-level-2 { color: #88ff00; }
+        .danger-level-3 { color: #ffff00; }
+        .danger-level-4 { color: #ff8800; }
+        .danger-level-5 { color: #ff0000; }
+
+        /* Close button for info panel */
+        .info-panel-close {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: color 0.3s ease;
+            padding: 0.25rem;
+            line-height: 1;
+        }
+
+        .info-panel-close:hover {
+            color: var(--primary-color);
+            text-shadow: 0 0 10px var(--glow-primary);
+        }
         .corridor-active {
             stroke: var(--primary-color);
             stroke-width: 2;
@@ -1410,10 +1530,12 @@ class WebMapCog(commands.Cog):
                 this.dragStartX = 0;
                 this.dragStartY = 0;
                 this.selectedLocation = null;
+                this.selectedCorridor = null;
+                this.hoveredCorridor = null;
                 this.showLabels = false;
                 this.showPlayers = false;
                 this.showNPCs = false;
-                this.showRoutes = false;
+                this.showRoutes = true; // Default to true to match HTML
                 
                 this.init();
             }
@@ -1450,12 +1572,12 @@ class WebMapCog(commands.Cog):
                 this.canvas.addEventListener('touchmove', e => this.handleTouchMove(e));
                 this.canvas.addEventListener('touchend', e => this.handleTouchEnd(e));
                 
-                // Control buttons
-                document.getElementById('zoom-in').addEventListener('click', () => this.zoom(1.2));
-                document.getElementById('zoom-out').addEventListener('click', () => this.zoom(0.8));
-                document.getElementById('zoom-reset').addEventListener('click', () => this.resetView());
+                // Toggle controls
+                document.getElementById('toggle-labels').addEventListener('change', e => {
+                    this.showLabels = e.target.checked;
+                    this.render();
+                });
                 
-                // Toggles
                 document.getElementById('toggle-players').addEventListener('change', e => {
                     this.showPlayers = e.target.checked;
                     this.render();
@@ -1468,10 +1590,6 @@ class WebMapCog(commands.Cog):
                 
                 document.getElementById('toggle-routes').addEventListener('change', e => {
                     this.showRoutes = e.target.checked;
-                    this.render();
-                });
-                document.getElementById('toggle-labels').addEventListener('change', e => {
-                    this.showLabels = e.target.checked;
                     this.render();
                 });
             }
@@ -1566,8 +1684,6 @@ class WebMapCog(commands.Cog):
             }
             
             drawCorridors() {
-                this.ctx.lineWidth = Math.max(1, Math.min(3, 2 / Math.sqrt(this.scale)));
-                
                 for (const corridor of this.data.corridors) {
                     const origin = this.data.locations[corridor.origin];
                     const dest = this.data.locations[corridor.destination];
@@ -1577,28 +1693,118 @@ class WebMapCog(commands.Cog):
                     const start = this.worldToScreen(origin.x, origin.y);
                     const end = this.worldToScreen(dest.x, dest.y);
                     
+                    // Determine if this corridor is selected or related to selected location
+                    const isSelected = this.selectedCorridor && 
+                        this.selectedCorridor.id === corridor.id;
+                    const isRelatedToLocation = this.selectedLocation && 
+                        (corridor.origin == this.selectedLocation || 
+                         corridor.destination == this.selectedLocation);
+                    const isHovered = this.hoveredCorridor && 
+                        this.hoveredCorridor.id === corridor.id;
+                    
+                    // Base line width - increased for better visibility
+                    let lineWidth = Math.max(3, Math.min(8, 5 / Math.sqrt(this.scale)));
+                    
+                    // Determine corridor type and styling
+                    let strokeStyle = 'rgba(0, 51, 68, 0.3)'; // Default faded
+                    let dashPattern = [];
+                    
+                    if (corridor.name && corridor.name.includes('Approach')) {
+                        // Local space - dotted line
+                        strokeStyle = 'rgba(136, 255, 136, 0.5)'; // Light green
+                        dashPattern = [5, 5];
+                    } else if (corridor.name && corridor.name.includes('Ungated')) {
+                        // Ungated - dashed line
+                        strokeStyle = 'rgba(255, 102, 0, 0.5)'; // Orange
+                        dashPattern = [10, 5];
+                    } else {
+                        // Gated - solid line
+                        strokeStyle = 'rgba(0, 204, 204, 0.5)'; // Cyan
+                    }
+                    
                     // Check if any players are in this corridor
                     const hasPlayers = Object.values(this.data.players).some(p => 
                         p.traveling && p.corridor_id === corridor.id
                     );
                     
-                    if (hasPlayers) {
-                        this.ctx.strokeStyle = '#00ffff';
-                        this.ctx.lineWidth = Math.max(2, Math.min(5, 4 / Math.sqrt(this.scale)));
+                    // Apply highlighting
+                    if (isSelected) {
+                        strokeStyle = '#00ffff';
+                        lineWidth = Math.max(4, Math.min(10, 8 / Math.sqrt(this.scale)));
+                        this.ctx.shadowBlur = 20;
+                        this.ctx.shadowColor = '#00ffff';
+                    } else if (isRelatedToLocation) {
+                        // Highlight routes from/to selected location
+                        if (corridor.name && corridor.name.includes('Approach')) {
+                            strokeStyle = '#88ff88';
+                        } else if (corridor.name && corridor.name.includes('Ungated')) {
+                            strokeStyle = '#ff6600';
+                        } else {
+                            strokeStyle = '#00cccc';
+                        }
+                        lineWidth = Math.max(3, Math.min(8, 6 / Math.sqrt(this.scale)));
+                        this.ctx.shadowBlur = 10;
+                        this.ctx.shadowColor = strokeStyle;
+                    } else if (isHovered) {
+                        lineWidth = Math.max(3, Math.min(8, 6 / Math.sqrt(this.scale)));
+                        this.ctx.shadowBlur = 15;
+                        this.ctx.shadowColor = strokeStyle;
+                    } else if (hasPlayers) {
+                        strokeStyle = '#00ffff';
+                        lineWidth = Math.max(3, Math.min(8, 6 / Math.sqrt(this.scale)));
                         this.ctx.shadowBlur = 10;
                         this.ctx.shadowColor = '#00ffff';
                     } else {
-                        this.ctx.strokeStyle = 'rgba(0, 51, 68, 0.5)';
                         this.ctx.shadowBlur = 0;
                     }
                     
+                    this.ctx.strokeStyle = strokeStyle;
+                    this.ctx.lineWidth = lineWidth;
+                    
+                    // Draw the line with dash pattern if applicable
                     this.ctx.beginPath();
+                    if (dashPattern.length > 0) {
+                        this.ctx.setLineDash(dashPattern);
+                    }
                     this.ctx.moveTo(start.x, start.y);
                     this.ctx.lineTo(end.x, end.y);
                     this.ctx.stroke();
+                    this.ctx.setLineDash([]); // Reset dash
+                    
+                    // Draw direction indicators for selected corridors
+                    if (isSelected || isRelatedToLocation) {
+                        this.drawCorridorArrow(start, end, strokeStyle);
+                    }
                 }
                 
                 this.ctx.shadowBlur = 0;
+            }
+            
+            drawCorridorArrow(start, end, color) {
+                const angle = Math.atan2(end.y - start.y, end.x - start.x);
+                const midX = (start.x + end.x) / 2;
+                const midY = (start.y + end.y) / 2;
+                
+                const arrowLength = 15;
+                const arrowAngle = Math.PI / 6;
+                
+                this.ctx.strokeStyle = color;
+                this.ctx.fillStyle = color;
+                this.ctx.lineWidth = 2;
+                
+                // Draw arrowhead
+                this.ctx.beginPath();
+                this.ctx.moveTo(midX, midY);
+                this.ctx.lineTo(
+                    midX - arrowLength * Math.cos(angle - arrowAngle),
+                    midY - arrowLength * Math.sin(angle - arrowAngle)
+                );
+                this.ctx.moveTo(midX, midY);
+                this.ctx.lineTo(
+                    midX - arrowLength * Math.cos(angle + arrowAngle),
+                    midY - arrowLength * Math.sin(angle + arrowAngle)
+                );
+                this.ctx.stroke();
             }
             
             drawLocations() {
@@ -1619,9 +1825,14 @@ class WebMapCog(commands.Cog):
                     
                     const color = colors[location.type] || '#ffffff';
                     
-                    // Scale icon size inversely with zoom to maintain constant screen size
-                    const baseSize = location.type === 'gate' ? 20 : 16;
-                    const size = Math.max(baseSize / Math.sqrt(this.scale), 10); // Min size of 10
+                    // Increased base sizes for better visibility
+                    const baseSize = location.type === 'gate' ? 25 : 20;
+                    const size = Math.max(baseSize / Math.sqrt(this.scale), 12);
+                    
+                    // Check if location is connected to selected corridor
+                    const isCorridorDestination = this.selectedCorridor && 
+                        (this.selectedCorridor.origin == id || 
+                         this.selectedCorridor.destination == id);
                     
                     // Draw location
                     this.ctx.fillStyle = color;
@@ -1644,49 +1855,35 @@ class WebMapCog(commands.Cog):
                         this.ctx.fill();
                     }
                     
-                    // Draw selection indicator
-                    if (this.selectedLocation === id) {
+                    // Draw selection/highlight indicators
+                    if (this.selectedLocation === id || isCorridorDestination) {
                         this.ctx.strokeStyle = color;
-                        this.ctx.lineWidth = 2;
+                        this.ctx.lineWidth = 3;
                         this.ctx.beginPath();
-                        this.ctx.arc(pos.x, pos.y, size + 5, 0, Math.PI * 2);
+                        this.ctx.arc(pos.x, pos.y, size + 8, 0, Math.PI * 2);
                         this.ctx.stroke();
+                        
+                        // Pulsing effect for corridor destinations
+                        if (isCorridorDestination) {
+                            const time = Date.now() / 1000;
+                            const pulseSize = size + 12 + Math.sin(time * 3) * 4;
+                            this.ctx.globalAlpha = 0.3;
+                            this.ctx.beginPath();
+                            this.ctx.arc(pos.x, pos.y, pulseSize, 0, Math.PI * 2);
+                            this.ctx.stroke();
+                            this.ctx.globalAlpha = 1;
+                        }
                     }
                     
                     // Draw name if labels are enabled
-                    // Draw name if labels are enabled
-                    if (this.showLabels) {
-                        // Only show labels at higher zoom levels to reduce clutter
-                        const minZoomForLabels = 2.0; // Increased from 0.8
-                        const labelOpacity = Math.min(1, (this.scale - minZoomForLabels) / 1.0);
-                        
-                        if (this.scale > minZoomForLabels) {
-                            this.ctx.shadowBlur = 5;
-                            this.ctx.shadowColor = '#000000';
-                            this.ctx.fillStyle = `rgba(224, 255, 255, ${labelOpacity})`;
-                            
-                            // Larger font size
-                            const fontSize = Math.min(20, 16 + this.scale / 3);
-                            this.ctx.font = `bold ${fontSize}px Tektur`;
-                            this.ctx.textAlign = 'center';
-                            
-                            // Add background for better readability
-                            const labelY = pos.y + size + 20;
-                            const metrics = this.ctx.measureText(location.name);
-                            
-                            // Draw background
-                            this.ctx.fillStyle = `rgba(0, 4, 8, ${labelOpacity * 0.8})`;
-                            this.ctx.fillRect(
-                                pos.x - metrics.width/2 - 4,
-                                labelY - fontSize + 2,
-                                metrics.width + 8,
-                                fontSize + 4
-                            );
-                            
-                            // Draw text
-                            this.ctx.fillStyle = `rgba(224, 255, 255, ${labelOpacity})`;
-                            this.ctx.fillText(location.name, pos.x, labelY);
-                        }
+                    if (this.showLabels && this.scale > 0.8) {
+                        this.ctx.fillStyle = '#ffffff';
+                        this.ctx.font = `${Math.max(12, 14 / Math.sqrt(this.scale))}px 'Tektur', monospace`;
+                        this.ctx.textAlign = 'center';
+                        this.ctx.textBaseline = 'top';
+                        this.ctx.shadowBlur = 5;
+                        this.ctx.shadowColor = '#000000';
+                        this.ctx.fillText(location.name, pos.x, pos.y + size + 5);
                     }
                 }
                 
@@ -1697,9 +1894,9 @@ class WebMapCog(commands.Cog):
                 this.ctx.fillStyle = '#00ff00';
                 
                 for (const [id, player] of Object.entries(this.data.players)) {
-                    if (!player.location_id || player.traveling) continue;
+                    if (!player.location || player.traveling) continue;
                     
-                    const location = this.data.locations[player.location_id];
+                    const location = this.data.locations[player.location];
                     if (!location) continue;
                     
                     const pos = this.worldToScreen(location.x, location.y);
@@ -1723,15 +1920,21 @@ class WebMapCog(commands.Cog):
             
             drawNPCs() {
                 for (const [id, npc] of Object.entries(this.data.npcs)) {
-                    if (!npc.location_id) continue;
+                    if (!npc.location) continue;
                     
-                    const location = this.data.locations[npc.location_id];
+                    const location = this.data.locations[npc.location];
                     if (!location) continue;
                     
                     const pos = this.worldToScreen(location.x, location.y);
                     
-                    // Determine NPC color
-                    this.ctx.fillStyle = npc.type === 'static' ? '#ff6600' : '#ff00ff';
+                    // Determine NPC color based on alignment
+                    if (npc.alignment === 'hostile' || npc.alignment === 'pirate') {
+                        this.ctx.fillStyle = '#ff0000';
+                    } else if (npc.alignment === 'friendly') {
+                        this.ctx.fillStyle = '#00ff88';
+                    } else {
+                        this.ctx.fillStyle = '#ff6600';
+                    }
                     
                     // Draw NPC indicator with inverse scaling
                     const squareSize = Math.max(10 / Math.sqrt(this.scale), 5);
@@ -1748,24 +1951,6 @@ class WebMapCog(commands.Cog):
                 }
                 
                 this.ctx.shadowBlur = 0;
-            }
-            
-            drawPulse(x, y, color, baseSize) {
-                const time = Date.now() / 1000;
-                const pulseSize = baseSize + Math.sin(time * 3) * 2;
-                
-                this.ctx.fillStyle = color;
-                this.ctx.globalAlpha = 0.8;
-                this.ctx.beginPath();
-                this.ctx.arc(x, y, pulseSize * this.scale, 0, Math.PI * 2);
-                this.ctx.fill();
-                
-                this.ctx.globalAlpha = 0.3;
-                this.ctx.beginPath();
-                this.ctx.arc(x, y, (pulseSize + 4) * this.scale, 0, Math.PI * 2);
-                this.ctx.fill();
-                
-                this.ctx.globalAlpha = 1;
             }
             
             handleMouseDown(e) {
@@ -1785,24 +1970,42 @@ class WebMapCog(commands.Cog):
                     this.offsetY = e.clientY - this.dragStartY;
                     this.render();
                 } else {
-                    // Check for hover
                     const worldPos = this.screenToWorld(x, y);
                     let hoveredLocation = null;
+                    let hoveredCorridor = null;
                     
-                    for (const [id, location] of Object.entries(this.data.locations)) {
-                        const dist = Math.sqrt(
-                            Math.pow(location.x - worldPos.x, 2) + 
-                            Math.pow(location.y - worldPos.y, 2)
-                        );
-                        
-                        if (dist < 10 / this.scale) {
-                            hoveredLocation = location;
-                            break;
+                    // Check corridor hover
+                    if (this.showRoutes) {
+                        for (const corridor of this.data.corridors) {
+                            if (this.isPointNearLine(worldPos, corridor)) {
+                                hoveredCorridor = corridor;
+                                break;
+                            }
                         }
                     }
                     
+                    // Check location hover
+                    if (!hoveredCorridor) {
+                        for (const [id, location] of Object.entries(this.data.locations)) {
+                            const dist = Math.sqrt(
+                                Math.pow(location.x - worldPos.x, 2) + 
+                                Math.pow(location.y - worldPos.y, 2)
+                            );
+                            
+                            if (dist < 15 / this.scale) {
+                                hoveredLocation = location;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    this.hoveredCorridor = hoveredCorridor;
+                    
                     if (hoveredLocation) {
                         this.showTooltip(x + rect.left, y + rect.top, hoveredLocation);
+                        this.canvas.style.cursor = 'pointer';
+                    } else if (hoveredCorridor) {
+                        this.showCorridorTooltip(x + rect.left, y + rect.top, hoveredCorridor);
                         this.canvas.style.cursor = 'pointer';
                     } else {
                         this.hideTooltip();
@@ -1828,18 +2031,48 @@ class WebMapCog(commands.Cog):
                 const y = e.clientY - rect.top;
                 const worldPos = this.screenToWorld(x, y);
                 
+                // Check for corridor click first (they're drawn underneath)
+                let clickedCorridor = null;
+                if (this.showRoutes) {
+                    for (const corridor of this.data.corridors) {
+                        if (this.isPointNearLine(worldPos, corridor)) {
+                            clickedCorridor = corridor;
+                            break;
+                        }
+                    }
+                }
+                
+                // Check for location click
+                let clickedLocation = null;
                 for (const [id, location] of Object.entries(this.data.locations)) {
                     const dist = Math.sqrt(
                         Math.pow(location.x - worldPos.x, 2) + 
                         Math.pow(location.y - worldPos.y, 2)
                     );
                     
-                    const hoverRadius = Math.max(20 / Math.sqrt(this.scale), 12);
+                    const hoverRadius = Math.max(25 / Math.sqrt(this.scale), 15);
                     if (dist < hoverRadius / this.scale) {
-                        hoveredLocation = location;
+                        clickedLocation = { id, location };
                         break;
                     }
                 }
+                
+                // Handle selection
+                if (clickedLocation) {
+                    this.selectLocation(clickedLocation.id, clickedLocation.location);
+                    this.selectedCorridor = null;
+                } else if (clickedCorridor) {
+                    this.selectCorridor(clickedCorridor);
+                    this.selectedLocation = null;
+                    this.hideLocationInfo();
+                } else {
+                    // Clicked on empty space - deselect all
+                    this.selectedLocation = null;
+                    this.selectedCorridor = null;
+                    this.hideLocationInfo();
+                }
+                
+                this.render();
             }
             
             handleTouchStart(e) {
@@ -1880,12 +2113,81 @@ class WebMapCog(commands.Cog):
                 this.render();
             }
             
+            isPointNearLine(point, corridor) {
+                const origin = this.data.locations[corridor.origin];
+                const dest = this.data.locations[corridor.destination];
+                
+                if (!origin || !dest) return false;
+                
+                // Calculate distance from point to line segment
+                const A = point.x - origin.x;
+                const B = point.y - origin.y;
+                const C = dest.x - origin.x;
+                const D = dest.y - origin.y;
+                
+                const dot = A * C + B * D;
+                const lenSq = C * C + D * D;
+                let param = -1;
+                
+                if (lenSq !== 0) param = dot / lenSq;
+                
+                let xx, yy;
+                
+                if (param < 0) {
+                    xx = origin.x;
+                    yy = origin.y;
+                } else if (param > 1) {
+                    xx = dest.x;
+                    yy = dest.y;
+                } else {
+                    xx = origin.x + param * C;
+                    yy = origin.y + param * D;
+                }
+                
+                const dx = point.x - xx;
+                const dy = point.y - yy;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                return distance < 10 / this.scale;
+            }
+            
             showTooltip(x, y, location) {
                 this.tooltip.innerHTML = `
                     <strong>${location.name}</strong><br>
                     Type: ${location.type}<br>
                     System: ${location.system}<br>
                     Wealth: ${location.wealth}
+                `;
+                this.tooltip.style.left = x + 10 + 'px';
+                this.tooltip.style.top = y + 10 + 'px';
+                this.tooltip.classList.add('visible');
+            }
+            
+            showCorridorTooltip(x, y, corridor) {
+                const origin = this.data.locations[corridor.origin];
+                const dest = this.data.locations[corridor.destination];
+                
+                if (!origin || !dest) return;
+                
+                // Determine corridor type
+                let corridorType = 'Gated Route';
+                if (corridor.name && corridor.name.includes('Approach')) {
+                    corridorType = 'Local Space';
+                } else if (corridor.name && corridor.name.includes('Ungated')) {
+                    corridorType = 'Ungated Route';
+                }
+                
+                // Format travel time
+                const mins = Math.floor((corridor.travel_time || 0) / 60);
+                const secs = (corridor.travel_time || 0) % 60;
+                const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                
+                this.tooltip.innerHTML = `
+                    <strong>${corridor.name || 'Unknown Route'}</strong><br>
+                    Type: ${corridorType}<br>
+                    ${origin.name} → ${dest.name}<br>
+                    Travel Time: ${timeStr}<br>
+                    Danger Level: ${'⚠️'.repeat(corridor.danger_level || 0)}
                 `;
                 this.tooltip.style.left = x + 10 + 'px';
                 this.tooltip.style.top = y + 10 + 'px';
@@ -1902,32 +2204,156 @@ class WebMapCog(commands.Cog):
                 
                 // Count entities at location
                 const playerCount = Object.values(this.data.players).filter(p => 
-                    p.location === parseInt(id) && !p.traveling
+                    !p.traveling && p.location == id
+                ).length;
+                const npcCount = Object.values(this.data.npcs).filter(n => 
+                    n.location == id
                 ).length;
                 
-                const npcCount = Object.values(this.data.npcs).filter(n => 
-                    n.location === parseInt(id) && !n.traveling
-                ).length;
+                // Get available routes
+                const routes = this.data.corridors.filter(c => 
+                    c.origin == id || c.destination == id
+                );
+                
+                // Build route information
+                let routeInfo = '';
+                if (routes.length > 0) {
+                    const outgoingRoutes = routes.filter(r => r.origin == id);
+                    const incomingRoutes = routes.filter(r => r.destination == id);
+                    
+                    if (outgoingRoutes.length > 0) {
+                        routeInfo += '<strong>Outgoing Routes:</strong><br>';
+                        outgoingRoutes.forEach(r => {
+                            const dest = this.data.locations[r.destination];
+                            if (dest) {
+                                const type = r.name && r.name.includes('Approach') ? '🌌' : 
+                                           r.name && r.name.includes('Ungated') ? '⭕' : '🔵';
+                                routeInfo += `${type} → ${dest.name}<br>`;
+                            }
+                        });
+                    }
+                    
+                    if (incomingRoutes.length > 0) {
+                        routeInfo += '<br><strong>Incoming Routes:</strong><br>';
+                        incomingRoutes.forEach(r => {
+                            const origin = this.data.locations[r.origin];
+                            if (origin) {
+                                const type = r.name && r.name.includes('Approach') ? '🌌' : 
+                                           r.name && r.name.includes('Ungated') ? '⭕' : '🔵';
+                                routeInfo += `${type} ← ${origin.name}<br>`;
+                            }
+                        });
+                    }
+                }
                 
                 // Update info panel
                 this.locationInfo.innerHTML = `
                     <h3>${location.name}</h3>
-                    <div class="location-detail"><strong>Type:</strong> ${location.type}</div>
-                    <div class="location-detail"><strong>System:</strong> ${location.system}</div>
-                    <div class="location-detail"><strong>Coordinates:</strong> ${location.x.toFixed(1)}, ${location.y.toFixed(1)}</div>
-                    <div class="location-detail"><strong>Wealth:</strong> <span class="wealth-${location.wealth}">${location.wealth}</span></div>
-                    <div class="location-detail"><strong>Population:</strong> ${location.population.toLocaleString()}</div>
-                    <div class="location-detail"><strong>Tech Level:</strong> ${location.tech_level}</div>
-                    <div class="location-detail"><strong>Faction:</strong> <span class="faction-${location.faction}">${location.faction}</span></div>
-                    <div class="location-detail"><strong>Stability:</strong> ${location.stability}%</div>
-                    ${location.owner_name ? `<div class="location-detail"><strong>Owner:</strong> ${location.owner_name}</div>` : ''}
-                    ${location.docking_fee ? `<div class="location-detail"><strong>Docking Fee:</strong> ${location.docking_fee} credits</div>` : ''}
-                    <div class="location-detail"><strong>Active Pilots:</strong> ${playerCount}</div>
-                    <div class="location-detail"><strong>Dynamic NPCs:</strong> ${npcCount}</div>
+                    <div class="location-detail">
+                        <strong>Type:</strong> ${location.type.replace('_', ' ')}
+                    </div>
+                    <div class="location-detail">
+                        <strong>System:</strong> ${location.system}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Wealth:</strong> ${location.wealth}/10
+                    </div>
+                    <div class="location-detail">
+                        <strong>Population:</strong> ${location.population || 'Unknown'}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Players Here:</strong> ${playerCount}
+                    </div>
+                    <div class="location-detail">
+                        <strong>NPCs Here:</strong> ${npcCount}
+                    </div>
+                    ${location.description ? `
+                    <div class="location-detail" style="margin-top: 10px;">
+                        <strong>Description:</strong><br>
+                        ${location.description}
+                    </div>` : ''}
+                    ${routeInfo ? `
+                    <div class="location-detail" style="margin-top: 10px;">
+                        ${routeInfo}
+                    </div>` : ''}
+                    <div class="location-detail" style="margin-top: 10px; font-size: 0.8rem; color: var(--text-secondary);">
+                        🌌 = Local Space | 🔵 = Gated | ⭕ = Ungated
+                    </div>
                 `;
+                
+                this.locationInfo.style.display = 'block';
+            }
+            
+            selectCorridor(corridor) {
+                this.selectedCorridor = corridor;
+                
+                const origin = this.data.locations[corridor.origin];
+                const dest = this.data.locations[corridor.destination];
+                
+                if (!origin || !dest) return;
+                
+                // Determine corridor type
+                let corridorType = 'Gated Route';
+                let typeIcon = '🔵';
+                if (corridor.name && corridor.name.includes('Approach')) {
+                    corridorType = 'Local Space Route';
+                    typeIcon = '🌌';
+                } else if (corridor.name && corridor.name.includes('Ungated')) {
+                    corridorType = 'Ungated Route';
+                    typeIcon = '⭕';
+                }
+                
+                // Format travel time
+                const mins = Math.floor((corridor.travel_time || 0) / 60);
+                const secs = (corridor.travel_time || 0) % 60;
+                const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                
+                // Check for travelers
+                const travelers = Object.values(this.data.players).filter(p => 
+                    p.traveling && p.corridor_id === corridor.id
+                );
+                
+                // Update info panel with corridor information
+                this.locationInfo.innerHTML = `
+                    <h3>${typeIcon} ${corridor.name || 'Unknown Route'}</h3>
+                    <div class="location-detail">
+                        <strong>Type:</strong> ${corridorType}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Route:</strong> ${origin.name} → ${dest.name}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Travel Time:</strong> ${timeStr}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Danger Level:</strong> ${'⚠️'.repeat(corridor.danger_level || 0)}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Travelers:</strong> ${travelers.length}
+                    </div>
+                    ${travelers.length > 0 ? `
+                    <div class="location-detail" style="margin-top: 10px;">
+                        <strong>Currently Traveling:</strong><br>
+                        ${travelers.map(t => `• ${t.name}`).join('<br>')}
+                    </div>` : ''}
+                    <div class="location-detail" style="margin-top: 15px; padding: 10px; background: var(--accent-bg); border-radius: 4px;">
+                        <strong>Route Information:</strong><br>
+                        ${corridorType === 'Local Space Route' ? 
+                            'Safe, short-distance travel within a system. No gate required.' :
+                          corridorType === 'Ungated Route' ? 
+                            'Direct but dangerous travel through unprotected space. Higher risk, shorter time.' :
+                            'Protected travel through established gate network. Safe but requires gate access.'}
+                    </div>
+                `;
+                
+                this.locationInfo.style.display = 'block';
+            }
+            
+            hideLocationInfo() {
+                this.locationInfo.style.display = 'none';
             }
         }
-        
+
         // Initialize map when page loads
         document.addEventListener('DOMContentLoaded', () => {
             const map = new GalaxyMap();
