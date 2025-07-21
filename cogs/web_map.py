@@ -77,7 +77,7 @@ class WebMapCog(commands.Cog):
         locations = {}
         for loc in locations_data:
             try:
-                loc_id = loc[0]  # Define this FIRST before any potential errors
+                loc_id = loc[0]
                 locations[loc_id] = {
                     'id': loc_id,
                     'name': loc[1],
@@ -91,8 +91,14 @@ class WebMapCog(commands.Cog):
                     'faction': loc[9] if loc[9] else 'Independent',
                     'owner_id': loc[10],
                     'owner_name': loc[12],
-                    'docking_fee': loc[11] if loc[11] else 0
+                    'docking_fee': loc[11] if loc[11] else 0,
+                    # Default values for non-existent columns
+                    'tech_level': 5,
+                    'stability': 75
                 }
+            except Exception as e:
+                print(f"Error processing location {loc_id if 'loc_id' in locals() else 'unknown'}: {e}")
+                continue
         
         # Get corridors
         corridors_data = self.db.execute_query(
@@ -114,16 +120,15 @@ class WebMapCog(commands.Cog):
                 'danger_level': corr[5]
             })
         
-        # Get active players - fixed to use 'money' instead of 'credits'
+        # Get active players - FIXED: use end_time not arrival_time, remove non-existent columns
         players_data = self.db.execute_query(
             """SELECT c.user_id, c.name, c.current_location, c.money,
-                      c.reputation_loyalist, c.reputation_outlaw,
-                      t.corridor_id, t.start_time, t.arrival_time,
-                      l.name as location_name, l.x_coord, l.y_coord
+                      t.corridor_id, t.start_time, t.end_time,
+                      l.name as location_name, l.x_coord, l.y_coord,
+                      c.level, c.experience
                FROM characters c
                LEFT JOIN travel_sessions t ON c.user_id = t.user_id AND t.status = 'traveling'
-               LEFT JOIN locations l ON c.current_location = l.location_id
-               WHERE c.is_logged_in = 1""",
+               LEFT JOIN locations l ON c.current_location = l.location_id""",
             fetch='all'
         )
         
@@ -134,18 +139,18 @@ class WebMapCog(commands.Cog):
                     'id': player[0],
                     'name': player[1],
                     'location': player[2],
-                    'location_name': player[9],
-                    'x': float(player[10]) if player[10] is not None else 0.0,
-                    'y': float(player[11]) if player[11] is not None else 0.0,
-                    'credits': player[3],  # This is 'money' from the database
-                    'rep_loyalist': player[4],
-                    'rep_outlaw': player[5],
-                    'traveling': player[6] is not None,
-                    'corridor_id': player[6],
-                    'travel_progress': self._calculate_travel_progress(player[7], player[8]) if player[6] else 0
+                    'location_name': player[7],
+                    'x': float(player[8]) if player[8] is not None else 0.0,
+                    'y': float(player[9]) if player[9] is not None else 0.0,
+                    'credits': player[3],
+                    'traveling': player[4] is not None,
+                    'corridor_id': player[4],
+                    'travel_progress': self._calculate_travel_progress(player[5], player[6]) if player[4] else 0,
+                    'level': player[10] if player[10] else 1,
+                    'experience': player[11] if player[11] else 0
                 }
             except Exception as e:
-                print(f"Error parsing player {player[0]}: {e}")
+                print(f"Error parsing player {player[0] if player else 'unknown'}: {e}")
                 continue
         
         # Get dynamic NPCs
@@ -171,20 +176,20 @@ class WebMapCog(commands.Cog):
                     'location_name': npc[9],
                     'x': float(npc[10]) if npc[10] is not None else 0.0,
                     'y': float(npc[11]) if npc[11] is not None else 0.0,
-                    'traveling': npc[4] is not None,
                     'destination': npc[4],
-                    'alignment': npc[7],
-                    'travel_progress': self._calculate_npc_travel_progress(npc[5], npc[6]) if npc[4] else 0
+                    'traveling': npc[4] is not None,
+                    'travel_progress': self._calculate_npc_travel_progress(npc[5], npc[6]) if npc[4] else 0,
+                    'alignment': npc[7]
                 }
             except Exception as e:
-                print(f"Error parsing NPC {npc[0]}: {e}")
+                print(f"Error parsing NPC {npc[0] if npc else 'unknown'}: {e}")
                 continue
         
-        # Get recent news
+        # Get recent news - FIXED: use correct galactic_history columns
         news_data = self.db.execute_query(
-            """SELECT title, content, location_id, timestamp
+            """SELECT event_title, event_description, location_id, event_date
                FROM galactic_history
-               ORDER BY timestamp DESC
+               ORDER BY created_at DESC
                LIMIT 20""",
             fetch='all'
         )
@@ -199,7 +204,7 @@ class WebMapCog(commands.Cog):
                 'game_date': self._convert_to_game_date(item[3])
             })
         
-        # Update cache
+        # Update cache with timestamp
         self.cache = {
             'locations': locations,
             'corridors': corridors,
@@ -209,22 +214,40 @@ class WebMapCog(commands.Cog):
             'last_update': datetime.now().isoformat()
         }
     
-    def _calculate_travel_progress(self, start_time, expected_arrival):
+    def _calculate_travel_progress(self, start_time, end_time):
         """Calculate travel progress as percentage"""
-        if not start_time or not expected_arrival:
+        if not start_time or not end_time:
             return 0
         
         try:
-            start = datetime.fromisoformat(start_time)
-            arrival = datetime.fromisoformat(expected_arrival)
+            # Handle both string and datetime objects
+            if isinstance(start_time, str):
+                start = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            else:
+                start = start_time
+                
+            if isinstance(end_time, str):
+                end = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+            else:
+                end = end_time
+                
             now = datetime.now()
             
-            total_duration = (arrival - start).total_seconds()
+            # If timezone-aware, make now timezone-aware too
+            if start.tzinfo is not None:
+                from datetime import timezone
+                now = now.replace(tzinfo=timezone.utc)
+            
+            total_duration = (end - start).total_seconds()
             elapsed = (now - start).total_seconds()
+            
+            if total_duration <= 0:
+                return 100  # Already arrived
             
             progress = (elapsed / total_duration) * 100
             return min(max(progress, 0), 100)
-        except:
+        except Exception as e:
+            print(f"Error calculating travel progress: {e}")
             return 0
     
     def _calculate_npc_travel_progress(self, start_time, duration):
@@ -441,22 +464,26 @@ class WebMapCog(commands.Cog):
     
     async def _compile_wiki_data(self):
         """Compile comprehensive wiki data"""
-        # Get detailed location information
+        # Get detailed location information - removed tech_level and stability
         locations = self.db.execute_query(
-            """SELECT l.*, COUNT(DISTINCT c.user_id) as player_count,
+            """SELECT l.location_id, l.name, l.location_type, l.x_coord, l.y_coord,
+                      l.system_name, l.wealth_level, l.population, l.description, l.faction,
+                      COUNT(DISTINCT c.user_id) as player_count,
                       COUNT(DISTINCT sn.npc_id) as static_npc_count,
                       COUNT(DISTINCT dn.npc_id) as dynamic_npc_count
                FROM locations l
-               LEFT JOIN characters c ON l.location_id = c.current_location AND c.is_logged_in = 1
+               LEFT JOIN characters c ON l.location_id = c.current_location
                LEFT JOIN static_npcs sn ON l.location_id = sn.location_id
                LEFT JOIN dynamic_npcs dn ON l.location_id = dn.current_location AND dn.is_alive = 1
                GROUP BY l.location_id""",
             fetch='all'
         )
         
-        # Get route information
+        # Get route information - removed stability
         routes = self.db.execute_query(
-            """SELECT c.*, ol.name as origin_name, dl.name as dest_name,
+            """SELECT c.corridor_id, c.origin_location, c.destination_location, c.name,
+                      c.travel_time, c.danger_level,
+                      ol.name as origin_name, dl.name as dest_name,
                       ol.system_name as origin_system, dl.system_name as dest_system
                FROM corridors c
                JOIN locations ol ON c.origin_location = ol.location_id
@@ -466,20 +493,23 @@ class WebMapCog(commands.Cog):
             fetch='all'
         )
         
-        # Get player information
+        # Get player information - only existing columns
         players = self.db.execute_query(
-            """SELECT c.*, l.name as location_name, s.name as ship_name
+            """SELECT c.user_id, c.name, c.current_location, c.money,
+                      c.level, c.experience, c.alignment,
+                      l.name as location_name, s.name as ship_name
                FROM characters c
                LEFT JOIN locations l ON c.current_location = l.location_id
                LEFT JOIN ships s ON c.ship_id = s.ship_id
-               WHERE c.is_logged_in = 1
                ORDER BY c.name""",
             fetch='all'
         )
         
         # Get dynamic NPC information
         dynamic_npcs = self.db.execute_query(
-            """SELECT n.*, l.name as location_name
+            """SELECT n.npc_id, n.name, n.callsign, n.age, n.ship_name, n.ship_type,
+                      n.current_location, n.credits, n.alignment, n.combat_rating,
+                      l.name as location_name
                FROM dynamic_npcs n
                LEFT JOIN locations l ON n.current_location = l.location_id
                WHERE n.is_alive = 1
@@ -489,7 +519,8 @@ class WebMapCog(commands.Cog):
         
         # Get location logs
         location_logs = self.db.execute_query(
-            """SELECT ll.*, l.name as location_name
+            """SELECT ll.log_id, ll.location_id, ll.author_id, ll.author_name, 
+                      ll.message, ll.posted_at, l.name as location_name
                FROM location_logs ll
                JOIN locations l ON ll.location_id = l.location_id
                ORDER BY ll.posted_at DESC
@@ -517,16 +548,16 @@ class WebMapCog(commands.Cog):
                 'system': loc[5],
                 'wealth': loc[6],
                 'population': loc[7],
-                'tech_level': loc[8],
-                'description': loc[9],
-                'faction': loc[10],
-                'stability': loc[11],
-                'player_count': loc[12],
-                'static_npc_count': loc[13],
-                'dynamic_npc_count': loc[14]
+                'tech_level': 5,  # Default since column doesn't exist
+                'description': loc[8],
+                'faction': loc[9],
+                'stability': 75,  # Default since column doesn't exist
+                'player_count': loc[10],
+                'static_npc_count': loc[11],
+                'dynamic_npc_count': loc[12]
             })
         return formatted
-    
+
     def _format_wiki_routes(self, routes):
         """Format route data for wiki"""
         formatted = []
@@ -536,16 +567,16 @@ class WebMapCog(commands.Cog):
                 'origin': route[1],
                 'destination': route[2],
                 'name': route[3],
-                'origin_name': route[10],
-                'dest_name': route[11],
-                'origin_system': route[12],
-                'dest_system': route[13],
                 'travel_time': route[4],
                 'danger_level': route[5],
-                'stability': route[6]
+                'stability': 90,  # Default since column doesn't exist
+                'origin_name': route[6],
+                'dest_name': route[7],
+                'origin_system': route[8],
+                'dest_system': route[9]
             })
         return formatted
-    
+
     def _format_wiki_players(self, players):
         """Format player data for wiki"""
         formatted = []
@@ -554,18 +585,22 @@ class WebMapCog(commands.Cog):
                 'id': player[0],
                 'name': player[1],
                 'location': player[2],
-                'location_name': player[-2],  # Second to last column
-                'ship_name': player[-1],       # Last column
-                'credits': player[3],          # This is the 'money' column
-                'reputation_loyalist': player[7],
-                'reputation_outlaw': player[8],
-                'total_distance': player[10],
-                'locations_visited': player[11],
-                'jobs_completed': player[12],
-                'pirates_defeated': player[13]
+                'credits': player[3],
+                'level': player[4] if player[4] else 1,
+                'experience': player[5] if player[5] else 0,
+                'alignment': player[6] if player[6] else 'neutral',
+                'location_name': player[7],
+                'ship_name': player[8],
+                # Default values for non-existent stats
+                'total_distance': 0,
+                'locations_visited': 0,
+                'jobs_completed': 0,
+                'pirates_defeated': 0,
+                'reputation_loyalist': 0,
+                'reputation_outlaw': 0
             })
         return formatted
-    
+
     def _format_wiki_npcs(self, npcs):
         """Format NPC data for wiki"""
         formatted = []
@@ -578,13 +613,13 @@ class WebMapCog(commands.Cog):
                 'ship_name': npc[4],
                 'ship_type': npc[5],
                 'location': npc[6],
-                'location_name': npc[20],
-                'alignment': npc[11],
-                'credits': npc[10],
-                'combat_rating': npc[14]
+                'credits': npc[7],
+                'alignment': npc[8],
+                'combat_rating': npc[9],
+                'location_name': npc[10]
             })
         return formatted
-    
+
     def _format_wiki_logs(self, logs):
         """Format location logs for wiki"""
         formatted = []
@@ -592,10 +627,10 @@ class WebMapCog(commands.Cog):
             formatted.append({
                 'id': log[0],
                 'location_id': log[1],
-                'location_name': log[6],      # Adjusted index
-                'character_name': log[3],     # author_name
-                'action': log[4],             # message
-                'timestamp': log[5],          # posted_at
+                'location_name': log[6],
+                'character_name': log[3],
+                'action': log[4],
+                'timestamp': log[5],
                 'game_date': self._convert_to_game_date(log[5])
             })
         return formatted
@@ -680,15 +715,19 @@ class WebMapCog(commands.Cog):
         <div class="map-controls">
             <div class="control-group">
                 <label class="toggle-control">
-                    <input type="checkbox" id="toggle-players" checked>
+                    <input type="checkbox" id="toggle-labels">
+                    <span class="toggle-label">Show Labels</span>
+                </label>
+                <label class="toggle-control">
+                    <input type="checkbox" id="toggle-players">
                     <span class="toggle-label">Show Players</span>
                 </label>
                 <label class="toggle-control">
-                    <input type="checkbox" id="toggle-npcs" checked>
+                    <input type="checkbox" id="toggle-npcs">
                     <span class="toggle-label">Show NPCs</span>
                 </label>
                 <label class="toggle-control">
-                    <input type="checkbox" id="toggle-routes" checked>
+                    <input type="checkbox" id="toggle-routes">
                     <span class="toggle-label">Show Routes</span>
                 </label>
             </div>
@@ -1371,10 +1410,10 @@ class WebMapCog(commands.Cog):
                 this.dragStartX = 0;
                 this.dragStartY = 0;
                 this.selectedLocation = null;
-                
-                this.showPlayers = true;
-                this.showNPCs = true;
-                this.showRoutes = true;
+                this.showLabels = false;
+                this.showPlayers = false;
+                this.showNPCs = false;
+                this.showRoutes = false;
                 
                 this.init();
             }
@@ -1429,6 +1468,10 @@ class WebMapCog(commands.Cog):
                 
                 document.getElementById('toggle-routes').addEventListener('change', e => {
                     this.showRoutes = e.target.checked;
+                    this.render();
+                });
+                document.getElementById('toggle-labels').addEventListener('change', e => {
+                    this.showLabels = e.target.checked;
                     this.render();
                 });
             }
@@ -1523,7 +1566,7 @@ class WebMapCog(commands.Cog):
             }
             
             drawCorridors() {
-                this.ctx.lineWidth = 1 * this.scale;
+                this.ctx.lineWidth = Math.max(1, Math.min(3, 2 / Math.sqrt(this.scale)));
                 
                 for (const corridor of this.data.corridors) {
                     const origin = this.data.locations[corridor.origin];
@@ -1541,7 +1584,7 @@ class WebMapCog(commands.Cog):
                     
                     if (hasPlayers) {
                         this.ctx.strokeStyle = '#00ffff';
-                        this.ctx.lineWidth = 2 * this.scale;
+                        this.ctx.lineWidth = Math.max(2, Math.min(5, 4 / Math.sqrt(this.scale)));
                         this.ctx.shadowBlur = 10;
                         this.ctx.shadowColor = '#00ffff';
                     } else {
@@ -1575,26 +1618,29 @@ class WebMapCog(commands.Cog):
                     };
                     
                     const color = colors[location.type] || '#ffffff';
-                    const size = location.type === 'gate' ? 8 : 6;
+                    
+                    // Scale icon size inversely with zoom to maintain constant screen size
+                    const baseSize = location.type === 'gate' ? 20 : 16;
+                    const size = Math.max(baseSize / Math.sqrt(this.scale), 10); // Min size of 10
                     
                     // Draw location
                     this.ctx.fillStyle = color;
-                    this.ctx.shadowBlur = 15;
+                    this.ctx.shadowBlur = Math.min(30, 25 / Math.sqrt(this.scale));
                     this.ctx.shadowColor = color;
                     
                     if (location.type === 'gate') {
                         // Draw diamond for gates
                         this.ctx.beginPath();
-                        this.ctx.moveTo(pos.x, pos.y - size * this.scale);
-                        this.ctx.lineTo(pos.x + size * this.scale, pos.y);
-                        this.ctx.lineTo(pos.x, pos.y + size * this.scale);
-                        this.ctx.lineTo(pos.x - size * this.scale, pos.y);
+                        this.ctx.moveTo(pos.x, pos.y - size);
+                        this.ctx.lineTo(pos.x + size, pos.y);
+                        this.ctx.lineTo(pos.x, pos.y + size);
+                        this.ctx.lineTo(pos.x - size, pos.y);
                         this.ctx.closePath();
                         this.ctx.fill();
                     } else {
                         // Draw circle for other locations
                         this.ctx.beginPath();
-                        this.ctx.arc(pos.x, pos.y, size * this.scale, 0, Math.PI * 2);
+                        this.ctx.arc(pos.x, pos.y, size, 0, Math.PI * 2);
                         this.ctx.fill();
                     }
                     
@@ -1603,17 +1649,44 @@ class WebMapCog(commands.Cog):
                         this.ctx.strokeStyle = color;
                         this.ctx.lineWidth = 2;
                         this.ctx.beginPath();
-                        this.ctx.arc(pos.x, pos.y, (size + 5) * this.scale, 0, Math.PI * 2);
+                        this.ctx.arc(pos.x, pos.y, size + 5, 0, Math.PI * 2);
                         this.ctx.stroke();
                     }
                     
-                    // Draw name if zoomed in enough
-                    if (this.scale > 1.5) {
-                        this.ctx.shadowBlur = 5;
-                        this.ctx.fillStyle = '#e0ffff';
-                        this.ctx.font = `${10 * this.scale}px Tektur`;
-                        this.ctx.textAlign = 'center';
-                        this.ctx.fillText(location.name, pos.x, pos.y + (12 * this.scale));
+                    // Draw name if labels are enabled
+                    // Draw name if labels are enabled
+                    if (this.showLabels) {
+                        // Only show labels at higher zoom levels to reduce clutter
+                        const minZoomForLabels = 2.0; // Increased from 0.8
+                        const labelOpacity = Math.min(1, (this.scale - minZoomForLabels) / 1.0);
+                        
+                        if (this.scale > minZoomForLabels) {
+                            this.ctx.shadowBlur = 5;
+                            this.ctx.shadowColor = '#000000';
+                            this.ctx.fillStyle = `rgba(224, 255, 255, ${labelOpacity})`;
+                            
+                            // Larger font size
+                            const fontSize = Math.min(20, 16 + this.scale / 3);
+                            this.ctx.font = `bold ${fontSize}px Tektur`;
+                            this.ctx.textAlign = 'center';
+                            
+                            // Add background for better readability
+                            const labelY = pos.y + size + 20;
+                            const metrics = this.ctx.measureText(location.name);
+                            
+                            // Draw background
+                            this.ctx.fillStyle = `rgba(0, 4, 8, ${labelOpacity * 0.8})`;
+                            this.ctx.fillRect(
+                                pos.x - metrics.width/2 - 4,
+                                labelY - fontSize + 2,
+                                metrics.width + 8,
+                                fontSize + 4
+                            );
+                            
+                            // Draw text
+                            this.ctx.fillStyle = `rgba(224, 255, 255, ${labelOpacity})`;
+                            this.ctx.fillText(location.name, pos.x, labelY);
+                        }
                     }
                 }
                 
@@ -1622,71 +1695,56 @@ class WebMapCog(commands.Cog):
             
             drawPlayers() {
                 this.ctx.fillStyle = '#00ff00';
-                this.ctx.shadowBlur = 20;
-                this.ctx.shadowColor = '#00ff00';
                 
-                for (const player of Object.values(this.data.players)) {
-                    if (player.traveling && player.corridor_id) {
-                        // Draw player in corridor
-                        const corridor = this.data.corridors.find(c => c.id === player.corridor_id);
-                        if (!corridor) continue;
-                        
-                        const origin = this.data.locations[corridor.origin];
-                        const dest = this.data.locations[corridor.destination];
-                        if (!origin || !dest) continue;
-                        
-                        // Calculate position along corridor
-                        const progress = player.travel_progress / 100;
-                        const x = origin.x + (dest.x - origin.x) * progress;
-                        const y = origin.y + (dest.y - origin.y) * progress;
-                        const pos = this.worldToScreen(x, y);
-                        
-                        this.drawPulse(pos.x, pos.y, '#00ff00', 4);
-                    } else if (player.location) {
-                        // Draw player at location
-                        const location = this.data.locations[player.location];
-                        if (!location) continue;
-                        
-                        const pos = this.worldToScreen(location.x, location.y);
-                        this.drawPulse(pos.x, pos.y, '#00ff00', 4);
-                    }
+                for (const [id, player] of Object.entries(this.data.players)) {
+                    if (!player.location_id || player.traveling) continue;
+                    
+                    const location = this.data.locations[player.location_id];
+                    if (!location) continue;
+                    
+                    const pos = this.worldToScreen(location.x, location.y);
+                    
+                    // Draw player indicator with inverse scaling
+                    const triangleSize = Math.max(12 / Math.sqrt(this.scale), 6);
+
+                    this.ctx.shadowBlur = Math.min(25, 20 / Math.sqrt(this.scale));
+                    this.ctx.shadowColor = '#00ff00';
+                    
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(pos.x, pos.y - triangleSize * 2);
+                    this.ctx.lineTo(pos.x - triangleSize, pos.y - triangleSize);
+                    this.ctx.lineTo(pos.x + triangleSize, pos.y - triangleSize);
+                    this.ctx.closePath();
+                    this.ctx.fill();
                 }
                 
                 this.ctx.shadowBlur = 0;
             }
             
             drawNPCs() {
-                this.ctx.fillStyle = '#ff8800';
-                this.ctx.shadowBlur = 15;
-                this.ctx.shadowColor = '#ff8800';
-                
-                for (const npc of Object.values(this.data.npcs)) {
-                    if (npc.traveling && npc.destination) {
-                        // Find corridor for traveling NPC
-                        const corridor = this.data.corridors.find(c => 
-                            c.origin === npc.location && c.destination === npc.destination
-                        );
-                        if (!corridor) continue;
-                        
-                        const origin = this.data.locations[npc.location];
-                        const dest = this.data.locations[npc.destination];
-                        if (!origin || !dest) continue;
-                        
-                        // Calculate position along corridor
-                        const progress = npc.travel_progress / 100;
-                        const x = origin.x + (dest.x - origin.x) * progress;
-                        const y = origin.y + (dest.y - origin.y) * progress;
-                        const pos = this.worldToScreen(x, y);
-                        
-                        this.drawPulse(pos.x, pos.y, '#ff8800', 3);
-                    } else if (npc.location) {
-                        // Draw NPC at location
-                        const location = this.data.locations[npc.location];
-                        if (!location) continue;
-                        
-                        const pos = this.worldToScreen(location.x, location.y);
-                        this.drawPulse(pos.x, pos.y, '#ff8800', 3);
-                    }
+                for (const [id, npc] of Object.entries(this.data.npcs)) {
+                    if (!npc.location_id) continue;
+                    
+                    const location = this.data.locations[npc.location_id];
+                    if (!location) continue;
+                    
+                    const pos = this.worldToScreen(location.x, location.y);
+                    
+                    // Determine NPC color
+                    this.ctx.fillStyle = npc.type === 'static' ? '#ff6600' : '#ff00ff';
+                    
+                    // Draw NPC indicator with inverse scaling
+                    const squareSize = Math.max(10 / Math.sqrt(this.scale), 5);
+
+                    this.ctx.shadowBlur = Math.min(20, 15 / Math.sqrt(this.scale));
+                    this.ctx.shadowColor = this.ctx.fillStyle;
+                    
+                    this.ctx.fillRect(
+                        pos.x - squareSize, 
+                        pos.y - squareSize, 
+                        squareSize * 2, 
+                        squareSize * 2
+                    );
                 }
                 
                 this.ctx.shadowBlur = 0;
@@ -1776,8 +1834,9 @@ class WebMapCog(commands.Cog):
                         Math.pow(location.y - worldPos.y, 2)
                     );
                     
-                    if (dist < 10 / this.scale) {
-                        this.selectLocation(id, location);
+                    const hoverRadius = Math.max(20 / Math.sqrt(this.scale), 12);
+                    if (dist < hoverRadius / this.scale) {
+                        hoveredLocation = location;
                         break;
                     }
                 }
@@ -1808,7 +1867,7 @@ class WebMapCog(commands.Cog):
             
             zoom(factor) {
                 const newScale = this.scale * factor;
-                if (newScale >= 0.5 && newScale <= 5) {
+                if (newScale >= 0.5 && newScale <= 20) {
                     this.scale = newScale;
                     this.render();
                 }
@@ -2039,50 +2098,20 @@ class WebMapCog(commands.Cog):
                 
                 html += '<table class="wiki-table"><thead><tr>';
                 html += '<th>Pilot Name</th><th>Location</th><th>Ship</th>';
-                html += '<th>Credits</th><th>Reputation</th><th>Stats</th>';
+                html += '<th>Credits</th><th>Alignment</th><th>Level</th>';
                 html += '</tr></thead><tbody>';
                 
                 for (const player of this.data.players) {
-                    const repType = player.reputation_loyalist > player.reputation_outlaw ? 'loyalist' : 
-                                   player.reputation_outlaw > player.reputation_loyalist ? 'outlaw' : 'neutral';
-                    const repValue = Math.max(player.reputation_loyalist, player.reputation_outlaw);
+                    const alignmentClass = player.alignment === 'loyal' ? 'faction-loyal' : 
+                                          player.alignment === 'bandit' ? 'faction-bandit' : 'faction-neutral';
                     
                     html += '<tr>';
                     html += `<td><strong>${player.name}</strong></td>`;
                     html += `<td>${player.location_name || 'In Transit'}</td>`;
                     html += `<td>${player.ship_name || 'Unknown'}</td>`;
                     html += `<td>${player.credits.toLocaleString()}</td>`;
-                    html += `<td class="faction-${repType}">${repType} (${repValue})</td>`;
-                    html += `<td>Distance: ${player.total_distance}ly<br>`;
-                    html += `Locations: ${player.locations_visited}<br>`;
-                    html += `Jobs: ${player.jobs_completed}</td>`;
-                    html += '</tr>';
-                }
-                
-                html += '</tbody></table></div>';
-                return html;
-            }
-            
-            renderNPCs() {
-                let html = '<div class="wiki-section"><h3>Dynamic NPCs</h3>';
-                
-                if (!this.data.npcs || this.data.npcs.length === 0) {
-                    return html + '<p>No active NPCs found.</p></div>';
-                }
-                
-                html += '<table class="wiki-table"><thead><tr>';
-                html += '<th>Name</th><th>Callsign</th><th>Ship</th>';
-                html += '<th>Location</th><th>Alignment</th><th>Combat Rating</th>';
-                html += '</tr></thead><tbody>';
-                
-                for (const npc of this.data.npcs) {
-                    html += '<tr>';
-                    html += `<td><strong>${npc.name}</strong></td>`;
-                    html += `<td>${npc.callsign}</td>`;
-                    html += `<td>${npc.ship_name} (${npc.ship_type})</td>`;
-                    html += `<td>${npc.location_name || 'In Transit'}</td>`;
-                    html += `<td class="faction-${npc.alignment}">${npc.alignment}</td>`;
-                    html += `<td>${npc.combat_rating}/10</td>`;
+                    html += `<td class="${alignmentClass}">${player.alignment}</td>`;
+                    html += `<td>Level ${player.level}</td>`;
                     html += '</tr>';
                 }
                 
