@@ -1,1899 +1,271 @@
+"""
+Web Map Cog for Discord RPG Bot
+Provides a dynamic web interface for the game map and wiki
+"""
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
+import aiohttp
+from aiohttp import web
 import asyncio
 import json
-import os
-from typing import Optional, Dict, List, Set, Any
 from datetime import datetime, timedelta
-import threading
-from dataclasses import dataclass, asdict
-import hashlib
-import time
+import os
+from typing import Optional, Dict, Any, List
+import socket
+import traceback
 
-# FastAPI imports
-try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-    from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
-    from fastapi.staticfiles import StaticFiles
-    from fastapi.templating import Jinja2Templates
-    import uvicorn
-    FASTAPI_AVAILABLE = True
-except ImportError:
-    FASTAPI_AVAILABLE = False
 
-@dataclass
-class CachedData:
-    """Container for cached data with metadata"""
-    data: Any
-    timestamp: float
-    hash: str
-    
-    def is_expired(self, ttl_seconds: float) -> bool:
-        return (time.time() - self.timestamp) > ttl_seconds
-
-class OptimizedWebMapCog(commands.Cog, name="WebMap"):
-    """Optimized web-based interactive galaxy map with high performance for large-scale games"""
-    
+class WebMapCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
-        
-        # Check if database is available
-        try:
-            test_query = self.db.execute_query("SELECT 1", fetch='one')
-            print("✅ Database connection verified")
-        except Exception as e:
-            print(f"❌ Database connection error: {e}")
-            
+        self.app = None
+        self.runner = None
+        self.site = None
         self.is_running = False
-        self.host = "0.0.0.0"
+        self.host = '0.0.0.0'
         self.port = 8090
-        self.external_ip_override = None
-        self.server_task = None
-        self.websocket_clients: Set[WebSocket] = set()
+        self.external_ip = None
+        self.domain = None
         
-        # Performance optimization settings
-        self.cache = {}
-        self.cache_ttl = {
-            'locations': 300,      # 5 minutes for static data
-            'corridors': 300,      # 5 minutes for static data
-            'galaxy_info': 300,    # 5 minutes for galaxy metadata
-            'npcs_static': 60,     # 1 minute for static NPCs
-            'npcs_dynamic': 10,    # 10 seconds for dynamic NPCs
-            'players': 5,          # 5 seconds for player positions
-            'news': 30,           # 30 seconds for news
-            'logs': 30,           # 30 seconds for logs
-            'history': 300        # 5 minutes for history
+        # Cache for performance
+        self.cache = {
+            'locations': {},
+            'corridors': [],
+            'players': {},
+            'npcs': {},
+            'news': [],
+            'last_update': None
         }
         
-        # Delta tracking for efficient updates
-        self.last_data_hashes = {}
-        self.viewport_cache = {}  # Cache data by viewport bounds
-        
-        # Performance metrics
-        self.update_metrics = {
-            'total_updates': 0,
-            'delta_updates': 0,
-            'full_updates': 0,
-            'cache_hits': 0,
-            'db_queries': 0
-        }
-        
-        # Create necessary directories
-        for directory in ["web", "web/static", "web/static/css", "web/static/js", "web/templates"]:
-            os.makedirs(directory, exist_ok=True)
-            
-        print("✅ Web directories created")
-        
-        # Auto-start configuration - Try to import config safely
+        # Update interval
+        self.update_cache.start()
+    
+    def cog_unload(self):
+        """Clean up when cog is unloaded"""
+        self.update_cache.cancel()
+        if self.is_running:
+            asyncio.create_task(self.stop_webmap())
+    
+    @tasks.loop(seconds=5)  # Update cache every 5 seconds
+    async def update_cache(self):
+        """Update cached data for the web map"""
         try:
-            from config import WEBMAP_CONFIG
-            webmap_config = WEBMAP_CONFIG
-        except ImportError:
-            webmap_config = {}
+            await self._refresh_cache()
         except Exception as e:
-            print(f"Error loading WEBMAP_CONFIG: {e}")
-            webmap_config = {}
-            
-        self.auto_start = webmap_config.get('auto_start', False)
-        self.auto_start_port = webmap_config.get('auto_start_port', 8090)
-        self.auto_start_host = webmap_config.get('auto_start_host', '0.0.0.0')
-        self.auto_start_delay = webmap_config.get('auto_start_time', 30)
-        
-        # Start background tasks when cog is loaded
-        if self.auto_start:
-            asyncio.create_task(self._delayed_auto_start())
+            print(f"Error updating web map cache: {e}")
     
-    async def _delayed_auto_start(self):
-        """Auto-start web map after delay"""
-        await asyncio.sleep(self.auto_start_delay)
-        if not self.is_running:
-            print(f"🚀 Auto-starting web map on {self.auto_start_host}:{self.auto_start_port}")
-            try:
-                await self._start_server(self.auto_start_host, self.auto_start_port)
-            except Exception as e:
-                print(f"❌ Failed to auto-start web map: {e}")
+    @update_cache.before_loop
+    async def before_update_cache(self):
+        await self.bot.wait_until_ready()
     
-    def _compute_hash(self, data: Any) -> str:
-        """Compute hash of data for change detection"""
-        return hashlib.md5(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
-    
-    async def _get_cached_data(self, key: str, fetch_func, *args, **kwargs) -> Any:
-        """Get data from cache or fetch if expired"""
-        ttl = self.cache_ttl.get(key, 60)
-        
-        if key in self.cache:
-            cached = self.cache[key]
-            if not cached.is_expired(ttl):
-                self.update_metrics['cache_hits'] += 1
-                return cached.data
-        
-        # Fetch fresh data
-        self.update_metrics['db_queries'] += 1
-        data = await fetch_func(*args, **kwargs)
-        data_hash = self._compute_hash(data)
-        
-        self.cache[key] = CachedData(
-            data=data,
-            timestamp=time.time(),
-            hash=data_hash
+    async def _refresh_cache(self):
+        """Refresh all cached data"""
+        # Get locations with explicit column names
+        locations_data = self.db.execute_query(
+            """SELECT l.location_id, l.name, l.location_type, l.x_coord, l.y_coord,
+                      l.system_name, l.wealth_level, l.population, l.description, l.faction,
+                      lo.owner_id, lo.docking_fee, c.name as owner_name
+               FROM locations l
+               LEFT JOIN location_ownership lo ON l.location_id = lo.location_id
+               LEFT JOIN characters c ON lo.owner_id = c.user_id
+               ORDER BY l.location_id""",
+            fetch='all'
         )
         
-        return data
-    
-    async def _get_delta_update(self, data_type: str, new_data: Any) -> Optional[Dict]:
-        """Generate delta update if data has changed"""
-        new_hash = self._compute_hash(new_data)
-        old_hash = self.last_data_hashes.get(data_type)
-        
-        if old_hash == new_hash:
-            return None  # No changes
-        
-        self.last_data_hashes[data_type] = new_hash
-        
-        # For certain data types, compute actual deltas
-        if data_type in ['players', 'npcs_dynamic']:
-            # These change frequently, send full update
-            return {
-                'type': 'delta',
-                'data_type': data_type,
-                'full_data': new_data,
-                'timestamp': datetime.now().isoformat()
-            }
-        else:
-            # For static data, only send if actually changed
-            return {
-                'type': 'update',
-                'data_type': data_type,
-                'data': new_data,
-                'timestamp': datetime.now().isoformat()
-            }
-    
-    # Optimized data fetching methods
-    async def _fetch_locations_optimized(self, viewport_bounds=None):
-        """Fetch locations with optional viewport filtering"""
-        try:
-            query = """
-                SELECT location_id, name, location_type, x_coord, y_coord, 
-                       wealth_level, population, description, has_black_market, 
-                       has_federal_supplies, faction, has_jobs, has_shops, 
-                       has_medical, has_repairs, has_fuel, has_upgrades,
-                       is_derelict, gate_status
-                FROM locations
-            """
-            
-            params = []
-            if viewport_bounds:
-                query += " WHERE x_coord BETWEEN ? AND ? AND y_coord BETWEEN ? AND ?"
-                params = [viewport_bounds['min_x'], viewport_bounds['max_x'], 
-                         viewport_bounds['min_y'], viewport_bounds['max_y']]
-            
-            query += " ORDER BY name"
-            
-            locations_data = self.db.execute_query(query, params, fetch='all')
-            
-            if not locations_data:
-                print("⚠️ No locations found in database! Has the galaxy been generated?")
-                return []
-            
-            print(f"✅ Fetched {len(locations_data)} locations")
-            
-            return [
-                {
-                    "id": loc[0],
-                    "name": loc[1],
-                    "type": loc[2],
-                    "coordinates": {"x": float(loc[3]) if loc[3] is not None else 0.0, 
-                                  "y": float(loc[4]) if loc[4] is not None else 0.0},
-                    "wealth_level": loc[5] or 3,
-                    "population": loc[6] or 0,
-                    "description": loc[7] or "No description available",
-                    "has_black_market": bool(loc[8]),
-                    "has_federal_supplies": bool(loc[9]),
-                    "faction": loc[10] or "Independent",
-                    "services": {
-                        "jobs": bool(loc[11]),
-                        "shops": bool(loc[12]),
-                        "medical": bool(loc[13]),
-                        "repairs": bool(loc[14]),
-                        "fuel": bool(loc[15]),
-                        "upgrades": bool(loc[16])
-                    },
-                    "is_derelict": bool(loc[17]),
-                    "gate_status": loc[18] or "active"
-                }
-                for loc in locations_data
-            ]
-        except Exception as e:
-            print(f"❌ Error fetching locations: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
-    
-    async def _fetch_corridors_optimized(self, location_ids=None):
-        """Fetch corridors with optional location filtering"""
-        try:
-            query = """
-                SELECT c.corridor_id, c.name, c.origin_location, c.destination_location,
-                       c.travel_time, c.fuel_cost, c.danger_level, c.is_active,
-                       l1.name as origin_name, l2.name as destination_name
-                FROM corridors c
-                JOIN locations l1 ON c.origin_location = l1.location_id
-                JOIN locations l2 ON c.destination_location = l2.location_id
-            """
-            
-            params = []
-            if location_ids:
-                placeholders = ','.join(['?' for _ in location_ids])
-                query += f" WHERE c.origin_location IN ({placeholders}) OR c.destination_location IN ({placeholders})"
-                params = location_ids + location_ids
-            
-            query += " ORDER BY c.name"
-            
-            corridors_data = self.db.execute_query(query, params, fetch='all')
-            
-            if not corridors_data:
-                print("⚠️ No corridors found in database!")
-                return []
-            
-            print(f"✅ Fetched {len(corridors_data)} corridors")
-            
-            return [
-                {
-                    "id": c[0],
-                    "name": c[1],
-                    "origin": {"id": c[2], "name": c[8]},
-                    "destination": {"id": c[3], "name": c[9]},
-                    "travel_time": c[4],
-                    "fuel_cost": c[5],
-                    "danger_level": c[6],
-                    "is_active": bool(c[7])
-                }
-                for c in corridors_data
-            ]
-        except Exception as e:
-            print(f"❌ Error fetching corridors: {e}")
-            return []
-    
-    async def _fetch_dynamic_data(self):
-        """Fetch only dynamic data (players, NPCs in transit)"""
-        # Get online players
-        players_data = self.db.execute_query("""
-            SELECT c.name, c.current_location, c.is_logged_in, c.user_id
-            FROM characters c
-            WHERE c.is_logged_in = 1 OR c.last_activity > datetime('now', '-30 minutes')
-        """, fetch='all')
-        
-        players = [
-            {
-                "name": p[0],
-                "location_id": p[1],
-                "is_logged_in": bool(p[2]),
-                "user_id": p[3]
-            }
-            for p in players_data
-        ] if players_data else []
-        
-        # Get NPCs in transit
-        transit_npcs = self.db.execute_query("""
-            SELECT d.npc_id, d.name, d.current_location, d.destination_location, 
-                   d.travel_start_time, 
-                   datetime(d.travel_start_time, '+' || d.travel_duration || ' seconds') as arrival_time
-            FROM dynamic_npcs d
-            WHERE d.travel_start_time IS NOT NULL 
-            AND datetime('now') < datetime(d.travel_start_time, '+' || d.travel_duration || ' seconds')
-        """, fetch='all')
-        
-        npcs_in_transit = [
-            {
-                "id": n[0],
-                "name": n[1],
-                "origin_id": n[2],
-                "destination_id": n[3],
-                "departure_time": n[4],
-                "arrival_time": n[5]
-            }
-            for n in transit_npcs
-        ] if transit_npcs else []
-        
-        return {
-            "players": players,
-            "npcs_in_transit": npcs_in_transit,
-            "timestamp": datetime.now().isoformat()
-        }
-    
-    # WebSocket message handling
-    async def _broadcast_update(self, update_type: str, data: Any, client_filter=None):
-        """Broadcast updates to WebSocket clients with optional filtering"""
-        if not self.websocket_clients:
-            return
-        
-        self.update_metrics['total_updates'] += 1
-        
-        # Check if this is a delta update
-        delta = await self._get_delta_update(update_type, data)
-        if delta is None and update_type in ['players', 'npcs_dynamic']:
-            return  # No changes to broadcast
-        
-        message_data = delta if delta else {
-            "type": update_type,
-            "data": data,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        if delta:
-            self.update_metrics['delta_updates'] += 1
-        else:
-            self.update_metrics['full_updates'] += 1
-        
-        message = json.dumps(message_data, default=str)
-        
-        # Send to clients
-        disconnected = set()
-        for client in self.websocket_clients.copy():
-            if client_filter and not client_filter(client):
-                continue
-                
+        locations = {}
+        for loc in locations_data:
             try:
-                await client.send_text(message)
-            except Exception:
-                disconnected.add(client)
-        
-        # Clean up disconnected clients
-        self.websocket_clients -= disconnected
-    
-    @tasks.loop(seconds=5)
-    async def update_dynamic_data_task(self):
-        """Update only dynamic data frequently"""
-        if not self.is_running or not self.websocket_clients:
-            return
-        
-        try:
-            dynamic_data = await self._fetch_dynamic_data()
-            await self._broadcast_update("dynamic_update", dynamic_data)
-        except Exception as e:
-            print(f"Error updating dynamic data: {e}")
-    
-    @tasks.loop(minutes=5)
-    async def cleanup_cache_task(self):
-        """Clean up expired cache entries"""
-        now = time.time()
-        expired_keys = []
-        
-        for key, cached in self.cache.items():
-            ttl = self.cache_ttl.get(key, 60)
-            if cached.is_expired(ttl * 2):  # Clean up if expired for 2x TTL
-                expired_keys.append(key)
-        
-        for key in expired_keys:
-            del self.cache[key]
-        
-        if expired_keys:
-            print(f"🧹 Cleaned up {len(expired_keys)} expired cache entries")
-    
-    # FastAPI setup
-    async def _create_fastapi_app(self):
-        """Create optimized FastAPI application"""
-        app = FastAPI()
-        templates = Jinja2Templates(directory="web/templates")
-        
-        # Mount static files
-        app.mount("/static", StaticFiles(directory="web/static"), name="static")
-        
-        # Debug endpoint
-        @app.get("/debug/locations")
-        async def debug_locations():
-            """Debug endpoint to check locations data"""
-            locations = await self._fetch_locations_optimized()
-            return {
-                "count": len(locations),
-                "sample": locations[:5] if locations else [],
-                "cache_status": {
-                    key: {
-                        "age": time.time() - cached.timestamp,
-                        "expired": cached.is_expired(self.cache_ttl.get(key, 60))
-                    }
-                    for key, cached in self.cache.items()
+                loc_id = loc[0]  # Define this FIRST before any potential errors
+                locations[loc_id] = {
+                    'id': loc_id,
+                    'name': loc[1],
+                    'type': loc[2],
+                    'x': float(loc[3]) if loc[3] is not None else 0.0,
+                    'y': float(loc[4]) if loc[4] is not None else 0.0,
+                    'system': loc[5],
+                    'wealth': loc[6],
+                    'population': loc[7],
+                    'description': loc[8],
+                    'faction': loc[9] if loc[9] else 'Independent',
+                    'owner_id': loc[10],
+                    'owner_name': loc[12],
+                    'docking_fee': loc[11] if loc[11] else 0
                 }
-            }
         
-        # Main map endpoint
-        @app.get("/map", response_class=HTMLResponse)
-        async def map_view(request: Request):
-            # Get initial data with caching
-            locations = await self._get_cached_data('locations', self._fetch_locations_optimized)
-            galaxy_info = await self._get_cached_data('galaxy_info', self._fetch_galaxy_info)
-            
-            return templates.TemplateResponse("map.html", {
-                "request": request,
-                "galaxy_name": galaxy_info.get('name', 'Unknown Galaxy'),
-                "initial_locations": len(locations)
+        # Get corridors
+        corridors_data = self.db.execute_query(
+            """SELECT corridor_id, origin_location, destination_location, 
+                      name, travel_time, danger_level
+               FROM corridors
+               WHERE is_active = 1""",
+            fetch='all'
+        )
+        
+        corridors = []
+        for corr in corridors_data:
+            corridors.append({
+                'id': corr[0],
+                'origin': corr[1],
+                'destination': corr[2],
+                'name': corr[3],
+                'travel_time': corr[4],
+                'danger_level': corr[5]
             })
         
-        # API endpoints for data
-        @app.get("/api/map/initial")
-        async def get_initial_data(viewport: Optional[str] = None):
-            """Get initial map data with optional viewport filtering"""
-            print("📍 API: Fetching initial map data...")
-            
-            viewport_bounds = None
-            if viewport:
-                # Parse viewport bounds
-                try:
-                    bounds = json.loads(viewport)
-                    viewport_bounds = bounds
-                except:
-                    pass
-            
-            # Get cached data
-            locations = await self._get_cached_data(
-                f'locations_{viewport}' if viewport else 'locations',
-                self._fetch_locations_optimized,
-                viewport_bounds
-            )
-            
-            print(f"📍 API: Found {len(locations)} locations")
-            
-            location_ids = [loc['id'] for loc in locations] if viewport_bounds else None
-            
-            corridors = await self._get_cached_data(
-                f'corridors_{viewport}' if viewport else 'corridors',
-                self._fetch_corridors_optimized,
-                location_ids
-            )
-            
-            print(f"📍 API: Found {len(corridors)} corridors")
-            
-            galaxy_info = await self._get_cached_data('galaxy_info', self._fetch_galaxy_info)
-            
-            response_data = {
-                "locations": locations,
-                "corridors": corridors,
-                "galaxy": galaxy_info,
-                "metrics": self.update_metrics
-            }
-            
-            print(f"📍 API: Sending response with {len(locations)} locations, {len(corridors)} corridors")
-            
-            return response_data
+        # Get active players - fixed to use 'money' instead of 'credits'
+        players_data = self.db.execute_query(
+            """SELECT c.user_id, c.name, c.current_location, c.money,
+                      c.reputation_loyalist, c.reputation_outlaw,
+                      t.corridor_id, t.start_time, t.arrival_time,
+                      l.name as location_name, l.x_coord, l.y_coord
+               FROM characters c
+               LEFT JOIN travel_sessions t ON c.user_id = t.user_id AND t.status = 'traveling'
+               LEFT JOIN locations l ON c.current_location = l.location_id
+               WHERE c.is_logged_in = 1""",
+            fetch='all'
+        )
         
-        @app.get("/api/map/dynamic")
-        async def get_dynamic_data():
-            """Get only dynamic data"""
-            return await self._fetch_dynamic_data()
-        
-        # WebSocket endpoint
-        @app.websocket("/ws")
-        async def websocket_endpoint(websocket: WebSocket):
-            await websocket.accept()
-            self.websocket_clients.add(websocket)
-            
+        players = {}
+        for player in players_data:
             try:
-                # Send initial data
-                initial_data = await self._fetch_dynamic_data()
-                await websocket.send_json({
-                    "type": "initial",
-                    "data": initial_data
-                })
-                
-                # Keep connection alive
-                while True:
-                    # Wait for client messages (ping/pong)
-                    data = await websocket.receive_text()
-                    
-                    # Handle viewport updates
-                    try:
-                        message = json.loads(data)
-                        if message.get('type') == 'viewport_update':
-                            # Client moved viewport, might need different data
-                            viewport = message.get('viewport')
-                            # Could implement viewport-based data loading here
-                    except:
-                        pass
-                        
-            except WebSocketDisconnect:
-                self.websocket_clients.discard(websocket)
+                players[player[0]] = {
+                    'id': player[0],
+                    'name': player[1],
+                    'location': player[2],
+                    'location_name': player[9],
+                    'x': float(player[10]) if player[10] is not None else 0.0,
+                    'y': float(player[11]) if player[11] is not None else 0.0,
+                    'credits': player[3],  # This is 'money' from the database
+                    'rep_loyalist': player[4],
+                    'rep_outlaw': player[5],
+                    'traveling': player[6] is not None,
+                    'corridor_id': player[6],
+                    'travel_progress': self._calculate_travel_progress(player[7], player[8]) if player[6] else 0
+                }
             except Exception as e:
-                print(f"WebSocket error: {e}")
-                self.websocket_clients.discard(websocket)
+                print(f"Error parsing player {player[0]}: {e}")
+                continue
         
-        # Wiki endpoint
-        @app.get("/wiki", response_class=HTMLResponse)
-        async def wiki_view(request: Request):
-            return templates.TemplateResponse("wiki.html", {
-                "request": request
+        # Get dynamic NPCs
+        npcs_data = self.db.execute_query(
+            """SELECT n.npc_id, n.name, n.callsign, n.current_location,
+                      n.destination_location, n.travel_start_time, n.travel_duration,
+                      n.alignment, n.is_alive, l.name as location_name,
+                      l.x_coord, l.y_coord
+               FROM dynamic_npcs n
+               LEFT JOIN locations l ON n.current_location = l.location_id
+               WHERE n.is_alive = 1""",
+            fetch='all'
+        )
+        
+        npcs = {}
+        for npc in npcs_data:
+            try:
+                npcs[npc[0]] = {
+                    'id': npc[0],
+                    'name': npc[1],
+                    'callsign': npc[2],
+                    'location': npc[3],
+                    'location_name': npc[9],
+                    'x': float(npc[10]) if npc[10] is not None else 0.0,
+                    'y': float(npc[11]) if npc[11] is not None else 0.0,
+                    'traveling': npc[4] is not None,
+                    'destination': npc[4],
+                    'alignment': npc[7],
+                    'travel_progress': self._calculate_npc_travel_progress(npc[5], npc[6]) if npc[4] else 0
+                }
+            except Exception as e:
+                print(f"Error parsing NPC {npc[0]}: {e}")
+                continue
+        
+        # Get recent news
+        news_data = self.db.execute_query(
+            """SELECT title, content, location_id, timestamp
+               FROM galactic_history
+               ORDER BY timestamp DESC
+               LIMIT 20""",
+            fetch='all'
+        )
+        
+        news = []
+        for item in news_data:
+            news.append({
+                'title': item[0],
+                'content': item[1],
+                'location_id': item[2],
+                'timestamp': item[3],
+                'game_date': self._convert_to_game_date(item[3])
             })
         
-        # Wiki data API endpoint
-        @app.get("/api/wiki/data")
-        async def get_wiki_data():
-            """Get wiki data"""
-            wiki_data = await self._get_wiki_data_optimized()
-            return wiki_data
-        
-        return app
+        # Update cache
+        self.cache = {
+            'locations': locations,
+            'corridors': corridors,
+            'players': players,
+            'npcs': npcs,
+            'news': news,
+            'last_update': datetime.now().isoformat()
+        }
     
-    async def _fetch_galaxy_info(self):
-        """Fetch basic galaxy information"""
+    def _calculate_travel_progress(self, start_time, expected_arrival):
+        """Calculate travel progress as percentage"""
+        if not start_time or not expected_arrival:
+            return 0
+        
         try:
-            from utils.time_system import TimeSystem
-            time_system = TimeSystem(self.bot)
+            start = datetime.fromisoformat(start_time)
+            arrival = datetime.fromisoformat(expected_arrival)
+            now = datetime.now()
             
-            galaxy_data = self.db.execute_query(
-                "SELECT name, start_date, time_scale_factor, is_time_paused FROM galaxy_info WHERE galaxy_id = 1",
-                fetch='one'
-            )
+            total_duration = (arrival - start).total_seconds()
+            elapsed = (now - start).total_seconds()
             
-            if not galaxy_data:
-                return {
-                    "name": "Unknown Galaxy",
-                    "start_date": "2751-01-01",
-                    "time_scale": 4.0,
-                    "is_paused": False,
-                    "current_time": "Unknown"
-                }
-            
-            return {
-                "name": galaxy_data[0],
-                "start_date": galaxy_data[1],
-                "time_scale": galaxy_data[2],
-                "is_paused": bool(galaxy_data[3]),
-                "current_time": time_system.format_ingame_datetime(time_system.calculate_current_ingame_time())
-            }
-        except Exception as e:
-            print(f"❌ Error fetching galaxy info: {e}")
-            return {
-                "name": "Error Loading Galaxy",
-                "start_date": "2751-01-01",
-                "time_scale": 4.0,
-                "is_paused": False,
-                "current_time": "Error"
-            }
+            progress = (elapsed / total_duration) * 100
+            return min(max(progress, 0), 100)
+        except:
+            return 0
     
-    async def _get_wiki_data_optimized(self):
-        """Get wiki data with intelligent caching"""
-        # Use longer TTL for wiki data
-        locations = await self._get_cached_data('locations', self._fetch_locations_optimized)
-        corridors = await self._get_cached_data('corridors', self._fetch_corridors_optimized)
-        galaxy_info = await self._get_cached_data('galaxy_info', self._fetch_galaxy_info)
+    def _calculate_npc_travel_progress(self, start_time, duration):
+        """Calculate NPC travel progress"""
+        if not start_time or not duration:
+            return 0
         
-        # Get other data as needed
-        npcs = await self._get_cached_data('npcs_static', self._fetch_static_npcs)
-        news = await self._get_cached_data('news', self._fetch_recent_news)
-        logs = await self._get_cached_data('logs', self._fetch_logs)
-        history = await self._get_cached_data('history', self._fetch_history)
-        
-        return {
-            "galaxy": galaxy_info,
-            "locations": locations,
-            "corridors": corridors,
-            "npcs": npcs,
-            "news": news,
-            "logs": logs,
-            "history": history,
-            "statistics": self._calculate_statistics(locations, corridors, npcs)
-        }
-    
-    def _calculate_statistics(self, locations, corridors, npcs):
-        """Calculate galaxy statistics"""
-        location_types = {}
-        total_population = 0
-        
-        for loc in locations:
-            loc_type = loc["type"]
-            location_types[loc_type] = location_types.get(loc_type, 0) + 1
-            if loc.get("population"):
-                total_population += loc["population"]
-        
-        active_corridors = sum(1 for c in corridors if c["is_active"])
-        
-        return {
-            "locations": {
-                "total": len(locations),
-                "by_type": location_types,
-                "total_population": total_population
-            },
-            "corridors": {
-                "total": len(corridors),
-                "active": active_corridors
-            },
-            "npcs": {
-                "total": len(npcs.get('static', [])) + len(npcs.get('dynamic', []))
-            }
-        }
-    
-    # Helper methods for specific data types
-    async def _fetch_static_npcs(self):
-        """Fetch static NPC data"""
-        static_npcs = self.db.execute_query("""
-            SELECT npc_id, name, occupation, location_id, alignment
-            FROM static_npcs
-            WHERE is_alive = 1
-        """, fetch='all')
-        
-        dynamic_npcs = self.db.execute_query("""
-            SELECT npc_id, name, ship_name, current_location, alignment
-            FROM dynamic_npcs
-            WHERE is_alive = 1
-        """, fetch='all')
-        
-        return {
-            "static": [
-                {
-                    "id": n[0],
-                    "name": n[1],
-                    "occupation": n[2],
-                    "location_id": n[3],
-                    "alignment": n[4]
-                }
-                for n in static_npcs
-            ] if static_npcs else [],
-            "dynamic": [
-                {
-                    "id": n[0],
-                    "name": n[1],
-                    "ship_name": n[2],
-                    "location_id": n[3],
-                    "alignment": n[4]
-                }
-                for n in dynamic_npcs
-            ] if dynamic_npcs else []
-        }
-    
-    async def _fetch_recent_news(self):
-        """Fetch recent news"""
-        news_data = self.db.execute_query("""
-            SELECT news_id, news_type, title, description, location_id,
-                   scheduled_delivery
-            FROM news_queue
-            WHERE is_delivered = 1
-            ORDER BY scheduled_delivery DESC
-            LIMIT 50
-        """, fetch='all')
-        
-        return [
-            {
-                "id": n[0],
-                "type": n[1],
-                "title": n[2],
-                "description": n[3],
-                "location_id": n[4],
-                "delivered_at": n[5]
-            }
-            for n in news_data
-        ]
-    
-    async def _fetch_logs(self):
-        """Fetch recent logs"""
-        logs_data = self.db.execute_query("""
-            SELECT ll.author_name, ll.message, ll.posted_at, l.name as location_name
-            FROM location_logs ll
-            JOIN locations l ON ll.location_id = l.location_id
-            ORDER BY ll.posted_at DESC
-            LIMIT 100
-        """, fetch='all')
-        
-        return [
-            {
-                "author": log[0],
-                "message": log[1],
-                "timestamp": log[2],
-                "location": log[3]
-            }
-            for log in logs_data
-        ] if logs_data else []
-    
-    async def _fetch_history(self):
-        """Fetch galaxy history"""
-        history_data = self.db.execute_query("""
-            SELECT event_title, event_description, historical_figure, 
-                   event_date, event_type, location_id
-            FROM galactic_history
-            ORDER BY history_id DESC
-            LIMIT 100
-        """, fetch='all')
-        
-        return [
-            {
-                "title": h[0],
-                "description": h[1],
-                "figure": h[2],
-                "date": h[3],
-                "type": h[4],
-                "location_id": h[5]
-            }
-            for h in history_data
-        ] if history_data else []
-    
-    async def _start_server(self, host: str, port: int):
-        """Start the optimized web server"""
-        self.host = host
-        self.port = port
-        
-        # Ensure directories exist
-        os.makedirs("web", exist_ok=True)
-        os.makedirs("web/static", exist_ok=True)
-        os.makedirs("web/static/css", exist_ok=True)
-        os.makedirs("web/static/js", exist_ok=True)
-        os.makedirs("web/templates", exist_ok=True)
-        
-        # Create web files
-        self._create_web_files()
-        
-        print("🌐 Creating FastAPI application...")
-        
-        # Create FastAPI app
-        app = await self._create_fastapi_app()
-        
-        print(f"🚀 Starting web server on {host}:{port}...")
-        
-        # Run server in background thread
-        config = uvicorn.Config(app, host=host, port=port, log_level="error")
-        server = uvicorn.Server(config)
-        
-        self.server_task = asyncio.create_task(server.serve())
-        self.is_running = True
-        
-        print("✅ Web server started successfully")
-        
-        # Update game panels
-        await self._update_game_panels_for_map_status()
-    
-    def _create_web_files(self):
-        """Create optimized HTML and static files"""
-        # Create optimized HTML
-        html_content = '''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>Galaxy Map - High Performance</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="/static/css/map.css" />
-    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Tektur:wght@400;700&display=swap" rel="stylesheet">
-</head>
-<body>
-    <div id="loading" class="loading-overlay">
-        <div class="loading-content">
-            <div class="loading-spinner"></div>
-            <p>Initializing Navigation Systems...</p>
-        </div>
-    </div>
-    
-    <div id="header" class="header-expanded">
-        <div class="header-brand">
-            <span class="brand-icon">🛸</span>
-            <span class="brand-text">GALAXY NAVIGATION</span>
-        </div>
-        <div class="header-stats">
-            <div class="stat-item">
-                <span class="stat-label">LOCATIONS</span>
-                <span class="stat-value" id="location-count">0</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-label">ONLINE</span>
-                <span class="stat-value" id="player-count">0</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-label">FPS</span>
-                <span class="stat-value" id="fps-counter">60</span>
-            </div>
-        </div>
-        <div class="header-controls">
-            <button id="toggle-labels" class="control-btn">LABELS</button>
-            <button id="toggle-routes" class="control-btn">ROUTES</button>
-            <button id="performance-mode" class="control-btn">PERF MODE</button>
-        </div>
-    </div>
-    
-    <div id="map"></div>
-    
-    <div id="location-panel" class="location-panel hidden"></div>
-    
-    <button id="header-toggle" class="header-toggle">
-        <span class="toggle-icon">▼</span>
-    </button>
-    
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="/static/js/map.js"></script>
-</body>
-</html>'''
-        
-        with open("web/templates/map.html", "w", encoding='utf-8') as f:
-            f.write(html_content)
-        
-        # Create optimized CSS
-        css_content = '''/* Optimized Galaxy Map Styles */
-:root {
-    --primary-color: #00ffff;
-    --secondary-color: #00cccc;
-    --primary-bg: #000408;
-    --secondary-bg: #0a0f1a;
-    --text-primary: #e0ffff;
-    --border-color: #003344;
-    --success-color: #00ff88;
-    --warning-color: #ff8800;
-    --error-color: #ff3333;
-}
-
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
-
-body {
-    font-family: 'Share Tech Mono', monospace;
-    background: var(--primary-bg);
-    color: var(--text-primary);
-    overflow: hidden;
-    position: relative;
-}
-
-/* Loading overlay */
-.loading-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: var(--primary-bg);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10000;
-    transition: opacity 0.5s ease;
-}
-
-.loading-spinner {
-    width: 60px;
-    height: 60px;
-    border: 3px solid var(--border-color);
-    border-top-color: var(--primary-color);
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-}
-
-.loading-content button {
-    background: var(--secondary-bg);
-    border: 2px solid var(--primary-color);
-    color: var(--primary-color);
-    padding: 10px 20px;
-    font-family: inherit;
-    font-size: 14px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    text-transform: uppercase;
-}
-
-.loading-content button:hover {
-    background: var(--primary-color);
-    color: var(--primary-bg);
-    box-shadow: 0 0 20px var(--primary-color);
-}
-
-.loading-content code {
-    background: rgba(0, 255, 255, 0.1);
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-family: 'Share Tech Mono', monospace;
-}
-
-/* Header styles */
-#header {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    background: linear-gradient(180deg, var(--secondary-bg) 0%, rgba(10, 15, 26, 0.95) 100%);
-    border-bottom: 2px solid var(--primary-color);
-    padding: 1rem;
-    z-index: 1000;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    transition: transform 0.3s ease;
-}
-
-.header-collapsed {
-    transform: translateY(-100%);
-}
-
-.header-brand {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.brand-icon {
-    font-size: 1.5rem;
-    filter: drop-shadow(0 0 10px var(--primary-color));
-}
-
-.brand-text {
-    font-family: 'Tektur', sans-serif;
-    font-weight: 700;
-    font-size: 1.2rem;
-    text-shadow: 0 0 10px var(--primary-color);
-}
-
-.header-stats {
-    display: flex;
-    gap: 2rem;
-}
-
-.stat-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-.stat-label {
-    font-size: 0.7rem;
-    color: var(--text-secondary);
-}
-
-.stat-value {
-    font-size: 1.2rem;
-    font-weight: bold;
-    color: var(--primary-color);
-}
-
-.header-controls {
-    display: flex;
-    gap: 0.5rem;
-}
-
-.control-btn {
-    background: linear-gradient(145deg, var(--secondary-bg), var(--primary-bg));
-    border: 1px solid var(--primary-color);
-    color: var(--primary-color);
-    padding: 0.5rem 1rem;
-    font-family: inherit;
-    font-size: 0.8rem;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    text-transform: uppercase;
-}
-
-.control-btn:hover {
-    background: var(--primary-color);
-    color: var(--primary-bg);
-    box-shadow: 0 0 20px var(--primary-color);
-}
-
-.control-btn.active {
-    background: var(--primary-color);
-    color: var(--primary-bg);
-}
-
-/* Map container with visible background */
-#map {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: radial-gradient(ellipse at center, #0a1020 0%, #000408 100%);
-    z-index: 1;
-}
-
-/* Header toggle */
-#header-toggle {
-    position: fixed;
-    top: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--secondary-bg);
-    border: 1px solid var(--primary-color);
-    border-radius: 0 0 10px 10px;
-    padding: 5px 20px;
-    cursor: pointer;
-    z-index: 1001;
-    transition: all 0.3s ease;
-}
-
-#header-toggle:hover {
-    background: var(--primary-color);
-    color: var(--primary-bg);
-}
-
-/* Location markers */
-.location-marker {
-    background: transparent;
-    border: none;
-}
-
-.marker-icon {
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 16px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    background: rgba(10, 15, 26, 0.9);
-    border: 2px solid var(--primary-color);
-    box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
-}
-
-.marker-icon:hover {
-    transform: scale(1.2);
-    box-shadow: 0 0 30px var(--primary-color);
-}
-
-.marker-colony {
-    border-color: #4169E1;
-    box-shadow: 0 0 20px rgba(65, 105, 225, 0.5);
-}
-
-.marker-space_station {
-    border-color: #FFD700;
-    box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
-}
-
-.marker-outpost {
-    border-color: #FF6347;
-    box-shadow: 0 0 20px rgba(255, 99, 71, 0.5);
-}
-
-.marker-gate {
-    border-color: #9370DB;
-    box-shadow: 0 0 20px rgba(147, 112, 219, 0.5);
-    animation: gate-pulse 2s infinite;
-}
-
-@keyframes gate-pulse {
-    0%, 100% { transform: scale(1); opacity: 1; }
-    50% { transform: scale(1.1); opacity: 0.8; }
-}
-
-.location-label {
-    background: rgba(10, 15, 26, 0.95) !important;
-    border: 1px solid var(--primary-color) !important;
-    border-radius: 3px !important;
-    color: var(--text-primary) !important;
-    font-family: 'Share Tech Mono', monospace !important;
-    font-size: 11px !important;
-    padding: 2px 6px !important;
-    white-space: nowrap !important;
-}
-
-.marker-symbol {
-    filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.8));
-    user-select: none;
-}
-.player-marker {
-    z-index: 1000 !important;
-}
-.location-panel {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    width: 400px;
-    max-width: calc(100vw - 40px);
-    background: linear-gradient(145deg, var(--secondary-bg), var(--primary-bg));
-    border: 2px solid var(--primary-color);
-    border-radius: 10px;
-    padding: 1.5rem;
-    box-shadow: 0 0 30px rgba(0, 255, 255, 0.3);
-    transition: all 0.3s ease;
-    max-height: calc(100vh - 120px);
-    overflow-y: auto;
-}
-
-.location-panel.hidden {
-    transform: translateX(120%);
-    opacity: 0;
-}
-
-/* Performance mode styles */
-.performance-mode .leaflet-marker-icon {
-    transition: none !important;
-}
-
-.performance-mode .location-marker {
-    filter: none !important;
-}
-
-.performance-mode * {
-    animation: none !important;
-}
-
-/* Mobile optimizations */
-@media (max-width: 768px) {
-    #header {
-        flex-direction: column;
-        gap: 1rem;
-        padding: 0.75rem;
-    }
-    
-    .header-stats {
-        gap: 1rem;
-    }
-    
-    .location-panel {
-        bottom: 0;
-        left: 0;
-        right: 0;
-        width: 100%;
-        max-width: 100%;
-        border-radius: 20px 20px 0 0;
-        max-height: 60vh;
-    }
-}
-
-/* DEBUG: Ensure leaflet divs are visible */
-.leaflet-pane {
-    z-index: 400 !important;
-}
-
-.leaflet-marker-pane {
-    z-index: 600 !important;
-}
-.leaflet-container {
-    background: transparent;
-    font-family: inherit;
-}
-
-.leaflet-control-zoom {
-    border: none !important;
-    box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
-}
-
-.leaflet-control-zoom a {
-    background: var(--secondary-bg) !important;
-    border: 1px solid var(--primary-color) !important;
-    color: var(--primary-color) !important;
-}
-
-.leaflet-control-zoom a:hover {
-    background: var(--primary-color) !important;
-    color: var(--primary-bg) !important;
-}'''
-        
-        with open("web/static/css/map.css", "w", encoding='utf-8') as f:
-            f.write(css_content)
-        
-        # Create optimized JavaScript
-        js_content = '''// Optimized Galaxy Map JavaScript
-class GalaxyMap {
-    constructor() {
-        this.map = null;
-        this.locations = new Map();
-        this.corridors = new Map();
-        this.markers = new Map();
-        this.routes = new Map();
-        this.playerMarkers = new Map();
-        
-        this.websocket = null;
-        this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 10;
-        
-        // Performance settings
-        this.performanceMode = false;
-        this.updateThrottle = new Map();
-        this.frameTime = 16; // Target 60 FPS
-        this.lastFrameTime = 0;
-        
-        // UI state
-        this.showLabels = true;
-        this.showRoutes = true;
-        this.selectedLocation = null;
-        
-        // Initialize
-        this.init();
-    }
-    
-    async init() {
-        try {
-            console.log('🚀 Initializing Galaxy Map...');
-            
-            // Load initial data first
-            await this.loadInitialData();
-            
-            // Setup map
-            this.setupMap();
-            
-            // Setup event listeners
-            this.setupEventListeners();
-            
-            // Connect WebSocket
-            this.connectWebSocket();
-            
-            // Start performance monitoring
-            this.startPerformanceMonitoring();
-            
-            // Hide loading overlay
-            const loading = document.getElementById('loading');
-            if (loading) {
-                loading.style.opacity = '0';
-                setTimeout(() => loading.style.display = 'none', 500);
-            }
-            
-            console.log('✅ Galaxy Map initialization complete');
-        } catch (error) {
-            console.error('❌ Failed to initialize Galaxy Map:', error);
-            alert('Failed to initialize map. Please check the console for errors.');
-        }
-    }
-    
-    async loadInitialData() {
-        try {
-            console.log('Loading initial data...');
-            const response = await fetch('/api/map/initial');
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const data = await response.json();
-            
-            console.log('Initial data received:', data);
-            
-            // Check if we have locations
-            if (!data.locations || data.locations.length === 0) {
-                throw new Error('No locations found. Has the galaxy been generated? Use /galaxy generate in Discord.');
-            }
-            
-            // Process locations
-            data.locations.forEach(loc => {
-                this.locations.set(loc.id, loc);
-            });
-            console.log(`Loaded ${data.locations.length} locations`);
-            
-            // Process corridors
-            if (data.corridors) {
-                data.corridors.forEach(corridor => {
-                    this.corridors.set(corridor.id, corridor);
-                });
-                console.log(`Loaded ${data.corridors.length} corridors`);
-            }
-            
-            // Update UI
-            document.getElementById('location-count').textContent = data.locations.length;
-            
-            console.log('Performance metrics:', data.metrics);
-            
-        } catch (error) {
-            console.error('Failed to load initial data:', error);
-            
-            // Show error in loading screen
-            const loading = document.getElementById('loading');
-            loading.innerHTML = `
-                <div class="loading-content" style="text-align: center;">
-                    <h2 style="color: #ff3333;">⚠️ Map Data Not Available</h2>
-                    <p>${error.message}</p>
-                    <p style="margin-top: 20px;">If you're an admin, run <code>/galaxy generate</code> in Discord first.</p>
-                    <button onclick="location.reload()" style="margin-top: 20px; padding: 10px 20px;">
-                        🔄 Retry
-                    </button>
-                </div>
-            `;
-            
-            throw error; // Re-throw to stop initialization
-        }
-    }
-    
-    setupMap() {
-        this.map = L.map('map', {
-            crs: L.CRS.Simple,
-            minZoom: -3,
-            maxZoom: 6,
-            zoomControl: false,
-            attributionControl: false,
-            preferCanvas: true // Use canvas for better performance
-        });
-        
-        // Add zoom control
-        L.control.zoom({ position: 'bottomright' }).addTo(this.map);
-        
-        // Set initial view
-        this.map.setView([0, 0], 1);
-        
-        // Render initial locations
-        this.renderLocations();
-        this.renderCorridors();
-        
-        // Setup viewport change detection
-        this.map.on('moveend', () => this.onViewportChange());
-    }
-    
-    renderLocations() {
-        const bounds = this.map.getBounds();
-        
-        console.log(`Rendering ${this.locations.size} locations...`);
-        
-        this.locations.forEach(location => {
-            const coords = [location.coordinates.y, location.coordinates.x];
-            
-            // Skip if outside viewport in performance mode
-            if (this.performanceMode && !bounds.contains(coords)) {
-                return;
-            }
-            
-            // Create marker if not exists
-            if (!this.markers.has(location.id)) {
-                const marker = this.createLocationMarker(location);
-                this.markers.set(location.id, marker);
-            }
-        });
-        
-        console.log(`Created ${this.markers.size} markers`);
-    }
-    
-    createLocationMarker(location) {
-        const iconClass = this.getLocationIconClass(location.type);
-        const icon = L.divIcon({
-            className: 'location-marker',
-            html: `<div class="marker-icon ${iconClass}" data-location-id="${location.id}">
-                     <span class="marker-symbol">${this.getLocationSymbol(location.type)}</span>
-                   </div>`,
-            iconSize: [30, 30],
-            iconAnchor: [15, 15]
-        });
-        
-        const marker = L.marker([location.coordinates.y, location.coordinates.x], { icon })
-            .addTo(this.map)
-            .on('click', () => this.selectLocation(location.id));
-        
-        // Add label if enabled  
-        if (this.showLabels) {
-            const tooltipMethod = 'bind' + 'Tooltip'; // Leaflet tooltip method
-            marker[tooltipMethod](location.name, {
-                permanent: true,
-                className: 'location-label',
-                offset: [0, 20]
-            });
-        }
-        
-        return marker;
-    }
-    
-    getLocationSymbol(type) {
-        const symbols = {
-            'colony': '🏙️',
-            'space_station': '🛸',
-            'outpost': '📡',
-            'gate': '🌀'
-        };
-        return symbols[type] || '📍';
-    }
-    
-    getLocationIconClass(type) {
-        return `marker-${type}`;
-    }
-    
-    renderCorridors() {
-        if (!this.showRoutes) return;
-        
-        this.corridors.forEach(corridor => {
-            if (!corridor.is_active) return;
-            
-            const origin = this.locations.get(corridor.origin.id);
-            const dest = this.locations.get(corridor.destination.id);
-            
-            if (!origin || !dest) return;
-            
-            const route = L.polyline([
-                [origin.coordinates.y, origin.coordinates.x],
-                [dest.coordinates.y, dest.coordinates.x]
-            ], {
-                color: this.getCorridorColor(corridor.danger_level),
-                weight: 2,
-                opacity: 0.6,
-                className: 'corridor-line'
-            }).addTo(this.map);
-            
-            this.routes.set(corridor.id, route);
-        });
-    }
-    
-    getCorridorColor(dangerLevel) {
-        if (dangerLevel <= 2) return '#00ff88';
-        if (dangerLevel <= 4) return '#ffff00';
-        if (dangerLevel <= 6) return '#ff8800';
-        return '#ff3333';
-    }
-    
-    selectLocation(locationId) {
-        const location = this.locations.get(locationId);
-        if (!location) return;
-        
-        this.selectedLocation = locationId;
-        this.showLocationPanel(location);
-    }
-    
-    showLocationPanel(location) {
-        const panel = document.getElementById('location-panel');
-        
-        // Build panel content
-        panel.innerHTML = `
-            <button class="panel-close" onclick="galaxyMap.hideLocationPanel()">×</button>
-            <h2>${location.name}</h2>
-            <p class="location-type">${location.type.toUpperCase()}</p>
-            <p>${location.description}</p>
-            
-            <div class="location-stats">
-                <div class="stat">
-                    <span>Population:</span>
-                    <span>${location.population?.toLocaleString() || 'None'}</span>
-                </div>
-                <div class="stat">
-                    <span>Wealth:</span>
-                    <span>${'⭐'.repeat(location.wealth_level)}</span>
-                </div>
-                <div class="stat">
-                    <span>Faction:</span>
-                    <span>${location.faction || 'Independent'}</span>
-                </div>
-            </div>
-            
-            <div class="location-services">
-                <h3>Services</h3>
-                <div class="services-grid">
-                    ${this.renderServices(location.services)}
-                </div>
-            </div>
-        `;
-        
-        panel.classList.remove('hidden');
-    }
-    
-    hideLocationPanel() {
-        document.getElementById('location-panel').classList.add('hidden');
-        this.selectedLocation = null;
-    }
-    
-    renderServices(services) {
-        return Object.entries(services)
-            .filter(([_, available]) => available)
-            .map(([service, _]) => `<span class="service">${service}</span>`)
-            .join('');
-    }
-    
-    setupEventListeners() {
-        // Header toggle
-        document.getElementById('header-toggle').addEventListener('click', () => {
-            const header = document.getElementById('header');
-            header.classList.toggle('header-collapsed');
-        });
-        
-        // Control buttons
-        document.getElementById('toggle-labels').addEventListener('click', () => {
-            this.showLabels = !this.showLabels;
-            this.updateLabels();
-            event.target.classList.toggle('active');
-        });
-        
-        document.getElementById('toggle-routes').addEventListener('click', () => {
-            this.showRoutes = !this.showRoutes;
-            this.updateRoutes();
-            event.target.classList.toggle('active');
-        });
-        
-        document.getElementById('performance-mode').addEventListener('click', () => {
-            this.performanceMode = !this.performanceMode;
-            document.body.classList.toggle('performance-mode');
-            event.target.classList.toggle('active');
-        });
-        
-        // Close panel on map click
-        this.map.on('click', (e) => {
-            if (!e.originalEvent.target.closest('.location-marker')) {
-                this.hideLocationPanel();
-            }
-        });
-    }
-    
-    connectWebSocket() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws`;
-        
-        this.websocket = new WebSocket(wsUrl);
-        
-        this.websocket.onopen = () => {
-            console.log('WebSocket connected');
-            this.reconnectAttempts = 0;
-        };
-        
-        this.websocket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            this.handleWebSocketMessage(data);
-        };
-        
-        this.websocket.onclose = () => {
-            console.log('WebSocket disconnected');
-            this.scheduleReconnect();
-        };
-        
-        this.websocket.onerror = (error) => {
-            console.error('WebSocket error:', error);
-        };
-    }
-    
-    handleWebSocketMessage(message) {
-        // Throttle updates for performance
-        const now = Date.now();
-        const lastUpdate = this.updateThrottle.get(message.type) || 0;
-        
-        if (now - lastUpdate < 100) return; // 100ms throttle
-        
-        this.updateThrottle.set(message.type, now);
-        
-        switch (message.type) {
-            case 'dynamic_update':
-                this.updateDynamicData(message.data);
-                break;
-            case 'delta':
-                this.applyDelta(message);
-                break;
-            case 'update':
-                this.applyUpdate(message);
-                break;
-        }
-    }
-    
-    updateDynamicData(data) {
-        // Update player count
-        document.getElementById('player-count').textContent = data.players.length;
-        
-        // Update player positions
-        this.updatePlayerMarkers(data.players);
-        
-        // Update NPCs in transit
-        // Could implement transit animations here
-    }
-    
-    updatePlayerMarkers(players) {
-        const activePlayerIds = new Set();
-        
-        players.forEach(player => {
-            activePlayerIds.add(player.user_id);
-            
-            if (!this.playerMarkers.has(player.user_id)) {
-                // Create new player marker
-                const location = this.locations.get(player.location_id);
-                if (!location) return;
-                
-                const marker = L.circleMarker([location.coordinates.y, location.coordinates.x], {
-                    radius: 8,
-                    fillColor: '#00ff88',
-                    color: '#00ff88',
-                    weight: 2,
-                    opacity: 1,
-                    fillOpacity: 0.5,
-                    className: 'player-marker'
-                }).addTo(this.map);
-                
-                this.playerMarkers.set(player.user_id, marker);
-            } else {
-                // Update existing marker position
-                const marker = this.playerMarkers.get(player.user_id);
-                const location = this.locations.get(player.location_id);
-                if (location && !this.performanceMode) {
-                    marker.setLatLng([location.coordinates.y, location.coordinates.x]);
-                }
-            }
-        });
-        
-        // Remove markers for offline players
-        this.playerMarkers.forEach((marker, userId) => {
-            if (!activePlayerIds.has(userId)) {
-                this.map.removeLayer(marker);
-                this.playerMarkers.delete(userId);
-            }
-        });
-    }
-    
-    scheduleReconnect() {
-        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            console.error('Max reconnection attempts reached');
-            return;
-        }
-        
-        this.reconnectAttempts++;
-        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000);
-        
-        setTimeout(() => this.connectWebSocket(), delay);
-    }
-    
-    onViewportChange() {
-        if (!this.performanceMode) return;
-        
-        // In performance mode, load data for visible viewport
-        const bounds = this.map.getBounds();
-        
-        // Hide markers outside viewport
-        this.markers.forEach((marker, locationId) => {
-            const location = this.locations.get(locationId);
-            const coords = [location.coordinates.y, location.coordinates.x];
-            
-            if (bounds.contains(coords)) {
-                this.map.addLayer(marker);
-            } else {
-                this.map.removeLayer(marker);
-            }
-        });
-    }
-    
-    updateLabels() {
-        this.markers.forEach(marker => {
-            if (this.showLabels) {
-                marker['open' + 'Tooltip']();
-            } else {
-                marker['close' + 'Tooltip']();
-            }
-        });
-    }
-    
-    updateRoutes() {
-        this.routes.forEach(route => {
-            if (this.showRoutes) {
-                this.map.addLayer(route);
-            } else {
-                this.map.removeLayer(route);
-            }
-        });
-    }
-    
-    startPerformanceMonitoring() {
-        let frameCount = 0;
-        let lastTime = performance.now();
-        
-        const updateFPS = () => {
-            frameCount++;
-            const currentTime = performance.now();
-            
-            if (currentTime >= lastTime + 1000) {
-                const fps = Math.round(frameCount * 1000 / (currentTime - lastTime));
-                document.getElementById('fps-counter').textContent = fps;
-                frameCount = 0;
-                lastTime = currentTime;
-            }
-            
-            requestAnimationFrame(updateFPS);
-        };
-        
-        requestAnimationFrame(updateFPS);
-    }
-}
-
-// Add debug helper to window
-window.debugMap = () => {
-    if (!window.galaxyMap) {
-        console.error('Galaxy map not initialized');
-        return;
-    }
-    
-    const map = window.galaxyMap;
-    console.log('=== Galaxy Map Debug Info ===');
-    console.log('Locations:', map.locations.size);
-    console.log('Corridors:', map.corridors.size);
-    console.log('Markers:', map.markers.size);
-    console.log('Routes:', map.routes.size);
-    console.log('Player Markers:', map.playerMarkers.size);
-    console.log('WebSocket:', map.websocket?.readyState === 1 ? 'Connected' : 'Disconnected');
-    console.log('Performance Mode:', map.performanceMode);
-    console.log('Show Labels:', map.showLabels);
-    console.log('Show Routes:', map.showRoutes);
-    
-    // Sample location data
-    if (map.locations.size > 0) {
-        const firstLocation = map.locations.values().next().value;
-        console.log('Sample location:', firstLocation);
-    }
-    
-    // Check map bounds
-    if (map.map) {
-        const bounds = map.map.getBounds();
-        console.log('Map bounds:', bounds);
-        console.log('Map zoom:', map.map.getZoom());
-        console.log('Map center:', map.map.getCenter());
-    }
-    
-    console.log('===========================');
-    console.log('Run window.debugMap() again to refresh');
-};'''
-        
-        with open("web/static/js/map.js", "w", encoding='utf-8') as f:
-            f.write(js_content)
-        
-        # Create wiki template
-        self._create_wiki_template()
-    
-    def _create_wiki_template(self):
-        """Create wiki template"""
-        wiki_html = '''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Galaxy Encyclopedia</title>
-    <link rel="stylesheet" href="/static/css/wiki.css" />
-    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
-</head>
-<body>
-    <div id="wiki-container">
-        <h1>Galaxy Encyclopedia</h1>
-        <div id="wiki-content">
-            <p>Loading galaxy data...</p>
-        </div>
-    </div>
-    <script>
-        // Load wiki data on page load
-        async function loadWikiData() {
-            try {
-                const response = await fetch('/api/wiki/data');
-                const data = await response.json();
-                
-                const container = document.getElementById('wiki-content');
-                container.innerHTML = generateWikiHTML(data);
-            } catch (error) {
-                console.error('Failed to load wiki data:', error);
-                document.getElementById('wiki-content').innerHTML = '<p>Error loading wiki data</p>';
-            }
-        }
-        
-        function generateWikiHTML(data) {
-            let html = '<div class="wiki-sections">';
-            
-            // Galaxy Overview
-            html += '<section><h2>Galaxy Overview</h2>';
-            html += `<p>Name: ${data.galaxy?.name || 'Unknown'}</p>`;
-            html += `<p>Current Time: ${data.galaxy?.current_time || 'Unknown'}</p>`;
-            html += '</section>';
-            
-            // Locations
-            html += '<section><h2>Locations</h2>';
-            if (data.locations && data.locations.length > 0) {
-                html += '<ul>';
-                data.locations.forEach(loc => {
-                    html += `<li><strong>${loc.name}</strong> - ${loc.type}</li>`;
-                });
-                html += '</ul>';
-            } else {
-                html += '<p>No locations found</p>';
-            }
-            html += '</section>';
-            
-            html += '</div>';
-            return html;
-        }
-        
-        loadWikiData();
-    </script>
-</body>
-</html>'''
-        
-        with open("web/templates/wiki.html", "w", encoding='utf-8') as f:
-            f.write(wiki_html)
-        
-        # Also create basic wiki CSS
-        wiki_css = '''
-body {
-    font-family: 'Share Tech Mono', monospace;
-    background: #000408;
-    color: #e0ffff;
-    margin: 0;
-    padding: 20px;
-}
-
-#wiki-container {
-    max-width: 1200px;
-    margin: 0 auto;
-}
-
-h1, h2 {
-    color: #00ffff;
-}
-
-section {
-    margin-bottom: 30px;
-    padding: 20px;
-    background: rgba(10, 15, 26, 0.8);
-    border: 1px solid #003344;
-    border-radius: 5px;
-}
-'''
-        with open("web/static/css/wiki.css", "w", encoding='utf-8') as f:
-            f.write(wiki_css)
-    
-    async def _update_game_panels_for_map_status(self):
-        """Update game panels to reflect web map status"""
         try:
-            panel_cog = self.bot.get_cog('GamePanelCog')
-            if not panel_cog:
-                print("⚠️ GamePanelCog not found, skipping panel updates")
-                return
-                
-            # Get all active panels
-            panels = self.bot.db.execute_query(
-                "SELECT guild_id, channel_id, message_id FROM game_panels",
-                fetch='all'
-            )
+            start = datetime.fromisoformat(start_time)
+            now = datetime.now()
+            elapsed = (now - start).total_seconds()
             
-            if not panels:
-                return
-                
-            print(f"🔄 Updating {len(panels)} game panels with webmap status: {self.is_running}")
-            
-            for guild_id, channel_id, message_id in panels:
-                try:
-                    guild = self.bot.get_guild(guild_id)
-                    if not guild:
-                        continue
-                    
-                    channel = guild.get_channel(channel_id)
-                    if not channel:
-                        continue
-                    
-                    # Create fresh embed and view for each panel
-                    embed = await panel_cog.create_panel_embed(guild)
-                    new_view = await panel_cog.create_panel_view()
-                    
-                    try:
-                        message = await channel.fetch_message(message_id)
-                        await message.edit(embed=embed, view=new_view)
-                        print(f"✅ Updated game panel in {guild.name} with webmap status: {self.is_running}")
-                    except discord.NotFound:
-                        # Message was deleted, remove from database
-                        self.bot.db.execute_query(
-                            "DELETE FROM game_panels WHERE message_id = ?",
-                            (message_id,)
-                        )
-                        print(f"🗑️ Removed orphaned panel record for message {message_id}")
-                    except discord.Forbidden:
-                        print(f"❌ No permission to update panel in {guild.name}")
-                    except Exception as e:
-                        print(f"❌ Error updating panel message {message_id}: {e}")
-                
-                except Exception as e:
-                    print(f"❌ Error processing panel update for guild {guild_id}: {e}")
-            
-            # Force refresh persistent views after updating messages
-            await panel_cog.refresh_all_panel_views()
-        
-        except Exception as e:
-            print(f"❌ Error in _update_game_panels_for_map_status: {e}")
-            import traceback
-            traceback.print_exc()
+            progress = (elapsed / duration) * 100
+            return min(max(progress, 0), 100)
+        except:
+            return 0
     
-    # Discord commands
-    @app_commands.command(name="webmap", description="Start the interactive web map server")
+    def _convert_to_game_date(self, timestamp):
+        """Convert real date to in-game date (2700s)"""
+        try:
+            if isinstance(timestamp, str):
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            else:
+                dt = timestamp
+            
+            # Game year calculation
+            game_year = 2700 + (dt.year - 2024)
+            return dt.strftime(f"{game_year}-%m-%d %H:%M GST")
+        except:
+            return "Unknown Date"
+    
+    webmap_group = app_commands.Group(name="webmap", description="Web map management commands")
+    
+    @webmap_group.command(name="start", description="Start the web map server")
     @app_commands.describe(
-        port="Port number (default: 8090)",
-        host="Host address (default: 0.0.0.0)"
+        port="Port to run the server on (default: 8090)",
+        host="Host to bind to (default: 0.0.0.0)",
+        domain="Domain name for the server (optional)"
     )
-    async def start_webmap(self, interaction: discord.Interaction, 
-                          port: Optional[int] = None, 
-                          host: Optional[str] = None):
+    async def start_webmap(self, interaction: discord.Interaction, port: int = 8090, host: str = '0.0.0.0', domain: str = None):
         """Start the web map server"""
-        
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
@@ -1902,200 +274,1864 @@ section {
             await interaction.response.send_message("Web map is already running!", ephemeral=True)
             return
         
-        port = port or self.port
-        host = host or self.host
         
         await interaction.response.defer()
         
         try:
-            await self._start_server(host, port)
+            self.port = port
+            self.host = host
+            self.domain = domain
             
-            display_url, url_note = self._get_display_url()
+            # Create web application
+            self.app = web.Application()
+            self.setup_routes()
+            
+            # Start the server
+            self.runner = web.AppRunner(self.app)
+            await self.runner.setup()
+            self.site = web.TCPSite(self.runner, self.host, self.port)
+            await self.site.start()
+            
+            self.is_running = True
+            
+            # Update game panel
+            panel_cog = self.bot.get_cog('GamePanelCog')
+            if panel_cog:
+                await panel_cog.refresh_all_panel_views()
+            
+            # Get access URL
+            final_url, _ = await self.get_final_map_url()
             
             embed = discord.Embed(
-                title="🗺️ Web Map Server Started",
-                description=f"Interactive galaxy map is now accessible!\n\n{url_note}",
+                title="✅ Web Map Started",
+                description=f"The web map server is now running!",
                 color=0x00ff00
             )
-            
+            embed.add_field(name="Host", value=self.host, inline=True)
+            embed.add_field(name="Port", value=str(self.port), inline=True)
+            embed.add_field(name="Status", value="🟢 Online", inline=True)
             embed.add_field(
-                name="Performance Metrics",
-                value="Use `/webmap_stats` to view performance metrics",
+                name="Access URLs",
+                value=f"**Map:** {final_url}\\n**Wiki:** {final_url.replace('/map', '/wiki')}",
                 inline=False
             )
             
             await interaction.followup.send(embed=embed)
             
         except Exception as e:
-            await interaction.followup.send(f"❌ Failed to start web map: {str(e)}")
+            self.is_running = False
+            await interaction.followup.send(f"Failed to start web map: {str(e)}", ephemeral=True)
+            print(f"Web map start error: {traceback.format_exc()}")
     
-    @app_commands.command(name="webmap_stop", description="Stop the web map server")
-    async def stop_webmap(self, interaction: discord.Interaction):
+    @webmap_group.command(name="stop", description="Stop the web map server")
+    async def stop_webmap_command(self, interaction: discord.Interaction):
         """Stop the web map server"""
-        
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
         if not self.is_running:
-            await interaction.response.send_message("Web map is not running.", ephemeral=True)
+            await interaction.response.send_message("Web map is not running!", ephemeral=True)
             return
+        
+        await interaction.response.defer()
+        
+        try:
+            await self.stop_webmap()
+            
+            # Update game panel
+            panel_cog = self.bot.get_cog('GamePanelCog')
+            if panel_cog:
+                await panel_cog.refresh_all_panel_views()
+            
+            embed = discord.Embed(
+                title="🛑 Web Map Stopped",
+                description="The web map server has been stopped.",
+                color=0xff0000
+            )
+            
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            await interaction.followup.send(f"Error stopping web map: {str(e)}", ephemeral=True)
+    
+    @webmap_group.command(name="set_ip", description="Set the external IP or domain for the web map")
+    @app_commands.describe(address="External IP address or domain name")
+    async def set_external_ip(self, interaction: discord.Interaction, address: str):
+        """Set external IP or domain"""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        # Check if it's a domain or IP
+        if '.' in address and not address.replace('.', '').replace(':', '').isdigit():
+            self.domain = address
+            self.external_ip = None
+            message = f"Domain set to: {address}"
+        else:
+            self.external_ip = address
+            self.domain = None
+            message = f"External IP set to: {address}"
+        
+        await interaction.response.send_message(message, ephemeral=True)
+    
+    async def stop_webmap(self):
+        """Stop the web map server"""
+        if self.site:
+            await self.site.stop()
+        if self.runner:
+            await self.runner.cleanup()
         
         self.is_running = False
-        
-        # Close WebSocket connections
-        for client in self.websocket_clients.copy():
-            try:
-                await client.close()
-            except:
-                pass
-        
-        self.websocket_clients.clear()
-        
-        # Cancel server task
-        if self.server_task:
-            self.server_task.cancel()
-        
-        # Update panels
-        await self._update_game_panels_for_map_status()
-        
-        embed = discord.Embed(
-            title="🛑 Web Map Server Stopped",
-            description="The interactive galaxy map has been shut down.",
-            color=0xff0000
-        )
-        
-        await interaction.response.send_message(embed=embed)
+        self.app = None
+        self.runner = None
+        self.site = None
     
-    @app_commands.command(name="webmap_stats", description="View web map performance statistics")
-    async def webmap_stats(self, interaction: discord.Interaction):
-        """View performance statistics"""
-        
-        if not self.is_running:
-            await interaction.response.send_message("Web map is not running.", ephemeral=True)
-            return
-        
-        embed = discord.Embed(
-            title="📊 Web Map Performance Statistics",
-            color=0x00ffff
-        )
-        
-        # Cache statistics
-        cache_info = []
-        for key, cached in self.cache.items():
-            ttl = self.cache_ttl.get(key, 60)
-            age = time.time() - cached.timestamp
-            status = "✅ Fresh" if age < ttl else "⚠️ Stale"
-            cache_info.append(f"{key}: {status} ({age:.1f}s old)")
-        
-        embed.add_field(
-            name="Cache Status",
-            value="\n".join(cache_info[:5]) or "No cached data",
-            inline=False
-        )
-        
-        # Update metrics
-        total = self.update_metrics['total_updates']
-        if total > 0:
-            delta_pct = (self.update_metrics['delta_updates'] / total) * 100
-            cache_hit_rate = (self.update_metrics['cache_hits'] / 
-                            (self.update_metrics['cache_hits'] + self.update_metrics['db_queries'])) * 100
+    async def get_final_map_url(self):
+        """Get the final URL for the map"""
+        if self.domain:
+            protocol = "https" if self.port == 443 else "http"
+            port_str = "" if self.port in [80, 443] else f":{self.port}"
+            return f"{protocol}://{self.domain}{port_str}/map", self.domain
+        elif self.external_ip:
+            return f"http://{self.external_ip}:{self.port}/map", self.external_ip
         else:
-            delta_pct = 0
-            cache_hit_rate = 0
-        
-        embed.add_field(
-            name="Update Statistics",
-            value=f"Total Updates: {total}\n"
-                  f"Delta Updates: {self.update_metrics['delta_updates']} ({delta_pct:.1f}%)\n"
-                  f"Full Updates: {self.update_metrics['full_updates']}\n"
-                  f"Cache Hit Rate: {cache_hit_rate:.1f}%\n"
-                  f"DB Queries: {self.update_metrics['db_queries']}",
-            inline=False
+            # Try to detect external IP
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get('https://api.ipify.org?format=text', timeout=5) as resp:
+                        detected_ip = await resp.text()
+                        return f"http://{detected_ip}:{self.port}/map", detected_ip
+            except:
+                # Fallback
+                return f"http://[SERVER_IP]:{self.port}/map", "[SERVER_IP]"
+    
+    def setup_routes(self):
+        """Setup web routes"""
+        self.app.router.add_get('/', self.handle_index)
+        self.app.router.add_get('/map', self.handle_map)
+        self.app.router.add_get('/wiki', self.handle_wiki)
+        self.app.router.add_get('/api/map-data', self.handle_api_map_data)
+        self.app.router.add_get('/api/wiki-data', self.handle_api_wiki_data)
+        self.app.router.add_static('/', path=os.path.dirname(__file__))
+    
+    async def handle_index(self, request):
+        """Serve the landing page"""
+        html_content = self.get_landing_html()
+        return web.Response(text=html_content, content_type='text/html')
+    
+    async def handle_map(self, request):
+        """Serve the map page"""
+        html_content = self.get_map_html()
+        return web.Response(text=html_content, content_type='text/html')
+    
+    async def handle_wiki(self, request):
+        """Serve the wiki page"""
+        html_content = self.get_wiki_html()
+        return web.Response(text=html_content, content_type='text/html')
+    
+    async def handle_api_map_data(self, request):
+        """API endpoint for map data"""
+        return web.json_response(self.cache)
+    
+    async def handle_api_wiki_data(self, request):
+        """API endpoint for wiki data"""
+        wiki_data = await self._compile_wiki_data()
+        return web.json_response(wiki_data)
+    
+    async def _compile_wiki_data(self):
+        """Compile comprehensive wiki data"""
+        # Get detailed location information
+        locations = self.db.execute_query(
+            """SELECT l.*, COUNT(DISTINCT c.user_id) as player_count,
+                      COUNT(DISTINCT sn.npc_id) as static_npc_count,
+                      COUNT(DISTINCT dn.npc_id) as dynamic_npc_count
+               FROM locations l
+               LEFT JOIN characters c ON l.location_id = c.current_location AND c.is_logged_in = 1
+               LEFT JOIN static_npcs sn ON l.location_id = sn.location_id
+               LEFT JOIN dynamic_npcs dn ON l.location_id = dn.current_location AND dn.is_alive = 1
+               GROUP BY l.location_id""",
+            fetch='all'
         )
         
-        embed.add_field(
-            name="Connected Clients",
-            value=f"{len(self.websocket_clients)} active WebSocket connections",
-            inline=False
+        # Get route information
+        routes = self.db.execute_query(
+            """SELECT c.*, ol.name as origin_name, dl.name as dest_name,
+                      ol.system_name as origin_system, dl.system_name as dest_system
+               FROM corridors c
+               JOIN locations ol ON c.origin_location = ol.location_id
+               JOIN locations dl ON c.destination_location = dl.location_id
+               WHERE c.is_active = 1
+               ORDER BY ol.name, dl.name""",
+            fetch='all'
         )
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    
-    @app_commands.command(name="webmap_set_ip", description="Set the external IP for web map access")
-    async def set_external_ip(self, interaction: discord.Interaction, ip_or_domain: str):
-        """Set external IP or domain for web map access"""
-        
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
-            return
-        
-        self.external_ip_override = ip_or_domain
-        
-        embed = discord.Embed(
-            title="✅ External IP Set",
-            description=f"Web map will now be accessible at:\n`http://{ip_or_domain}:{self.port}/map`",
-            color=0x00ff00
+        # Get player information
+        players = self.db.execute_query(
+            """SELECT c.*, l.name as location_name, s.name as ship_name
+               FROM characters c
+               LEFT JOIN locations l ON c.current_location = l.location_id
+               LEFT JOIN ships s ON c.ship_id = s.ship_id
+               WHERE c.is_logged_in = 1
+               ORDER BY c.name""",
+            fetch='all'
         )
         
-        if self.is_running:
-            await self._update_game_panels_for_map_status()
-            embed.add_field(
-                name="Note",
-                value="Game panels have been updated with the new URL.",
-                inline=False
-            )
+        # Get dynamic NPC information
+        dynamic_npcs = self.db.execute_query(
+            """SELECT n.*, l.name as location_name
+               FROM dynamic_npcs n
+               LEFT JOIN locations l ON n.current_location = l.location_id
+               WHERE n.is_alive = 1
+               ORDER BY n.name""",
+            fetch='all'
+        )
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # Get location logs
+        location_logs = self.db.execute_query(
+            """SELECT ll.*, l.name as location_name
+               FROM location_logs ll
+               JOIN locations l ON ll.location_id = l.location_id
+               ORDER BY ll.posted_at DESC
+               LIMIT 100""",
+            fetch='all'
+        )
+        
+        return {
+            'locations': self._format_wiki_locations(locations),
+            'routes': self._format_wiki_routes(routes),
+            'players': self._format_wiki_players(players),
+            'npcs': self._format_wiki_npcs(dynamic_npcs),
+            'logs': self._format_wiki_logs(location_logs),
+            'news': self.cache['news']
+        }
     
-    def _get_display_url(self) -> tuple[str, str]:
-        """Get the display URL and note for users"""
-        if self.external_ip_override:
-            display_url = f"http://{self.external_ip_override}:{self.port}/map"
-            url_note = f"Connect to: {display_url}"
-            return display_url, url_note
-        
-        if self.host != "0.0.0.0":
-            display_url = f"http://{self.host}:{self.port}/map"
-            url_note = f"Connect to: {display_url}"
-            return display_url, url_note
-        
-        display_url = f"http://[SERVER_IP]:{self.port}/map"
-        url_note = f"Connect to: {display_url}\n*Use `/webmap_set_ip <your_external_ip_or_domain>` to set the correct address*"
-        return display_url, url_note
+    def _format_wiki_locations(self, locations):
+        """Format location data for wiki"""
+        formatted = []
+        for loc in locations:
+            formatted.append({
+                'id': loc[0],
+                'name': loc[1],
+                'type': loc[2],
+                'system': loc[5],
+                'wealth': loc[6],
+                'population': loc[7],
+                'tech_level': loc[8],
+                'description': loc[9],
+                'faction': loc[10],
+                'stability': loc[11],
+                'player_count': loc[12],
+                'static_npc_count': loc[13],
+                'dynamic_npc_count': loc[14]
+            })
+        return formatted
     
-    async def get_final_map_url(self) -> tuple[str, str]:
-        """Public method to get the final map URL (for GamePanelCog)"""
-        return self._get_display_url()
+    def _format_wiki_routes(self, routes):
+        """Format route data for wiki"""
+        formatted = []
+        for route in routes:
+            formatted.append({
+                'id': route[0],
+                'origin': route[1],
+                'destination': route[2],
+                'name': route[3],
+                'origin_name': route[10],
+                'dest_name': route[11],
+                'origin_system': route[12],
+                'dest_system': route[13],
+                'travel_time': route[4],
+                'danger_level': route[5],
+                'stability': route[6]
+            })
+        return formatted
     
-    async def cog_unload(self):
-        """Clean up when cog is unloaded"""
-        # Cancel background tasks
-        if hasattr(self, 'update_dynamic_data_task'):
-            self.update_dynamic_data_task.cancel()
-        if hasattr(self, 'cleanup_cache_task'):
-            self.cleanup_cache_task.cancel()
+    def _format_wiki_players(self, players):
+        """Format player data for wiki"""
+        formatted = []
+        for player in players:
+            formatted.append({
+                'id': player[0],
+                'name': player[1],
+                'location': player[2],
+                'location_name': player[-2],  # Second to last column
+                'ship_name': player[-1],       # Last column
+                'credits': player[3],          # This is the 'money' column
+                'reputation_loyalist': player[7],
+                'reputation_outlaw': player[8],
+                'total_distance': player[10],
+                'locations_visited': player[11],
+                'jobs_completed': player[12],
+                'pirates_defeated': player[13]
+            })
+        return formatted
+    
+    def _format_wiki_npcs(self, npcs):
+        """Format NPC data for wiki"""
+        formatted = []
+        for npc in npcs:
+            formatted.append({
+                'id': npc[0],
+                'name': npc[1],
+                'callsign': npc[2],
+                'age': npc[3],
+                'ship_name': npc[4],
+                'ship_type': npc[5],
+                'location': npc[6],
+                'location_name': npc[20],
+                'alignment': npc[11],
+                'credits': npc[10],
+                'combat_rating': npc[14]
+            })
+        return formatted
+    
+    def _format_wiki_logs(self, logs):
+        """Format location logs for wiki"""
+        formatted = []
+        for log in logs:
+            formatted.append({
+                'id': log[0],
+                'location_id': log[1],
+                'location_name': log[6],      # Adjusted index
+                'character_name': log[3],     # author_name
+                'action': log[4],             # message
+                'timestamp': log[5],          # posted_at
+                'game_date': self._convert_to_game_date(log[5])
+            })
+        return formatted
+    
+    def get_landing_html(self):
+        """Get landing page HTML"""
+        return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Quiet End - Web Interface</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tektur:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>''' + self.get_shared_css() + '''</style>
+</head>
+<body class="theme-blue">
+    <div class="static-overlay"></div>
+    <div class="scanlines"></div>
+    <div class="main-container">
+        <header class="game-header">
+            <div class="terminal-indicator">
+                <div class="power-light"></div>
+                <span class="terminal-id">TERMINAL-2754-ACTIVE</span>
+            </div>
+            <h1 class="game-title">THE QUIET END</h1>
+            <p class="game-subtitle">WEB INTERFACE</p>
+        </header>
         
-        # Stop server if running
-        if self.is_running:
-            self.is_running = False
+        <div class="action-buttons">
+            <a href="/map" class="action-button">
+                <div class="button-icon">🗺️</div>
+                <div class="button-text">
+                    <div class="button-title">GALAXY MAP</div>
+                    <div class="button-subtitle">Real-time Navigation</div>
+                </div>
+                <div class="button-glow"></div>
+            </a>
             
-            # Close WebSocket connections
-            for client in self.websocket_clients:
-                try:
-                    await client.close()
-                except:
-                    pass
-            
-            # Cancel server task
-            if self.server_task:
-                self.server_task.cancel()
+            <a href="/wiki" class="action-button">
+                <div class="button-icon">📚</div>
+                <div class="button-text">
+                    <div class="button-title">GALACTIC WIKI</div>
+                    <div class="button-subtitle">Knowledge Database</div>
+                </div>
+                <div class="button-glow"></div>
+            </a>
+        </div>
+    </div>
+</body>
+</html>'''
+    
+    def get_map_html(self):
+        """Get map page HTML"""
+        return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Quiet End - Galaxy Map</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tektur:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>''' + self.get_shared_css() + self.get_map_css() + '''</style>
+</head>
+<body class="theme-blue">
+    <div class="static-overlay"></div>
+    <div class="scanlines"></div>
+    
+    <div class="map-container">
+        <header class="map-header">
+            <div class="header-section">
+                <h1 class="map-title">GALAXY MAP</h1>
+                <div class="map-status">
+                    <div class="status-indicator online"></div>
+                    <span id="last-update">LOADING...</span>
+                </div>
+            </div>
+            <div class="header-controls">
+                <a href="/" class="nav-button">HOME</a>
+                <a href="/wiki" class="nav-button">WIKI</a>
+            </div>
+        </header>
         
-        print("✅ WebMap cog unloaded successfully")
+        <div class="map-controls">
+            <div class="control-group">
+                <label class="toggle-control">
+                    <input type="checkbox" id="toggle-players" checked>
+                    <span class="toggle-label">Show Players</span>
+                </label>
+                <label class="toggle-control">
+                    <input type="checkbox" id="toggle-npcs" checked>
+                    <span class="toggle-label">Show NPCs</span>
+                </label>
+                <label class="toggle-control">
+                    <input type="checkbox" id="toggle-routes" checked>
+                    <span class="toggle-label">Show Routes</span>
+                </label>
+            </div>
+            <div class="control-group">
+                <button id="zoom-in" class="control-button">+</button>
+                <button id="zoom-out" class="control-button">-</button>
+                <button id="zoom-reset" class="control-button">Reset</button>
+            </div>
+        </div>
+        
+        <div class="map-viewport">
+            <canvas id="galaxy-map"></canvas>
+            <div id="tooltip" class="map-tooltip"></div>
+        </div>
+        
+        <div id="location-info" class="location-info-panel">
+            <h3>Select a location for details</h3>
+        </div>
+    </div>
+    
+    <script>''' + self.get_map_script() + '''</script>
+</body>
+</html>'''
+    
+    def get_wiki_html(self):
+        """Get wiki page HTML"""
+        return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Quiet End - Galactic Wiki</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tektur:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>''' + self.get_shared_css() + self.get_wiki_css() + '''</style>
+</head>
+<body class="theme-blue">
+    <div class="static-overlay"></div>
+    <div class="scanlines"></div>
+    
+    <div class="wiki-container">
+        <header class="wiki-header">
+            <div class="header-section">
+                <h1 class="wiki-title">GALACTIC WIKI</h1>
+                <div class="wiki-status">
+                    <div class="status-indicator online"></div>
+                    <span>DATABASE ONLINE</span>
+                </div>
+            </div>
+            <div class="header-controls">
+                <a href="/" class="nav-button">HOME</a>
+                <a href="/map" class="nav-button">MAP</a>
+            </div>
+        </header>
+        
+        <div class="wiki-tabs">
+            <button class="wiki-tab active" data-tab="locations">Locations</button>
+            <button class="wiki-tab" data-tab="routes">Routes</button>
+            <button class="wiki-tab" data-tab="players">Pilots</button>
+            <button class="wiki-tab" data-tab="npcs">NPCs</button>
+            <button class="wiki-tab" data-tab="logs">Activity Logs</button>
+            <button class="wiki-tab" data-tab="news">News Feed</button>
+        </div>
+        
+        <div class="wiki-content">
+            <div id="loading" class="loading-message">Loading database...</div>
+            <div id="wiki-data" class="wiki-data"></div>
+        </div>
+    </div>
+    
+    <script>''' + self.get_wiki_script() + '''</script>
+</body>
+</html>'''
+    
+    def get_shared_css(self):
+        """Get shared CSS styles"""
+        return '''
+        :root {
+            --primary-color: #00ffff;
+            --secondary-color: #00cccc;
+            --accent-color: #0088cc;
+            --warning-color: #ff8800;
+            --success-color: #00ff88;
+            --error-color: #ff3333;
+            --primary-bg: #000408;
+            --secondary-bg: #0a0f1a;
+            --accent-bg: #1a2332;
+            --text-primary: #e0ffff;
+            --text-secondary: #88ccdd;
+            --text-muted: #556677;
+            --border-color: #003344;
+            --shadow-dark: rgba(0, 0, 0, 0.9);
+            --glow-primary: rgba(0, 255, 255, 0.6);
+            --glow-secondary: rgba(0, 204, 204, 0.4);
+            --gradient-panel: linear-gradient(145deg, rgba(10, 15, 26, 0.95), rgba(26, 35, 50, 0.95));
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Tektur', monospace;
+            background: var(--primary-bg);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        
+        .static-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 255, 255, 0.01) 2px,
+                rgba(0, 255, 255, 0.01) 4px
+            );
+            pointer-events: none;
+            z-index: 1;
+            opacity: 0.3;
+        }
+        
+        .scanlines {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                to bottom,
+                transparent 50%,
+                rgba(0, 0, 0, 0.25) 50%
+            );
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 2;
+            animation: flicker 0.15s infinite;
+        }
+        
+        @keyframes flicker {
+            0%, 100% { opacity: 0.97; }
+            50% { opacity: 1; }
+        }
+        
+        .main-container {
+            position: relative;
+            z-index: 10;
+            padding: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        
+        .game-header {
+            background: var(--gradient-panel);
+            border: 2px solid var(--primary-color);
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 0 40px var(--glow-primary);
+            margin-bottom: 3rem;
+        }
+        
+        .terminal-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        
+        .power-light {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--success-color);
+            box-shadow: 0 0 15px var(--success-color);
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        .game-title {
+            font-size: 3rem;
+            font-weight: 900;
+            color: var(--primary-color);
+            text-shadow: 0 0 30px var(--glow-primary);
+            margin-bottom: 0.5rem;
+        }
+        
+        .game-subtitle {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            letter-spacing: 3px;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 2rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .action-button {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1.5rem 2rem;
+            background: var(--gradient-panel);
+            border: 2px solid var(--primary-color);
+            border-radius: 8px;
+            text-decoration: none;
+            color: var(--text-primary);
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        
+        .action-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 30px rgba(0, 255, 255, 0.3);
+            border-color: var(--secondary-color);
+        }
+        
+        .button-icon {
+            font-size: 2rem;
+            filter: drop-shadow(0 0 10px var(--glow-primary));
+        }
+        
+        .button-text {
+            text-align: left;
+        }
+        
+        .button-title {
+            font-weight: 700;
+            font-size: 1.1rem;
+            margin-bottom: 0.25rem;
+        }
+        
+        .button-subtitle {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+        
+        .button-glow {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle, var(--glow-primary) 0%, transparent 70%);
+            transform: translate(-50%, -50%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+        
+        .action-button:hover .button-glow {
+            opacity: 0.2;
+        }
+        '''
+    
+    def get_map_css(self):
+        """Get map-specific CSS"""
+        return '''
+        .map-container {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .map-header {
+            background: var(--gradient-panel);
+            border-bottom: 2px solid var(--primary-color);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header-section {
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+        
+        .map-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            text-shadow: 0 0 20px var(--glow-primary);
+        }
+        
+        .map-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+        
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success-color);
+            box-shadow: 0 0 10px var(--success-color);
+        }
+        
+        .header-controls {
+            display: flex;
+            gap: 1rem;
+        }
+        
+        .nav-button {
+            padding: 0.5rem 1rem;
+            background: var(--accent-bg);
+            border: 1px solid var(--primary-color);
+            border-radius: 4px;
+            text-decoration: none;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+        
+        .nav-button:hover {
+            background: var(--primary-color);
+            color: var(--primary-bg);
+            box-shadow: 0 0 15px var(--glow-primary);
+        }
+        
+        .map-controls {
+            background: var(--secondary-bg);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .control-group {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        
+        .toggle-control {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            transition: color 0.3s ease;
+        }
+        
+        .toggle-control:hover {
+            color: var(--text-primary);
+        }
+        
+        .toggle-control input {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--primary-color);
+        }
+        
+        .control-button {
+            padding: 0.5rem 1rem;
+            background: var(--accent-bg);
+            border: 1px solid var(--primary-color);
+            border-radius: 4px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .control-button:hover {
+            background: var(--primary-color);
+            color: var(--primary-bg);
+            box-shadow: 0 0 15px var(--glow-primary);
+        }
+        
+        .map-viewport {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            background: radial-gradient(ellipse at center, var(--secondary-bg) 0%, var(--primary-bg) 100%);
+        }
+        
+        #galaxy-map {
+            position: absolute;
+            top: 0;
+            left: 0;
+            cursor: grab;
+        }
+        
+        #galaxy-map:active {
+            cursor: grabbing;
+        }
+        
+        .map-tooltip {
+            position: absolute;
+            background: var(--gradient-panel);
+            border: 1px solid var(--primary-color);
+            border-radius: 4px;
+            padding: 0.5rem 1rem;
+            font-size: 0.8rem;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 100;
+            max-width: 250px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+        }
+        
+        .map-tooltip.visible {
+            opacity: 1;
+        }
+        
+        .location-info-panel {
+            position: absolute;
+            right: 2rem;
+            bottom: 2rem;
+            width: 300px;
+            background: var(--gradient-panel);
+            border: 2px solid var(--primary-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: 0 0 30px var(--glow-primary);
+            z-index: 50;
+        }
+        
+        .location-info-panel h3 {
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+            font-size: 1.1rem;
+            text-shadow: 0 0 10px var(--glow-primary);
+        }
+        
+        .location-detail {
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+        
+        .location-detail strong {
+            color: var(--text-primary);
+        }
+        
+        /* Map object styles */
+        .location-colony { fill: #00ff88; }
+        .location-space_station { fill: #00ffff; }
+        .location-outpost { fill: #ffaa00; }
+        .location-gate { fill: #ff00ff; }
+        
+        .corridor-line {
+            stroke: var(--border-color);
+            stroke-width: 1;
+            fill: none;
+            opacity: 0.5;
+        }
+        
+        .corridor-active {
+            stroke: var(--primary-color);
+            stroke-width: 2;
+            opacity: 1;
+            filter: drop-shadow(0 0 5px var(--glow-primary));
+        }
+        
+        .player-pulse {
+            animation: player-pulse 2s infinite;
+        }
+        
+        @keyframes player-pulse {
+            0%, 100% { r: 4; opacity: 1; }
+            50% { r: 8; opacity: 0.6; }
+        }
+        
+        .npc-pulse {
+            animation: npc-pulse 2.5s infinite;
+        }
+        
+        @keyframes npc-pulse {
+            0%, 100% { r: 3; opacity: 0.8; }
+            50% { r: 6; opacity: 0.5; }
+        }
+        '''
+    
+    def get_wiki_css(self):
+        """Get wiki-specific CSS"""
+        return '''
+        .wiki-container {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .wiki-header {
+            background: var(--gradient-panel);
+            border-bottom: 2px solid var(--primary-color);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .wiki-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            text-shadow: 0 0 20px var(--glow-primary);
+        }
+        
+        .wiki-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+        
+        .wiki-tabs {
+            background: var(--secondary-bg);
+            border-bottom: 1px solid var(--border-color);
+            padding: 0 2rem;
+            display: flex;
+            gap: 0.5rem;
+            overflow-x: auto;
+        }
+        
+        .wiki-tab {
+            padding: 1rem 1.5rem;
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--text-secondary);
+            font-family: inherit;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+        
+        .wiki-tab:hover {
+            color: var(--text-primary);
+            background: rgba(0, 255, 255, 0.05);
+        }
+        
+        .wiki-tab.active {
+            color: var(--primary-color);
+            border-bottom-color: var(--primary-color);
+            text-shadow: 0 0 10px var(--glow-primary);
+        }
+        
+        .wiki-content {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+        
+        .loading-message {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+        
+        .wiki-data {
+            display: none;
+        }
+        
+        .wiki-section {
+            background: var(--gradient-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .wiki-section h3 {
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+            text-shadow: 0 0 10px var(--glow-primary);
+        }
+        
+        .wiki-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+        
+        .wiki-table th {
+            background: var(--accent-bg);
+            color: var(--primary-color);
+            padding: 0.75rem;
+            text-align: left;
+            font-weight: 700;
+            border-bottom: 2px solid var(--primary-color);
+        }
+        
+        .wiki-table td {
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-secondary);
+        }
+        
+        .wiki-table tr:hover {
+            background: rgba(0, 255, 255, 0.05);
+        }
+        
+        .wiki-card {
+            background: var(--accent-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .wiki-card h4 {
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+            font-size: 1rem;
+        }
+        
+        .wiki-card p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }
+        
+        .faction-loyalist { color: var(--primary-color); }
+        .faction-outlaw { color: var(--error-color); }
+        .faction-neutral { color: var(--text-secondary); }
+        
+        .wealth-rich { color: var(--success-color); }
+        .wealth-moderate { color: var(--warning-color); }
+        .wealth-poor { color: var(--error-color); }
+        '''
+    
+    def get_map_script(self):
+        """Get map JavaScript"""
+        return '''
+        class GalaxyMap {
+            constructor() {
+                this.canvas = document.getElementById('galaxy-map');
+                this.ctx = this.canvas.getContext('2d');
+                this.tooltip = document.getElementById('tooltip');
+                this.locationInfo = document.getElementById('location-info');
+                
+                this.data = null;
+                this.scale = 1;
+                this.offsetX = 0;
+                this.offsetY = 0;
+                this.isDragging = false;
+                this.dragStartX = 0;
+                this.dragStartY = 0;
+                this.selectedLocation = null;
+                
+                this.showPlayers = true;
+                this.showNPCs = true;
+                this.showRoutes = true;
+                
+                this.init();
+            }
+            
+            async init() {
+                this.setupCanvas();
+                this.setupEventListeners();
+                await this.loadData();
+                this.startUpdateLoop();
+            }
+            
+            setupCanvas() {
+                const resize = () => {
+                    const viewport = this.canvas.parentElement;
+                    this.canvas.width = viewport.clientWidth;
+                    this.canvas.height = viewport.clientHeight;
+                    this.render();
+                };
+                
+                window.addEventListener('resize', resize);
+                resize();
+            }
+            
+            setupEventListeners() {
+                // Mouse events
+                this.canvas.addEventListener('mousedown', e => this.handleMouseDown(e));
+                this.canvas.addEventListener('mousemove', e => this.handleMouseMove(e));
+                this.canvas.addEventListener('mouseup', e => this.handleMouseUp(e));
+                this.canvas.addEventListener('wheel', e => this.handleWheel(e));
+                this.canvas.addEventListener('click', e => this.handleClick(e));
+                
+                // Touch events for mobile
+                this.canvas.addEventListener('touchstart', e => this.handleTouchStart(e));
+                this.canvas.addEventListener('touchmove', e => this.handleTouchMove(e));
+                this.canvas.addEventListener('touchend', e => this.handleTouchEnd(e));
+                
+                // Control buttons
+                document.getElementById('zoom-in').addEventListener('click', () => this.zoom(1.2));
+                document.getElementById('zoom-out').addEventListener('click', () => this.zoom(0.8));
+                document.getElementById('zoom-reset').addEventListener('click', () => this.resetView());
+                
+                // Toggles
+                document.getElementById('toggle-players').addEventListener('change', e => {
+                    this.showPlayers = e.target.checked;
+                    this.render();
+                });
+                
+                document.getElementById('toggle-npcs').addEventListener('change', e => {
+                    this.showNPCs = e.target.checked;
+                    this.render();
+                });
+                
+                document.getElementById('toggle-routes').addEventListener('change', e => {
+                    this.showRoutes = e.target.checked;
+                    this.render();
+                });
+            }
+            
+            async loadData() {
+                try {
+                    const response = await fetch('/api/map-data');
+                    this.data = await response.json();
+                    this.updateLastUpdate();
+                    this.render();
+                } catch (error) {
+                    console.error('Failed to load map data:', error);
+                }
+            }
+            
+            startUpdateLoop() {
+                setInterval(() => this.loadData(), 5000); // Update every 5 seconds
+            }
+            
+            updateLastUpdate() {
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString();
+                document.getElementById('last-update').textContent = `Updated: ${timeStr}`;
+            }
+            
+            worldToScreen(x, y) {
+                return {
+                    x: (x * this.scale) + this.offsetX + this.canvas.width / 2,
+                    y: (y * this.scale) + this.offsetY + this.canvas.height / 2
+                };
+            }
+            
+            screenToWorld(x, y) {
+                return {
+                    x: (x - this.canvas.width / 2 - this.offsetX) / this.scale,
+                    y: (y - this.canvas.height / 2 - this.offsetY) / this.scale
+                };
+            }
+            
+            render() {
+                if (!this.data) return;
+                
+                // Clear canvas
+                this.ctx.fillStyle = '#000408';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Draw grid
+                this.drawGrid();
+                
+                // Draw corridors
+                if (this.showRoutes) {
+                    this.drawCorridors();
+                }
+                
+                // Draw locations
+                this.drawLocations();
+                
+                // Draw players
+                if (this.showPlayers) {
+                    this.drawPlayers();
+                }
+                
+                // Draw NPCs
+                if (this.showNPCs) {
+                    this.drawNPCs();
+                }
+            }
+            
+            drawGrid() {
+                this.ctx.strokeStyle = 'rgba(0, 136, 204, 0.1)';
+                this.ctx.lineWidth = 1;
+                
+                const gridSize = 20 * this.scale;
+                const startX = (Math.floor(-this.offsetX / gridSize) - 1) * gridSize;
+                const startY = (Math.floor(-this.offsetY / gridSize) - 1) * gridSize;
+                const endX = startX + this.canvas.width + gridSize * 2;
+                const endY = startY + this.canvas.height + gridSize * 2;
+                
+                for (let x = startX; x <= endX; x += gridSize) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(x + this.offsetX, 0);
+                    this.ctx.lineTo(x + this.offsetX, this.canvas.height);
+                    this.ctx.stroke();
+                }
+                
+                for (let y = startY; y <= endY; y += gridSize) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(0, y + this.offsetY);
+                    this.ctx.lineTo(this.canvas.width, y + this.offsetY);
+                    this.ctx.stroke();
+                }
+            }
+            
+            drawCorridors() {
+                this.ctx.lineWidth = 1 * this.scale;
+                
+                for (const corridor of this.data.corridors) {
+                    const origin = this.data.locations[corridor.origin];
+                    const dest = this.data.locations[corridor.destination];
+                    
+                    if (!origin || !dest) continue;
+                    
+                    const start = this.worldToScreen(origin.x, origin.y);
+                    const end = this.worldToScreen(dest.x, dest.y);
+                    
+                    // Check if any players are in this corridor
+                    const hasPlayers = Object.values(this.data.players).some(p => 
+                        p.traveling && p.corridor_id === corridor.id
+                    );
+                    
+                    if (hasPlayers) {
+                        this.ctx.strokeStyle = '#00ffff';
+                        this.ctx.lineWidth = 2 * this.scale;
+                        this.ctx.shadowBlur = 10;
+                        this.ctx.shadowColor = '#00ffff';
+                    } else {
+                        this.ctx.strokeStyle = 'rgba(0, 51, 68, 0.5)';
+                        this.ctx.shadowBlur = 0;
+                    }
+                    
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(start.x, start.y);
+                    this.ctx.lineTo(end.x, end.y);
+                    this.ctx.stroke();
+                }
+                
+                this.ctx.shadowBlur = 0;
+            }
+            
+            drawLocations() {
+                for (const [id, location] of Object.entries(this.data.locations)) {
+                    const pos = this.worldToScreen(location.x, location.y);
+                    
+                    // Skip if off-screen
+                    if (pos.x < -50 || pos.x > this.canvas.width + 50 ||
+                        pos.y < -50 || pos.y > this.canvas.height + 50) continue;
+                    
+                    // Determine color based on type
+                    const colors = {
+                        colony: '#00ff88',
+                        space_station: '#00ffff',
+                        outpost: '#ffaa00',
+                        gate: '#ff00ff'
+                    };
+                    
+                    const color = colors[location.type] || '#ffffff';
+                    const size = location.type === 'gate' ? 8 : 6;
+                    
+                    // Draw location
+                    this.ctx.fillStyle = color;
+                    this.ctx.shadowBlur = 15;
+                    this.ctx.shadowColor = color;
+                    
+                    if (location.type === 'gate') {
+                        // Draw diamond for gates
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(pos.x, pos.y - size * this.scale);
+                        this.ctx.lineTo(pos.x + size * this.scale, pos.y);
+                        this.ctx.lineTo(pos.x, pos.y + size * this.scale);
+                        this.ctx.lineTo(pos.x - size * this.scale, pos.y);
+                        this.ctx.closePath();
+                        this.ctx.fill();
+                    } else {
+                        // Draw circle for other locations
+                        this.ctx.beginPath();
+                        this.ctx.arc(pos.x, pos.y, size * this.scale, 0, Math.PI * 2);
+                        this.ctx.fill();
+                    }
+                    
+                    // Draw selection indicator
+                    if (this.selectedLocation === id) {
+                        this.ctx.strokeStyle = color;
+                        this.ctx.lineWidth = 2;
+                        this.ctx.beginPath();
+                        this.ctx.arc(pos.x, pos.y, (size + 5) * this.scale, 0, Math.PI * 2);
+                        this.ctx.stroke();
+                    }
+                    
+                    // Draw name if zoomed in enough
+                    if (this.scale > 1.5) {
+                        this.ctx.shadowBlur = 5;
+                        this.ctx.fillStyle = '#e0ffff';
+                        this.ctx.font = `${10 * this.scale}px Tektur`;
+                        this.ctx.textAlign = 'center';
+                        this.ctx.fillText(location.name, pos.x, pos.y + (12 * this.scale));
+                    }
+                }
+                
+                this.ctx.shadowBlur = 0;
+            }
+            
+            drawPlayers() {
+                this.ctx.fillStyle = '#00ff00';
+                this.ctx.shadowBlur = 20;
+                this.ctx.shadowColor = '#00ff00';
+                
+                for (const player of Object.values(this.data.players)) {
+                    if (player.traveling && player.corridor_id) {
+                        // Draw player in corridor
+                        const corridor = this.data.corridors.find(c => c.id === player.corridor_id);
+                        if (!corridor) continue;
+                        
+                        const origin = this.data.locations[corridor.origin];
+                        const dest = this.data.locations[corridor.destination];
+                        if (!origin || !dest) continue;
+                        
+                        // Calculate position along corridor
+                        const progress = player.travel_progress / 100;
+                        const x = origin.x + (dest.x - origin.x) * progress;
+                        const y = origin.y + (dest.y - origin.y) * progress;
+                        const pos = this.worldToScreen(x, y);
+                        
+                        this.drawPulse(pos.x, pos.y, '#00ff00', 4);
+                    } else if (player.location) {
+                        // Draw player at location
+                        const location = this.data.locations[player.location];
+                        if (!location) continue;
+                        
+                        const pos = this.worldToScreen(location.x, location.y);
+                        this.drawPulse(pos.x, pos.y, '#00ff00', 4);
+                    }
+                }
+                
+                this.ctx.shadowBlur = 0;
+            }
+            
+            drawNPCs() {
+                this.ctx.fillStyle = '#ff8800';
+                this.ctx.shadowBlur = 15;
+                this.ctx.shadowColor = '#ff8800';
+                
+                for (const npc of Object.values(this.data.npcs)) {
+                    if (npc.traveling && npc.destination) {
+                        // Find corridor for traveling NPC
+                        const corridor = this.data.corridors.find(c => 
+                            c.origin === npc.location && c.destination === npc.destination
+                        );
+                        if (!corridor) continue;
+                        
+                        const origin = this.data.locations[npc.location];
+                        const dest = this.data.locations[npc.destination];
+                        if (!origin || !dest) continue;
+                        
+                        // Calculate position along corridor
+                        const progress = npc.travel_progress / 100;
+                        const x = origin.x + (dest.x - origin.x) * progress;
+                        const y = origin.y + (dest.y - origin.y) * progress;
+                        const pos = this.worldToScreen(x, y);
+                        
+                        this.drawPulse(pos.x, pos.y, '#ff8800', 3);
+                    } else if (npc.location) {
+                        // Draw NPC at location
+                        const location = this.data.locations[npc.location];
+                        if (!location) continue;
+                        
+                        const pos = this.worldToScreen(location.x, location.y);
+                        this.drawPulse(pos.x, pos.y, '#ff8800', 3);
+                    }
+                }
+                
+                this.ctx.shadowBlur = 0;
+            }
+            
+            drawPulse(x, y, color, baseSize) {
+                const time = Date.now() / 1000;
+                const pulseSize = baseSize + Math.sin(time * 3) * 2;
+                
+                this.ctx.fillStyle = color;
+                this.ctx.globalAlpha = 0.8;
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, pulseSize * this.scale, 0, Math.PI * 2);
+                this.ctx.fill();
+                
+                this.ctx.globalAlpha = 0.3;
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, (pulseSize + 4) * this.scale, 0, Math.PI * 2);
+                this.ctx.fill();
+                
+                this.ctx.globalAlpha = 1;
+            }
+            
+            handleMouseDown(e) {
+                this.isDragging = true;
+                this.dragStartX = e.clientX - this.offsetX;
+                this.dragStartY = e.clientY - this.offsetY;
+                this.canvas.style.cursor = 'grabbing';
+            }
+            
+            handleMouseMove(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                if (this.isDragging) {
+                    this.offsetX = e.clientX - this.dragStartX;
+                    this.offsetY = e.clientY - this.dragStartY;
+                    this.render();
+                } else {
+                    // Check for hover
+                    const worldPos = this.screenToWorld(x, y);
+                    let hoveredLocation = null;
+                    
+                    for (const [id, location] of Object.entries(this.data.locations)) {
+                        const dist = Math.sqrt(
+                            Math.pow(location.x - worldPos.x, 2) + 
+                            Math.pow(location.y - worldPos.y, 2)
+                        );
+                        
+                        if (dist < 10 / this.scale) {
+                            hoveredLocation = location;
+                            break;
+                        }
+                    }
+                    
+                    if (hoveredLocation) {
+                        this.showTooltip(x + rect.left, y + rect.top, hoveredLocation);
+                        this.canvas.style.cursor = 'pointer';
+                    } else {
+                        this.hideTooltip();
+                        this.canvas.style.cursor = 'grab';
+                    }
+                }
+            }
+            
+            handleMouseUp(e) {
+                this.isDragging = false;
+                this.canvas.style.cursor = 'grab';
+            }
+            
+            handleWheel(e) {
+                e.preventDefault();
+                const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                this.zoom(delta);
+            }
+            
+            handleClick(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const worldPos = this.screenToWorld(x, y);
+                
+                for (const [id, location] of Object.entries(this.data.locations)) {
+                    const dist = Math.sqrt(
+                        Math.pow(location.x - worldPos.x, 2) + 
+                        Math.pow(location.y - worldPos.y, 2)
+                    );
+                    
+                    if (dist < 10 / this.scale) {
+                        this.selectLocation(id, location);
+                        break;
+                    }
+                }
+            }
+            
+            handleTouchStart(e) {
+                if (e.touches.length === 1) {
+                    const touch = e.touches[0];
+                    this.isDragging = true;
+                    this.dragStartX = touch.clientX - this.offsetX;
+                    this.dragStartY = touch.clientY - this.offsetY;
+                }
+            }
+            
+            handleTouchMove(e) {
+                e.preventDefault();
+                if (e.touches.length === 1 && this.isDragging) {
+                    const touch = e.touches[0];
+                    this.offsetX = touch.clientX - this.dragStartX;
+                    this.offsetY = touch.clientY - this.dragStartY;
+                    this.render();
+                }
+            }
+            
+            handleTouchEnd(e) {
+                this.isDragging = false;
+            }
+            
+            zoom(factor) {
+                const newScale = this.scale * factor;
+                if (newScale >= 0.5 && newScale <= 5) {
+                    this.scale = newScale;
+                    this.render();
+                }
+            }
+            
+            resetView() {
+                this.scale = 1;
+                this.offsetX = 0;
+                this.offsetY = 0;
+                this.render();
+            }
+            
+            showTooltip(x, y, location) {
+                this.tooltip.innerHTML = `
+                    <strong>${location.name}</strong><br>
+                    Type: ${location.type}<br>
+                    System: ${location.system}<br>
+                    Wealth: ${location.wealth}
+                `;
+                this.tooltip.style.left = x + 10 + 'px';
+                this.tooltip.style.top = y + 10 + 'px';
+                this.tooltip.classList.add('visible');
+            }
+            
+            hideTooltip() {
+                this.tooltip.classList.remove('visible');
+            }
+            
+            selectLocation(id, location) {
+                this.selectedLocation = id;
+                this.render();
+                
+                // Count entities at location
+                const playerCount = Object.values(this.data.players).filter(p => 
+                    p.location === parseInt(id) && !p.traveling
+                ).length;
+                
+                const npcCount = Object.values(this.data.npcs).filter(n => 
+                    n.location === parseInt(id) && !n.traveling
+                ).length;
+                
+                // Update info panel
+                this.locationInfo.innerHTML = `
+                    <h3>${location.name}</h3>
+                    <div class="location-detail"><strong>Type:</strong> ${location.type}</div>
+                    <div class="location-detail"><strong>System:</strong> ${location.system}</div>
+                    <div class="location-detail"><strong>Coordinates:</strong> ${location.x.toFixed(1)}, ${location.y.toFixed(1)}</div>
+                    <div class="location-detail"><strong>Wealth:</strong> <span class="wealth-${location.wealth}">${location.wealth}</span></div>
+                    <div class="location-detail"><strong>Population:</strong> ${location.population.toLocaleString()}</div>
+                    <div class="location-detail"><strong>Tech Level:</strong> ${location.tech_level}</div>
+                    <div class="location-detail"><strong>Faction:</strong> <span class="faction-${location.faction}">${location.faction}</span></div>
+                    <div class="location-detail"><strong>Stability:</strong> ${location.stability}%</div>
+                    ${location.owner_name ? `<div class="location-detail"><strong>Owner:</strong> ${location.owner_name}</div>` : ''}
+                    ${location.docking_fee ? `<div class="location-detail"><strong>Docking Fee:</strong> ${location.docking_fee} credits</div>` : ''}
+                    <div class="location-detail"><strong>Active Pilots:</strong> ${playerCount}</div>
+                    <div class="location-detail"><strong>Dynamic NPCs:</strong> ${npcCount}</div>
+                `;
+            }
+        }
+        
+        // Initialize map when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            const map = new GalaxyMap();
+        });
+        '''
+    
+    def get_wiki_script(self):
+        """Get wiki JavaScript"""
+        return '''
+        class GalacticWiki {
+            constructor() {
+                this.currentTab = 'locations';
+                this.data = null;
+                this.init();
+            }
+            
+            async init() {
+                this.setupEventListeners();
+                await this.loadData();
+            }
+            
+            setupEventListeners() {
+                document.querySelectorAll('.wiki-tab').forEach(tab => {
+                    tab.addEventListener('click', () => {
+                        const tabName = tab.dataset.tab;
+                        this.switchTab(tabName);
+                    });
+                });
+            }
+            
+            async loadData() {
+                try {
+                    document.getElementById('loading').style.display = 'block';
+                    document.getElementById('wiki-data').style.display = 'none';
+                    
+                    const response = await fetch('/api/wiki-data');
+                    this.data = await response.json();
+                    
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('wiki-data').style.display = 'block';
+                    
+                    this.renderCurrentTab();
+                } catch (error) {
+                    console.error('Failed to load wiki data:', error);
+                    document.getElementById('loading').innerHTML = 'Failed to load data. Please refresh.';
+                }
+            }
+            
+            switchTab(tabName) {
+                this.currentTab = tabName;
+                
+                // Update tab styles
+                document.querySelectorAll('.wiki-tab').forEach(tab => {
+                    if (tab.dataset.tab === tabName) {
+                        tab.classList.add('active');
+                    } else {
+                        tab.classList.remove('active');
+                    }
+                });
+                
+                this.renderCurrentTab();
+            }
+            
+            renderCurrentTab() {
+                const container = document.getElementById('wiki-data');
+                
+                switch (this.currentTab) {
+                    case 'locations':
+                        container.innerHTML = this.renderLocations();
+                        break;
+                    case 'routes':
+                        container.innerHTML = this.renderRoutes();
+                        break;
+                    case 'players':
+                        container.innerHTML = this.renderPlayers();
+                        break;
+                    case 'npcs':
+                        container.innerHTML = this.renderNPCs();
+                        break;
+                    case 'logs':
+                        container.innerHTML = this.renderLogs();
+                        break;
+                    case 'news':
+                        container.innerHTML = this.renderNews();
+                        break;
+                }
+            }
+            
+            renderLocations() {
+                let html = '<div class="wiki-section"><h3>Galaxy Locations</h3>';
+                
+                if (!this.data.locations || this.data.locations.length === 0) {
+                    return html + '<p>No locations found.</p></div>';
+                }
+                
+                // Group by system
+                const systems = {};
+                this.data.locations.forEach(loc => {
+                    if (!systems[loc.system]) systems[loc.system] = [];
+                    systems[loc.system].push(loc);
+                });
+                
+                for (const [system, locations] of Object.entries(systems)) {
+                    html += `<div class="wiki-section"><h4>System: ${system}</h4>`;
+                    html += '<table class="wiki-table"><thead><tr>';
+                    html += '<th>Name</th><th>Type</th><th>Wealth</th><th>Population</th>';
+                    html += '<th>Tech</th><th>Faction</th><th>Pilots</th><th>NPCs</th>';
+                    html += '</tr></thead><tbody>';
+                    
+                    locations.sort((a, b) => a.name.localeCompare(b.name));
+                    
+                    for (const loc of locations) {
+                        html += '<tr>';
+                        html += `<td><strong>${loc.name}</strong></td>`;
+                        html += `<td>${loc.type}</td>`;
+                        html += `<td class="wealth-${loc.wealth}">${loc.wealth}</td>`;
+                        html += `<td>${loc.population.toLocaleString()}</td>`;
+                        html += `<td>${loc.tech_level}</td>`;
+                        html += `<td class="faction-${loc.faction}">${loc.faction}</td>`;
+                        html += `<td>${loc.player_count || 0}</td>`;
+                        html += `<td>${(loc.static_npc_count || 0) + (loc.dynamic_npc_count || 0)}</td>`;
+                        html += '</tr>';
+                    }
+                    
+                    html += '</tbody></table></div>';
+                }
+                
+                return html + '</div>';
+            }
+            
+            renderRoutes() {
+                let html = '<div class="wiki-section"><h3>Space Routes</h3>';
+                
+                if (!this.data.routes || this.data.routes.length === 0) {
+                    return html + '<p>No active routes found.</p></div>';
+                }
+                
+                html += '<table class="wiki-table"><thead><tr>';
+                html += '<th>Route Name</th><th>Origin</th><th>Destination</th>';
+                html += '<th>Travel Time</th><th>Danger Level</th><th>Stability</th>';
+                html += '</tr></thead><tbody>';
+                
+                for (const route of this.data.routes) {
+                    const minutes = Math.floor(route.travel_time / 60);
+                    const seconds = route.travel_time % 60;
+                    const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+                    
+                    html += '<tr>';
+                    html += `<td><strong>${route.name}</strong></td>`;
+                    html += `<td>${route.origin_name} (${route.origin_system})</td>`;
+                    html += `<td>${route.dest_name} (${route.dest_system})</td>`;
+                    html += `<td>${timeStr}</td>`;
+                    html += `<td>${route.danger_level}/10</td>`;
+                    html += `<td>${route.stability}%</td>`;
+                    html += '</tr>';
+                }
+                
+                html += '</tbody></table></div>';
+                return html;
+            }
+            
+            renderPlayers() {
+                let html = '<div class="wiki-section"><h3>Active Pilots</h3>';
+                
+                if (!this.data.players || this.data.players.length === 0) {
+                    return html + '<p>No active pilots found.</p></div>';
+                }
+                
+                html += '<table class="wiki-table"><thead><tr>';
+                html += '<th>Pilot Name</th><th>Location</th><th>Ship</th>';
+                html += '<th>Credits</th><th>Reputation</th><th>Stats</th>';
+                html += '</tr></thead><tbody>';
+                
+                for (const player of this.data.players) {
+                    const repType = player.reputation_loyalist > player.reputation_outlaw ? 'loyalist' : 
+                                   player.reputation_outlaw > player.reputation_loyalist ? 'outlaw' : 'neutral';
+                    const repValue = Math.max(player.reputation_loyalist, player.reputation_outlaw);
+                    
+                    html += '<tr>';
+                    html += `<td><strong>${player.name}</strong></td>`;
+                    html += `<td>${player.location_name || 'In Transit'}</td>`;
+                    html += `<td>${player.ship_name || 'Unknown'}</td>`;
+                    html += `<td>${player.credits.toLocaleString()}</td>`;
+                    html += `<td class="faction-${repType}">${repType} (${repValue})</td>`;
+                    html += `<td>Distance: ${player.total_distance}ly<br>`;
+                    html += `Locations: ${player.locations_visited}<br>`;
+                    html += `Jobs: ${player.jobs_completed}</td>`;
+                    html += '</tr>';
+                }
+                
+                html += '</tbody></table></div>';
+                return html;
+            }
+            
+            renderNPCs() {
+                let html = '<div class="wiki-section"><h3>Dynamic NPCs</h3>';
+                
+                if (!this.data.npcs || this.data.npcs.length === 0) {
+                    return html + '<p>No active NPCs found.</p></div>';
+                }
+                
+                html += '<table class="wiki-table"><thead><tr>';
+                html += '<th>Name</th><th>Callsign</th><th>Ship</th>';
+                html += '<th>Location</th><th>Alignment</th><th>Combat Rating</th>';
+                html += '</tr></thead><tbody>';
+                
+                for (const npc of this.data.npcs) {
+                    html += '<tr>';
+                    html += `<td><strong>${npc.name}</strong></td>`;
+                    html += `<td>${npc.callsign}</td>`;
+                    html += `<td>${npc.ship_name} (${npc.ship_type})</td>`;
+                    html += `<td>${npc.location_name || 'In Transit'}</td>`;
+                    html += `<td class="faction-${npc.alignment}">${npc.alignment}</td>`;
+                    html += `<td>${npc.combat_rating}/10</td>`;
+                    html += '</tr>';
+                }
+                
+                html += '</tbody></table></div>';
+                return html;
+            }
+            
+            renderLogs() {
+                let html = '<div class="wiki-section"><h3>Recent Activity Logs</h3>';
+                
+                if (!this.data.logs || this.data.logs.length === 0) {
+                    return html + '<p>No recent activity.</p></div>';
+                }
+                
+                for (const log of this.data.logs) {
+                    html += '<div class="wiki-card">';
+                    html += `<h4>${log.game_date} - ${log.location_name}</h4>`;
+                    html += `<p><strong>${log.character_name}</strong> ${log.action}</p>`;
+                    html += '</div>';
+                }
+                
+                return html + '</div>';
+            }
+            
+            renderNews() {
+                let html = '<div class="wiki-section"><h3>Galactic News Feed</h3>';
+                
+                if (!this.data.news || this.data.news.length === 0) {
+                    return html + '<p>No recent news.</p></div>';
+                }
+                
+                for (const article of this.data.news) {
+                    html += '<div class="wiki-card">';
+                    html += `<h4>${article.title}</h4>`;
+                    html += `<p class="news-date">${article.game_date}</p>`;
+                    html += `<p>${article.content}</p>`;
+                    html += '</div>';
+                }
+                
+                return html + '</div>';
+            }
+        }
+        
+        // Initialize wiki when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            const wiki = new GalacticWiki();
+        });
+        '''
+
 
 async def setup(bot):
-    if not FASTAPI_AVAILABLE:
-        print("❌ FastAPI not installed. Run: pip install fastapi uvicorn websockets")
-        return
-    
-    await bot.add_cog(OptimizedWebMapCog(bot))
+    await bot.add_cog(WebMapCog(bot))
