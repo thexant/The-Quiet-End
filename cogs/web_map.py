@@ -1835,10 +1835,11 @@ class WebMapCog(commands.Cog):
                          this.selectedCorridor.destination == id);
                     
                     // Draw location
+                    // Draw location based on type
                     this.ctx.fillStyle = color;
                     this.ctx.shadowBlur = Math.min(30, 25 / Math.sqrt(this.scale));
                     this.ctx.shadowColor = color;
-                    
+
                     if (location.type === 'gate') {
                         // Draw diamond for gates
                         this.ctx.beginPath();
@@ -1848,8 +1849,19 @@ class WebMapCog(commands.Cog):
                         this.ctx.lineTo(pos.x - size, pos.y);
                         this.ctx.closePath();
                         this.ctx.fill();
+                    } else if (location.type === 'space_station') {
+                        // Draw triangle for space stations
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(pos.x, pos.y - size);
+                        this.ctx.lineTo(pos.x + size * 0.866, pos.y + size * 0.5);
+                        this.ctx.lineTo(pos.x - size * 0.866, pos.y + size * 0.5);
+                        this.ctx.closePath();
+                        this.ctx.fill();
+                    } else if (location.type === 'outpost') {
+                        // Draw square for outposts
+                        this.ctx.fillRect(pos.x - size, pos.y - size, size * 2, size * 2);
                     } else {
-                        // Draw circle for other locations
+                        // Draw circle for colonies and other types
                         this.ctx.beginPath();
                         this.ctx.arc(pos.x, pos.y, size, 0, Math.PI * 2);
                         this.ctx.fill();
@@ -1891,10 +1903,10 @@ class WebMapCog(commands.Cog):
             }
             
             drawPlayers() {
-                this.ctx.fillStyle = '#00ff00';
+                this.ctx.fillStyle = '#0006ff';
                 
                 for (const [id, player] of Object.entries(this.data.players)) {
-                    if (!player.location || player.traveling) continue;
+                    if (!player.location) continue;
                     
                     const location = this.data.locations[player.location];
                     if (!location) continue;
@@ -1902,10 +1914,10 @@ class WebMapCog(commands.Cog):
                     const pos = this.worldToScreen(location.x, location.y);
                     
                     // Draw player indicator with inverse scaling
-                    const triangleSize = Math.max(12 / Math.sqrt(this.scale), 6);
+                    const triangleSize = Math.max(16 / Math.sqrt(this.scale), 10);
 
                     this.ctx.shadowBlur = Math.min(25, 20 / Math.sqrt(this.scale));
-                    this.ctx.shadowColor = '#00ff00';
+                    this.ctx.shadowColor = '#8000ff';
                     
                     this.ctx.beginPath();
                     this.ctx.moveTo(pos.x, pos.y - triangleSize * 2);
@@ -1928,26 +1940,29 @@ class WebMapCog(commands.Cog):
                     const pos = this.worldToScreen(location.x, location.y);
                     
                     // Determine NPC color based on alignment
-                    if (npc.alignment === 'hostile' || npc.alignment === 'pirate') {
+                    if (npc.alignment === 'hostile' || npc.alignment === 'pirate' || 
+                        npc.alignment === 'bandit') {
                         this.ctx.fillStyle = '#ff0000';
-                    } else if (npc.alignment === 'friendly') {
-                        this.ctx.fillStyle = '#00ff88';
+                    } else if (npc.alignment === 'friendly' || npc.alignment === 'loyal') {
+                        this.ctx.fillStyle = '#ff0000';
                     } else {
-                        this.ctx.fillStyle = '#ff6600';
+                        this.ctx.fillStyle = '#ff0000';
                     }
                     
                     // Draw NPC indicator with inverse scaling
-                    const squareSize = Math.max(10 / Math.sqrt(this.scale), 5);
-
+                    const dotSize = Math.max(10 / Math.sqrt(this.scale), 6);
+                    
                     this.ctx.shadowBlur = Math.min(20, 15 / Math.sqrt(this.scale));
                     this.ctx.shadowColor = this.ctx.fillStyle;
                     
-                    this.ctx.fillRect(
-                        pos.x - squareSize, 
-                        pos.y - squareSize, 
-                        squareSize * 2, 
-                        squareSize * 2
-                    );
+                    // Draw a diamond shape for NPCs
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(pos.x, pos.y - dotSize);
+                    this.ctx.lineTo(pos.x + dotSize * 0.7, pos.y);
+                    this.ctx.lineTo(pos.x, pos.y + dotSize);
+                    this.ctx.lineTo(pos.x - dotSize * 0.7, pos.y);
+                    this.ctx.closePath();
+                    this.ctx.fill();
                 }
                 
                 this.ctx.shadowBlur = 0;
@@ -2528,8 +2543,10 @@ class WebMapCog(commands.Cog):
                 html += '</tr></thead><tbody>';
                 
                 for (const player of this.data.players) {
-                    const alignmentClass = player.alignment === 'loyal' ? 'faction-loyal' : 
-                                          player.alignment === 'bandit' ? 'faction-bandit' : 'faction-neutral';
+                    const alignmentClass = player.alignment === 'loyal' || player.alignment === 'loyalist' ? 
+                        'faction-loyalist' : 
+                        (player.alignment === 'outlaw' || player.alignment === 'bandit' ? 
+                            'faction-outlaw' : 'faction-neutral');
                     
                     html += '<tr>';
                     html += `<td><strong>${player.name}</strong></td>`;
@@ -2544,7 +2561,39 @@ class WebMapCog(commands.Cog):
                 html += '</tbody></table></div>';
                 return html;
             }
-            
+            renderNPCs() {
+                let html = '<div class="wiki-section"><h3>Dynamic NPCs</h3>';
+                
+                if (!this.data.npcs || this.data.npcs.length === 0) {
+                    return html + '<p>No dynamic NPCs found.</p></div>';
+                }
+                
+                html += '<table class="wiki-table"><thead><tr>';
+                html += '<th>Name</th><th>Callsign</th><th>Ship</th>';
+                html += '<th>Location</th><th>Credits</th><th>Alignment</th>';
+                html += '<th>Combat Rating</th>';
+                html += '</tr></thead><tbody>';
+                
+                for (const npc of this.data.npcs) {
+                    const alignmentClass = npc.alignment === 'loyal' || npc.alignment === 'friendly' ? 
+                        'faction-loyalist' : 
+                        (npc.alignment === 'bandit' || npc.alignment === 'hostile' || npc.alignment === 'pirate' ? 
+                            'faction-outlaw' : 'faction-neutral');
+                    
+                    html += '<tr>';
+                    html += `<td><strong>${npc.name}</strong></td>`;
+                    html += `<td>${npc.callsign}</td>`;
+                    html += `<td>${npc.ship_name} (${npc.ship_type})</td>`;
+                    html += `<td>${npc.location_name || 'Unknown'}</td>`;
+                    html += `<td>${npc.credits.toLocaleString()}</td>`;
+                    html += `<td class="${alignmentClass}">${npc.alignment}</td>`;
+                    html += `<td>${npc.combat_rating}/10</td>`;
+                    html += '</tr>';
+                }
+                
+                html += '</tbody></table></div>';
+                return html;
+            }
             renderLogs() {
                 let html = '<div class="wiki-section"><h3>Recent Activity Logs</h3>';
                 
