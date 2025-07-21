@@ -14,12 +14,14 @@ import os
 from typing import Optional, Dict, Any, List
 import socket
 import traceback
+from utils.time_system import TimeSystem
 
 
 class WebMapCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
+        self.time_system = TimeSystem(bot)
         self.app = None
         self.runner = None
         self.site = None
@@ -36,6 +38,8 @@ class WebMapCog(commands.Cog):
             'players': {},
             'npcs': {},
             'news': [],
+            'galaxy_info': {},
+            'current_time': None,
             'last_update': None
         }
         
@@ -93,7 +97,6 @@ class WebMapCog(commands.Cog):
                     'owner_name': loc[12],
                     'docking_fee': loc[11] if loc[11] else 0,
                     # Default values for non-existent columns
-                    'tech_level': 5,
                     'stability': 75
                 }
             except Exception as e:
@@ -120,7 +123,7 @@ class WebMapCog(commands.Cog):
                 'danger_level': corr[5]
             })
         
-        # Get active players - FIXED: use end_time not arrival_time, remove non-existent columns
+        # Get active players - Only show currently logged in characters
         players_data = self.db.execute_query(
             """SELECT c.user_id, c.name, c.current_location, c.money,
                       t.corridor_id, t.start_time, t.end_time,
@@ -128,7 +131,8 @@ class WebMapCog(commands.Cog):
                       c.level, c.experience
                FROM characters c
                LEFT JOIN travel_sessions t ON c.user_id = t.user_id AND t.status = 'traveling'
-               LEFT JOIN locations l ON c.current_location = l.location_id""",
+               LEFT JOIN locations l ON c.current_location = l.location_id
+               WHERE c.is_logged_in = 1""",
             fetch='all'
         )
         
@@ -185,11 +189,12 @@ class WebMapCog(commands.Cog):
                 print(f"Error parsing NPC {npc[0] if npc else 'unknown'}: {e}")
                 continue
         
-        # Get recent news - FIXED: use correct galactic_history columns
+        # Get recent news from GalacticNewsCog's news_queue table
         news_data = self.db.execute_query(
-            """SELECT event_title, event_description, location_id, event_date
-               FROM galactic_history
-               ORDER BY created_at DESC
+            """SELECT title, description, location_id, scheduled_delivery, news_type
+               FROM news_queue
+               WHERE is_delivered = 1
+               ORDER BY scheduled_delivery DESC
                LIMIT 20""",
             fetch='all'
         )
@@ -201,8 +206,28 @@ class WebMapCog(commands.Cog):
                 'content': item[1],
                 'location_id': item[2],
                 'timestamp': item[3],
+                'news_type': item[4],
                 'game_date': self._convert_to_game_date(item[3])
             })
+        
+        # Get galaxy info and current time
+        galaxy_info_data = self.time_system.get_galaxy_info()
+        galaxy_info = {}
+        current_time = None
+        
+        if galaxy_info_data:
+            galaxy_name, start_date, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame = galaxy_info_data
+            current_time_obj = self.time_system.calculate_current_ingame_time()
+            
+            galaxy_info = {
+                'name': galaxy_name,
+                'start_date': start_date,
+                'time_scale': time_scale,
+                'is_paused': is_paused
+            }
+            
+            if current_time_obj:
+                current_time = self.time_system.format_ingame_datetime(current_time_obj)
         
         # Update cache with timestamp
         self.cache = {
@@ -211,6 +236,8 @@ class WebMapCog(commands.Cog):
             'players': players,
             'npcs': npcs,
             'news': news,
+            'galaxy_info': galaxy_info,
+            'current_time': current_time,
             'last_update': datetime.now().isoformat()
         }
     
@@ -266,18 +293,62 @@ class WebMapCog(commands.Cog):
             return 0
     
     def _convert_to_game_date(self, timestamp):
-        """Convert real date to in-game date (2700s)"""
+        """Convert timestamp to proper in-game date, handling mixed formats"""
         try:
+            # Parse the provided timestamp
             if isinstance(timestamp, str):
                 dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
             else:
                 dt = timestamp
             
-            # Game year calculation
-            game_year = 2700 + (dt.year - 2024)
-            return dt.strftime(f"{game_year}-%m-%d %H:%M GST")
+            # Check if this timestamp is already in game format or real format
+            # Game years are typically 2500-4000, real years are 2020-2030
+            if dt.year >= 2500 and dt.year <= 4000:
+                # Already in game format, use as-is
+                return dt.strftime("%d-%m-%Y %H:%M ISST")
+            elif dt.year >= 2020 and dt.year <= 2030:
+                # Real timestamp, convert to game time
+                from utils.time_system import TimeSystem
+                time_system = TimeSystem(self.bot)
+                ingame_time = self._calculate_historical_ingame_time(time_system, dt)
+                if ingame_time:
+                    return ingame_time.strftime("%d-%m-%Y %H:%M ISST")
+                else:
+                    # Fallback if conversion fails
+                    return dt.strftime("%d-%m-%Y %H:%M ISST")
+            else:
+                # Unknown year range, use as-is with ISST format
+                return dt.strftime("%d-%m-%Y %H:%M ISST")
         except:
             return "Unknown Date"
+    
+    def _calculate_historical_ingame_time(self, time_system, historical_real_time):
+        """Calculate what the in-game time was at a given historical real time"""
+        galaxy_info = time_system.get_galaxy_info()
+        if not galaxy_info:
+            return None
+            
+        name, start_date_str, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame = galaxy_info
+        
+        # Parse start date
+        start_date = time_system.parse_date_string(start_date_str)
+        if not start_date:
+            return None
+        
+        # Use time_started_at if available, otherwise use created_at
+        real_start_time = datetime.fromisoformat(time_started_at) if time_started_at else datetime.fromisoformat(created_at)
+        time_scale_factor = time_scale if time_scale else 4.0
+        
+        # If the historical time is before the galaxy started, return None
+        if historical_real_time < real_start_time:
+            return None
+        
+        # Calculate elapsed time from galaxy start to the historical timestamp
+        elapsed_real_time = historical_real_time - real_start_time
+        elapsed_ingame_time = elapsed_real_time * time_scale_factor
+        historical_ingame_time = start_date + elapsed_ingame_time
+        
+        return historical_ingame_time
     
     webmap_group = app_commands.Group(name="webmap", description="Web map management commands")
     
@@ -464,6 +535,24 @@ class WebMapCog(commands.Cog):
     
     async def _compile_wiki_data(self):
         """Compile comprehensive wiki data"""
+        # Get galaxy info and current time
+        galaxy_info_data = self.time_system.get_galaxy_info()
+        galaxy_info = {}
+        current_time = None
+        
+        if galaxy_info_data:
+            galaxy_name, start_date, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame = galaxy_info_data
+            current_time_obj = self.time_system.calculate_current_ingame_time()
+            
+            galaxy_info = {
+                'name': galaxy_name,
+                'start_date': start_date,
+                'time_scale': time_scale,
+                'is_paused': is_paused
+            }
+            
+            if current_time_obj:
+                current_time = self.time_system.format_ingame_datetime(current_time_obj)
         # Get detailed location information - removed tech_level and stability
         locations = self.db.execute_query(
             """SELECT l.location_id, l.name, l.location_type, l.x_coord, l.y_coord,
@@ -493,7 +582,7 @@ class WebMapCog(commands.Cog):
             fetch='all'
         )
         
-        # Get player information - only existing columns
+        # Get player information - only existing columns, only recent logins
         players = self.db.execute_query(
             """SELECT c.user_id, c.name, c.current_location, c.money,
                       c.level, c.experience, c.alignment,
@@ -501,6 +590,7 @@ class WebMapCog(commands.Cog):
                FROM characters c
                LEFT JOIN locations l ON c.current_location = l.location_id
                LEFT JOIN ships s ON c.ship_id = s.ship_id
+               WHERE c.is_logged_in = 1
                ORDER BY c.name""",
             fetch='all'
         )
@@ -534,7 +624,9 @@ class WebMapCog(commands.Cog):
             'players': self._format_wiki_players(players),
             'npcs': self._format_wiki_npcs(dynamic_npcs),
             'logs': self._format_wiki_logs(location_logs),
-            'news': self.cache['news']
+            'news': self.cache['news'],
+            'galaxy_info': galaxy_info,
+            'current_time': current_time
         }
     
     def _format_wiki_locations(self, locations):
@@ -548,7 +640,6 @@ class WebMapCog(commands.Cog):
                 'system': loc[5],
                 'wealth': loc[6],
                 'population': loc[7],
-                'tech_level': 5,  # Default since column doesn't exist
                 'description': loc[8],
                 'faction': loc[9],
                 'stability': 75,  # Default since column doesn't exist
@@ -703,9 +794,12 @@ class WebMapCog(commands.Cog):
     <div class="map-container">
         <div class="map-header">
             <div class="header-section">
-                <h1 class="map-title">Galaxy Map</h1>
+                <h1 class="map-title">
+                    <span id="galaxy-name">Galaxy Map</span>
+                </h1>
                 <div class="map-status">
                     <span class="status-indicator"></span>
+                    <span id="current-time">Loading...</span>
                     <span id="last-update">Loading...</span>
                 </div>
             </div>
@@ -735,6 +829,8 @@ class WebMapCog(commands.Cog):
                 </label>
             </div>
             <div class="control-group">
+                <input type="text" id="search-input" placeholder="Search locations..." class="search-input">
+                <button class="control-button" onclick="galaxyMap.searchLocation()">Search</button>
                 <button class="control-button" onclick="galaxyMap.resetView()">Reset View</button>
             </div>
         </div>
@@ -771,10 +867,12 @@ class WebMapCog(commands.Cog):
     <div class="wiki-container">
         <header class="wiki-header">
             <div class="header-section">
-                <h1 class="wiki-title">GALACTIC WIKI</h1>
+                <h1 class="wiki-title">
+                    <span id="galaxy-name">GALACTIC WIKI</span>
+                </h1>
                 <div class="wiki-status">
                     <div class="status-indicator online"></div>
-                    <span>DATABASE ONLINE</span>
+                    <span id="current-time">DATABASE ONLINE</span>
                 </div>
             </div>
             <div class="header-controls">
@@ -1134,6 +1232,28 @@ class WebMapCog(commands.Cog):
             background: var(--primary-color);
             color: var(--primary-bg);
             box-shadow: 0 0 15px var(--glow-primary);
+        }
+        
+        .search-input {
+            padding: 0.5rem 0.75rem;
+            background: var(--secondary-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.9rem;
+            min-width: 200px;
+            transition: all 0.3s ease;
+        }
+        
+        .search-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 10px rgba(64, 224, 208, 0.3);
+        }
+        
+        .search-input::placeholder {
+            color: var(--text-secondary);
         }
         
         .map-viewport {
@@ -1526,6 +1646,11 @@ class WebMapCog(commands.Cog):
                 this.scale = 1;
                 this.offsetX = 0;
                 this.offsetY = 0;
+                
+                // Route planning
+                this.routePlanningMode = false;
+                this.routeStartLocation = null;
+                this.plannedRoute = null;
                 this.isDragging = false;
                 this.dragStartX = 0;
                 this.dragStartY = 0;
@@ -1535,7 +1660,12 @@ class WebMapCog(commands.Cog):
                 this.showLabels = false;
                 this.showPlayers = false;
                 this.showNPCs = false;
-                this.showRoutes = true; // Default to true to match HTML
+                this.showRoutes = true;
+                
+                // Animation timing for pulsing effects
+                this.animationTime = 0;
+                this.lastFrameTime = performance.now();
+                this.isAnimating = false;
                 
                 this.init();
             }
@@ -1571,6 +1701,13 @@ class WebMapCog(commands.Cog):
                 this.canvas.addEventListener('touchstart', e => this.handleTouchStart(e));
                 this.canvas.addEventListener('touchmove', e => this.handleTouchMove(e));
                 this.canvas.addEventListener('touchend', e => this.handleTouchEnd(e));
+                
+                // Search input - Enter key support
+                document.getElementById('search-input').addEventListener('keypress', e => {
+                    if (e.key === 'Enter') {
+                        this.searchLocation();
+                    }
+                });
                 
                 // Toggle controls
                 document.getElementById('toggle-labels').addEventListener('change', e => {
@@ -1613,6 +1750,24 @@ class WebMapCog(commands.Cog):
                 const now = new Date();
                 const timeStr = now.toLocaleTimeString();
                 document.getElementById('last-update').textContent = `Updated: ${timeStr}`;
+                
+                // Update galaxy name and current game time
+                if (this.data) {
+                    const galaxyNameEl = document.getElementById('galaxy-name');
+                    const currentTimeEl = document.getElementById('current-time');
+                    
+                    if (this.data.galaxy_info && this.data.galaxy_info.name) {
+                        galaxyNameEl.textContent = this.data.galaxy_info.name;
+                    } else {
+                        galaxyNameEl.textContent = 'Galaxy Map';
+                    }
+                    
+                    if (this.data.current_time) {
+                        currentTimeEl.textContent = this.data.current_time;
+                    } else {
+                        currentTimeEl.textContent = 'Time unknown';
+                    }
+                }
             }
             
             worldToScreen(x, y) {
@@ -1632,6 +1787,12 @@ class WebMapCog(commands.Cog):
             render() {
                 if (!this.data) return;
                 
+                // Update animation timing
+                const currentTime = performance.now();
+                const deltaTime = currentTime - this.lastFrameTime;
+                this.animationTime += deltaTime * 0.003; // Control animation speed
+                this.lastFrameTime = currentTime;
+                
                 // Clear canvas
                 this.ctx.fillStyle = '#000408';
                 this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
@@ -1642,6 +1803,11 @@ class WebMapCog(commands.Cog):
                 // Draw corridors
                 if (this.showRoutes) {
                     this.drawCorridors();
+                }
+                
+                // Draw planned route
+                if (this.plannedRoute) {
+                    this.drawPlannedRoute();
                 }
                 
                 // Draw locations
@@ -1655,6 +1821,30 @@ class WebMapCog(commands.Cog):
                 // Draw NPCs
                 if (this.showNPCs) {
                     this.drawNPCs();
+                }
+                
+                // Continue animation loop if needed (for pulsing effects or traveling animations)
+                const hasTravelingEntities = this.showRoutes && (
+                    Object.values(this.data.players).some(p => p.traveling) ||
+                    Object.values(this.data.npcs).some(n => n.traveling)
+                );
+                
+                if ((this.showPlayers && Object.keys(this.data.players).length > 0) || 
+                    (this.showNPCs && Object.keys(this.data.npcs).length > 0) ||
+                    hasTravelingEntities) {
+                    if (!this.isAnimating) {
+                        this.isAnimating = true;
+                        this.animationLoop();
+                    }
+                } else {
+                    this.isAnimating = false;
+                }
+            }
+            
+            animationLoop() {
+                if (this.isAnimating) {
+                    this.render();
+                    requestAnimationFrame(() => this.animationLoop());
                 }
             }
             
@@ -1722,10 +1912,14 @@ class WebMapCog(commands.Cog):
                         strokeStyle = 'rgba(0, 204, 204, 0.5)'; // Cyan
                     }
                     
-                    // Check if any players are in this corridor
-                    const hasPlayers = Object.values(this.data.players).some(p => 
+                    // Check if any players/NPCs are in this corridor
+                    const travelingPlayers = Object.values(this.data.players).filter(p => 
                         p.traveling && p.corridor_id === corridor.id
                     );
+                    const travelingNPCs = Object.values(this.data.npcs).filter(n => 
+                        n.traveling && n.corridor_id === corridor.id
+                    );
+                    const hasTravelers = travelingPlayers.length > 0 || travelingNPCs.length > 0;
                     
                     // Apply highlighting
                     if (isSelected) {
@@ -1749,11 +1943,12 @@ class WebMapCog(commands.Cog):
                         lineWidth = Math.max(3, Math.min(8, 6 / Math.sqrt(this.scale)));
                         this.ctx.shadowBlur = 15;
                         this.ctx.shadowColor = strokeStyle;
-                    } else if (hasPlayers) {
-                        strokeStyle = '#00ffff';
-                        lineWidth = Math.max(3, Math.min(8, 6 / Math.sqrt(this.scale)));
-                        this.ctx.shadowBlur = 10;
-                        this.ctx.shadowColor = '#00ffff';
+                    } else if (hasTravelers) {
+                        // Enhanced styling for corridors with travelers
+                        strokeStyle = '#00aaff';
+                        lineWidth = Math.max(4, Math.min(10, 7 / Math.sqrt(this.scale)));
+                        this.ctx.shadowBlur = 15;
+                        this.ctx.shadowColor = '#00aaff';
                     } else {
                         this.ctx.shadowBlur = 0;
                     }
@@ -1771,6 +1966,11 @@ class WebMapCog(commands.Cog):
                     this.ctx.stroke();
                     this.ctx.setLineDash([]); // Reset dash
                     
+                    // Draw animated flow effects for traveling entities
+                    if (hasTravelers) {
+                        this.drawTravelingAnimation(start, end, travelingPlayers, travelingNPCs);
+                    }
+                    
                     // Draw direction indicators for selected corridors
                     if (isSelected || isRelatedToLocation) {
                         this.drawCorridorArrow(start, end, strokeStyle);
@@ -1778,6 +1978,84 @@ class WebMapCog(commands.Cog):
                 }
                 
                 this.ctx.shadowBlur = 0;
+            }
+            
+            drawTravelingAnimation(start, end, travelingPlayers, travelingNPCs) {
+                this.ctx.save();
+                
+                // Calculate line properties
+                const dx = end.x - start.x;
+                const dy = end.y - start.y;
+                const length = Math.sqrt(dx * dx + dy * dy);
+                const unitX = dx / length;
+                const unitY = dy / length;
+                
+                // Animation parameters
+                const flowSpeed = this.animationTime * 0.5;
+                const dotSpacing = Math.max(30, 40 / Math.sqrt(this.scale));
+                const numDots = Math.floor(length / dotSpacing) + 2;
+                
+                // Draw flowing particles for players
+                if (travelingPlayers.length > 0) {
+                    for (let i = 0; i < numDots; i++) {
+                        const progress = ((i * dotSpacing + flowSpeed * 60) % (length + dotSpacing)) / length;
+                        if (progress > 1) continue;
+                        
+                        const x = start.x + progress * dx;
+                        const y = start.y + progress * dy;
+                        
+                        // Fade effect based on position
+                        const fadeIn = Math.min(1, progress * 4);
+                        const fadeOut = Math.min(1, (1 - progress) * 4);
+                        const alpha = Math.min(fadeIn, fadeOut) * 0.8;
+                        
+                        this.ctx.globalAlpha = alpha;
+                        this.ctx.fillStyle = '#00ddff';
+                        this.ctx.shadowBlur = Math.min(10, 8 / Math.sqrt(this.scale));
+                        this.ctx.shadowColor = '#00ddff';
+                        
+                        const dotSize = Math.max(3, 4 / Math.sqrt(this.scale));
+                        this.ctx.beginPath();
+                        this.ctx.arc(x, y, dotSize, 0, Math.PI * 2);
+                        this.ctx.fill();
+                    }
+                }
+                
+                // Draw flowing particles for NPCs (slightly different pattern)
+                if (travelingNPCs.length > 0) {
+                    for (let i = 0; i < numDots; i++) {
+                        const progress = ((i * dotSpacing + flowSpeed * 45) % (length + dotSpacing)) / length;
+                        if (progress > 1) continue;
+                        
+                        const x = start.x + progress * dx;
+                        const y = start.y + progress * dy;
+                        
+                        // Offset NPCs slightly perpendicular to the line
+                        const offsetX = -unitY * 3;
+                        const offsetY = unitX * 3;
+                        
+                        // Fade effect
+                        const fadeIn = Math.min(1, progress * 4);
+                        const fadeOut = Math.min(1, (1 - progress) * 4);
+                        const alpha = Math.min(fadeIn, fadeOut) * 0.6;
+                        
+                        this.ctx.globalAlpha = alpha;
+                        this.ctx.fillStyle = '#ffaa00';
+                        this.ctx.shadowBlur = Math.min(8, 6 / Math.sqrt(this.scale));
+                        this.ctx.shadowColor = '#ffaa00';
+                        
+                        const dotSize = Math.max(2, 3 / Math.sqrt(this.scale));
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(x + offsetX, y + offsetY - dotSize);
+                        this.ctx.lineTo(x + offsetX + dotSize, y + offsetY);
+                        this.ctx.lineTo(x + offsetX, y + offsetY + dotSize);
+                        this.ctx.lineTo(x + offsetX - dotSize, y + offsetY);
+                        this.ctx.closePath();
+                        this.ctx.fill();
+                    }
+                }
+                
+                this.ctx.restore();
             }
             
             drawCorridorArrow(start, end, color) {
@@ -1903,8 +2181,6 @@ class WebMapCog(commands.Cog):
             }
             
             drawPlayers() {
-                this.ctx.fillStyle = '#0006ff';
-                
                 for (const [id, player] of Object.entries(this.data.players)) {
                     if (!player.location) continue;
                     
@@ -1913,21 +2189,72 @@ class WebMapCog(commands.Cog):
                     
                     const pos = this.worldToScreen(location.x, location.y);
                     
-                    // Draw player indicator with inverse scaling
-                    const triangleSize = Math.max(16 / Math.sqrt(this.scale), 10);
-
-                    this.ctx.shadowBlur = Math.min(25, 20 / Math.sqrt(this.scale));
-                    this.ctx.shadowColor = '#8000ff';
+                    // Enhanced player colors based on alignment
+                    let playerColor = '#00aaff'; // Default blue
+                    let glowColor = '#0088cc';
+                    
+                    if (player.alignment === 'loyalist' || player.alignment === 'loyal') {
+                        playerColor = '#00ff44';
+                        glowColor = '#00cc33';
+                    } else if (player.alignment === 'outlaw' || player.alignment === 'bandit') {
+                        playerColor = '#ff4400';
+                        glowColor = '#cc3300';
+                    }
+                    
+                    // Pulsing animation calculations
+                    const pulseOffset = (id.length % 10) * 0.2; // Stagger animations
+                    const pulsePhase = this.animationTime + pulseOffset;
+                    const pulseFactor = 0.8 + 0.4 * Math.sin(pulsePhase * 2);
+                    const ringPulseFactor = 0.5 + 0.5 * Math.sin(pulsePhase * 3);
+                    
+                    // Base size with inverse scaling
+                    const baseSize = Math.max(12 / Math.sqrt(this.scale), 8);
+                    const pulseSize = baseSize * pulseFactor;
+                    const ringSize = baseSize * (1.5 + ringPulseFactor * 0.8);
+                    
+                    this.ctx.save();
+                    
+                    // Draw pulsing outer ring
+                    this.ctx.globalAlpha = 0.3 * ringPulseFactor;
+                    this.ctx.fillStyle = glowColor;
+                    this.ctx.shadowBlur = Math.min(30, 25 / Math.sqrt(this.scale));
+                    this.ctx.shadowColor = glowColor;
                     
                     this.ctx.beginPath();
-                    this.ctx.moveTo(pos.x, pos.y - triangleSize * 2);
-                    this.ctx.lineTo(pos.x - triangleSize, pos.y - triangleSize);
-                    this.ctx.lineTo(pos.x + triangleSize, pos.y - triangleSize);
-                    this.ctx.closePath();
+                    this.ctx.arc(pos.x, pos.y, ringSize, 0, Math.PI * 2);
                     this.ctx.fill();
+                    
+                    // Draw middle ring
+                    this.ctx.globalAlpha = 0.6;
+                    this.ctx.fillStyle = playerColor;
+                    this.ctx.shadowBlur = Math.min(20, 15 / Math.sqrt(this.scale));
+                    this.ctx.shadowColor = playerColor;
+                    
+                    this.ctx.beginPath();
+                    this.ctx.arc(pos.x, pos.y, pulseSize * 1.2, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    
+                    // Draw core player indicator
+                    this.ctx.globalAlpha = 1.0;
+                    this.ctx.fillStyle = '#ffffff';
+                    this.ctx.shadowBlur = Math.min(15, 10 / Math.sqrt(this.scale));
+                    this.ctx.shadowColor = playerColor;
+                    
+                    this.ctx.beginPath();
+                    this.ctx.arc(pos.x, pos.y, pulseSize, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    
+                    // Draw small inner core
+                    this.ctx.globalAlpha = 1.0;
+                    this.ctx.fillStyle = playerColor;
+                    this.ctx.shadowBlur = 0;
+                    
+                    this.ctx.beginPath();
+                    this.ctx.arc(pos.x, pos.y, pulseSize * 0.4, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    
+                    this.ctx.restore();
                 }
-                
-                this.ctx.shadowBlur = 0;
             }
             
             drawNPCs() {
@@ -1939,33 +2266,76 @@ class WebMapCog(commands.Cog):
                     
                     const pos = this.worldToScreen(location.x, location.y);
                     
-                    // Determine NPC color based on alignment
+                    // Enhanced NPC colors based on alignment
+                    let npcColor = '#ffaa00'; // Default orange (neutral)
+                    let glowColor = '#cc8800';
+                    
                     if (npc.alignment === 'hostile' || npc.alignment === 'pirate' || 
                         npc.alignment === 'bandit') {
-                        this.ctx.fillStyle = '#ff0000';
+                        npcColor = '#ff3300';  // Bright red for hostiles
+                        glowColor = '#cc2200';
                     } else if (npc.alignment === 'friendly' || npc.alignment === 'loyal') {
-                        this.ctx.fillStyle = '#ff0000';
-                    } else {
-                        this.ctx.fillStyle = '#ff0000';
+                        npcColor = '#00cc44';  // Green for friendlies  
+                        glowColor = '#009933';
                     }
                     
-                    // Draw NPC indicator with inverse scaling
-                    const dotSize = Math.max(10 / Math.sqrt(this.scale), 6);
+                    // Pulsing animation calculations
+                    const pulseOffset = (id.charCodeAt(0) % 10) * 0.15; // Stagger based on ID
+                    const pulsePhase = this.animationTime + pulseOffset;
+                    const pulseFactor = 0.7 + 0.4 * Math.sin(pulsePhase * 1.8);
+                    const glowPulseFactor = 0.4 + 0.6 * Math.sin(pulsePhase * 2.5);
                     
-                    this.ctx.shadowBlur = Math.min(20, 15 / Math.sqrt(this.scale));
-                    this.ctx.shadowColor = this.ctx.fillStyle;
+                    // Base size with inverse scaling
+                    const baseSize = Math.max(10 / Math.sqrt(this.scale), 6);
+                    const pulseSize = baseSize * pulseFactor;
+                    const glowSize = baseSize * (1.8 + glowPulseFactor * 0.5);
                     
-                    // Draw a diamond shape for NPCs
+                    this.ctx.save();
+                    
+                    // Draw pulsing glow effect
+                    this.ctx.globalAlpha = 0.25 * glowPulseFactor;
+                    this.ctx.fillStyle = glowColor;
+                    this.ctx.shadowBlur = Math.min(25, 20 / Math.sqrt(this.scale));
+                    this.ctx.shadowColor = glowColor;
+                    
                     this.ctx.beginPath();
-                    this.ctx.moveTo(pos.x, pos.y - dotSize);
-                    this.ctx.lineTo(pos.x + dotSize * 0.7, pos.y);
-                    this.ctx.lineTo(pos.x, pos.y + dotSize);
-                    this.ctx.lineTo(pos.x - dotSize * 0.7, pos.y);
+                    this.ctx.moveTo(pos.x, pos.y - glowSize);
+                    this.ctx.lineTo(pos.x + glowSize * 0.8, pos.y);
+                    this.ctx.lineTo(pos.x, pos.y + glowSize);
+                    this.ctx.lineTo(pos.x - glowSize * 0.8, pos.y);
                     this.ctx.closePath();
                     this.ctx.fill();
+                    
+                    // Draw main NPC body
+                    this.ctx.globalAlpha = 0.9;
+                    this.ctx.fillStyle = npcColor;
+                    this.ctx.shadowBlur = Math.min(15, 12 / Math.sqrt(this.scale));
+                    this.ctx.shadowColor = npcColor;
+                    
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(pos.x, pos.y - pulseSize);
+                    this.ctx.lineTo(pos.x + pulseSize * 0.7, pos.y);
+                    this.ctx.lineTo(pos.x, pos.y + pulseSize);
+                    this.ctx.lineTo(pos.x - pulseSize * 0.7, pos.y);
+                    this.ctx.closePath();
+                    this.ctx.fill();
+                    
+                    // Draw bright core
+                    this.ctx.globalAlpha = 1.0;
+                    this.ctx.fillStyle = '#ffffff';
+                    this.ctx.shadowBlur = Math.min(8, 6 / Math.sqrt(this.scale));
+                    this.ctx.shadowColor = npcColor;
+                    
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(pos.x, pos.y - pulseSize * 0.4);
+                    this.ctx.lineTo(pos.x + pulseSize * 0.3, pos.y);
+                    this.ctx.lineTo(pos.x, pos.y + pulseSize * 0.4);
+                    this.ctx.lineTo(pos.x - pulseSize * 0.3, pos.y);
+                    this.ctx.closePath();
+                    this.ctx.fill();
+                    
+                    this.ctx.restore();
                 }
-                
-                this.ctx.shadowBlur = 0;
             }
             
             handleMouseDown(e) {
@@ -2074,7 +2444,17 @@ class WebMapCog(commands.Cog):
                 
                 // Handle selection
                 if (clickedLocation) {
-                    this.selectLocation(clickedLocation.id, clickedLocation.location);
+                    // Check if we're in route planning mode
+                    if (this.routePlanningMode && this.routeStartLocation) {
+                        // Plot route from start to clicked location
+                        if (this.plotRoute(this.routeStartLocation, clickedLocation.id)) {
+                            // Route successfully plotted, select the destination
+                            this.selectLocation(clickedLocation.id, clickedLocation.location);
+                        }
+                    } else {
+                        // Normal location selection
+                        this.selectLocation(clickedLocation.id, clickedLocation.location);
+                    }
                     this.selectedCorridor = null;
                 } else if (clickedCorridor) {
                     this.selectCorridor(clickedCorridor);
@@ -2128,6 +2508,355 @@ class WebMapCog(commands.Cog):
                 this.render();
             }
             
+            searchLocation() {
+                const searchInput = document.getElementById('search-input');
+                const searchTerm = searchInput.value.trim().toLowerCase();
+                
+                if (!searchTerm) {
+                    alert('Please enter a location name to search for.');
+                    return;
+                }
+                
+                if (!this.data || !this.data.locations) {
+                    alert('Location data not loaded yet. Please wait a moment and try again.');
+                    return;
+                }
+                
+                // Search for matching locations
+                const matches = Object.values(this.data.locations).filter(location => 
+                    location.name.toLowerCase().includes(searchTerm) ||
+                    location.system.toLowerCase().includes(searchTerm) ||
+                    location.type.toLowerCase().includes(searchTerm)
+                );
+                
+                if (matches.length === 0) {
+                    alert(`No locations found matching "${searchTerm}"`);
+                    return;
+                }
+                
+                // If multiple matches, focus on the first one and show all in tooltip
+                const firstMatch = matches[0];
+                this.focusOnLocation(firstMatch);
+                
+                if (matches.length > 1) {
+                    const matchNames = matches.map(loc => loc.name).join(', ');
+                    alert(`Found ${matches.length} matches: ${matchNames}. Focusing on "${firstMatch.name}".`);
+                }
+            }
+            
+            focusOnLocation(location) {
+                // Center the view on the location
+                this.offsetX = -location.x * this.scale;
+                this.offsetY = -location.y * this.scale;
+                
+                // Zoom in a bit to better show the location
+                this.scale = Math.max(this.scale, 2.0);
+                
+                // Re-render the map
+                this.render();
+                
+                // Show location info panel
+                this.selectLocation(location.id, location);
+            }
+            
+            startRoutePlanning(fromLocationId) {
+                this.routePlanningMode = true;
+                this.routeStartLocation = fromLocationId;
+                this.plannedRoute = null;
+                
+                // Update status
+                const statusEl = document.getElementById('route-planning-status');
+                if (statusEl) {
+                    statusEl.textContent = 'Click destination to plot route...';
+                    statusEl.style.color = 'var(--primary-color)';
+                }
+                
+                // Update button text
+                const routeButton = document.querySelector('button[onclick*="startRoutePlanning"]');
+                if (routeButton) {
+                    routeButton.textContent = '❌ Cancel Route Planning';
+                    routeButton.onclick = () => this.cancelRoutePlanning();
+                }
+                
+                this.render();
+            }
+            
+            cancelRoutePlanning() {
+                this.routePlanningMode = false;
+                this.routeStartLocation = null;
+                this.plannedRoute = null;
+                
+                // Update status
+                const statusEl = document.getElementById('route-planning-status');
+                if (statusEl) {
+                    statusEl.textContent = '';
+                }
+                
+                // Update button text back
+                const routeButton = document.querySelector('button[onclick*="cancelRoutePlanning"]');
+                if (routeButton && this.routeStartLocation) {
+                    routeButton.textContent = '📍 Plot Route';
+                    routeButton.onclick = () => this.startRoutePlanning(this.selectedLocation);
+                }
+                
+                this.render();
+            }
+            
+            plotRoute(fromId, toId) {
+                const route = this.findShortestPath(fromId, toId);
+                if (route && route.length > 1) {
+                    this.plannedRoute = route;
+                    this.routePlanningMode = false;
+                    
+                    // Calculate route stats
+                    const stats = this.calculateRouteStats(route);
+                    
+                    // Update status with route information
+                    const statusEl = document.getElementById('route-planning-status');
+                    if (statusEl) {
+                        statusEl.innerHTML = `<br>Route: ${route.length - 1} jumps | ${stats.totalTime}h | Danger: ${stats.avgDanger.toFixed(1)}/10`;
+                        statusEl.style.color = 'var(--text-primary)';
+                    }
+                    
+                    // Update button
+                    const routeButton = document.querySelector('button');
+                    if (routeButton) {
+                        routeButton.textContent = '🗑️ Clear Route';
+                        routeButton.onclick = () => this.clearRoute();
+                    }
+                    
+                    this.render();
+                    return true;
+                } else {
+                    // No route found
+                    const statusEl = document.getElementById('route-planning-status');
+                    if (statusEl) {
+                        statusEl.textContent = 'No route found!';
+                        statusEl.style.color = 'var(--danger-color, #ff4444)';
+                    }
+                    return false;
+                }
+            }
+            
+            clearRoute() {
+                this.plannedRoute = null;
+                this.routePlanningMode = false;
+                this.routeStartLocation = null;
+                
+                const statusEl = document.getElementById('route-planning-status');
+                if (statusEl) {
+                    statusEl.textContent = '';
+                }
+                
+                const routeButton = document.querySelector('button');
+                if (routeButton && this.selectedLocation) {
+                    routeButton.textContent = '📍 Plot Route';
+                    routeButton.onclick = () => this.startRoutePlanning(this.selectedLocation);
+                }
+                
+                this.render();
+            }
+            
+            findShortestPath(fromId, toId) {
+                // Simple Dijkstra's algorithm for pathfinding
+                if (fromId === toId) return [fromId];
+                
+                const distances = {};
+                const previous = {};
+                const unvisited = new Set();
+                
+                // Initialize all locations
+                for (const [id] of Object.entries(this.data.locations)) {
+                    distances[id] = Infinity;
+                    previous[id] = null;
+                    unvisited.add(id);
+                }
+                
+                distances[fromId] = 0;
+                
+                while (unvisited.size > 0) {
+                    // Find unvisited node with smallest distance
+                    let current = null;
+                    let minDistance = Infinity;
+                    
+                    for (const node of unvisited) {
+                        if (distances[node] < minDistance) {
+                            minDistance = distances[node];
+                            current = node;
+                        }
+                    }
+                    
+                    if (current === null || distances[current] === Infinity) {
+                        break; // No path exists
+                    }
+                    
+                    if (current === toId) {
+                        // Found destination, reconstruct path
+                        const path = [];
+                        let node = toId;
+                        while (node !== null) {
+                            path.unshift(node);
+                            node = previous[node];
+                        }
+                        return path;
+                    }
+                    
+                    unvisited.delete(current);
+                    
+                    // Check all corridors from current location
+                    for (const corridor of this.data.corridors) {
+                        let neighbor = null;
+                        if (corridor.origin == current) {
+                            neighbor = corridor.destination;
+                        } else if (corridor.destination == current) {
+                            neighbor = corridor.origin;
+                        }
+                        
+                        if (neighbor && unvisited.has(neighbor)) {
+                            // Use travel time as weight (with danger level as penalty)
+                            const weight = (corridor.travel_time || 1) + (corridor.danger_level || 0) * 0.5;
+                            const alt = distances[current] + weight;
+                            
+                            if (alt < distances[neighbor]) {
+                                distances[neighbor] = alt;
+                                previous[neighbor] = current;
+                            }
+                        }
+                    }
+                }
+                
+                return null; // No path found
+            }
+            
+            calculateRouteStats(route) {
+                let totalTime = 0;
+                let totalDanger = 0;
+                let corridorCount = 0;
+                
+                for (let i = 0; i < route.length - 1; i++) {
+                    const fromId = route[i];
+                    const toId = route[i + 1];
+                    
+                    // Find the corridor between these locations
+                    const corridor = this.data.corridors.find(c => 
+                        (c.origin == fromId && c.destination == toId) ||
+                        (c.origin == toId && c.destination == fromId)
+                    );
+                    
+                    if (corridor) {
+                        totalTime += corridor.travel_time || 1;
+                        totalDanger += corridor.danger_level || 0;
+                        corridorCount++;
+                    }
+                }
+                
+                return {
+                    totalTime,
+                    avgDanger: corridorCount > 0 ? totalDanger / corridorCount : 0,
+                    corridorCount
+                };
+            }
+
+            drawPlannedRoute() {
+                if (!this.plannedRoute || this.plannedRoute.length < 2) return;
+                
+                this.ctx.save();
+                
+                // Set route style
+                this.ctx.strokeStyle = '#00ffff'; // Cyan color for planned route
+                this.ctx.lineWidth = Math.max(4, Math.min(10, 6 / Math.sqrt(this.scale)));
+                this.ctx.lineCap = 'round';
+                this.ctx.lineJoin = 'round';
+                
+                // Add glow effect
+                this.ctx.shadowColor = '#00ffff';
+                this.ctx.shadowBlur = 15;
+                
+                // Draw animated dashed line
+                const dashLength = 20 / this.scale;
+                const animationOffset = (Date.now() * 0.01) % (dashLength * 2);
+                this.ctx.setLineDash([dashLength, dashLength]);
+                this.ctx.lineDashOffset = animationOffset;
+                
+                // Draw each segment of the planned route
+                for (let i = 0; i < this.plannedRoute.length - 1; i++) {
+                    const fromId = this.plannedRoute[i];
+                    const toId = this.plannedRoute[i + 1];
+                    
+                    const fromLocation = this.data.locations[fromId];
+                    const toLocation = this.data.locations[toId];
+                    
+                    if (fromLocation && toLocation) {
+                        const start = this.worldToScreen(fromLocation.x, fromLocation.y);
+                        const end = this.worldToScreen(toLocation.x, toLocation.y);
+                        
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(start.x, start.y);
+                        this.ctx.lineTo(end.x, end.y);
+                        this.ctx.stroke();
+                    }
+                }
+                
+                // Draw route waypoint markers
+                this.ctx.setLineDash([]); // Reset dash
+                this.ctx.shadowBlur = 0;
+                
+                for (let i = 1; i < this.plannedRoute.length - 1; i++) {
+                    const locationId = this.plannedRoute[i];
+                    const location = this.data.locations[locationId];
+                    
+                    if (location) {
+                        const pos = this.worldToScreen(location.x, location.y);
+                        
+                        // Draw waypoint circle
+                        this.ctx.fillStyle = '#00ffff';
+                        this.ctx.beginPath();
+                        this.ctx.arc(pos.x, pos.y, 6, 0, 2 * Math.PI);
+                        this.ctx.fill();
+                        
+                        // Draw inner circle
+                        this.ctx.fillStyle = '#004444';
+                        this.ctx.beginPath();
+                        this.ctx.arc(pos.x, pos.y, 3, 0, 2 * Math.PI);
+                        this.ctx.fill();
+                        
+                        // Draw waypoint number
+                        this.ctx.fillStyle = '#ffffff';
+                        this.ctx.font = `${Math.max(10, 12 / Math.sqrt(this.scale))}px Arial`;
+                        this.ctx.textAlign = 'center';
+                        this.ctx.textBaseline = 'middle';
+                        this.ctx.fillText(i.toString(), pos.x, pos.y);
+                    }
+                }
+                
+                // Highlight start and end points
+                if (this.plannedRoute.length >= 2) {
+                    // Start point (green)
+                    const startLocation = this.data.locations[this.plannedRoute[0]];
+                    if (startLocation) {
+                        const startPos = this.worldToScreen(startLocation.x, startLocation.y);
+                        this.ctx.strokeStyle = '#00ff00';
+                        this.ctx.lineWidth = 3;
+                        this.ctx.beginPath();
+                        this.ctx.arc(startPos.x, startPos.y, 12, 0, 2 * Math.PI);
+                        this.ctx.stroke();
+                    }
+                    
+                    // End point (red)
+                    const endLocation = this.data.locations[this.plannedRoute[this.plannedRoute.length - 1]];
+                    if (endLocation) {
+                        const endPos = this.worldToScreen(endLocation.x, endLocation.y);
+                        this.ctx.strokeStyle = '#ff0000';
+                        this.ctx.lineWidth = 3;
+                        this.ctx.beginPath();
+                        this.ctx.arc(endPos.x, endPos.y, 12, 0, 2 * Math.PI);
+                        this.ctx.stroke();
+                    }
+                }
+                
+                this.ctx.restore();
+            }
+
             isPointNearLine(point, corridor) {
                 const origin = this.data.locations[corridor.origin];
                 const dest = this.data.locations[corridor.destination];
@@ -2294,6 +3023,10 @@ class WebMapCog(commands.Cog):
                     <div class="location-detail" style="margin-top: 10px; font-size: 0.8rem; color: var(--text-secondary);">
                         🌌 = Local Space | 🔵 = Gated | ⭕ = Ungated
                     </div>
+                    <div class="location-detail" style="margin-top: 15px;">
+                        <button class="control-button" onclick="galaxyMap.startRoutePlanning('${id}')">📍 Plot Route</button>
+                        <span id="route-planning-status" style="margin-left: 10px; font-size: 0.8rem; color: var(--text-secondary);"></span>
+                    </div>
                 `;
                 
                 this.locationInfo.style.display = 'block';
@@ -2407,6 +3140,9 @@ class WebMapCog(commands.Cog):
                     const response = await fetch('/api/wiki-data');
                     this.data = await response.json();
                     
+                    // Update galaxy name and current time in header
+                    this.updateHeader();
+                    
                     document.getElementById('loading').style.display = 'none';
                     document.getElementById('wiki-data').style.display = 'block';
                     
@@ -2414,6 +3150,25 @@ class WebMapCog(commands.Cog):
                 } catch (error) {
                     console.error('Failed to load wiki data:', error);
                     document.getElementById('loading').innerHTML = 'Failed to load data. Please refresh.';
+                }
+            }
+            
+            updateHeader() {
+                if (this.data) {
+                    const galaxyNameEl = document.getElementById('galaxy-name');
+                    const currentTimeEl = document.getElementById('current-time');
+                    
+                    if (this.data.galaxy_info && this.data.galaxy_info.name) {
+                        galaxyNameEl.textContent = this.data.galaxy_info.name.toUpperCase() + ' WIKI';
+                    } else {
+                        galaxyNameEl.textContent = 'GALACTIC WIKI';
+                    }
+                    
+                    if (this.data.current_time) {
+                        currentTimeEl.textContent = this.data.current_time;
+                    } else {
+                        currentTimeEl.textContent = 'DATABASE ONLINE';
+                    }
                 }
             }
             
@@ -2475,18 +3230,17 @@ class WebMapCog(commands.Cog):
                     html += `<div class="wiki-section"><h4>System: ${system}</h4>`;
                     html += '<table class="wiki-table"><thead><tr>';
                     html += '<th>Name</th><th>Type</th><th>Wealth</th><th>Population</th>';
-                    html += '<th>Tech</th><th>Faction</th><th>Pilots</th><th>NPCs</th>';
+                    html += '<th>Faction</th><th>Pilots</th><th>NPCs</th>';
                     html += '</tr></thead><tbody>';
                     
                     locations.sort((a, b) => a.name.localeCompare(b.name));
                     
                     for (const loc of locations) {
-                        html += '<tr>';
+                        html += `<tr onclick="window.galacticWiki.showLocationInfoFromWiki('${loc.id}')" style="cursor: pointer;">`;
                         html += `<td><strong>${loc.name}</strong></td>`;
                         html += `<td>${loc.type}</td>`;
                         html += `<td class="wealth-${loc.wealth}">${loc.wealth}</td>`;
                         html += `<td>${loc.population.toLocaleString()}</td>`;
-                        html += `<td>${loc.tech_level}</td>`;
                         html += `<td class="faction-${loc.faction}">${loc.faction}</td>`;
                         html += `<td>${loc.player_count || 0}</td>`;
                         html += `<td>${(loc.static_npc_count || 0) + (loc.dynamic_npc_count || 0)}</td>`;
@@ -2516,7 +3270,7 @@ class WebMapCog(commands.Cog):
                     const seconds = route.travel_time % 60;
                     const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
                     
-                    html += '<tr>';
+                    html += `<tr onclick="window.galacticWiki.showRouteInfoFromWiki('${route.id}')" style="cursor: pointer;">`;
                     html += `<td><strong>${route.name}</strong></td>`;
                     html += `<td>${route.origin_name} (${route.origin_system})</td>`;
                     html += `<td>${route.dest_name} (${route.dest_system})</td>`;
@@ -2628,11 +3382,110 @@ class WebMapCog(commands.Cog):
                 
                 return html + '</div>';
             }
+            
+            showLocationInfoFromWiki(locationId) {
+                // Find the location data
+                const location = this.data.locations.find(loc => loc.id === locationId);
+                if (!location) return;
+                
+                // Count players and NPCs at this location
+                const playerCount = this.data.players.filter(p => p.location === locationId).length;
+                const npcCount = this.data.npcs.filter(n => n.location === locationId).length;
+                
+                // Get info panel element
+                const locationInfo = document.getElementById('location-info');
+                if (!locationInfo) return;
+                
+                // Populate info panel with location details
+                locationInfo.innerHTML = `
+                    <button class="info-panel-close" onclick="document.getElementById('location-info').style.display='none'">×</button>
+                    <h3>${location.name}</h3>
+                    <div class="location-detail">
+                        <strong>Type:</strong> ${location.type.replace('_', ' ')}
+                    </div>
+                    <div class="location-detail">
+                        <strong>System:</strong> ${location.system}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Wealth:</strong> ${location.wealth}/10
+                    </div>
+                    <div class="location-detail">
+                        <strong>Population:</strong> ${location.population || 'Unknown'}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Faction Control:</strong> ${location.faction}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Players Here:</strong> ${playerCount}
+                    </div>
+                    <div class="location-detail">
+                        <strong>NPCs Here:</strong> ${npcCount}
+                    </div>
+                    ${location.description ? `
+                    <div class="location-detail">
+                        <strong>Description:</strong> ${location.description}
+                    </div>` : ''}
+                `;
+                
+                // Show the info panel
+                locationInfo.style.display = 'block';
+            }
+            
+            showRouteInfoFromWiki(routeId) {
+                // Find the route data
+                const route = this.data.routes.find(r => r.id === routeId);
+                if (!route) return;
+                
+                // Calculate travel time string
+                const minutes = Math.floor(route.travel_time / 60);
+                const seconds = route.travel_time % 60;
+                const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+                
+                // Count travelers on this route
+                const travelers = this.data.players.filter(p => p.traveling && p.corridor_id === routeId);
+                
+                // Get info panel element  
+                const locationInfo = document.getElementById('location-info');
+                if (!locationInfo) return;
+                
+                // Populate info panel with route details
+                locationInfo.innerHTML = `
+                    <button class="info-panel-close" onclick="document.getElementById('location-info').style.display='none'">×</button>
+                    <h3>🛸 ${route.name || 'Unknown Route'}</h3>
+                    <div class="location-detail">
+                        <strong>Route:</strong> ${route.origin_name} → ${route.dest_name}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Travel Time:</strong> ${timeStr}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Danger Level:</strong> ${route.danger_level}/10 ${'⚠️'.repeat(Math.min(route.danger_level || 0, 3))}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Stability:</strong> ${route.stability}%
+                    </div>
+                    <div class="location-detail">
+                        <strong>Travelers:</strong> ${travelers.length}
+                    </div>
+                    ${travelers.length > 0 ? `
+                    <div class="location-detail" style="margin-top: 10px;">
+                        <strong>Currently Traveling:</strong><br>
+                        ${travelers.map(t => `• ${t.name}`).join('<br>')}
+                    </div>` : ''}
+                    ${route.description ? `
+                    <div class="location-detail">
+                        <strong>Description:</strong> ${route.description}
+                    </div>` : ''}
+                `;
+                
+                // Show the info panel
+                locationInfo.style.display = 'block';
+            }
         }
         
         // Initialize wiki when page loads
         document.addEventListener('DOMContentLoaded', () => {
-            const wiki = new GalacticWiki();
+            window.galacticWiki = new GalacticWiki();
         });
         '''
 
