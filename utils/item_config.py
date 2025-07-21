@@ -25,8 +25,60 @@ class ItemConfig:
             "single_use": True,
             "rarity": "uncommon"
         },
-
-
+        "Painkillers": {
+            "type": "medical",
+            "description": "Standard issue pain relief medication",
+            "base_value": 20,
+            "usage_type": "heal_hp",
+            "effect_value": 10,
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Field Dressing": {
+            "type": "medical",
+            "description": "Basic bandages and antiseptic for wounds",
+            "base_value": 50,
+            "usage_type": "heal_hp",
+            "effect_value": 20,
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Trauma Kit": {
+            "type": "medical",
+            "description": "Comprehensive supplies for critical, life-threatening injuries. Contains auto-sutures and blood plasma.",
+            "base_value": 300,
+            "usage_type": "heal_hp",
+            "effect_value": 100,
+            "single_use": True,
+            "rarity": "rare"
+        },
+        "Suture Kit": {
+            "type": "medical",
+            "description": "A sterile kit for closing deep wounds. Requires a steady hand.",
+            "base_value": 100,
+            "usage_type": "heal_hp",
+            "effect_value": 35,
+            "single_use": True,
+            "rarity": "uncommon"
+        },
+        "Antibiotics": {
+            "type": "medical",
+            "description": "Broad-spectrum antibiotics to fight infections.",
+            "base_value": 40,
+            "usage_type": "heal_hp",
+            "effect_value": 15,
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Coagulant Spray": {
+            "type": "medical",
+            "description": "Stops bleeding quickly with a pressurized clotting agent.",
+            "base_value": 60,
+            "usage_type": "heal_hp",
+            "effect_value": 20,
+            "single_use": True,
+            "rarity": "common"
+        },
         # Special Items
         "Emergency Beacon": {
             "type": "equipment",
@@ -76,6 +128,15 @@ class ItemConfig:
             "single_use": True,
             "rarity": "common"
         },
+        "Recycled Brew": {
+            "type": "consumable",
+            "description": "Cheap, dubious alcohol distilled from reclaimed water. Tastes like regret.",
+            "base_value": 4,
+            "usage_type": "heal_hp",
+            "effect_value": 2,
+            "single_use": True,
+            "rarity": "common"
+        },
         "Space Soda": {
             "type": "consumable",
             "description": "Sweet and fizzy space soda",
@@ -84,6 +145,55 @@ class ItemConfig:
             "effect_value": 1,
             "single_use": True,
             "rarirty": "common"
+        },
+        "Canned Stew": {
+            "type": "consumable",
+            "description": "A dented tin of mass-produced stew. Smells metallic.",
+            "base_value": 6,
+            "usage_type": "heal_hp",
+            "effect_value": 10,
+            "single_use": True,
+            "rarity": "common"
+        },
+
+        "Synthetic Coffee": {
+            "type": "consumable",
+            "description": "A bitter cup of lab-grown coffee substitute. Keeps you awake, at least.",
+            "base_value": 5,
+            "usage_type": "heal_hp",
+            "effect_value": 2,
+            "single_use": True,
+            "rarity": "common"
+        },
+
+        "Dried Fruit Pack": {
+            "type": "consumable",
+            "description": "Sealed pouch of dehydrated fruit slices. Chewy but edible.",
+            "base_value": 8,
+            "usage_type": "heal_hp",
+            "effect_value": 8,
+            "single_use": True,
+            "rarity": "common"
+        },
+
+        "Vitamin Tablets": {
+            "type": "consumable",
+            "description": "Synthetic vitamin pills to stave off deficiencies.",
+            "base_value": 4,
+            "usage_type": "heal_hp",
+            "effect_value": 3,
+            "single_use": True,
+            "rarity": "common"
+        },
+
+        "Energy Drink": {
+            "type": "consumable",
+            "description": "Energy drink. High in caffeine, low in everything else.",
+            "base_value": 3,
+            "usage_type": "heal_hp",
+            "effect_value": 2,
+            "single_use": True,
+            "rarity": "common"
         },
         "Protein Bars": {
             "type": "consumable",
@@ -94,7 +204,69 @@ class ItemConfig:
             "single_use": True,
             "rarity": "common"
         },
-        
+        "Processed Snack Bag": {
+            "type": "consumable",
+            "description": "A sealed bag of salty, preserved snack bits.",
+            "base_value": 4,
+            "usage_type": "heal_hp",
+            "effect_value": 5,
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Meal Replacement Drink": {
+            "type": "consumable",
+            "description": "Convenient bottled drink containing balanced nutrients for busy spacefarers.",
+            "base_value": 7,
+            "usage_type": "heal_hp",
+            "effect_value": 8,
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Chocolate Meal Replacement Drink": {
+            "type": "consumable",
+            "description": "Convenient bottled drink containing balanced nutrients for busy spacefares. In chocolate flavor!.",
+            "base_value": 7,
+            "usage_type": "heal_hp",
+            "effect_value": 8,
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Instant Noodles": {
+            "type": "consumable",
+            "description": "Popular quick meal, just add hot water. Slightly stale.",
+            "base_value": 6,
+            "usage_type": "heal_hp",
+            "effect_value": 8,
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Nutrient Paste": {
+            "type": "consumable",
+            "description": "A bland, synthetic paste containing essential daily nutrients. Tastes like nothing.",
+            "base_value": 8,
+            "usage_type": "heal_hp",
+            "effect_value": 12,
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Filtered Water": {
+            "type": "consumable",
+            "description": "Recycled and filtered water, safe for consumption. Has a faint metallic taste.",
+            "base_value": 3,
+            "usage_type": "heal_hp",
+            "effect_value": 5,
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Expired Ration Pack": {
+            "type": "consumable",
+            "description": "Military surplus food, long past its expiration date. A gamble.",
+            "base_value": 1,
+            "usage_type": "heal_hp",
+            "effect_value": 3,
+            "single_use": True,
+            "rarity": "common"
+        },
         # Repair Items
         "Repair Kit": {
             "type": "equipment",
@@ -114,7 +286,51 @@ class ItemConfig:
             "uses_remaining": 5,
             "rarity": "common"
         },
-
+        "Hull Patch": {
+            "type": "equipment",
+            "description": "An adhesive, self-sealing patch for minor hull breaches. A temporary fix.",
+            "base_value": 80,
+            "usage_type": "repair_hull",
+            "effect_value": 20,
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Welding Kit": {
+            "type": "equipment",
+            "description": "A portable plasma welder for more serious hull repairs.",
+            "base_value": 400,
+            "usage_type": "repair_hull",
+            "effect_value": 25,
+            "uses_remaining": 4,
+            "rarity": "uncommon"
+        },
+        "Scrap Metal": {
+            "type": "trade",
+            "description": "Salvaged metal plating and components. Not useful on its own, but valuable for trade or fabrication.",
+            "base_value": 20,
+            "usage_type": "narrative",
+            "effect_value": "valuable",
+            "single_use": False,
+            "rarity": "common"
+        },
+        "Sealant Foam": {
+            "type": "equipment",
+            "description": "Expanding foam for sealing microfractures in the hull.",
+            "base_value": 90,
+            "usage_type": "repair_hull",
+            "effect_value": 15,
+            "uses_remaining": 2,
+            "rarity": "common"
+        },
+        "Multi-Tool": {
+            "type": "equipment",
+            "description": "A basic powered tool for a range of small repairs.",
+            "base_value": 200,
+            "usage_type": "repair_hull",
+            "effect_value": 10,
+            "uses_remaining": 5,
+            "rarity": "common"
+        },
         "Scanner Module": {
             "type": "equipment",
             "description": "Improves search effectiveness when used",
@@ -129,13 +345,40 @@ class ItemConfig:
         "Fuel Cell": {
             "type": "fuel",
             "description": "Portable fuel container for ship refueling",
-            "base_value": 35,
+            "base_value": 45,
+            "usage_type": "restore_fuel",
+            "effect_value": 15,
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Refined Fuel Pod": {
+            "type": "fuel",
+            "description": "Small but clean-burning fuel supply.",
+            "base_value": 55,
+            "usage_type": "restore_fuel",
+            "effect_value": 20,
+            "single_use": True,
+            "rarity": "uncommon"
+        },
+
+        "Low-Grade Fuel Canister": {
+            "type": "fuel",
+            "description": "Cheap, low-output fuel supply",
+            "base_value": 20,
             "usage_type": "restore_fuel",
             "effect_value": 10,
             "single_use": True,
             "rarity": "common"
         },
-        
+        "Impure Fuel Slurry": {
+            "type": "fuel",
+            "description": "A low-grade, poorly refined fuel. Prone to causing engine residue.",
+            "base_value": 10,
+            "usage_type": "restore_fuel",
+            "effect_value": 3,
+            "single_use": True,
+            "rarity": "common"
+        },
         "High-Grade Fuel Cell": {
             "type": "fuel",
             "description": "Premium fuel cell with increased capacity",
@@ -156,6 +399,15 @@ class ItemConfig:
             "single_use": False,
             "rarity": "common"
         },
+        "Printed Manuals": {
+            "type": "trade",
+            "description": "Old printed maintenance or survival manuals. Some pages missing.",
+            "base_value": 20,
+            "usage_type": "narrative",
+            "effect_value": "information",
+            "single_use": False,
+            "rarity": "common"
+        },
         "Rare Minerals": {
             "type": "trade",
             "description": "Valuable crystalline formations with unique properties",
@@ -164,6 +416,15 @@ class ItemConfig:
             "effect_value": "valuable",
             "single_use": False,
             "rarity": "rare"
+        },
+        "Packaging Foil": {
+            "type": "trade",
+            "description": "Bulk roll of durable synthetic foil used for food storage or insulation.",
+            "base_value": 30,
+            "usage_type": "narrative",
+            "effect_value": "valuable",
+            "single_use": False,
+            "rarity": "common"
         },
         "Artifact": {
             "type": "trade",
@@ -174,7 +435,60 @@ class ItemConfig:
             "single_use": False,
             "rarity": "legendary"
         },
-
+        "Personal Trinket": {
+            "type": "trade",
+            "description": "A keepsake from another life. Was sentimental to someone at one point, now it might just be junk.",
+            "base_value": 50,
+            "usage_type": "narrative",
+            "effect_value": "mysterious",
+            "single_use": False,
+            "rarity": "rare"
+        },
+        "Scrap Electronics": {
+            "type": "trade",
+            "description": "Broken circuit boards and fried components. Some parts might be salvageable.",
+            "base_value": 30,
+            "usage_type": "narrative",
+            "effect_value": "valuable",
+            "single_use": False,
+            "rarity": "common"
+        },
+        "Scarp Mechanical Parts": {
+            "type": "trade",
+            "description": "Screws, nuts, bolts, gears and other miscellaneous mechanical parts.",
+            "base_value": 30,
+            "usage_type": "narrative",
+            "effect_value": "valuable",
+            "single_use": False,
+            "rarity": "common"
+        },
+        "Synthetic Textiles": {
+            "type": "trade",
+            "description": "A bolt of durable, multi-purpose fabric used for clothing and repairs.",
+            "base_value": 60,
+            "usage_type": "narrative",
+            "effect_value": "valuable",
+            "single_use": False,
+            "rarity": "common"
+        },
+        "Encrypted Data Drive": {
+            "type": "trade",
+            "description": "Contains sensitive information. No telling what’s on it.",
+            "base_value": 120,
+            "usage_type": "narrative",
+            "effect_value": "information",
+            "single_use": False,
+            "rarity": "uncommon"
+        },
+        "Processed Alloys": {
+            "type": "trade",
+            "description": "Refined metal, ready for manufacturing or trade.",
+            "base_value": 80,
+            "usage_type": "narrative",
+            "effect_value": "valuable",
+            "single_use": False,
+            "rarity": "common"
+        },
         # Upgrade Items
         "Engine Booster": {
             "type": "upgrade",
@@ -245,16 +559,6 @@ class ItemConfig:
             "rarity": "legendary"
         },
 
-        "Neural Interface Hack": {
-            "type": "software",
-            "description": "Illegal consciousness enhancement technology",
-            "base_value": 4500,
-            "usage_type": "temp_boost",
-            "effect_value": 15,
-            "effect_duration": 7200,  # 2 hours
-            "single_use": True,
-            "rarity": "rare"
-        },
 
         # Federal Depot Exclusive Items
         "Federal ID Card": {
@@ -271,20 +575,10 @@ class ItemConfig:
             "type": "consumable",
             "description": "High-quality preserved food with extended shelf life",
             "base_value": 35,
-            "usage_type": "restore_energy",
+            "usage_type": "restore_hp",
             "effect_value": 25,
             "single_use": True,
             "rarity": "uncommon"
-        },
-
-        "Federal Comm Codes": {
-            "type": "data",
-            "description": "Access codes for federal communication networks",
-            "base_value": 3000,
-            "usage_type": "comm_access",
-            "effect_value": "federal_channels",
-            "single_use": False,
-            "rarity": "rare"
         },
 
         "Loyalty Certification": {
@@ -296,36 +590,27 @@ class ItemConfig:
             "single_use": True,
             "rarity": "uncommon"
         },
-
-        "Federal Permit": {
-            "type": "documents",
-            "description": "Authorization for restricted activities in federal space",
-            "base_value": 1500,
-            "usage_type": "permit_access", 
-            "effect_value": "restricted_zones",
-            "single_use": False,
-            "rarity": "rare"
-        },
-
-        "Military Scanner Array": {
+        
+        "Military Repair Drone": {
             "type": "equipment",
-            "description": "Advanced military-grade scanning equipment",
-            "base_value": 2500,
-            "usage_type": "search_boost",
-            "effect_value": 40,  # +40% search success rate
-            "uses_remaining": 15,
+            "description": "A small drone capable of performing high end repairs.",
+            "base_value": 4000,
+            "usage_type": "repair_hull",
+            "effect_value": 80,
+            "uses_remaining": 5,
             "rarity": "rare"
         },
 
-        "Federal Security Override": {
-            "type": "software",
-            "description": "Authorized security bypass codes for federal personnel",
-            "base_value": 5000,
-            "usage_type": "security_override",
-            "effect_value": "federal_bypass",
-            "uses_remaining": 3,
-            "rarity": "legendary"
+        "Military Fuel Cell": {
+            "type": "fuel",
+            "description": "High Grade, multi-use Military fuel cell.",
+            "base_value": 2500,
+            "usage_type": "restore_fuel",
+            "effect_value": 75,
+            "uses_remaining": 5,
+            "rarity": "rare"
         },
+
 
         "Combat Stim Injector": {
             "type": "medical",
@@ -355,17 +640,14 @@ class ItemConfig:
         "Stolen Data Chips",
         "Unmarked Credits",
         "Weapon System Override",
-        "Neural Interface Hack"
     ]
 
     FEDERAL_DEPOT_EXCLUSIVE = [
         "Federal ID Card",
         "Military Rations",
-        "Federal Comm Codes",
         "Loyalty Certification",
-        "Federal Permit",
-        "Military Scanner Array",
-        "Federal Security Override",
+        "Military Repair Drone",
+        "Military Fuel Cell",
         "Combat Stim Injector",
         "Emergency Medical Pod"
     ]

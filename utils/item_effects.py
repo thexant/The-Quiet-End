@@ -57,50 +57,8 @@ class ItemEffectChecker:
             return expire_time > datetime.utcnow()
         return False
     
-    def get_federal_comm_channels(self, user_id):
-        """Get list of federal communication channels user has access to"""
-        comm_check = self.db.execute_query(
-            """SELECT metadata FROM inventory 
-               WHERE owner_id = ? AND item_name = 'Active: Federal Comms'""",
-            (user_id,),
-            fetch='one'
-        )
-        
-        if comm_check and comm_check[0]:
-            metadata = json.loads(comm_check[0])
-            return metadata.get('comm_channels', [])
-        return []
     
-    def has_federal_permit(self, user_id, zone_type='restricted'):
-        """Check if user has permit for specific zone type"""
-        permit_check = self.db.execute_query(
-            """SELECT metadata FROM inventory 
-               WHERE owner_id = ? AND item_name = 'Active: Federal Permit'""",
-            (user_id,),
-            fetch='one'
-        )
-        
-        if permit_check and permit_check[0]:
-            metadata = json.loads(permit_check[0])
-            allowed_zones = metadata.get('zones', [])
-            return zone_type in allowed_zones
-        return False
-    
-    def get_scanner_boost(self, user_id):
-        """Get active scanner boost percentage"""
-        boost_check = self.db.execute_query(
-            """SELECT metadata FROM inventory 
-               WHERE owner_id = ? AND item_name = 'Active: Scanner Boost'""",
-            (user_id,),
-            fetch='one'
-        )
-        
-        if boost_check and boost_check[0]:
-            metadata = json.loads(boost_check[0])
-            expire_time = datetime.fromisoformat(metadata['active_until'])
-            if expire_time > datetime.utcnow():
-                return metadata.get('boost_value', 0)
-        return 0
+
     
     def get_combat_boost(self, user_id):
         """Get active combat stim boost"""
