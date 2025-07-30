@@ -22,7 +22,9 @@ services:
     
     # Optional: Expose port if web interface is used
     ports:
-      - "8000:8000"
+      - "8090:8090"
+      - "80:80"
+      - "443:443"
     
     # Health check
     healthcheck:
