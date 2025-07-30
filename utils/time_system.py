@@ -85,7 +85,7 @@ class TimeSystem:
         """Get galaxy information including start date and time scale"""
         return self.db.execute_query(
             """SELECT name, start_date, time_scale_factor, time_started_at, created_at,
-                      is_time_paused, time_paused_at, current_ingame_time
+                      is_time_paused, time_paused_at, current_ingame_time, is_manually_paused
                FROM galaxy_info WHERE galaxy_id = 1""",
             fetch='one'
         )
@@ -96,7 +96,7 @@ class TimeSystem:
         if not galaxy_info:
             return None
             
-        name, start_date_str, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame = galaxy_info
+        name, start_date_str, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame, is_manually_paused = galaxy_info
         
         # Parse start date
         start_date = self.parse_date_string(start_date_str)
@@ -143,7 +143,8 @@ class TimeSystem:
                time_scale_factor = ?,
                current_ingame_time = ?,
                time_paused_at = ?,
-               is_time_paused = 0
+               is_time_paused = 0,
+               is_manually_paused = 0
                WHERE galaxy_id = 1""",
             (new_scale, current_time.isoformat(), current_real.isoformat())
         )
@@ -173,7 +174,7 @@ class TimeSystem:
             
         return (current_time - start_date).days
     
-    def pause_time(self) -> bool:
+    def pause_time(self, manual: bool = True) -> bool:
         """Pause the time system"""
         current_ingame = self.calculate_current_ingame_time()
         if not current_ingame:
@@ -184,14 +185,20 @@ class TimeSystem:
             """UPDATE galaxy_info SET 
                is_time_paused = 1, 
                time_paused_at = ?,
-               current_ingame_time = ?
+               current_ingame_time = ?,
+               is_manually_paused = ?
                WHERE galaxy_id = 1""",
-            (current_real.isoformat(), current_ingame.isoformat())
+            (current_real.isoformat(), current_ingame.isoformat(), 1 if manual else 0)
         )
+        
+        if manual:
+            formatted_time = self.format_ingame_datetime(current_ingame)
+            print(f"⏸️ MANUAL-PAUSE: Time system manually paused by admin at {formatted_time}")
+        
         return True
     
     def resume_time(self) -> bool:
-        """Resume the time system"""
+        """Resume the time system (manually by admin)"""
         # Get the current paused time before resuming
         galaxy_info = self.get_galaxy_info()
         if not galaxy_info or not galaxy_info[5]:  # not paused
@@ -206,10 +213,21 @@ class TimeSystem:
             """UPDATE galaxy_info SET 
                is_time_paused = 0,
                time_paused_at = ?,
-               current_ingame_time = ?
+               current_ingame_time = ?,
+               is_manually_paused = 0
                WHERE galaxy_id = 1""",
             (current_real.isoformat(), current_ingame)
         )
+        
+        # Get time scale for logging
+        time_scale = galaxy_info[2] if galaxy_info else 4.0
+        resume_time_dt = datetime.fromisoformat(current_ingame)
+        formatted_time = self.format_ingame_datetime(resume_time_dt)
+        player_count = self.get_logged_in_player_count()
+        
+        print(f"▶️ MANUAL-RESUME: Time system manually resumed by admin from {formatted_time}")
+        print(f"▶️ MANUAL-RESUME: Time flowing at {time_scale}x speed - {player_count} players online")
+        
         return True
     
     def set_current_time(self, new_datetime: datetime) -> bool:
@@ -232,7 +250,8 @@ class TimeSystem:
             """UPDATE galaxy_info SET 
                current_ingame_time = ?,
                time_paused_at = ?,
-               is_time_paused = 0
+               is_time_paused = 0,
+               is_manually_paused = 0
                WHERE galaxy_id = 1""",
             (new_datetime.isoformat(), current_real.isoformat())
         )
@@ -244,3 +263,113 @@ class TimeSystem:
         if not galaxy_info:
             return False
         return bool(galaxy_info[5])  # is_time_paused
+    
+    def is_manually_paused(self) -> bool:
+        """Check if time system was manually paused by admin"""
+        galaxy_info = self.get_galaxy_info()
+        if not galaxy_info:
+            return False
+        return bool(galaxy_info[8])  # is_manually_paused
+    
+    def get_logged_in_player_count(self) -> int:
+        """Get count of currently logged in players"""
+        result = self.db.execute_query(
+            "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
+            fetch='one'
+        )
+        return result[0] if result else 0
+    
+    def auto_pause_time(self) -> bool:
+        """Automatically pause the time system when no players are online"""
+        try:
+            # Check if already paused
+            if self.is_paused():
+                print("⏸️ AUTO-PAUSE: Time system already paused, skipping auto-pause")
+                return True
+            
+            # Get current player count
+            player_count = self.get_logged_in_player_count()
+            print(f"⏸️ AUTO-PAUSE: Checking player count - {player_count} players online")
+            
+            # If players are still online, don't auto-pause
+            if player_count > 0:
+                print(f"⏸️ AUTO-PAUSE: Skipping auto-pause - {player_count} players still online")
+                return False
+            
+            # Perform the pause
+            current_ingame = self.calculate_current_ingame_time()
+            if not current_ingame:
+                print("❌ AUTO-PAUSE: Failed to calculate current time for auto-pause")
+                return False
+            
+            current_real = datetime.now()
+            self.db.execute_query(
+                """UPDATE galaxy_info SET 
+                   is_time_paused = 1, 
+                   time_paused_at = ?,
+                   current_ingame_time = ?,
+                   is_manually_paused = 0
+                   WHERE galaxy_id = 1""",
+                (current_real.isoformat(), current_ingame.isoformat())
+            )
+            
+            formatted_time = self.format_ingame_datetime(current_ingame)
+            print(f"⏸️ AUTO-PAUSE: Time system automatically paused at {formatted_time}")
+            print(f"⏸️ AUTO-PAUSE: No players online - time flow suspended to save resources")
+            return True
+            
+        except Exception as e:
+            print(f"❌ AUTO-PAUSE: Failed to auto-pause time system: {e}")
+            return False
+    
+    def auto_resume_time(self) -> bool:
+        """Automatically resume the time system when players log in"""
+        try:
+            # Check if manually paused by admin
+            if self.is_manually_paused():
+                print("▶️ AUTO-RESUME: Time system manually paused by admin - skipping auto-resume")
+                return False
+            
+            # Check if already running
+            if not self.is_paused():
+                print("▶️ AUTO-RESUME: Time system already running, skipping auto-resume")
+                return True
+            
+            # Get current player count
+            player_count = self.get_logged_in_player_count()
+            print(f"▶️ AUTO-RESUME: Player logged in - {player_count} players now online")
+            
+            # Get the current paused time before resuming
+            galaxy_info = self.get_galaxy_info()
+            if not galaxy_info or not galaxy_info[5]:  # not paused
+                print("▶️ AUTO-RESUME: Time system not paused, no resume needed")
+                return False
+            
+            current_ingame = galaxy_info[7]  # current_ingame_time
+            if not current_ingame:
+                print("❌ AUTO-RESUME: No stored pause time found for auto-resume")
+                return False
+            
+            current_real = datetime.now()
+            self.db.execute_query(
+                """UPDATE galaxy_info SET 
+                   is_time_paused = 0,
+                   time_paused_at = ?,
+                   current_ingame_time = ?,
+                   is_manually_paused = 0
+                   WHERE galaxy_id = 1""",
+                (current_real.isoformat(), current_ingame)
+            )
+            
+            # Get time scale for logging
+            time_scale = galaxy_info[2] if galaxy_info else 4.0
+            resume_time = datetime.fromisoformat(current_ingame)
+            formatted_time = self.format_ingame_datetime(resume_time)
+            
+            print(f"▶️ AUTO-RESUME: Time system automatically resumed from {formatted_time}")
+            print(f"▶️ AUTO-RESUME: Time flowing at {time_scale}x speed - {player_count} players online")
+            return True
+            
+        except Exception as e:
+            print(f"❌ AUTO-RESUME: Failed to auto-resume time system: {e}")
+            return False

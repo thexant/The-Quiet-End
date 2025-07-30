@@ -3,6 +3,7 @@ import discord
 import random
 from typing import List, Dict, Tuple
 from datetime import datetime
+from utils.leave_button import UniversalLeaveView
 
 class ShipActivityManager:
     """Manages interactive activities available on player ships"""
@@ -173,7 +174,7 @@ class ShipActivityManager:
 class ShipActivityView(discord.ui.View):
     """Interactive view for ship activities"""
     
-    def __init__(self, bot, ship_id: int, ship_name: str, char_name: str, location_name: str = None):
+    def __init__(self, bot, ship_id: int, ship_name: str, char_name: str, location_name: str = None, is_transit: bool = False):
         super().__init__(timeout=1800)  # 30 minute timeout
         self.bot = bot
         self.db = bot.db
@@ -194,6 +195,12 @@ class ShipActivityView(discord.ui.View):
                 style=discord.ButtonStyle.secondary
             )
             self.add_item(button)
+        
+        # Add universal leave button only if not in transit
+        if not is_transit:
+            leave_view = UniversalLeaveView(bot)
+            for item in leave_view.children:
+                self.add_item(item)
     
     async def handle_activity(self, interaction: discord.Interaction, activity_type: str):
         """Handle activity interactions"""

@@ -2,14 +2,84 @@
 import discord
 import random
 import asyncio
+import json
+import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Tuple, Dict
 import uuid
 import math
 from utils.ship_data import get_random_starter_ship
+from utils import stat_system
+from utils.item_config import ItemConfig
     
 # Replace the entire create_random_character function at the end of utils/views.py
-from cogs.character import RadioModal
+from cogs.factions import FactionCreateModal
+
+
+class RadioModal(discord.ui.Modal):
+    def __init__(self, bot):
+        super().__init__(title="📡 Radio Transmission")
+        self.bot = bot
+        
+        # Add message input field
+        self.message = discord.ui.TextInput(
+            label="Message to Transmit",
+            placeholder="Enter your radio message...",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=1000
+        )
+        self.add_item(self.message)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Get the RadioCog to use its existing logic
+        radio_cog = self.bot.get_cog('RadioCog')
+        if not radio_cog:
+            await interaction.response.send_message(
+                "Radio system unavailable.", 
+                ephemeral=True
+            )
+            return
+        
+        # Call the radio_send command's logic directly
+        await radio_cog.radio_send.callback(
+            radio_cog, 
+            interaction, 
+            self.message.value
+        )
+
+
+class ObserveModal(discord.ui.Modal):
+    def __init__(self, bot):
+        super().__init__(title="👁️ Observe Surroundings")
+        self.bot = bot
+        
+        # Add observation input field
+        self.observation = discord.ui.TextInput(
+            label="What you observe in your surroundings",
+            placeholder="Describe what your character observes...",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=1000
+        )
+        self.add_item(self.observation)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Get the CharacterCog to use its existing logic
+        character_cog = self.bot.get_cog('CharacterCog')
+        if not character_cog:
+            await interaction.response.send_message(
+                "Character system unavailable.", 
+                ephemeral=True
+            )
+            return
+        
+        # Call the observe command's logic directly
+        await character_cog.observe.callback(
+            character_cog, 
+            interaction, 
+            self.observation.value
+        )
         
 async def create_random_character(bot, interaction: discord.Interaction):
     """Create a random character for the user"""
@@ -102,6 +172,10 @@ async def create_random_character(bot, interaction: discord.Interaction):
     # Generate random starting ship
     ship_type, ship_name, exterior_desc, interior_desc = get_random_starter_ship()
 
+    # Defensive cleanup: remove any existing ships (in case death cleanup was incomplete)
+    bot.db.execute_query("DELETE FROM ships WHERE owner_id = ?", (interaction.user.id,))
+    bot.db.execute_query("DELETE FROM player_ships WHERE owner_id = ?", (interaction.user.id,))
+
     # Create basic ship
     bot.db.execute_query(
         "INSERT INTO ships (owner_id, name, ship_type, exterior_description, interior_description) VALUES (?, ?, ?, ?, ?)",
@@ -141,8 +215,8 @@ async def create_random_character(bot, interaction: discord.Interaction):
     for row in rows:
         loc_id = row[0]
         has_route = bot.db.execute_query(
-            "SELECT 1 FROM corridors WHERE origin_location = ? AND is_active = 1 LIMIT 1",
-            (loc_id,),
+            "SELECT 1 FROM corridors WHERE (origin_location = ? OR (destination_location = ? AND is_bidirectional = 1)) AND is_active = 1 LIMIT 1",
+            (loc_id, loc_id),
             fetch='one'
         )
         if has_route:
@@ -333,7 +407,7 @@ class CharacterCreationModal(discord.ui.Modal):
 
         if existing_char:
             await interaction.followup.send(
-                "You already have a character! Use `/character view` to see your stats.",
+                "You already have a character! Use `/tqe` and access the character panel to see your stats.",
                 ephemeral=True
             )
             return
@@ -414,6 +488,10 @@ class CharacterCreationModal(discord.ui.Modal):
         # Generate random starting ship
         ship_type, ship_name, exterior_desc, interior_desc = get_random_starter_ship()
 
+        # Defensive cleanup: remove any existing ships (in case death cleanup was incomplete)
+        self.bot.db.execute_query("DELETE FROM ships WHERE owner_id = ?", (interaction.user.id,))
+        self.bot.db.execute_query("DELETE FROM player_ships WHERE owner_id = ?", (interaction.user.id,))
+
         # Create basic ship
         self.bot.db.execute_query(
             "INSERT INTO ships (owner_id, name, ship_type, exterior_description, interior_description) VALUES (?, ?, ?, ?, ?)",
@@ -453,8 +531,8 @@ class CharacterCreationModal(discord.ui.Modal):
         for row in rows:
             loc_id = row[0]
             has_route = self.bot.db.execute_query(
-                "SELECT 1 FROM corridors WHERE origin_location = ? AND is_active = 1 LIMIT 1",
-                (loc_id,),
+                "SELECT 1 FROM corridors WHERE (origin_location = ? OR (destination_location = ? AND is_bidirectional = 1)) AND is_active = 1 LIMIT 1",
+                (loc_id, loc_id),
                 fetch='one'
             )
             if has_route:
@@ -608,6 +686,22 @@ class LocationView(discord.ui.View):
                 await cog.undock_ship.callback(cog, interaction)
             undock_btn.callback = undock_callback
             self.add_item(undock_btn)
+            
+            # Add Map button when docked
+            map_btn = discord.ui.Button(
+                label="Map",
+                style=discord.ButtonStyle.secondary,
+                emoji="🗺️"
+            )
+            async def map_callback(interaction: discord.Interaction):
+                # Get the floormap cog and call its floormap method
+                floormap_cog = bot.get_cog('FloormapCog')
+                if floormap_cog:
+                    await floormap_cog.floormap.callback(floormap_cog, interaction)
+                else:
+                    await interaction.response.send_message("❌ Map system is currently unavailable.", ephemeral=True)
+            map_btn.callback = map_callback
+            self.add_item(map_btn)
         else:
             dock_btn = discord.ui.Button(
                 label="Dock",
@@ -660,7 +754,7 @@ class LocationView(discord.ui.View):
         )
         if row and row[0] == "docked":
             await interaction.response.send_message(
-                "❌ You must undock before travelling! Use `/character undock`.",
+                "❌ You must undock before travelling! Use `/tqe` to undock.",
                 ephemeral=True
             )
             return
@@ -1467,16 +1561,16 @@ class TravelConfirmView(discord.ui.View):
             if random.random() < 0.3:  # 30% chance of effect
                 if "Radiation" in event_name:
                     # Minor health loss
-                    self.bot.db.execute_query(
-                        "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                        (random.randint(2, 8), traveler_id)
-                    )
+                    damage = random.randint(2, 8)
+                    char_cog = self.bot.get_cog('CharacterCog')
+                    if char_cog:
+                        await char_cog.update_character_hp(traveler_id, -damage, channel.guild, "Corridor radiation exposure")
                 elif "System" in event_name:
                     # Minor ship damage
-                    self.bot.db.execute_query(
-                        "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                        (random.randint(1, 5), traveler_id)
-                    )
+                    damage = random.randint(1, 5)
+                    char_cog = self.bot.get_cog('CharacterCog')
+                    if char_cog:
+                        await char_cog.update_ship_hull(traveler_id, -damage, channel.guild)
         
         try:
             await channel.send(embed=embed)
@@ -1586,11 +1680,15 @@ class PersistentLocationView(discord.ui.View):
         has_black_market = False
         can_search = False
         can_train = False
+        has_jobs = False
+        has_shops = False
+        has_any_services = False
         
         if char_data and char_data[0]:
             location_services = self.bot.db.execute_query(
                 """SELECT has_federal_supplies, has_black_market, location_type, 
-                          wealth_level, has_medical 
+                          wealth_level, has_medical, has_jobs, has_shops, 
+                          has_repairs, has_fuel, has_upgrades, has_shipyard
                    FROM locations WHERE location_id = ?""",
                 (char_data[0],),
                 fetch='one'
@@ -1601,6 +1699,15 @@ class PersistentLocationView(discord.ui.View):
                 location_type = location_services[2]
                 wealth_level = location_services[3]
                 has_medical = location_services[4]
+                has_jobs = location_services[5]
+                has_shops = location_services[6]
+                has_repairs = location_services[7]
+                has_fuel = location_services[8]
+                has_upgrades = location_services[9]
+                has_shipyard = location_services[10]
+                
+                # Check if location has any services (for Services button)
+                has_any_services = any([has_medical, has_repairs, has_fuel, has_upgrades, has_shipyard])
                 
                 # Check if location allows searching (not on ships or travel channels)
                 can_search = location_type not in ['ship', 'travel']
@@ -1616,8 +1723,8 @@ class PersistentLocationView(discord.ui.View):
         # Check search cooldown
         if can_search:
             cooldown_data = self.bot.db.execute_query(
-                "SELECT last_search_time FROM search_cooldowns WHERE user_id = ?",
-                (self.user_id,),
+                "SELECT last_search_time FROM search_cooldowns WHERE user_id = ? AND location_id = ?",
+                (self.user_id, self.current_location_id),
                 fetch='one'
             )
             
@@ -1633,10 +1740,13 @@ class PersistentLocationView(discord.ui.View):
         
         # Status-dependent buttons
         if location_status == "docked":
-            # Standard location buttons
-            self.add_item(self.jobs_panel)
-            self.add_item(self.shop_management)
-            self.add_item(self.services)
+            # Conditional location buttons - only show if location has these services
+            if has_jobs:
+                self.add_item(self.jobs_panel)
+            if has_shops:
+                self.add_item(self.shop_management)
+            if has_any_services:
+                self.add_item(self.services)
             
             # Add Search button if available and not on cooldown
             if can_search:
@@ -1861,6 +1971,7 @@ class PersistentLocationView(discord.ui.View):
         economy_cog = self.bot.get_cog('EconomyCog')
         if economy_cog:
             await economy_cog.shop_list.callback(economy_cog, interaction)
+
     
     @discord.ui.button(label="Sub-Areas", style=discord.ButtonStyle.secondary, emoji="🏢")
     async def sub_areas(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1969,6 +2080,81 @@ class EphemeralLocationView(discord.ui.View):
         
         # Configure buttons based on dock status and location services
         self._configure_buttons(location_status)
+
+    @discord.ui.button(label="Map", style=discord.ButtonStyle.secondary, emoji="🗺️")
+    async def map_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Display the floormap for the current location"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        # Check if user has a character
+        char_info = self.bot.db.execute_query(
+            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.followup.send(
+                "❌ You need a character to view floormaps!",
+                ephemeral=True
+            )
+            return
+        
+        current_location_id, char_name = char_info
+        
+        if not current_location_id:
+            await interaction.followup.send(
+                "❌ You must be at a location to view its floormap!",
+                ephemeral=True
+            )
+            return
+        
+        # Generate holographic floormap using the same logic as /floormap
+        try:
+            from utils.holographic_floorplan_generator import HolographicFloorplanGenerator
+            holo_generator = HolographicFloorplanGenerator(self.bot)
+            
+            image_path = holo_generator.generate_holographic_floormap(current_location_id)
+            
+            if not image_path or not os.path.exists(image_path):
+                await interaction.followup.send(
+                    "❌ Unable to generate floormap for this location.",
+                    ephemeral=True
+                )
+                return
+            
+            # Create embed
+            embed = discord.Embed(
+                title="LOCATION LAYOUT",
+                color=0x00FFFF,  # Cyan color matching holographic theme
+                timestamp=discord.utils.utcnow()
+            )
+            
+            embed.set_footer(text=f"Requested by {char_name}")
+            
+            # Add usage instructions
+            embed.add_field(
+                name="🔹 Location Map Interface",
+                value="Facility blueprint generated with advanced scanning protocols. Use the sub-locations sub-menu to access rooms.",
+                inline=False
+            )
+            
+            # Send with holographic blueprint attachment
+            with open(image_path, 'rb') as f:
+                file = discord.File(f, filename="holographic_blueprint.png")
+                embed.set_image(url="attachment://holographic_blueprint.png")
+                await interaction.followup.send(embed=embed, file=file, ephemeral=True)
+            
+        except Exception as e:
+            print(f"❌ Error generating floormap for location {current_location_id}: {e}")
+            await interaction.followup.send(
+                "❌ An error occurred while generating the floormap. Please try again later.",
+                ephemeral=True
+            )
     
     def _configure_buttons(self, location_status: str):
         """Configure button states based on dock status and location services"""
@@ -1985,11 +2171,15 @@ class EphemeralLocationView(discord.ui.View):
         has_black_market = False
         can_search = False
         can_train = False
+        has_jobs = False
+        has_shops = False
+        has_any_services = False
         
         if char_data and char_data[0]:
             location_services = self.bot.db.execute_query(
                 """SELECT has_federal_supplies, has_black_market, location_type, 
-                          wealth_level, has_medical 
+                          wealth_level, has_medical, has_jobs, has_shops, 
+                          has_repairs, has_fuel, has_upgrades, has_shipyard
                    FROM locations WHERE location_id = ?""",
                 (char_data[0],),
                 fetch='one'
@@ -2000,6 +2190,15 @@ class EphemeralLocationView(discord.ui.View):
                 location_type = location_services[2]
                 wealth_level = location_services[3]
                 has_medical = location_services[4]
+                has_jobs = location_services[5]
+                has_shops = location_services[6]
+                has_repairs = location_services[7]
+                has_fuel = location_services[8]
+                has_upgrades = location_services[9]
+                has_shipyard = location_services[10]
+                
+                # Check if location has any services (for Services button)
+                has_any_services = any([has_medical, has_repairs, has_fuel, has_upgrades, has_shipyard])
                 
                 # Check if location allows searching (not on ships or travel channels)
                 can_search = location_type not in ['ship', 'travel']
@@ -2015,8 +2214,8 @@ class EphemeralLocationView(discord.ui.View):
         # Check search cooldown
         if can_search:
             cooldown_data = self.bot.db.execute_query(
-                "SELECT last_search_time FROM search_cooldowns WHERE user_id = ?",
-                (self.user_id,),
+                "SELECT last_search_time FROM search_cooldowns WHERE user_id = ? AND location_id = ?",
+                (self.user_id, self.current_location_id),
                 fetch='one'
             )
             
@@ -2032,10 +2231,13 @@ class EphemeralLocationView(discord.ui.View):
         
         # Status-dependent buttons
         if location_status == "docked":
-            # Standard location buttons
-            self.add_item(self.jobs_panel)
-            self.add_item(self.shop_management)
-            self.add_item(self.services)
+            # Conditional location buttons - only show if location has these services
+            if has_jobs:
+                self.add_item(self.jobs_panel)
+            if has_shops:
+                self.add_item(self.shop_management)
+            if has_any_services:
+                self.add_item(self.services)
             
             # Add Search button if available and not on cooldown
             if can_search:
@@ -2054,6 +2256,7 @@ class EphemeralLocationView(discord.ui.View):
                 self.add_item(self.black_market)
             
             # Continue with other docked buttons
+            self.add_item(self.map_button)
             self.add_item(self.sub_areas)
             self.add_item(self.crime_button)
             self.add_item(self.npc_interactions)
@@ -2577,20 +2780,20 @@ class EphemeralLocationView(discord.ui.View):
                 fetch='one'
             )[0]
             
-            # Send confirmation message
+            # Get character name for roleplay message
+            char_name = char_cog.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )[0]
+            
+            # Send visible roleplay message with embed (same style as command version)
             embed = discord.Embed(
-                title="🛬 Ship Docked",
-                description=f"Your ship has docked at **{location_name}**.",
-                color=0x00ff00
+                title="🛬 Docked",
+                description=f"**{char_name}** has docked their ship at **{location_name}**",
+                color=0x00aa00
             )
-            
-            embed.add_field(
-                name="Status Change",
-                value="• You can now engage in personal combat\n• Access to all location services\n• Limited radio range (location only)",
-                inline=False
-            )
-            
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=False)
             
             # Refresh the view to show updated buttons
             await self.refresh_view(interaction)
@@ -2603,87 +2806,93 @@ class EphemeralLocationView(discord.ui.View):
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        # Defer the response since we'll be doing database operations
-        await interaction.response.defer(ephemeral=True)
+        # Get full character data for all checks
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location, location_status, current_ship_id FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
         
-        char_cog = self.bot.get_cog('CharacterCog')
-        if char_cog:
-            char_data = char_cog.db.execute_query(
-                "SELECT current_location, location_status FROM characters WHERE user_id = ?",
-                (interaction.user.id,),
-                fetch='one'
-            )
+        if not char_data:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
             
-            if not char_data:
-                await interaction.followup.send("Character not found!", ephemeral=True)
-                return
-            
-            current_location, location_status = char_data
-            
-            # Check for active stationary jobs
-            active_jobs = char_cog.db.execute_query(
-                '''SELECT COUNT(*) FROM jobs j 
-                   JOIN job_tracking jt ON j.job_id = jt.job_id
-                   WHERE j.taken_by = ? AND j.job_status = 'active' AND jt.start_location = ?''',
-                (interaction.user.id, current_location),
-                fetch='one'
-            )[0]
-            
-            if active_jobs > 0:
-                embed = discord.Embed(
-                    title="⚠️ Active Job Warning",
-                    description=f"You have {active_jobs} active job(s) at this location. Undocking will cancel them!",
-                    color=0xff9900
-                )
-                embed.add_field(
-                    name="Confirm Undocking?",
-                    value="This will cancel your active jobs without reward.",
-                    inline=False
-                )
-                
-                view = UndockJobConfirmView(char_cog.bot, interaction.user.id, current_location)
-                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-                return
-            
-            if not current_location:
-                await interaction.followup.send("You're in deep space!", ephemeral=True)
-                return
-            
-            if location_status == "in_space":
-                await interaction.followup.send("You're already in space near this location!", ephemeral=True)
-                return
-            
-            # Undock the ship
-            char_cog.db.execute_query(
-                "UPDATE characters SET location_status = 'in_space' WHERE user_id = ?",
-                (interaction.user.id,)
-            )
-            
-            location_name = char_cog.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
-                (current_location,),
-                fetch='one'
-            )[0]
-            
-            # Send confirmation message
-            embed = discord.Embed(
-                title="🚀 Ship Undocked",
-                description=f"Your ship is now in space near **{location_name}**.",
-                color=0x4169e1
-            )
-            
-            embed.add_field(
-                name="Status Change",
-                value="• You can now engage in ship combat\n• Limited access to location services\n• Full radio range available",
-                inline=False
-            )
-            
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            
-            # Refresh the view to show updated buttons
-            await self.refresh_view(interaction)
-        else:
-            await interaction.followup.send("Character system unavailable.", ephemeral=True)
+        current_location, location_status, current_ship_id = char_data
+        
+        # Combat check
+        combat_cog = self.bot.get_cog('CombatCog')
+        if combat_cog and combat_cog.check_any_combat_status(interaction.user.id):
+            await interaction.response.send_message("❌ You cannot undock while in combat!", ephemeral=True)
+            return
+        
+        # Ship interior check
+        if current_ship_id:
+            await interaction.response.send_message("❌ You cannot undock while inside your ship interior! Use `/tqe` to leave your ship first.", ephemeral=True)
+            return
+        
+        # Deep space check
+        if not current_location:
+            await interaction.response.send_message("You're in deep space!", ephemeral=True)
+            return
+        
+        # Already in space check
+        if location_status == "in_space":
+            await interaction.response.send_message("You're already in space near this location!", ephemeral=True)
+            return
+        
+        # Check for active jobs that need to be completed at this location
+        # Only delegate to main undock command for jobs that would be cancelled by undocking
+        blocking_jobs = self.bot.db.execute_query(
+            '''SELECT COUNT(*) FROM jobs j 
+               LEFT JOIN job_tracking jt ON j.job_id = jt.job_id
+               WHERE j.taken_by = ? AND j.job_status = 'active' 
+               AND (jt.start_location = ? OR (jt.start_location IS NULL AND j.location_id = ?))
+               AND (j.destination_location_id IS NULL OR j.destination_location_id = ?)''',
+            (interaction.user.id, current_location, current_location, current_location),
+            fetch='one'
+        )[0]
+        
+        if blocking_jobs > 0:
+            # Let the main undock command handle job warnings
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog:
+                await char_cog.undock_ship.callback(char_cog, interaction)
+            else:
+                await interaction.response.send_message("Character system unavailable.", ephemeral=True)
+            return
+        
+        # No active jobs - handle undock manually to preserve interaction for panel refresh
+        await interaction.response.defer()
+        
+        # Execute the undock
+        self.bot.db.execute_query(
+            "UPDATE characters SET location_status = 'in_space' WHERE user_id = ?",
+            (interaction.user.id,)
+        )
+        
+        # Get names for embed
+        char_name = self.bot.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        location_name = self.bot.db.execute_query(
+            "SELECT name FROM locations WHERE location_id = ?",
+            (current_location,),
+            fetch='one'
+        )[0]
+        
+        # Send the undock embed as followup
+        embed = discord.Embed(
+            title="🚀 Undocked",
+            description=f"**{char_name}** has undocked their ship and entered space near **{location_name}**",
+            color=0x4169e1
+        )
+        await interaction.followup.send(embed=embed, ephemeral=False)
+        
+        # Refresh the ephemeral panel to show new status
+        await self.refresh_view(interaction)
         
     @discord.ui.button(label="Info", style=discord.ButtonStyle.secondary, emoji="ℹ️", row=2)
     async def location_info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2903,25 +3112,64 @@ class EphemeralLocationView(discord.ui.View):
 
         # Get available routes and display them
         routes = self.bot.db.execute_query(
-            '''SELECT c.name, l.name as dest_name, l.location_type as dest_type, c.travel_time, c.danger_level
+            '''SELECT c.name, 
+                      CASE 
+                          WHEN c.origin_location = ? THEN l_dest.name
+                          ELSE l_orig.name
+                      END as dest_name,
+                      CASE 
+                          WHEN c.origin_location = ? THEN l_dest.location_type
+                          ELSE l_orig.location_type
+                      END as dest_type,
+                      c.travel_time, c.danger_level,
+                      lo.location_type as origin_type,
+                      CASE WHEN lo.system_name = CASE 
+                          WHEN c.origin_location = ? THEN l_dest.system_name
+                          ELSE l_orig.system_name
+                      END THEN 1 ELSE 0 END AS same_system,
+                      c.corridor_type
                FROM corridors c
-               JOIN locations l ON c.destination_location = l.location_id
-               WHERE c.origin_location = ? AND c.is_active = 1
+               JOIN locations l_dest ON c.destination_location = l_dest.location_id
+               JOIN locations l_orig ON c.origin_location = l_orig.location_id
+               JOIN locations lo ON ? = lo.location_id
+               WHERE (c.origin_location = ? OR (c.destination_location = ? AND c.is_bidirectional = 1)) 
+               AND c.is_active = 1
                ORDER BY c.travel_time
                LIMIT 8''',
-            (loc_id,),
+            (loc_id, loc_id, loc_id, loc_id, loc_id, loc_id),
             fetch='all'
         )
         
         if routes:
+            # Deduplicate routes by (destination, corridor_type) to prevent duplicates
+            # while allowing different route types to the same destination
+            seen_routes = set()
+            unique_routes = []
+            for route in routes:
+                corridor_name, dest_name, dest_type, travel_time, danger, origin_type, same_system, corridor_type = route
+                # Create unique key: destination name + corridor type
+                route_key = (dest_name, corridor_type)
+                if route_key not in seen_routes:
+                    seen_routes.add(route_key)
+                    unique_routes.append(route)
+            
+            routes = unique_routes
+            
             route_lines = []
-            for corridor_name, dest_name, dest_type, travel_time, danger in routes:
-                # Determine route type and emoji
-                if "Approach" in corridor_name:
-                    route_emoji = "🌌"  # Local space
-                elif "Ungated" in corridor_name:
+            for corridor_name, dest_name, dest_type, travel_time, danger, origin_type, same_system, corridor_type in routes:
+                # Determine route type and emoji based on architectural rules
+                major_types = {'colony', 'space_station', 'outpost'}
+                is_gate_to_major = (origin_type == 'gate' and dest_type in major_types) or (origin_type in major_types and dest_type == 'gate')
+                
+                # Apply architectural rules for route classification
+                if corridor_type == 'ungated':
+                    # Ungated corridors are always dangerous
                     route_emoji = "⭕️"  # Dangerous ungated
+                elif corridor_type == 'local_space' or (is_gate_to_major and same_system) or "Local Space" in corridor_name or "Approach" in corridor_name:
+                    # Local space corridors, gate to major in same system, or legacy name detection
+                    route_emoji = "🌌"  # Local space
                 else:
+                    # All other routes are gated corridors (typically gate-to-gate)
                     route_emoji = "🔵"  # Safe gated
                 
                 dest_emoji = {
@@ -3060,8 +3308,6 @@ class ServicesView(discord.ui.View):
                 self.remove_item(self.repair)
             if not has_medical:
                 self.remove_item(self.medical)
-            if not has_upgrades:
-                self.remove_item(self.ship_upgrades)
             if not has_shipyard:
                 self.remove_item(self.shipyard)
             if not has_logbook:
@@ -3428,7 +3674,7 @@ class FuelQuantitySelect(discord.ui.Select):
         
         # Handle case with no options
         if not options:
-            options.append(discord.SelectOption(label="No affordable amount", value="0", disabled=True))
+            options.append(discord.SelectOption(label="No affordable amount", value="0"))
 
         super().__init__(
             placeholder="Select fuel amount...",
@@ -3588,7 +3834,7 @@ class RepairQuantitySelect(discord.ui.Select):
         options = sorted(list(options_dict.values()), key=lambda opt: int(opt.value))
 
         if not options:
-            options.append(discord.SelectOption(label="No affordable amount", value="0", disabled=True))
+            options.append(discord.SelectOption(label="No affordable amount", value="0"))
 
         super().__init__(
             placeholder="Select repair amount...",
@@ -3751,7 +3997,7 @@ class MedicalQuantitySelect(discord.ui.Select):
         options = sorted(list(options_dict.values()), key=lambda opt: int(opt.value))
         
         if not options:
-            options.append(discord.SelectOption(label="No affordable amount", value="0", disabled=True))
+            options.append(discord.SelectOption(label="No affordable amount", value="0"))
 
         super().__init__(
             placeholder="Select healing amount...",
@@ -4109,7 +4355,14 @@ class LogbookInteractionView(discord.ui.View):
 
 class LogbookEntryModal(discord.ui.Modal):
     def __init__(self, bot, location_id: int, location_name: str):
-        super().__init__(title=f"Add Entry - {location_name}")
+        # Truncate location name to fit Discord's 45 character modal title limit
+        # "Add Entry - " is 12 characters, so max location name is 33 chars
+        if len(location_name) > 30:
+            truncated_name = location_name[:30] + "..."
+        else:
+            truncated_name = location_name
+        
+        super().__init__(title=f"Add Entry - {truncated_name}")
         self.bot = bot
         self.location_id = location_id
         self.location_name = location_name
@@ -4172,74 +4425,6 @@ class LogbookEntryModal(discord.ui.Modal):
         await interaction.response.send_message(embed=embed, ephemeral=True)
       
       
-class UndockJobConfirmView(discord.ui.View):
-    def __init__(self, bot, user_id: int, current_location: int):
-        super().__init__(timeout=60)
-        self.bot = bot
-        self.user_id = user_id
-        self.current_location = current_location
-    
-    @discord.ui.button(label="Confirm Undock (Cancel Jobs)", style=discord.ButtonStyle.danger, emoji="🚀")
-    async def confirm_undock(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This is not your undock panel!", ephemeral=True)
-            return
-        
-        # Cancel active jobs
-        active_jobs = self.bot.db.execute_query(
-            '''SELECT j.job_id FROM jobs j 
-               JOIN job_tracking jt ON j.job_id = jt.job_id
-               WHERE j.taken_by = ? AND j.job_status = 'active' AND jt.start_location = ?''',
-            (self.user_id, self.current_location),
-            fetch='all'
-        )
-        
-        for job_row in active_jobs:
-            job_id = job_row[0]
-            self.bot.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-            self.bot.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, self.user_id))
-        
-        # Undock the ship
-        self.bot.db.execute_query(
-            "UPDATE characters SET location_status = 'in_space' WHERE user_id = ?",
-            (self.user_id,)
-        )
-        
-        location_name = self.bot.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
-            (self.current_location,),
-            fetch='one'
-        )[0]
-        
-        embed = discord.Embed(
-            title="🚀 Ship Undocked",
-            description=f"Your ship is now in space near **{location_name}**.",
-            color=0x4169e1
-        )
-        
-        embed.add_field(
-            name="⚠️ Jobs Cancelled",
-            value=f"{len(active_jobs)} active job(s) were cancelled without reward.",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="Status Change",
-            value="• You can now engage in ship combat\n• Limited access to location services\n• Full radio range available",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    
-    @discord.ui.button(label="Cancel Undocking", style=discord.ButtonStyle.secondary, emoji="❌")
-    async def cancel_undock(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This is not your undock panel!", ephemeral=True)
-            return
-        
-        await interaction.response.send_message("Undocking cancelled. Your jobs remain active.", ephemeral=True)
-        
-        
 # Personal Log View Classes
 class PersonalLogMainView(discord.ui.View):
     def __init__(self, bot, user_id: int, logbook_id: str, char_name: str):
@@ -4624,6 +4809,9 @@ class TQEOverviewView(discord.ui.View):
         if not in_combat:
             # Remove the attack_button from the view
             self.remove_item(self.attack_button)
+        
+        # Check for active job and add job button if needed
+        self._add_job_button_if_needed()
 
     def _check_combat_status(self):
         """Check if user is in any combat"""
@@ -4643,6 +4831,127 @@ class TQEOverviewView(discord.ui.View):
         
         return (npc_combat is not None) or (pvp_combat is not None)
     
+    def check_job_status(self):
+        """Check if user has active job and if it's ready for completion"""
+        # Get active job info - UPDATED to include destination_location_id and job location
+        job_info = self.bot.db.execute_query(
+            '''SELECT j.job_id, j.title, j.description, j.reward_money, j.taken_at, j.duration_minutes,
+                      j.danger_level, l.name as location_name, j.job_status, j.location_id, 
+                      j.destination_location_id
+               FROM jobs j
+               JOIN locations l ON j.location_id = l.location_id
+               WHERE j.taken_by = ? AND j.is_taken = 1''',
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not job_info:
+            return None, False  # No active job
+        
+        # Unpack with new fields
+        (job_id, title, description, reward, taken_at, duration_minutes, danger, 
+         location_name, job_status, job_location_id, destination_location_id) = job_info
+        
+        # Check if job is ready for completion
+        is_ready = False
+        
+        # Check for transport job finalization
+        if job_status == 'awaiting_finalization':
+            is_ready = True
+        else:
+            # Determine if this is a transport job using the new logic
+            title_lower = title.lower()
+            desc_lower = description.lower()
+            
+            # Check destination_location_id first for definitive classification
+            if destination_location_id and destination_location_id != job_location_id:
+                # Has a different destination location = definitely a transport job
+                is_transport_job = True
+            elif destination_location_id is None:
+                # No destination set - check keywords to determine if it's a transport job (NPC-style)
+                is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
+                                  any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
+            else:
+                # destination_location_id == job_location_id = stationary job
+                is_transport_job = False
+            
+            if is_transport_job:
+                # For transport jobs with specific destinations, check if at correct location
+                if destination_location_id:
+                    # Get player's current location
+                    player_location = self.bot.db.execute_query(
+                        "SELECT current_location FROM characters WHERE user_id = ?",
+                        (self.user_id,),
+                        fetch='one'
+                    )
+                    
+                    if player_location and player_location[0] == destination_location_id:
+                        is_ready = True  # At correct destination
+                    else:
+                        is_ready = False  # Not at destination yet
+                else:
+                    # NPC transport job - check elapsed time
+                    from datetime import datetime
+                    taken_time = datetime.fromisoformat(taken_at)
+                    current_time = datetime.utcnow()
+                    elapsed_minutes = (current_time - taken_time).total_seconds() / 60
+                    is_ready = elapsed_minutes >= duration_minutes
+            else:
+                # For stationary jobs, check location tracking
+                tracking = self.bot.db.execute_query(
+                    "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
+                    (job_id, self.user_id),
+                    fetch='one'
+                )
+                
+                if tracking:
+                    time_at_location, required_duration = tracking
+                    time_at_location = float(time_at_location) if time_at_location else 0.0
+                    required_duration = float(required_duration) if required_duration else 1.0
+                    is_ready = time_at_location >= required_duration
+        
+        return job_info, is_ready
+    
+    def _add_job_button_if_needed(self):
+        """Add job button if user has an active job"""
+        job_info, is_ready = self.check_job_status()
+        
+        if job_info:
+            # Check if player is docked
+            location_status = self.bot.db.execute_query(
+                "SELECT location_status FROM characters WHERE user_id = ?",
+                (self.user_id,),
+                fetch='one'
+            )
+            
+            is_docked = location_status and location_status[0] == 'docked'
+            
+            # User has an active job, add the appropriate button
+            if is_ready and is_docked:
+                job_button = discord.ui.Button(
+                    label="Complete Job",
+                    style=discord.ButtonStyle.success,
+                    emoji="✅"
+                )
+                job_button.callback = self.complete_job
+            elif is_ready and not is_docked:
+                # Job is ready but player is not docked
+                job_button = discord.ui.Button(
+                    label="Job Ready (Dock Required)",
+                    style=discord.ButtonStyle.secondary,
+                    emoji="⚠️"
+                )
+                job_button.callback = self.view_job_status
+            else:
+                # Job is not ready yet
+                job_button = discord.ui.Button(
+                    label="Job Status",
+                    style=discord.ButtonStyle.primary,
+                    emoji="💼"
+                )
+                job_button.callback = self.view_job_status
+            
+            self.add_item(job_button)
             
     @discord.ui.button(label="Location", style=discord.ButtonStyle.primary, emoji="📍")
     async def location_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -4651,11 +4960,11 @@ class TQEOverviewView(discord.ui.View):
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        # Call the actual location_info command logic from CharacterCog
+        # Call the actual /here command logic from CharacterCog
         char_cog = self.bot.get_cog('CharacterCog')
         if char_cog:
-            # Call the location_info command directly
-            await char_cog.location_info.callback(char_cog, interaction)
+            # Call the /here command directly to get the same behavior
+            await char_cog.here_shorthand.callback(char_cog, interaction)
         else:
             await interaction.response.send_message("Character system unavailable.", ephemeral=True)
     
@@ -4915,13 +5224,13 @@ class TQEOverviewView(discord.ui.View):
             shift_name = "Unknown Shift"
 
         # Get logged in players count
-        logged_in_count = self.db.execute_query(
+        logged_in_count = self.bot.db.execute_query(
             "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
             fetch='one'
         )[0]
 
         # Get galaxy name from galaxy_info table
-        galaxy_info = self.db.execute_query(
+        galaxy_info = self.bot.db.execute_query(
             "SELECT name FROM galaxy_info WHERE galaxy_id = 1",
             fetch='one'
         )
@@ -4954,12 +5263,238 @@ class TQEOverviewView(discord.ui.View):
         
         embed.set_footer(text="The Quiet End • Use the buttons to navigate • Panel Refreshed")
         
-        # Edit the message with updated embed
-        await interaction.edit_original_response(embed=embed, view=self)
+        # Refresh dynamic buttons by recreating the view
+        new_view = TQEOverviewView(self.bot, self.user_id)
+        
+        # Edit the message with updated embed and refreshed view
+        await interaction.edit_original_response(embed=embed, view=new_view)
+    
+    async def complete_job(self, interaction: discord.Interaction):
+        """Handle job completion"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get the EconomyCog and call its job completion logic
+        econ_cog = self.bot.get_cog('EconomyCog')
+        if econ_cog:
+            await econ_cog.job_complete.callback(econ_cog, interaction)
+        else:
+            await interaction.response.send_message("Job system is currently unavailable.", ephemeral=True)
+    
+    async def view_job_status(self, interaction: discord.Interaction):
+        """Handle viewing job status"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Force a manual update first (same as job_status command)
+        econ_cog = self.bot.get_cog('EconomyCog')
+        if econ_cog:
+            await econ_cog._manual_job_update(interaction.user.id)
+        
+        # Get job info (same logic as job_status command)
+        job_info = self.bot.db.execute_query(
+            '''SELECT j.job_id, j.title, j.description, j.reward_money, j.taken_at, j.duration_minutes,
+                      j.danger_level, l.name as location_name, j.job_status, j.location_id, 
+                      j.destination_location_id
+               FROM jobs j
+               JOIN locations l ON j.location_id = l.location_id
+               WHERE j.taken_by = ? AND j.is_taken = 1''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not job_info:
+            await interaction.response.send_message("You don't have any active jobs.", ephemeral=True)
+            return
+
+        job_id, title, description, reward, taken_at, duration_minutes, danger, location_name, job_status, job_location_id, destination_location_id = job_info
+
+        # Determine job type - check destination_location_id first for definitive classification
+        title_lower = title.lower()
+        desc_lower = description.lower()
+        
+        if destination_location_id and destination_location_id != job_location_id:
+            # Has a different destination location = definitely a transport job
+            is_transport_job = True
+        elif destination_location_id is None:
+            # No destination set - check keywords to determine if it's a transport job (NPC-style)
+            is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
+                              any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
+        else:
+            # destination_location_id == job_location_id = stationary job, regardless of keywords
+            is_transport_job = False
+
+        from datetime import datetime
+        taken_time = datetime.fromisoformat(taken_at)
+        current_time = datetime.utcnow()
+        elapsed_minutes = (current_time - taken_time).total_seconds() / 60
+
+        # Truncate description to prevent Discord limit issues
+        truncated_description = description[:800] + "..." if len(description) > 800 else description
+        
+        embed = discord.Embed(
+            title="💼 Current Job Status",
+            description=f"**{title}**\n{truncated_description}",
+            color=0x4169E1
+        )
+
+        # Status based on job type and current state
+        if job_status == 'awaiting_finalization':
+            status_text = "🚛 **Unloading cargo** - Use the Complete Job button in `/tqe` to finalize immediately"
+            progress_text = "✅ Transport completed, finalizing delivery..."
+        elif job_status == 'completed':
+            status_text = "✅ **Completed** - Job finished!"
+            progress_text = "Job has been completed successfully"
+        elif is_transport_job:
+            if elapsed_minutes >= duration_minutes:
+                status_text = "✅ **Ready for completion** - Use `/job complete`"
+                progress_text = "Minimum travel time completed"
+            else:
+                remaining_minutes = duration_minutes - elapsed_minutes
+                status_text = f"⏳ **In Transit** - {remaining_minutes:.1f} minutes remaining"
+                progress_pct = (elapsed_minutes / duration_minutes) * 100
+                bars = int(progress_pct // 10)
+                progress_text = "🟩" * bars + "⬜" * (10 - bars) + f" {progress_pct:.0f}%"
+        else:
+            # Stationary job - check tracking
+            tracking = self.bot.db.execute_query(
+                "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
+                (job_id, interaction.user.id),
+                fetch='one'
+            )
+            
+            if tracking:
+                time_at_location, required_duration = tracking
+                time_at_location = float(time_at_location) if time_at_location else 0.0
+                required_duration = float(required_duration) if required_duration else 1.0
+                
+                if time_at_location >= required_duration:
+                    status_text = "✅ **Ready for completion** - Use the Complete Job button in `/tqe`"
+                    progress_text = "Required time at location completed"
+                else:
+                    remaining = max(0, required_duration - time_at_location)
+                    status_text = f"📍 **Working on-site** - {remaining:.1f} minutes remaining"
+                    progress_pct = min(100, (time_at_location / required_duration) * 100)
+                    bars = int(progress_pct // 10)
+                    progress_text = "🟩" * bars + "⬜" * (10 - bars) + f" {progress_pct:.0f}%"
+            else:
+                status_text = "📍 **Needs location tracking** - Use the Complete Job button in `/tqe` to start"
+                progress_text = "Location-based work not yet started"
+
+        # Truncate field values to stay under Discord's 1024 character limit
+        status_text = status_text[:1020] + "..." if len(status_text) > 1020 else status_text
+        progress_text = progress_text[:1020] + "..." if len(progress_text) > 1020 else progress_text
+
+        embed.add_field(name="Status", value=status_text, inline=False)
+        
+        # For transport jobs, remove misleading progress bars and show correct location
+        if is_transport_job:
+            if destination_location_id:
+                # Get destination name for transport jobs with specific destination
+                dest_name = self.bot.db.execute_query(
+                    "SELECT name FROM locations WHERE location_id = ?",
+                    (destination_location_id,),
+                    fetch='one'
+                )
+                dest_name = dest_name[0] if dest_name else "Unknown Location"
+                location_display = dest_name
+                location_label = "🎯 Destination"
+            else:
+                # NPC transport job without specific destination
+                location_display = location_name
+                location_label = "🎯 Destination"
+            
+            # Don't show progress bar for transport jobs - they use maximum time limits, not minimum
+            embed.add_field(name="Reward", value=f"{reward:,} credits", inline=True)
+            embed.add_field(name="Danger", value="⚠️" * danger if danger > 0 else "Safe", inline=True)
+            embed.add_field(name=location_label, value=location_display[:1020] if len(location_display) > 1020 else location_display, inline=True)
+        else:
+            # Stationary jobs show progress bar and origin location
+            embed.add_field(name="Progress", value=progress_text, inline=False)
+            embed.add_field(name="Reward", value=f"{reward:,} credits", inline=True)
+            embed.add_field(name="Danger", value="⚠️" * danger if danger > 0 else "Safe", inline=True)
+            embed.add_field(name="📍 Location", value=location_name[:1020] if len(location_name) > 1020 else location_name, inline=True)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         
         
+class BasicTQEView(discord.ui.View):
+    """Basic view for The Quiet End overview panel for non-location channels with no character"""
+    
+    def __init__(self, bot):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.bot = bot
+    
+    @discord.ui.button(label="Login", style=discord.ButtonStyle.primary, emoji="🚀")
+    async def login_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Login to the game"""
+        # Call the actual login command logic from CharacterCog
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            # Call the login command directly
+            await char_cog.login_character.callback(char_cog, interaction)
+        else:
+            await interaction.response.send_message("Character system unavailable.", ephemeral=True)
+    
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.success, emoji="🔄")
+    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Refresh the basic overview panel"""
+        # Defer the response
+        await interaction.response.defer()
         
+        # Get updated galaxy info
+        char_cog = self.bot.get_cog('CharacterCog')
+        if not char_cog:
+            await interaction.followup.send("Character system unavailable.", ephemeral=True)
+            return
         
+        galaxy_info = char_cog._get_galaxy_info()
+        
+        # Create basic embed with galaxy info only
+        embed = discord.Embed(
+            title="🌌 The Quiet End - Galaxy Overview",
+            description="Current galaxy status and information",
+            color=0x1a1a2e
+        )
+        
+        embed.add_field(
+            name="🌍 Galaxy",
+            value=f"**Name:** {galaxy_info['galaxy_name']}\n"
+                  f"**Date:** {galaxy_info['current_date']}\n"
+                  f"**Shift:** {galaxy_info['shift_emoji']} {galaxy_info['shift_name']}\n"
+                  f"**Players Online:** {galaxy_info['logged_in_count']}",
+            inline=False
+        )
+        
+        # Check if the user has a character to customize the message
+        char_data = self.bot.db.execute_query(
+            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if char_data:
+            getting_started_text = "• Click **Login** to connect to your character\n• Use `/tqe` in a location channel after logging in for full features"
+        else:
+            getting_started_text = "• Use the Game Panel to create a new character if you don't have a character yet!"
+        
+        embed.add_field(
+            name="🚀 Getting Started",
+            value=getting_started_text,
+            inline=False
+        )
+        
+        embed.set_footer(text="The Quiet End • Use Login to access full features")
+        
+        # Create new view for the updated message
+        view = BasicTQEView(self.bot)
+        
+        await interaction.followup.edit_message(interaction.message.id, embed=embed, view=view)
+
+
 class SimpleShipUpgradeView(discord.ui.View):
     def __init__(self, bot, user_id: int, ship_id: int, ship_info: tuple, money: int, condition_modifier: float):
         super().__init__(timeout=180)
@@ -5154,7 +5689,7 @@ class InteractiveInventoryView(discord.ui.View):
             options = []
             seen_values = set()  # Track unique values to avoid duplicates
             
-            for idx, (item_name, item_type, quantity, description, value) in enumerate(page_items):
+            for idx, (item_name, item_type, quantity, description, value, item_id, is_equipped) in enumerate(page_items):
                 # Create unique value for each item
                 item_value = f"{start_idx + idx}_{item_name[:50]}"  # Limit name length
                 
@@ -5166,8 +5701,9 @@ class InteractiveInventoryView(discord.ui.View):
                     counter += 1
                 seen_values.add(item_value)
                 
-                # Create label with quantity
-                label = f"{item_name}"
+                # Create label with quantity and equipped status
+                equipped_indicator = " ⚡" if is_equipped else ""
+                label = f"{item_name}{equipped_indicator}"
                 if quantity > 1:
                     label += f" (x{quantity})"
                 
@@ -5181,6 +5717,8 @@ class InteractiveInventoryView(discord.ui.View):
                     desc_parts.append(item_type.replace('_', ' ').title())
                 if value > 0:
                     desc_parts.append(f"{value} credits")
+                if is_equipped:
+                    desc_parts.append("Equipped")
                 
                 option_desc = " | ".join(desc_parts) if desc_parts else "No additional info"
                 if len(option_desc) > 100:
@@ -5246,23 +5784,148 @@ class InteractiveInventoryView(discord.ui.View):
         
         # Get the selected item
         if item_index < len(self.items):
-            item_name, item_type, quantity, description, value = self.items[item_index]
+            item_name, item_type, quantity, description, value, item_id, is_equipped = self.items[item_index]
             
-            # Get the ItemUsageCog to use the item
-            item_cog = self.bot.get_cog('ItemUsageCog')
-            if item_cog:
-                # Call the use_item command logic directly
-                await item_cog.use_item.callback(item_cog, interaction, item_name)
-            else:
-                await interaction.response.send_message(
-                    "Item usage system unavailable.", 
-                    ephemeral=True
+            # Check if item is equippable (check both static config and database)
+            is_equippable_static = ItemConfig.is_equippable(item_name)
+            
+            # For dynamically created items, check database
+            is_equippable_db = False
+            if not is_equippable_static:
+                db_equippable = self.bot.db.execute_query(
+                    '''SELECT equippable FROM inventory 
+                       WHERE owner_id = ? AND LOWER(item_name) = LOWER(?) AND quantity > 0 LIMIT 1''',
+                    (self.user_id, item_name),
+                    fetch='one'
                 )
+                is_equippable_db = bool(db_equippable and db_equippable[0])
+            
+            if is_equippable_static or is_equippable_db:
+                # Handle equipment/unequipment
+                await self._handle_equipment(interaction, item_name)
+            else:
+                # Get the ItemUsageCog to use the item normally
+                item_cog = self.bot.get_cog('ItemUsageCog')
+                if item_cog:
+                    # Call the use_item command logic directly
+                    await item_cog.use_item.callback(item_cog, interaction, item_name)
+                else:
+                    await interaction.response.send_message(
+                        "Item usage system unavailable.", 
+                        ephemeral=True
+                    )
         else:
             await interaction.response.send_message(
                 "Invalid item selection.", 
                 ephemeral=True
             )
+    
+    async def _handle_equipment(self, interaction: discord.Interaction, item_name: str):
+        """Handle equipping/unequipping items"""
+        # Get item from inventory with ID and equipment info
+        item_data = self.bot.db.execute_query(
+            '''SELECT item_id, item_name, quantity, equipment_slot, stat_modifiers 
+               FROM inventory 
+               WHERE owner_id = ? AND LOWER(item_name) = LOWER(?) AND quantity > 0''',
+            (self.user_id, item_name),
+            fetch='one'
+        )
+        
+        if not item_data:
+            await interaction.response.send_message(
+                f"Item '{item_name}' not found in inventory.", 
+                ephemeral=True
+            )
+            return
+        
+        item_id, actual_name, quantity, db_equipment_slot, db_stat_modifiers = item_data
+        
+        # Get equipment slot and stat modifiers (try static config first, then database)
+        equipment_slot = ItemConfig.get_equipment_slot(actual_name) or db_equipment_slot
+        
+        # Parse stat modifiers from database if available
+        stat_modifiers = {}
+        if db_stat_modifiers:
+            try:
+                stat_modifiers = json.loads(db_stat_modifiers) if isinstance(db_stat_modifiers, str) else db_stat_modifiers
+            except (json.JSONDecodeError, TypeError):
+                stat_modifiers = {}
+        
+        # Fallback to static config if database doesn't have stat modifiers
+        if not stat_modifiers:
+            stat_modifiers = ItemConfig.get_stat_modifiers(actual_name)
+        
+        # Check if item is currently equipped
+        equipped_data = self.bot.db.execute_query(
+            '''SELECT equipment_id FROM character_equipment 
+               WHERE user_id = ? AND item_id = ?''',
+            (self.user_id, item_id),
+            fetch='one'
+        )
+        
+        if equipped_data:
+            # Item is equipped, unequip it
+            stat_sys = stat_system.StatSystem(self.bot.db)
+            
+            # Find which slot this item is in
+            slot_data = self.bot.db.execute_query(
+                '''SELECT slot_name FROM character_equipment 
+                   WHERE user_id = ? AND item_id = ?''',
+                (self.user_id, item_id),
+                fetch='one'
+            )
+            
+            if slot_data:
+                slot_name = slot_data[0]
+                success = stat_sys.unequip_item(self.user_id, slot_name)
+                if success:
+                    embed = discord.Embed(
+                        title="✅ Item Unequipped",
+                        description=f"You have unequipped **{actual_name}**!",
+                        color=0x00ff00
+                    )
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
+                else:
+                    await interaction.response.send_message(
+                        f"Failed to unequip **{actual_name}**.", 
+                        ephemeral=True
+                    )
+            else:
+                await interaction.response.send_message(
+                    f"Could not find equipment slot for **{actual_name}**.", 
+                    ephemeral=True
+                )
+        else:
+            # Item is not equipped, try to equip it
+            if not equipment_slot:
+                await interaction.response.send_message(
+                    f"**{actual_name}** cannot be equipped - no equipment slot defined.", 
+                    ephemeral=True
+                )
+                return
+                
+            stat_sys = stat_system.StatSystem(self.bot.db)
+            success = stat_sys.equip_item(self.user_id, item_id, actual_name)
+            if success:
+                # Check if item has damage modifier for message
+                armor_mod = stat_modifiers.get('damage_modifier', 0) or stat_modifiers.get('defense', 0)
+                
+                description = f"You have equipped **{actual_name}**!"
+                if armor_mod > 0:
+                    description += f"\n+{armor_mod} armor applied."
+                
+                embed = discord.Embed(
+                    title="⚡ Item Equipped",
+                    description=description,
+                    color=0x4169E1
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            else:
+                # Equipment failed, likely slot occupied
+                await interaction.response.send_message(
+                    f"Cannot equip **{actual_name}** - {equipment_slot} slot may be occupied.", 
+                    ephemeral=True
+                )
     
     async def previous_page(self, interaction: discord.Interaction):
         """Go to previous page"""
@@ -5521,39 +6184,6 @@ class ExtrasMenuView(discord.ui.View):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
-class FactionCreateModal(discord.ui.Modal, title="Create New Faction"):
-    """Modal for creating a new faction"""
-    
-    def __init__(self, bot):
-        super().__init__()
-        self.bot = bot
-    
-    faction_name = discord.ui.TextInput(
-        label="Faction Name",
-        placeholder="Enter your faction name...",
-        required=True,
-        max_length=50
-    )
-    
-    faction_emoji = discord.ui.TextInput(
-        label="Faction Emoji",
-        placeholder="Enter an emoji for your faction...",
-        required=True,
-        max_length=10
-    )
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        factions_cog = self.bot.get_cog('FactionsCog')
-        if factions_cog:
-            # Temporarily set the modal values as attributes for the cog to access
-            self.bot._temp_faction_name = self.faction_name.value
-            self.bot._temp_faction_emoji = self.faction_emoji.value
-            await factions_cog.faction_create.callback(factions_cog, interaction)
-            # Clean up temp values
-            delattr(self.bot, '_temp_faction_name')
-            delattr(self.bot, '_temp_faction_emoji')
-        else:
-            await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
 
 
 class FactionsRepView(discord.ui.View):
@@ -5564,34 +6194,129 @@ class FactionsRepView(discord.ui.View):
         self.bot = bot
         self.user_id = user_id
         self.is_faction_leader = False
-        self._check_faction_leader()
+        self.user_faction_id = None
+        self._check_faction_status()
         
-        # Add conditional payout button for faction leaders
-        if self.is_faction_leader:
-            payout_button = discord.ui.Button(
-                label="Faction Payout",
-                style=discord.ButtonStyle.primary,
-                emoji="💎",
-                row=2
-            )
-            payout_button.callback = self.faction_payout_button
-            self.add_item(payout_button)
+        # Add context-aware buttons based on user faction status
+        self._add_context_buttons()
     
-    def _check_faction_leader(self):
-        """Check if user is a faction leader for conditional button display"""
+    def _check_faction_status(self):
+        """Check user's faction status for conditional button display"""
         try:
             from database import Database
             db = Database()
-            result = db.execute_query(
+            
+            # Check if user is a faction leader
+            leader_result = db.execute_query(
                 "SELECT faction_id FROM factions WHERE leader_id = ?",
                 (self.user_id,),
                 fetch='one'
             )
-            self.is_faction_leader = result is not None
+            if leader_result:
+                self.is_faction_leader = True
+                self.user_faction_id = leader_result[0]
+            else:
+                # Check if user is a faction member
+                member_result = db.execute_query(
+                    "SELECT faction_id FROM faction_members WHERE user_id = ?",
+                    (self.user_id,),
+                    fetch='one'
+                )
+                if member_result:
+                    self.user_faction_id = member_result[0]
         except Exception:
             self.is_faction_leader = False
+            self.user_faction_id = None
     
-    @discord.ui.button(label="Faction Info", style=discord.ButtonStyle.primary, emoji="ℹ️")
+    def _add_context_buttons(self):
+        """Add buttons based on user's faction status"""
+        # Always show Faction Info and View Reputation buttons
+        info_button = discord.ui.Button(
+            label="Faction Info",
+            style=discord.ButtonStyle.primary,
+            emoji="ℹ️",
+            row=0
+        )
+        info_button.callback = lambda interaction: self.faction_info_button(interaction, info_button)
+        self.add_item(info_button)
+        
+        reputation_button = discord.ui.Button(
+            label="View Reputation",
+            style=discord.ButtonStyle.secondary,
+            emoji="⭐",
+            row=1
+        )
+        reputation_button.callback = lambda interaction: self.view_reputation_button(interaction, reputation_button)
+        self.add_item(reputation_button)
+        
+        if self.user_faction_id is None:
+            # User is NOT in a faction - show Create and Join buttons
+            join_button = discord.ui.Button(
+                label="Join Faction",
+                style=discord.ButtonStyle.success,
+                emoji="➕",
+                row=0
+            )
+            join_button.callback = lambda interaction: self.faction_join_button(interaction, join_button)
+            self.add_item(join_button)
+            
+            create_button = discord.ui.Button(
+                label="Create Faction",
+                style=discord.ButtonStyle.success,
+                emoji="🏗️",
+                row=0
+            )
+            create_button.callback = lambda interaction: self.create_faction_button(interaction, create_button)
+            self.add_item(create_button)
+        else:
+            # User IS in a faction - show faction-specific buttons
+            leave_button = discord.ui.Button(
+                label="Leave Faction",
+                style=discord.ButtonStyle.danger,
+                emoji="➖",
+                row=0
+            )
+            leave_button.callback = lambda interaction: self.faction_leave_button(interaction, leave_button)
+            self.add_item(leave_button)
+            
+            members_button = discord.ui.Button(
+                label="Members",
+                style=discord.ButtonStyle.secondary,
+                emoji="👥",
+                row=0
+            )
+            members_button.callback = lambda interaction: self.faction_members_button(interaction, members_button)
+            self.add_item(members_button)
+            
+            donate_button = discord.ui.Button(
+                label="Donate to Faction",
+                style=discord.ButtonStyle.success,
+                emoji="💰",
+                row=1
+            )
+            donate_button.callback = lambda interaction: self.donate_faction_button(interaction, donate_button)
+            self.add_item(donate_button)
+            
+            # Leader-only buttons
+            if self.is_faction_leader:
+                payout_button = discord.ui.Button(
+                    label="Faction Payout",
+                    style=discord.ButtonStyle.primary,
+                    emoji="💎",
+                    row=2
+                )
+                payout_button.callback = lambda interaction: self.faction_payout_button(interaction, payout_button)
+                self.add_item(payout_button)
+                
+                disband_button = discord.ui.Button(
+                    label="Disband Faction",
+                    style=discord.ButtonStyle.danger,
+                    emoji="💥",
+                    row=2
+                )
+                disband_button.callback = lambda interaction: self.faction_disband_button(interaction, disband_button)
+                self.add_item(disband_button)
+    
     async def faction_info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """View current faction information"""
         if interaction.user.id != self.user_id:
@@ -5604,7 +6329,6 @@ class FactionsRepView(discord.ui.View):
         else:
             await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
     
-    @discord.ui.button(label="Join Faction", style=discord.ButtonStyle.success, emoji="➕")
     async def faction_join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Join an available faction"""
         if interaction.user.id != self.user_id:
@@ -5617,7 +6341,6 @@ class FactionsRepView(discord.ui.View):
         else:
             await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
     
-    @discord.ui.button(label="Leave Faction", style=discord.ButtonStyle.danger, emoji="➖")
     async def faction_leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Leave current faction"""
         if interaction.user.id != self.user_id:
@@ -5630,7 +6353,6 @@ class FactionsRepView(discord.ui.View):
         else:
             await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
     
-    @discord.ui.button(label="Members", style=discord.ButtonStyle.secondary, emoji="👥")
     async def faction_members_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """View faction members"""
         if interaction.user.id != self.user_id:
@@ -5643,17 +6365,20 @@ class FactionsRepView(discord.ui.View):
         else:
             await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
     
-    @discord.ui.button(label="Create Faction", style=discord.ButtonStyle.success, emoji="🏗️", row=1)
     async def create_faction_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Create a new faction"""
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        modal = FactionCreateModal(self.bot)
+        factions_cog = self.bot.get_cog('FactionsCog')
+        if not factions_cog:
+            await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
+            return
+            
+        modal = FactionCreateModal(factions_cog, interaction.user.id)
         await interaction.response.send_modal(modal)
     
-    @discord.ui.button(label="View Reputation", style=discord.ButtonStyle.secondary, emoji="⭐", row=1)
     async def view_reputation_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """View your reputation standings"""
         if interaction.user.id != self.user_id:
@@ -5666,7 +6391,6 @@ class FactionsRepView(discord.ui.View):
         else:
             await interaction.response.send_message("Reputation system unavailable.", ephemeral=True)
     
-    @discord.ui.button(label="Donate to Faction", style=discord.ButtonStyle.success, emoji="💰", row=2)
     async def donate_faction_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Donate credits to your faction"""
         if interaction.user.id != self.user_id:
@@ -5676,7 +6400,7 @@ class FactionsRepView(discord.ui.View):
         modal = FactionDonateModal(self.bot)
         await interaction.response.send_modal(modal)
     
-    async def faction_payout_button(self, interaction: discord.Interaction):
+    async def faction_payout_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Distribute faction bank funds equally to all members"""
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
@@ -5685,6 +6409,18 @@ class FactionsRepView(discord.ui.View):
         factions_cog = self.bot.get_cog('FactionsCog')
         if factions_cog:
             await factions_cog.faction_payout.callback(factions_cog, interaction)
+        else:
+            await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
+    
+    async def faction_disband_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Disband the faction (leader only)"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        factions_cog = self.bot.get_cog('FactionsCog')
+        if factions_cog:
+            await factions_cog.faction_disband.callback(factions_cog, interaction)
         else:
             await interaction.response.send_message("Factions system unavailable.", ephemeral=True)
 
@@ -5775,22 +6511,38 @@ class PostBountyPlayerSelect(discord.ui.View):
         self.user_id = user_id
         self.amount = amount
         
-        # Create select menu with guild members
+        # Create select menu with guild members who have characters
         options = []
         guild = bot.get_guild(bot.config.ALLOWED_GUILD_ID) if hasattr(bot, 'config') else None
         if guild:
-            for member in guild.members[:25]:  # Discord limit is 25 options
-                if member.id != user_id and not member.bot:
+            # Get all characters and their user info
+            characters = bot.db.execute_query(
+                "SELECT user_id, name FROM characters WHERE user_id != ?",
+                (user_id,),
+                fetch='all'
+            )
+            
+            for char_user_id, char_name in characters[:25]:  # Discord limit is 25 options
+                member = guild.get_member(char_user_id)
+                if member and not member.bot:
                     options.append(discord.SelectOption(
                         label=member.display_name,
                         value=str(member.id),
-                        description=f"User: {member.name}"
+                        description=f"Character: {char_name}"
                     ))
         
         if options:
             select = discord.ui.Select(placeholder="Choose a player...", options=options)
             select.callback = self.player_selected
             self.add_item(select)
+        else:
+            # If no options available, add a disabled button explaining the issue
+            no_players_button = discord.ui.Button(
+                label="No Players Available", 
+                style=discord.ButtonStyle.secondary, 
+                disabled=True
+            )
+            self.add_item(no_players_button)
     
     async def player_selected(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
@@ -5884,22 +6636,55 @@ class ClaimBountyPlayerSelect(discord.ui.View):
         self.bot = bot
         self.user_id = user_id
         
-        # Create select menu with guild members
+        # Get user's current location
+        user_location = bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (user_id,),
+            fetch='one'
+        )
+        
+        # Create select menu with bountied players in same location
         options = []
         guild = bot.get_guild(bot.config.ALLOWED_GUILD_ID) if hasattr(bot, 'config') else None
-        if guild:
-            for member in guild.members[:25]:  # Discord limit is 25 options
-                if member.id != user_id and not member.bot:
+        if guild and user_location and user_location[0]:
+            current_location = user_location[0]
+            
+            # Get bountied players in the same location
+            bountied_players = bot.db.execute_query(
+                '''SELECT DISTINCT pb.target_id, pb.target_name, SUM(pb.amount) as total_bounty
+                   FROM personal_bounties pb
+                   JOIN characters c ON pb.target_id = c.user_id
+                   WHERE pb.is_active = 1 
+                   AND c.current_location = ?
+                   AND c.is_logged_in = 1
+                   AND pb.target_id != ?
+                   GROUP BY pb.target_id, pb.target_name
+                   ORDER BY total_bounty DESC''',
+                (current_location, user_id),
+                fetch='all'
+            )
+            
+            for target_id, target_name, total_bounty in bountied_players[:25]:  # Discord limit is 25 options
+                member = guild.get_member(target_id)
+                if member and not member.bot:
                     options.append(discord.SelectOption(
                         label=member.display_name,
                         value=str(member.id),
-                        description=f"User: {member.name}"
+                        description=f"Bounty: {total_bounty:,} credits"
                     ))
         
         if options:
-            select = discord.ui.Select(placeholder="Choose a player to capture...", options=options)
+            select = discord.ui.Select(placeholder="Choose a bountied player to capture...", options=options)
             select.callback = self.player_selected
             self.add_item(select)
+        else:
+            # If no options available, add a disabled button explaining the issue
+            no_players_button = discord.ui.Button(
+                label="No Bountied Players in Range", 
+                style=discord.ButtonStyle.secondary, 
+                disabled=True
+            )
+            self.add_item(no_players_button)
     
     async def player_selected(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
@@ -5971,9 +6756,151 @@ class HomesView(discord.ui.View):
         super().__init__(timeout=300)
         self.bot = bot
         self.user_id = user_id
+        
+        # Get user's current state for context-aware buttons
+        self._setup_context_buttons()
     
-    @discord.ui.button(label="Enter Home", style=discord.ButtonStyle.primary, emoji="🏠")
-    async def enter_home_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    def _setup_context_buttons(self):
+        """Setup buttons based on user's current context"""
+        # Get character info
+        char_info = self.bot.db.execute_query(
+            '''SELECT c.current_location, c.current_home_id, l.name as location_name
+               FROM characters c
+               LEFT JOIN locations l ON c.current_location = l.location_id
+               WHERE c.user_id = ?''',
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            return
+        
+        current_location, current_home_id, location_name = char_info
+        
+        # Check if user owns a home at current location
+        owned_home = self.bot.db.execute_query(
+            "SELECT home_id FROM location_homes WHERE owner_id = ? AND location_id = ?",
+            (self.user_id, current_location),
+            fetch='one'
+        )
+        
+        # Check if location has homes for sale
+        available_homes = self.bot.db.execute_query(
+            "SELECT COUNT(*) FROM location_homes WHERE location_id = ? AND is_available = 1",
+            (current_location,),
+            fetch='one'
+        )
+        
+        # Check if user has pending invitations
+        pending_invitation = self.bot.db.execute_query(
+            '''SELECT COUNT(*) FROM home_invitations
+               WHERE invitee_id = ? AND expires_at > datetime('now')''',
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        # Check if user owns any homes (for warp functionality)
+        owned_homes_count = self.bot.db.execute_query(
+            "SELECT COUNT(*) FROM location_homes WHERE owner_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        has_owned_home = owned_home is not None
+        has_available_homes = available_homes and available_homes[0] > 0
+        has_pending_invitation = pending_invitation and pending_invitation[0] > 0
+        is_in_home = current_home_id is not None
+        has_any_homes = owned_homes_count and owned_homes_count[0] > 0
+        
+        # Check if user is in their own home
+        is_in_own_home = False
+        if is_in_home and has_owned_home:
+            own_home_check = self.bot.db.execute_query(
+                '''SELECT h.home_id FROM characters c
+                   JOIN location_homes h ON c.current_home_id = h.home_id
+                   WHERE c.user_id = ? AND h.owner_id = ?''',
+                (self.user_id, self.user_id),
+                fetch='one'
+            )
+            is_in_own_home = own_home_check is not None
+        
+        # Add buttons based on context
+        row = 0
+        
+        # Enter Home: Show if owns home at location and not in that home
+        if has_owned_home and not is_in_own_home:
+            button = discord.ui.Button(
+                label="Enter Home",
+                style=discord.ButtonStyle.primary,
+                emoji="🏠",
+                row=row
+            )
+            button.callback = self.enter_home_button_callback
+            self.add_item(button)
+        
+        # Buy Home: Show if location has homes for sale and user doesn't own one there
+        if has_available_homes and not has_owned_home:
+            button = discord.ui.Button(
+                label="Buy Home",
+                style=discord.ButtonStyle.success,
+                emoji="💰",
+                row=row
+            )
+            button.callback = self.buy_home_button_callback
+            self.add_item(button)
+        
+        # Accept Invitation: Show if user has pending invitations
+        if has_pending_invitation:
+            button = discord.ui.Button(
+                label="Accept Invitation",
+                style=discord.ButtonStyle.success,
+                emoji="✅",
+                row=row
+            )
+            button.callback = self.accept_invitation_button_callback
+            self.add_item(button)
+        
+        # If first row is getting full, move to second row
+        if len([item for item in self.children if getattr(item, 'row', 0) == 0]) >= 4:
+            row = 1
+        
+        # Warp Home: Show if user owns at least one home
+        if has_any_homes:
+            button = discord.ui.Button(
+                label="Warp Home",
+                style=discord.ButtonStyle.secondary,
+                emoji="🌟",
+                row=row
+            )
+            button.callback = self.warp_home_button_callback
+            self.add_item(button)
+        
+        # Always use row 1 for these buttons
+        row = 1
+        
+        # Leave Home: Show when user is in their own home
+        if is_in_own_home:
+            button = discord.ui.Button(
+                label="Leave Home",
+                style=discord.ButtonStyle.danger,
+                emoji="🚪",
+                row=row
+            )
+            button.callback = self.leave_home_button_callback
+            self.add_item(button)
+        
+        # Invite Player: Show when user is in their own home
+        if is_in_own_home:
+            button = discord.ui.Button(
+                label="Invite Player",
+                style=discord.ButtonStyle.secondary,
+                emoji="📨",
+                row=row
+            )
+            button.callback = self.invite_player_button_callback
+            self.add_item(button)
+    
+    async def enter_home_button_callback(self, interaction: discord.Interaction):
         """Enter your home"""
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
@@ -5985,8 +6912,7 @@ class HomesView(discord.ui.View):
         else:
             await interaction.response.send_message("Homes system unavailable.", ephemeral=True)
     
-    @discord.ui.button(label="Buy Home", style=discord.ButtonStyle.success, emoji="💰")
-    async def buy_home_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def buy_home_button_callback(self, interaction: discord.Interaction):
         """Purchase a home"""
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
@@ -5998,8 +6924,7 @@ class HomesView(discord.ui.View):
         else:
             await interaction.response.send_message("Homes system unavailable.", ephemeral=True)
     
-    @discord.ui.button(label="Accept Invitation", style=discord.ButtonStyle.success, emoji="✅")
-    async def accept_invitation_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def accept_invitation_button_callback(self, interaction: discord.Interaction):
         """Accept a home invitation"""
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
@@ -6011,8 +6936,7 @@ class HomesView(discord.ui.View):
         else:
             await interaction.response.send_message("Homes system unavailable.", ephemeral=True)
     
-    @discord.ui.button(label="Leave Home", style=discord.ButtonStyle.danger, emoji="🚪", row=1)
-    async def leave_home_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def leave_home_button_callback(self, interaction: discord.Interaction):
         """Leave current home"""
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
@@ -6024,8 +6948,7 @@ class HomesView(discord.ui.View):
         else:
             await interaction.response.send_message("Homes system unavailable.", ephemeral=True)
     
-    @discord.ui.button(label="Invite Player", style=discord.ButtonStyle.secondary, emoji="📨", row=1)
-    async def invite_player_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def invite_player_button_callback(self, interaction: discord.Interaction):
         """Invite someone to your home"""
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
@@ -6033,6 +6956,53 @@ class HomesView(discord.ui.View):
         
         view = HomeInvitePlayerSelect(self.bot, interaction.user.id)
         await interaction.response.send_message("Select a player to invite to your home:", view=view, ephemeral=True)
+    
+    async def warp_home_button_callback(self, interaction: discord.Interaction):
+        """Warp to one of your homes"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get user's current location
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+            
+        current_location = char_data[0]
+        
+        # Get user's homes
+        homes = self.bot.db.execute_query(
+            '''SELECT h.home_id, h.home_name, h.home_type, l.name as location_name,
+                      h.price, h.purchase_date, h.value_modifier, h.location_id
+               FROM location_homes h
+               JOIN locations l ON h.location_id = l.location_id
+               WHERE h.owner_id = ?
+               ORDER BY h.purchase_date DESC''',
+            (interaction.user.id,),
+            fetch='all'
+        )
+        
+        if not homes:
+            await interaction.response.send_message("You don't own any homes.", ephemeral=True)
+            return
+        
+        # Create HomeWarpView to let user select which home to warp to
+        from cogs.homes import HomeWarpView
+        view = HomeWarpView(homes, interaction.user.id, current_location, self.bot)
+        
+        embed = discord.Embed(
+            title="🌟 Warp to Home",
+            description="Select one of your homes to warp to:",
+            color=0x9370DB
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 class ShipInteriorView(discord.ui.View):
@@ -6214,10 +7184,1062 @@ class ShipInteriorView(discord.ui.View):
             )
             return
         
-        # Import and open the radio modal
+        # Open the radio modal (RadioModal is defined in this file)
+        modal = RadioModal(self.bot)
+        await interaction.response.send_modal(modal)
+
+
+class HomeInteriorView(discord.ui.View):
+    """View for home interior interactions, replacing the normal /here panel when in a home"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        
+        # Add UniversalLeaveView components
+        from utils.leave_button import UniversalLeaveView
+        universal_leave_view = UniversalLeaveView(bot)
+        for item in universal_leave_view.children:
+            self.add_item(item)
+    
+    @discord.ui.button(label="Home Activities", style=discord.ButtonStyle.primary, emoji="🏠")
+    async def home_activities_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Access home activities"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get current home
+        home_info = self.bot.db.execute_query(
+            '''SELECT lh.home_id, lh.home_name
+               FROM location_homes lh 
+               JOIN home_interiors hi ON lh.home_id = hi.home_id 
+               WHERE hi.channel_id = ?''',
+            (interaction.channel.id,),
+            fetch='one'
+        )
+        
+        if not home_info:
+            await interaction.response.send_message("Home not found!", ephemeral=True)
+            return
+        
+        home_id, home_name = home_info
+        
+        # Get home activities
         try:
-            from cogs.character import RadioModal
-            modal = RadioModal(self.bot)
-            await interaction.response.send_modal(modal)
+            from utils.home_activities import HomeActivityManager, HomeActivityView
+            activity_manager = HomeActivityManager(self.bot)
+            activities = activity_manager.get_home_activities(home_id)
+            
+            if activities:
+                # Get character name for the view
+                char_name = self.bot.db.execute_query(
+                    "SELECT name FROM characters WHERE user_id = ?",
+                    (interaction.user.id,),
+                    fetch='one'
+                )[0]
+                
+                activity_view = HomeActivityView(self.bot, home_id, home_name, char_name)
+                activity_embed = discord.Embed(
+                    title="🏠 Home Activities",
+                    description="Choose an activity to engage with in your home:",
+                    color=0x8B4513
+                )
+                
+                activity_list = []
+                for activity in activities[:10]:  # Limit display
+                    activity_list.append(f"{activity['icon']} {activity['name']}")
+                
+                activity_embed.add_field(
+                    name="Available Activities",
+                    value="\n".join(activity_list),
+                    inline=False
+                )
+                
+                await interaction.response.send_message(embed=activity_embed, view=activity_view, ephemeral=True)
+            else:
+                await interaction.response.send_message("No activities available in this home.", ephemeral=True)
         except ImportError:
-            await interaction.response.send_message("Radio system unavailable.", ephemeral=True)
+            await interaction.response.send_message("Home activities system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Storage", style=discord.ButtonStyle.secondary, emoji="📦")
+    async def storage_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """View home storage"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Call the existing storage view command
+        homes_cog = self.bot.get_cog('HomesCog')
+        if homes_cog:
+            await homes_cog.storage_view.callback(homes_cog, interaction)
+        else:
+            await interaction.response.send_message("Storage system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Income", style=discord.ButtonStyle.success, emoji="💰")
+    async def income_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """View and collect income"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Call the existing income collect command
+        homes_cog = self.bot.get_cog('HomesCog')
+        if homes_cog:
+            await homes_cog.income_collect.callback(homes_cog, interaction)
+        else:
+            await interaction.response.send_message("Income system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Upgrades", style=discord.ButtonStyle.success, emoji="⬆️")
+    async def upgrades_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Purchase home upgrades"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Call the existing home upgrade command
+        homes_cog = self.bot.get_cog('HomesCog')
+        if homes_cog:
+            await homes_cog.buy_upgrade.callback(homes_cog, interaction)
+        else:
+            await interaction.response.send_message("Home upgrade system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Customize", style=discord.ButtonStyle.secondary, emoji="🎨", row=1)
+    async def customize_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Access home customization"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Call the existing home preview command to show customization status
+        homes_cog = self.bot.get_cog('HomesCog')
+        if homes_cog:
+            await homes_cog.preview_home.callback(homes_cog, interaction)
+        else:
+            await interaction.response.send_message("Customization system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Invite Player", style=discord.ButtonStyle.success, emoji="📨", row=1)
+    async def invite_player_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Invite someone to your home"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Check if user owns the home
+        home_owner = self.bot.db.execute_query(
+            '''SELECT lh.owner_id
+               FROM location_homes lh 
+               JOIN home_interiors hi ON lh.home_id = hi.home_id 
+               WHERE hi.channel_id = ?''',
+            (interaction.channel.id,),
+            fetch='one'
+        )
+        
+        if not home_owner or home_owner[0] != interaction.user.id:
+            await interaction.response.send_message("You can only invite players to your own home!", ephemeral=True)
+            return
+        
+        # Get players at the same location
+        location_info = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not location_info:
+            await interaction.response.send_message("Location not found!", ephemeral=True)
+            return
+        
+        location_id = location_info[0]
+        
+        # Get other players at this location who are docked
+        other_players = self.bot.db.execute_query(
+            '''SELECT c.user_id, c.name
+               FROM characters c
+               WHERE c.current_location = ? AND c.user_id != ? 
+               AND c.location_status = 'docked' AND c.is_logged_in = 1''',
+            (location_id, interaction.user.id),
+            fetch='all'
+        )
+        
+        if not other_players:
+            await interaction.response.send_message("No other players are docked at this location to invite.", ephemeral=True)
+            return
+        
+        # Use existing home invite system
+        homes_cog = self.bot.get_cog('HomesCog')
+        if homes_cog:
+            # Create a simple selection view (we'll use the first available player for simplicity)
+            target_user_id, target_name = other_players[0]
+            target_member = interaction.guild.get_member(target_user_id)
+            
+            if target_member:
+                await homes_cog.home_invite.callback(homes_cog, interaction, target_member)
+            else:
+                await interaction.response.send_message("Target player not found.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Home invitation system unavailable.", ephemeral=True)
+    
+    @discord.ui.button(label="Leave Home", style=discord.ButtonStyle.danger, emoji="🚪", row=1)
+    async def leave_home_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Leave the home interior"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        homes_cog = self.bot.get_cog('HomesCog')
+        if homes_cog:
+            await homes_cog.leave_home.callback(homes_cog, interaction)
+        else:
+            await interaction.response.send_message("Home system unavailable.", ephemeral=True)
+
+
+class ItemSelectView(discord.ui.View):
+    """View for selecting items from inventory with quantity input"""
+    
+    def __init__(self, bot, user_id: int, items: list, action: str, callback_func=None):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        self.action = action  # "give" or "sell"
+        self.callback_func = callback_func
+        self.selected_item = None
+        
+        # Create select menu for items
+        options = []
+        for idx, (item_name, item_type, quantity, description, value) in enumerate(items[:25]):  # Discord limit
+            label = f"{item_name}"
+            if quantity > 1:
+                label += f" (x{quantity})"
+            
+            # Truncate label if too long
+            if len(label) > 100:
+                label = label[:97] + "..."
+            
+            # Create description
+            desc_parts = []
+            if item_type:
+                desc_parts.append(item_type.replace('_', ' ').title())
+            if value > 0:
+                desc_parts.append(f"{value} credits")
+            
+            option_desc = " | ".join(desc_parts) if desc_parts else "No additional info"
+            if len(option_desc) > 100:
+                option_desc = option_desc[:97] + "..."
+            
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    value=str(idx),
+                    description=option_desc
+                )
+            )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder=f"Choose an item to {action}...",
+                options=options
+            )
+            select.callback = self.item_selected
+            self.add_item(select)
+    
+    async def item_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        item_idx = int(interaction.data['values'][0])
+        # Store selected item for later use
+        self.selected_item = item_idx
+        
+        if self.callback_func:
+            await self.callback_func(interaction, item_idx)
+        else:
+            await interaction.response.send_message("Item selected!", ephemeral=True)
+
+
+class PlayerGiveSelectView(discord.ui.View):
+    """View for selecting a player to give an item to"""
+    
+    def __init__(self, bot, user_id: int, players: list, item_data: tuple, quantity: int = 1):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        self.item_data = item_data  # (item_name, item_type, quantity, description, value)
+        self.quantity = quantity
+        
+        # Create select menu for players
+        options = []
+        for player_id, player_name in players[:25]:  # Discord limit
+            options.append(
+                discord.SelectOption(
+                    label=player_name,
+                    value=str(player_id)
+                )
+            )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder="Choose a player to give the item to...",
+                options=options
+            )
+            select.callback = self.player_selected
+            self.add_item(select)
+        
+        # Add quantity adjustment buttons
+        if self.item_data[2] > 1:  # If item quantity > 1
+            self.add_quantity_controls()
+    
+    def add_quantity_controls(self):
+        """Add buttons to adjust quantity"""
+        # Decrease quantity button
+        decrease_btn = discord.ui.Button(
+            label="-",
+            style=discord.ButtonStyle.secondary,
+            custom_id="decrease_qty"
+        )
+        decrease_btn.callback = self.decrease_quantity
+        self.add_item(decrease_btn)
+        
+        # Quantity display
+        qty_btn = discord.ui.Button(
+            label=f"Qty: {self.quantity}",
+            style=discord.ButtonStyle.primary,
+            disabled=True,
+            custom_id="qty_display"
+        )
+        self.add_item(qty_btn)
+        
+        # Increase quantity button
+        increase_btn = discord.ui.Button(
+            label="+",
+            style=discord.ButtonStyle.secondary,
+            custom_id="increase_qty"
+        )
+        increase_btn.callback = self.increase_quantity
+        self.add_item(increase_btn)
+    
+    async def decrease_quantity(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        if self.quantity > 1:
+            self.quantity -= 1
+            self.update_quantity_display()
+            await interaction.response.edit_message(view=self)
+        else:
+            await interaction.response.defer()
+    
+    async def increase_quantity(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        if self.quantity < self.item_data[2]:  # Can't exceed available quantity
+            self.quantity += 1
+            self.update_quantity_display()
+            await interaction.response.edit_message(view=self)
+        else:
+            await interaction.response.defer()
+    
+    def update_quantity_display(self):
+        """Update the quantity display button"""
+        for item in self.children:
+            if hasattr(item, 'custom_id') and item.custom_id == "qty_display":
+                item.label = f"Qty: {self.quantity}"
+                break
+    
+    async def player_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        target_id = int(interaction.data['values'][0])
+        target_member = interaction.guild.get_member(target_id)
+        
+        if not target_member:
+            await interaction.response.send_message("Player not found!", ephemeral=True)
+            return
+        
+        # Call the item trading command
+        item_cog = self.bot.get_cog('ItemTradingCog')
+        if item_cog:
+            await item_cog.give_item.callback(item_cog, interaction, target_member, self.item_data[0], self.quantity)
+        else:
+            await interaction.response.send_message("Item trading system unavailable.", ephemeral=True)
+
+
+class PlayerSellSelectView(discord.ui.View):
+    """View for selecting a player to sell an item to"""
+    
+    def __init__(self, bot, user_id: int, players: list, item_data: tuple, quantity: int = 1, price: int = None):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.user_id = user_id
+        self.item_data = item_data  # (item_name, item_type, quantity, description, value)
+        self.quantity = quantity
+        self.price = price if price is not None else item_data[4]  # Default to item value
+        
+        # Create select menu for players
+        options = []
+        for player_id, player_name in players[:25]:  # Discord limit
+            options.append(
+                discord.SelectOption(
+                    label=player_name,
+                    value=str(player_id)
+                )
+            )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder="Choose a player to sell the item to...",
+                options=options
+            )
+            select.callback = self.player_selected
+            self.add_item(select)
+        
+        # Add quantity and price adjustment controls
+        if self.item_data[2] > 1:  # If item quantity > 1
+            self.add_quantity_controls()
+        self.add_price_controls()
+    
+    def add_quantity_controls(self):
+        """Add buttons to adjust quantity"""
+        # Decrease quantity button
+        decrease_btn = discord.ui.Button(
+            label="-",
+            style=discord.ButtonStyle.secondary,
+            custom_id="decrease_qty"
+        )
+        decrease_btn.callback = self.decrease_quantity
+        self.add_item(decrease_btn)
+        
+        # Quantity display
+        qty_btn = discord.ui.Button(
+            label=f"Qty: {self.quantity}",
+            style=discord.ButtonStyle.primary,
+            disabled=True,
+            custom_id="qty_display"
+        )
+        self.add_item(qty_btn)
+        
+        # Increase quantity button
+        increase_btn = discord.ui.Button(
+            label="+",
+            style=discord.ButtonStyle.secondary,
+            custom_id="increase_qty"
+        )
+        increase_btn.callback = self.increase_quantity
+        self.add_item(increase_btn)
+    
+    def add_price_controls(self):
+        """Add buttons to adjust price"""
+        # Decrease price button
+        price_down_btn = discord.ui.Button(
+            label="💰-",
+            style=discord.ButtonStyle.secondary,
+            custom_id="decrease_price"
+        )
+        price_down_btn.callback = self.decrease_price
+        self.add_item(price_down_btn)
+        
+        # Price display
+        price_btn = discord.ui.Button(
+            label=f"Price: {self.price}",
+            style=discord.ButtonStyle.success,
+            disabled=True,
+            custom_id="price_display"
+        )
+        self.add_item(price_btn)
+        
+        # Increase price button
+        price_up_btn = discord.ui.Button(
+            label="💰+",
+            style=discord.ButtonStyle.secondary,
+            custom_id="increase_price"
+        )
+        price_up_btn.callback = self.increase_price
+        self.add_item(price_up_btn)
+    
+    async def decrease_quantity(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        if self.quantity > 1:
+            self.quantity -= 1
+            self.update_quantity_display()
+            await interaction.response.edit_message(view=self)
+        else:
+            await interaction.response.defer()
+    
+    async def increase_quantity(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        if self.quantity < self.item_data[2]:  # Can't exceed available quantity
+            self.quantity += 1
+            self.update_quantity_display()
+            await interaction.response.edit_message(view=self)
+        else:
+            await interaction.response.defer()
+    
+    async def decrease_price(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        if self.price > 1:
+            self.price = max(1, self.price - 10)  # Decrease by 10, minimum 1
+            self.update_price_display()
+            await interaction.response.edit_message(view=self)
+        else:
+            await interaction.response.defer()
+    
+    async def increase_price(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        self.price += 10  # Increase by 10
+        self.update_price_display()
+        await interaction.response.edit_message(view=self)
+    
+    def update_quantity_display(self):
+        """Update the quantity display button"""
+        for item in self.children:
+            if hasattr(item, 'custom_id') and item.custom_id == "qty_display":
+                item.label = f"Qty: {self.quantity}"
+                break
+    
+    def update_price_display(self):
+        """Update the price display button"""
+        for item in self.children:
+            if hasattr(item, 'custom_id') and item.custom_id == "price_display":
+                item.label = f"Price: {self.price}"
+                break
+    
+    async def player_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        target_id = int(interaction.data['values'][0])
+        target_member = interaction.guild.get_member(target_id)
+        
+        if not target_member:
+            await interaction.response.send_message("Player not found!", ephemeral=True)
+            return
+        
+        # Call the item trading command
+        item_cog = self.bot.get_cog('ItemTradingCog')
+        if item_cog:
+            await item_cog.sell_item.callback(item_cog, interaction, target_member, self.item_data[0], self.quantity, self.price)
+        else:
+            await interaction.response.send_message("Item trading system unavailable.", ephemeral=True)
+
+
+class GiveItemSelectView(discord.ui.View):
+    """Multi-step view for giving items: First select item, then select player"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.user_id = user_id
+        self.selected_item_data = None
+        self.quantity = 1
+        
+        # Start by showing item selection
+        self.show_item_selection()
+    
+    def show_item_selection(self):
+        """Show the item selection dropdown"""
+        self.clear_items()
+        
+        # Get user's inventory
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not char_data or not char_data[0]:
+            return  # No character or location
+        
+        # Get user's inventory
+        inventory = self.bot.db.execute_query(
+            """SELECT item_name, item_type, quantity, description, value 
+               FROM inventory 
+               WHERE owner_id = ? AND quantity > 0 
+               ORDER BY item_name""",
+            (self.user_id,),
+            fetch='all'
+        )
+        
+        if not inventory:
+            return  # No items
+        
+        # Create select menu for items
+        options = []
+        for idx, (item_name, item_type, quantity, description, value) in enumerate(inventory[:25]):  # Discord limit
+            label = f"{item_name}"
+            if quantity > 1:
+                label += f" (x{quantity})"
+            
+            # Truncate label if too long
+            if len(label) > 100:
+                label = label[:97] + "..."
+            
+            # Create description
+            desc_parts = []
+            if item_type:
+                desc_parts.append(item_type.replace('_', ' ').title())
+            if value > 0:
+                desc_parts.append(f"{value} credits")
+            
+            option_desc = " | ".join(desc_parts) if desc_parts else "No additional info"
+            if len(option_desc) > 100:
+                option_desc = option_desc[:97] + "..."
+            
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    value=str(idx),
+                    description=option_desc
+                )
+            )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder="Choose an item to give...",
+                options=options
+            )
+            select.callback = self.item_selected
+            self.add_item(select)
+            self.inventory = inventory  # Store for later reference
+    
+    async def item_selected(self, interaction: discord.Interaction):
+        """Handle item selection and move to player selection"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        item_idx = int(interaction.data['values'][0])
+        self.selected_item_data = self.inventory[item_idx]
+        self.quantity = 1  # Default quantity
+        
+        # Get other players at same location
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        other_players = self.bot.db.execute_query(
+            """SELECT c.user_id, c.name 
+               FROM characters c 
+               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1""",
+            (char_data[0], self.user_id),
+            fetch='all'
+        )
+        
+        if not other_players:
+            await interaction.response.send_message("No other players at this location!", ephemeral=True)
+            return
+        
+        # Show player selection with item info in embed
+        embed = discord.Embed(
+            title="🎁 Give Item - Select Player",
+            description=f"Selected item: **{self.selected_item_data[0]}**\nChoose a player to give it to:",
+            color=0x2ecc71
+        )
+        
+        # Create new view for player selection
+        view = PlayerGiveSelectView(self.bot, self.user_id, other_players, self.selected_item_data, self.quantity)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class SellItemSelectView(discord.ui.View):
+    """Multi-step view for selling items: First select item, then select player and price"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.user_id = user_id
+        self.selected_item_data = None
+        self.quantity = 1
+        
+        # Start by showing item selection
+        self.show_item_selection()
+    
+    def show_item_selection(self):
+        """Show the item selection dropdown"""
+        self.clear_items()
+        
+        # Get user's inventory
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not char_data or not char_data[0]:
+            return  # No character or location
+        
+        # Get user's inventory
+        inventory = self.bot.db.execute_query(
+            """SELECT item_name, item_type, quantity, description, value 
+               FROM inventory 
+               WHERE owner_id = ? AND quantity > 0 
+               ORDER BY item_name""",
+            (self.user_id,),
+            fetch='all'
+        )
+        
+        if not inventory:
+            return  # No items
+        
+        # Create select menu for items
+        options = []
+        for idx, (item_name, item_type, quantity, description, value) in enumerate(inventory[:25]):  # Discord limit
+            label = f"{item_name}"
+            if quantity > 1:
+                label += f" (x{quantity})"
+            
+            # Truncate label if too long
+            if len(label) > 100:
+                label = label[:97] + "..."
+            
+            # Create description
+            desc_parts = []
+            if item_type:
+                desc_parts.append(item_type.replace('_', ' ').title())
+            if value > 0:
+                desc_parts.append(f"{value} credits")
+            
+            option_desc = " | ".join(desc_parts) if desc_parts else "No additional info"
+            if len(option_desc) > 100:
+                option_desc = option_desc[:97] + "..."
+            
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    value=str(idx),
+                    description=option_desc
+                )
+            )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder="Choose an item to sell...",
+                options=options
+            )
+            select.callback = self.item_selected
+            self.add_item(select)
+            self.inventory = inventory  # Store for later reference
+    
+    async def item_selected(self, interaction: discord.Interaction):
+        """Handle item selection and move to player selection"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+        
+        item_idx = int(interaction.data['values'][0])
+        self.selected_item_data = self.inventory[item_idx]
+        self.quantity = 1  # Default quantity
+        
+        # Get other players at same location
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        other_players = self.bot.db.execute_query(
+            """SELECT c.user_id, c.name 
+               FROM characters c 
+               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1""",
+            (char_data[0], self.user_id),
+            fetch='all'
+        )
+        
+        if not other_players:
+            await interaction.response.send_message("No other players at this location!", ephemeral=True)
+            return
+        
+        # Show player selection with item info in embed
+        embed = discord.Embed(
+            title="💰 Sell Item - Select Player & Price",
+            description=f"Selected item: **{self.selected_item_data[0]}**\nBase value: {self.selected_item_data[4]} credits\nChoose a player and adjust quantity/price:",
+            color=0xf39c12
+        )
+        
+        # Create new view for player selection with pricing
+        view = PlayerSellSelectView(self.bot, self.user_id, other_players, self.selected_item_data, self.quantity)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class AdminInventoryDeleteView(discord.ui.View):
+    """Admin view for deleting items from player inventory"""
+    
+    def __init__(self, bot, user_id: int, items: list, char_name: str):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.bot = bot
+        self.user_id = user_id
+        self.items = items
+        self.char_name = char_name
+        self.current_page = 0
+        self.items_per_page = 20
+        
+        # Create the select menu and pagination buttons
+        self._update_components()
+    
+    def _update_components(self):
+        """Update the view components based on current page"""
+        self.clear_items()
+        
+        # Calculate pagination
+        total_pages = (len(self.items) - 1) // self.items_per_page + 1 if self.items else 1
+        start_idx = self.current_page * self.items_per_page
+        end_idx = start_idx + self.items_per_page
+        page_items = self.items[start_idx:end_idx]
+        
+        if page_items:
+            # Create select menu options
+            options = []
+            seen_values = set()
+            
+            for idx, (item_name, item_type, quantity, description, value, item_id, is_equipped) in enumerate(page_items):
+                # Create unique value for each item
+                item_value = f"{start_idx + idx}_{item_name[:50]}"
+                
+                # Ensure unique values
+                counter = 1
+                original_value = item_value
+                while item_value in seen_values:
+                    item_value = f"{original_value}_{counter}"
+                    counter += 1
+                seen_values.add(item_value)
+                
+                # Create label with quantity and equipped status
+                equipped_indicator = " ⚡" if is_equipped else ""
+                label = f"{item_name}{equipped_indicator}"
+                if quantity > 1:
+                    label += f" (x{quantity})"
+                
+                # Truncate label if too long
+                if len(label) > 100:
+                    label = label[:97] + "..."
+                
+                # Create description
+                desc_parts = []
+                if item_type:
+                    desc_parts.append(item_type.replace('_', ' ').title())
+                if value > 0:
+                    desc_parts.append(f"{value} credits")
+                if is_equipped:
+                    desc_parts.append("⚠️ EQUIPPED")
+                
+                option_desc = " | ".join(desc_parts) if desc_parts else "No additional info"
+                if len(option_desc) > 100:
+                    option_desc = option_desc[:97] + "..."
+                
+                options.append(
+                    discord.SelectOption(
+                        label=label,
+                        value=item_value,
+                        description=option_desc
+                    )
+                )
+            
+            # Add select menu
+            select = discord.ui.Select(
+                placeholder=f"Select item to DELETE (Page {self.current_page + 1}/{total_pages})",
+                options=options,
+                custom_id="item_delete_select"
+            )
+            select.callback = self.item_selected
+            self.add_item(select)
+        
+        # Add pagination buttons if needed
+        if total_pages > 1:
+            # Previous button
+            prev_btn = discord.ui.Button(
+                label="Previous",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.current_page == 0,
+                custom_id="prev_page"
+            )
+            prev_btn.callback = self.previous_page
+            self.add_item(prev_btn)
+            
+            # Next button
+            next_btn = discord.ui.Button(
+                label="Next",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.current_page >= total_pages - 1,
+                custom_id="next_page"
+            )
+            next_btn.callback = self.next_page
+            self.add_item(next_btn)
+    
+    async def item_selected(self, interaction: discord.Interaction):
+        """Handle item selection for deletion"""
+        selected_value = interaction.data['values'][0]
+        
+        # Parse the selected value to get item index
+        try:
+            item_index = int(selected_value.split('_')[0])
+            selected_item = self.items[item_index]
+            item_name, item_type, quantity, description, value, item_id, is_equipped = selected_item
+            
+            # Create confirmation view
+            confirm_view = AdminDeleteConfirmView(
+                self.bot, self.user_id, selected_item, self.char_name, self, item_index
+            )
+            
+            # Create warning embed
+            embed = discord.Embed(
+                title="⚠️ CONFIRM ITEM DELETION",
+                description=f"Are you sure you want to **permanently delete** this item from **{self.char_name}**'s inventory?",
+                color=0xff0000
+            )
+            embed.add_field(name="Item", value=item_name, inline=True)
+            embed.add_field(name="Quantity", value=str(quantity), inline=True)
+            embed.add_field(name="Value", value=f"{value} credits" if value > 0 else "No value", inline=True)
+            
+            if is_equipped:
+                embed.add_field(name="⚠️ WARNING", value="This item is currently **EQUIPPED**!", inline=False)
+            
+            embed.set_footer(text="This action cannot be undone!")
+            
+            await interaction.response.edit_message(embed=embed, view=confirm_view)
+            
+        except (ValueError, IndexError):
+            await interaction.response.send_message("Error: Invalid item selection.", ephemeral=True)
+    
+    async def previous_page(self, interaction: discord.Interaction):
+        """Go to previous page"""
+        if self.current_page > 0:
+            self.current_page -= 1
+            self._update_components()
+            
+            embed = discord.Embed(
+                title="🗑️ Admin Item Deletion",
+                description=f"Select items to delete from **{self.char_name}**'s inventory.\n⚠️ **This action cannot be undone!**",
+                color=0xff0000
+            )
+            embed.add_field(name="Target Character", value=self.char_name, inline=True)
+            embed.add_field(name="Total Items", value=len(self.items), inline=True)
+            embed.set_footer(text="Admin Tool • Items will be permanently deleted")
+            
+            await interaction.response.edit_message(embed=embed, view=self)
+    
+    async def next_page(self, interaction: discord.Interaction):
+        """Go to next page"""
+        total_pages = (len(self.items) - 1) // self.items_per_page + 1
+        if self.current_page < total_pages - 1:
+            self.current_page += 1
+            self._update_components()
+            
+            embed = discord.Embed(
+                title="🗑️ Admin Item Deletion",
+                description=f"Select items to delete from **{self.char_name}**'s inventory.\n⚠️ **This action cannot be undone!**",
+                color=0xff0000
+            )
+            embed.add_field(name="Target Character", value=self.char_name, inline=True)
+            embed.add_field(name="Total Items", value=len(self.items), inline=True)
+            embed.set_footer(text="Admin Tool • Items will be permanently deleted")
+            
+            await interaction.response.edit_message(embed=embed, view=self)
+
+
+class AdminDeleteConfirmView(discord.ui.View):
+    """Confirmation view for admin item deletion"""
+    
+    def __init__(self, bot, user_id: int, item_data: tuple, char_name: str, parent_view, item_index: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.item_data = item_data
+        self.char_name = char_name
+        self.parent_view = parent_view
+        self.item_index = item_index
+    
+    @discord.ui.button(label="DELETE ITEM", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def confirm_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Confirm and execute item deletion"""
+        item_name, item_type, quantity, description, value, item_id, is_equipped = self.item_data
+        
+        try:
+            # If item is equipped, unequip it first
+            if is_equipped:
+                self.bot.db.execute_query(
+                    "DELETE FROM character_equipment WHERE item_id = ? AND user_id = ?",
+                    (item_id, self.user_id)
+                )
+            
+            # Delete the item from database
+            self.bot.db.execute_query(
+                "DELETE FROM inventory WHERE item_id = ?",
+                (item_id,)
+            )
+            
+            # Remove item from parent view's items list
+            self.parent_view.items.pop(self.item_index)
+            
+            # Update parent view components
+            self.parent_view._update_components()
+            
+            # Success embed
+            embed = discord.Embed(
+                title="✅ Item Deleted Successfully",
+                description=f"**{item_name}** has been permanently deleted from **{self.char_name}**'s inventory.",
+                color=0x00ff00
+            )
+            embed.add_field(name="Deleted Item", value=item_name, inline=True)
+            embed.add_field(name="Quantity", value=str(quantity), inline=True)
+            embed.add_field(name="Admin", value=interaction.user.mention, inline=True)
+            
+            if is_equipped:
+                embed.add_field(name="Status", value="Item was unequipped before deletion", inline=False)
+            
+            embed.set_footer(text="Item deletion completed")
+            
+            # If no more items, show completion message
+            if not self.parent_view.items:
+                embed.add_field(name="Inventory Status", value="**All items deleted - inventory is now empty**", inline=False)
+                await interaction.response.edit_message(embed=embed, view=None)
+            else:
+                # Return to parent view with updated inventory
+                parent_embed = discord.Embed(
+                    title="🗑️ Admin Item Deletion",
+                    description=f"Select items to delete from **{self.char_name}**'s inventory.\n⚠️ **This action cannot be undone!**",
+                    color=0xff0000
+                )
+                parent_embed.add_field(name="Target Character", value=self.char_name, inline=True)
+                parent_embed.add_field(name="Total Items", value=len(self.parent_view.items), inline=True)
+                parent_embed.add_field(name="✅ Last Action", value=f"Deleted: {item_name}", inline=False)
+                parent_embed.set_footer(text="Admin Tool • Items will be permanently deleted")
+                
+                await interaction.response.edit_message(embed=parent_embed, view=self.parent_view)
+            
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error deleting item: {str(e)}", ephemeral=True)
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Cancel deletion and return to inventory view"""
+        embed = discord.Embed(
+            title="🗑️ Admin Item Deletion",
+            description=f"Select items to delete from **{self.char_name}**'s inventory.\n⚠️ **This action cannot be undone!**",
+            color=0xff0000
+        )
+        embed.add_field(name="Target Character", value=self.char_name, inline=True)
+        embed.add_field(name="Total Items", value=len(self.parent_view.items), inline=True)
+        embed.set_footer(text="Admin Tool • Items will be permanently deleted")
+        
+        await interaction.response.edit_message(embed=embed, view=self.parent_view)

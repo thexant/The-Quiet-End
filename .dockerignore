@@ -1,0 +1,74 @@
+# Version control
+.git
+.gitignore
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Database files (will be mounted as volumes)
+*.db
+DB BACKUPS/
+
+# Test files
+test_*.py
+*_test.py
+simple_corridor_test.py
+verify_fixes.py
+
+# Documentation
+*.md
+corridormigration.md
+
+# Windows specific
+*.bat
+setup.bat
+start.bat
+
+# Tokens and sensitive files
+tokens.txt
+
+# Node modules and electron app (not needed for bot)
+electron-app/node_modules/
+electron-app/dist/
+
+# Icons
+*.ico
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+.env
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

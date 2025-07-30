@@ -106,7 +106,7 @@ def get_character_location_status(db, user_id: int) -> Tuple[str, Optional[dict]
     transit_data = db.execute_query(
         """SELECT ts.corridor_id, c.name as corridor_name,
                   ol.name as origin_name, dl.name as dest_name,
-                  ts.origin_location, ts.destination_location
+                  ts.origin_location, ts.destination_location, c.corridor_type
            FROM travel_sessions ts
            JOIN corridors c ON ts.corridor_id = c.corridor_id
            JOIN locations ol ON ts.origin_location = ol.location_id
@@ -117,7 +117,7 @@ def get_character_location_status(db, user_id: int) -> Tuple[str, Optional[dict]
     )
     
     if transit_data:
-        corridor_id, corridor_name, origin_name, dest_name, origin_id, dest_id = transit_data
+        corridor_id, corridor_name, origin_name, dest_name, origin_id, dest_id, corridor_type = transit_data
         status_text = f"In transit: {origin_name} → {dest_name} (via {corridor_name})"
         return status_text, {
             'type': 'transit',
@@ -126,7 +126,8 @@ def get_character_location_status(db, user_id: int) -> Tuple[str, Optional[dict]
             'origin_name': origin_name,
             'dest_name': dest_name,
             'origin_id': origin_id,
-            'dest_id': dest_id
+            'dest_id': dest_id,
+            'corridor_type': corridor_type
         }
     
     # If nothing else, they are lost

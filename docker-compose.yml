@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  rpg-bot:
+    build: .
+    container_name: discord-rpg-bot
+    restart: unless-stopped
+    
+    # Environment variables
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - COMMAND_PREFIX=${COMMAND_PREFIX:-!}
+      - ACTIVITY_NAME=${ACTIVITY_NAME:-Entropy}
+      - ALLOWED_GUILD_ID=${ALLOWED_GUILD_ID}
+      - DATABASE_PATH=/app/data/bot.db
+    
+    # Volume mounts for data persistence
+    volumes:
+      - ./data:/app/data
+      - ./floormaps:/app/floormaps
+      - ./landing:/app/landing
+    
+    # Optional: Expose port if web interface is used
+    ports:
+      - "8000:8000"
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import discord; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Resource limits (optional)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M

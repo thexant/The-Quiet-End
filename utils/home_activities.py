@@ -124,6 +124,12 @@ class HomeActivityView(discord.ui.View):
                 style=discord.ButtonStyle.secondary
             )
             self.add_item(button)
+        
+        # Add UniversalLeaveView components
+        from utils.leave_button import UniversalLeaveView
+        universal_leave_view = UniversalLeaveView(bot)
+        for item in universal_leave_view.children:
+            self.add_item(item)
     
     async def handle_activity(self, interaction: discord.Interaction, activity_type: str):
         """Handle activity interactions"""
@@ -256,13 +262,13 @@ class IncomeButton(discord.ui.Button):
                 f"**💰 Income Status**\n"
                 f"Daily Rate: {daily} credits/day\n"
                 f"Available to Collect: {accumulated or 0} credits\n\n"
-                f"Use `/income collect` to collect!",
+                f"Use `/tqe` and access the 'Extras > Homes' menu to collect!",
                 ephemeral=True
             )
         else:
             await interaction.response.send_message(
                 "Your home doesn't generate income yet!\n"
-                "Use `/income upgrade` to purchase income-generating upgrades.",
+                "Use `/tqe` and access the 'Extras > Homes' menu to purchase income-generating upgrades.",
                 ephemeral=True
             )
             

@@ -709,10 +709,10 @@ class ChannelManager:
             fetch='one'
         )
         
-        # Get services info including alignment flags
+        # Get services info including alignment flags and gate status
         services_info = self.db.execute_query(
             '''SELECT has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population,
-                      has_federal_supplies, has_black_market, has_shipyard
+                      has_federal_supplies, has_black_market, has_shipyard, gate_status, reconnection_eta
                FROM locations WHERE location_id = ?''',
             (loc_id,),
             fetch='one'
@@ -722,7 +722,7 @@ class ChannelManager:
             return
             
         (has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, 
-         population, has_federal_supplies, has_black_market, has_shipyard) = services_info
+         population, has_federal_supplies, has_black_market, has_shipyard, gate_status, reconnection_eta) = services_info
         
         # Get available homes info
         homes_info = self.db.execute_query(
@@ -766,6 +766,32 @@ class ChannelManager:
             if docking_fee and docking_fee > 0:
                 ownership_line += f" • Docking fee: {docking_fee:,} credits"
             enhanced_description += ownership_line
+        
+        # Add gate status info for gates
+        if loc_type == 'gate' and gate_status and gate_status != 'active':
+            if gate_status == 'unused':
+                enhanced_description += "\n\n⚫ **Gate Status: UNUSED** - This gate is disconnected from the corridor network. Only accessible via local space connections."
+                embed_color = 0x808080  # Gray for unused
+            elif gate_status == 'moving':
+                # Calculate ETA if available
+                eta_text = ""
+                if reconnection_eta:
+                    from datetime import datetime
+                    try:
+                        eta = datetime.fromisoformat(reconnection_eta.replace('Z', '+00:00'))
+                        now = datetime.now()
+                        time_diff = eta - now
+                        if time_diff.total_seconds() > 0:
+                            hours = int(time_diff.total_seconds() // 3600)
+                            minutes = int((time_diff.total_seconds() % 3600) // 60)
+                            if hours > 0:
+                                eta_text = f" - Reconnecting in {hours}h {minutes}m"
+                            else:
+                                eta_text = f" - Reconnecting in {minutes} minutes"
+                    except:
+                        pass
+                enhanced_description += f"\n\n🔄 **Gate Status: MOVING**{eta_text} - This gate is realigning with the corridor network."
+                embed_color = 0xFFD700  # Gold for moving
         
         # Create welcome embed with status-aware styling
         title_with_status = f"📍 Welcome to {display_name}"
@@ -896,35 +922,74 @@ class ChannelManager:
             value="Available" if log_count > 0 else "None",
             inline=True
         )
-        total_routes = self.db.execute_query(
-            '''SELECT COUNT(*) FROM corridors 
-               WHERE origin_location = ? AND is_active = 1''',
-            (loc_id,),
-            fetch='one'
-        )[0]
-        # Get available routes and display them
+        # Get available routes with bidirectional support
         routes = self.db.execute_query(
-            '''SELECT c.name, l.name as dest_name, l.location_type as dest_type, 
-                      c.travel_time, c.danger_level, l.location_id as dest_id
+            '''SELECT c.name,
+                      CASE 
+                          WHEN c.origin_location = ? THEN l_dest.name
+                          ELSE l_orig.name
+                      END AS dest_name,
+                      CASE 
+                          WHEN c.origin_location = ? THEN l_dest.location_type
+                          ELSE l_orig.location_type
+                      END AS dest_type,
+                      c.travel_time, c.danger_level,
+                      CASE 
+                          WHEN c.origin_location = ? THEN l_dest.location_id
+                          ELSE l_orig.location_id
+                      END AS dest_id,
+                      lo.location_type as origin_type,
+                      CASE WHEN lo.system_name = CASE 
+                          WHEN c.origin_location = ? THEN l_dest.system_name
+                          ELSE l_orig.system_name
+                      END THEN 1 ELSE 0 END AS same_system,
+                      c.corridor_type
                FROM corridors c
-               JOIN locations l ON c.destination_location = l.location_id
-               WHERE c.origin_location = ? AND c.is_active = 1
-               ORDER BY c.travel_time
-               LIMIT 8''',
-            (loc_id,),
+               JOIN locations l_dest ON c.destination_location = l_dest.location_id
+               JOIN locations l_orig ON c.origin_location = l_orig.location_id
+               JOIN locations lo ON ? = lo.location_id
+               WHERE (c.origin_location = ? OR (c.destination_location = ? AND c.is_bidirectional = 1)) 
+               AND c.is_active = 1
+               ORDER BY c.travel_time''',
+            (loc_id, loc_id, loc_id, loc_id, loc_id, loc_id, loc_id),
             fetch='all'
         )
         
         if routes:
+            # Deduplicate routes by (destination, corridor_type) to prevent duplicates
+            # while allowing different route types to the same destination
+            seen_routes = set()
+            unique_routes = []
+            for route in routes:
+                corridor_name, dest_name, dest_type, travel_time, danger, dest_id, origin_type, same_system, corridor_type = route
+                # Create unique key: destination name + corridor type
+                route_key = (dest_name, corridor_type)
+                if route_key not in seen_routes:
+                    seen_routes.add(route_key)
+                    unique_routes.append(route)
+            
+            routes = unique_routes
+            # Count total unique routes after deduplication
+            total_routes = len(routes)
+            
+            # Limit display to 8 routes
+            routes = routes[:8]
+            
             route_lines = []
-            for corridor_name, dest_name, dest_type, travel_time, danger, dest_id in routes:  # FIXED: Added dest_id                # Get display name for destination
+            for corridor_name, dest_name, dest_type, travel_time, danger, dest_id, origin_type, same_system, corridor_type in routes:
                 dest_display_name, _ = self.get_location_display_name(dest_id)  # Now dest_id is defined!                
-                # Determine route type and emoji
-                if "Approach" in corridor_name:
+                # Determine route type and emoji based on architecture and generation logic
+                major_types = {'colony', 'space_station', 'outpost'}
+                is_major_to_gate = (origin_type in major_types and dest_type == 'gate') or (origin_type == 'gate' and dest_type in major_types)
+                
+                if corridor_type == 'local_space' or ("Local Space" in corridor_name or "Approach" in corridor_name or 
+                    (is_major_to_gate and travel_time <= 300 and same_system)):
+                    # Local space: based on corridor_type or legacy name detection
                     route_emoji = "🌌"  # Local space
-                elif "Ungated" in corridor_name:
+                elif corridor_type == 'ungated':
                     route_emoji = "⭕"  # Dangerous ungated
                 else:
+                    # All other routes are gated (gate-to-gate long distance, different systems, etc.)
                     route_emoji = "🔵"  # Safe gated
                 
                 dest_emoji = {
@@ -1073,8 +1138,15 @@ class ChannelManager:
             fetch='one'
         )[0]
         
-        # Skip departure message if no other players present
-        if other_players == 0:
+        # Also check if anyone is traveling TO this location
+        travelers_coming = self.db.execute_query(
+            "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = ? AND status = 'traveling'",
+            (location_id,),
+            fetch='one'
+        )[0]
+        
+        # Skip departure message if no other players present AND no one is traveling here
+        if other_players == 0 and travelers_coming == 0:
             return
         
         # Get character name
@@ -1196,7 +1268,7 @@ class ChannelManager:
             except Exception as e:
                 print(f"❌ Failed to delete transit channel: {e}")
                 
-    async def give_user_location_access(self, user: discord.Member, location_id: int) -> bool:
+    async def give_user_location_access(self, user: discord.Member, location_id: int, send_arrival_notification: bool = True) -> bool:
         """Give a user access to a location's channel, creating it if necessary"""
         try:
             # Call get_or_create_location_channel with correct 3 parameters
@@ -1209,8 +1281,9 @@ class ChannelManager:
             await channel.set_permissions(user, read_messages=True, send_messages=True)
             await self._update_channel_activity(location_id)
             
-            # Send personalized location status to the user
-            await self.send_location_arrival(channel, user, location_id)
+            # Send personalized location status to the user (if not suppressed)
+            if send_arrival_notification:
+                await self.send_location_arrival(channel, user, location_id)
             
             print(f"✅ Successfully gave {user.name} access to location {location_id}")
             return True
@@ -1293,6 +1366,20 @@ class ChannelManager:
                 fetch='all'
             )
             
+            # Also check for empty home channels with read-only query
+            empty_home_channels = self.db.execute_read_query(
+                '''SELECT hi.home_id, hi.channel_id, lh.home_name,
+                          COUNT(CASE WHEN c.is_logged_in = 1 THEN c.user_id END) as logged_in_count
+                   FROM home_interiors hi
+                   JOIN location_homes lh ON hi.home_id = lh.home_id
+                   LEFT JOIN characters c ON lh.home_id = c.current_home_id
+                   WHERE hi.channel_id IS NOT NULL
+                   GROUP BY hi.home_id, hi.channel_id, lh.home_name
+                   HAVING logged_in_count = 0
+                   LIMIT 2''',  # Reduced limit
+                fetch='all'
+            )
+            
         except Exception as e:
             print(f"⚠️ Database timeout in cleanup query: {e}")
             return  # Skip cleanup if database is busy
@@ -1352,6 +1439,26 @@ class ChannelManager:
             # Yield between deletions
             await asyncio.sleep(0.5)
         
+        # Clean up home channels
+        for home_id, channel_id, home_name, logged_in_count in empty_home_channels:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                try:
+                    await channel.delete(reason="Automated cleanup - no players in home")
+                    print(f"🧹 Auto-cleaned home channel #{channel.name} for {home_name} (no players inside)")
+                    cleaned_count += 1
+                    
+                    # Update database after successful deletion
+                    self.db.execute_query(
+                        "UPDATE home_interiors SET channel_id = NULL WHERE home_id = ?",
+                        (home_id,)
+                    )
+                except Exception as e:
+                    print(f"❌ Failed to delete home channel for {home_name}: {e}")
+            
+            # Yield between deletions
+            await asyncio.sleep(0.5)
+        
         if cleaned_count > 0:
             print(f"🧹 Background cleanup: removed {cleaned_count} channels with no logged-in players")
             
@@ -1388,6 +1495,41 @@ class ChannelManager:
                         )
                     except Exception as e:
                         print(f"❌ Failed to cleanup empty ship channel: {e}")
+                        
+    async def immediate_home_cleanup(self, guild: discord.Guild, home_id: int):
+        """Check if a home should be cleaned up immediately when someone leaves"""
+        # Wait just a moment for database to update
+        await asyncio.sleep(1)
+        
+        # Check if home has any LOGGED-IN players
+        logged_in_players = self.db.execute_query(
+            "SELECT COUNT(*) FROM characters WHERE current_home_id = ? AND is_logged_in = 1",
+            (home_id,),
+            fetch='one'
+        )[0]
+        
+        if logged_in_players == 0:
+            # Get home channel info
+            home_info = self.db.execute_query(
+                "SELECT hi.channel_id, lh.home_name FROM home_interiors hi JOIN location_homes lh ON hi.home_id = lh.home_id WHERE hi.home_id = ?",
+                (home_id,),
+                fetch='one'
+            )
+            
+            if home_info and home_info[0]:
+                channel = guild.get_channel(home_info[0])
+                if channel:
+                    try:
+                        await channel.delete(reason="No logged-in players in home")
+                        print(f"🧹 Immediately cleaned up home channel for: {home_info[1]} (no logged-in players)")
+                        
+                        self.db.execute_query(
+                            "UPDATE home_interiors SET channel_id = NULL WHERE home_id = ?",
+                            (home_id,)
+                        )
+                    except Exception as e:
+                        print(f"❌ Failed to cleanup empty home channel: {e}")
+                        
     async def _cleanup_old_channels_if_needed(self, guild: discord.Guild):
         """
         Clean up old unused channels if we're approaching the limit - IMPROVED to count only logged-in players
@@ -1486,9 +1628,9 @@ class ChannelManager:
         # Wait just a moment for database to update
         await asyncio.sleep(5)
         
-        # IMPROVED: Check if location has any LOGGED-IN players
+        # IMPROVED: Check if location has any LOGGED-IN players (excluding those inside ships)
         logged_in_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE current_location = ? AND is_logged_in = 1",
+            "SELECT COUNT(*) FROM characters WHERE current_location = ? AND is_logged_in = 1 AND current_ship_id IS NULL",
             (location_id,),
             fetch='one'
         )[0]
@@ -1499,6 +1641,8 @@ class ChannelManager:
             (location_id,),
             fetch='one'
         )[0]
+        
+        print(f"🔍 Cleanup check for location {location_id}: logged_in_count={logged_in_count}, travelers_coming={travelers_coming}")
         
         if logged_in_count == 0 and travelers_coming == 0:
             # Get channel info
@@ -1585,15 +1729,84 @@ class ChannelManager:
             else:
                 dest_display_name = destination  # Fallback to passed name
 
-            if "Approach" in corridor_name:
-                travel_type = "local space"
-                topic = f"In local space traveling to {dest_display_name}"
-            elif "Ungated" in corridor_name:
-                travel_type = "dangerous ungated corridor"
-                topic = f"In dangerous ungated corridor {corridor_name} to {dest_display_name}"
+            # Get origin and destination location types to properly determine travel type
+            print(f"🔍 DEBUG: Looking up corridor info for '{corridor_name}'")
+            try:
+                corridor_info = self.db.execute_query(
+                    '''SELECT lo.location_type as origin_type, ld.location_type as dest_type,
+                              CASE WHEN lo.system_name = ld.system_name THEN 1 ELSE 0 END as same_system,
+                              c.corridor_type
+                       FROM corridors c
+                       JOIN locations lo ON c.origin_location = lo.location_id
+                       JOIN locations ld ON c.destination_location = ld.location_id
+                       WHERE c.name = ? AND c.is_active = 1
+                       LIMIT 1''',
+                    (corridor_name,),
+                    fetch='one'
+                )
+                print(f"🔍 DEBUG: Corridor info result: {corridor_info}")
+            except Exception as db_error:
+                print(f"❌ Database error looking up corridor info: {db_error}")
+                # Fallback query without corridor_type column
+                try:
+                    corridor_info = self.db.execute_query(
+                        '''SELECT lo.location_type as origin_type, ld.location_type as dest_type,
+                                  CASE WHEN lo.system_name = ld.system_name THEN 1 ELSE 0 END as same_system,
+                                  'unknown' as corridor_type
+                           FROM corridors c
+                           JOIN locations lo ON c.origin_location = lo.location_id
+                           JOIN locations ld ON c.destination_location = ld.location_id
+                           WHERE c.name = ? AND c.is_active = 1
+                           LIMIT 1''',
+                        (corridor_name,),
+                        fetch='one'
+                    )
+                    print(f"🔍 DEBUG: Fallback corridor info result: {corridor_info}")
+                except Exception as fallback_error:
+                    print(f"❌ Fallback database query also failed: {fallback_error}")
+                    corridor_info = None
+            
+            # Determine travel type based on architectural rules
+            if corridor_info:
+                origin_type, dest_type, same_system, corridor_type = corridor_info
+                major_types = {'colony', 'space_station', 'outpost'}
+                is_gate_to_major = (origin_type == 'gate' and dest_type in major_types) or (origin_type in major_types and dest_type == 'gate')
+                
+                # Apply architectural rules for travel type determination
+                if corridor_type == 'ungated':
+                    travel_type = "dangerous ungated corridor"
+                    topic = f"In dangerous ungated corridor {corridor_name} to {dest_display_name}"
+                elif corridor_type == 'local_space' or (is_gate_to_major and same_system) or "Approach" in corridor_name or "Local Space" in corridor_name:
+                    # Local space corridors or gate to major location in same system, or legacy name detection
+                    travel_type = "local space"
+                    topic = f"In local space traveling to {dest_display_name}"
+                elif corridor_type == 'unknown':
+                    # Fallback for missing corridor_type column - use legacy name detection
+                    print(f"⚠️ Using fallback travel type detection for {corridor_name}")
+                    if "Approach" in corridor_name or "Local Space" in corridor_name:
+                        travel_type = "local space"
+                        topic = f"In local space traveling to {dest_display_name}"
+                    elif "Ungated" in corridor_name:
+                        travel_type = "dangerous ungated corridor"
+                        topic = f"In dangerous ungated corridor {corridor_name} to {dest_display_name}"
+                    else:
+                        travel_type = "gated corridor"
+                        topic = f"In gated corridor {corridor_name} to {dest_display_name}"
+                else:
+                    # Default to gated corridor (gate-to-gate routes)
+                    travel_type = "gated corridor"
+                    topic = f"In gated corridor {corridor_name} to {dest_display_name}"
             else:
-                travel_type = "gated corridor"
-                topic = f"In gated corridor {corridor_name} to {dest_display_name}"
+                # Fallback logic if we can't determine from DB
+                if "Approach" in corridor_name or "Local Space" in corridor_name:
+                    travel_type = "local space"
+                    topic = f"In local space traveling to {dest_display_name}"
+                elif "Ungated" in corridor_name:
+                    travel_type = "dangerous ungated corridor"
+                    topic = f"In dangerous ungated corridor {corridor_name} to {dest_display_name}"
+                else:
+                    travel_type = "gated corridor"
+                    topic = f"In gated corridor {corridor_name} to {dest_display_name}"
             
             # Create the transit channel
             channel = await guild.create_text_channel(
@@ -1732,10 +1945,22 @@ class ChannelManager:
             inline=False
         )
         
-        if travel_type != "local space":
+        if travel_type == "local space":
             embed.add_field(
                 name="🌌 Local Space",
-                value="You are travelling through local space which is significantly less dangerous than corridor travel.",
+                value="You are travelling through **local space** which is significantly less dangerous than corridor travel.",
+                inline=False
+            )
+        elif travel_type == "gated corridor":
+            embed.add_field(
+                name="🔵 Gated Corridor",
+                value="You are travelling through a **Gated Corridor** with enhanced stabilization systems and hazard monitoring.",
+                inline=False
+            )
+        elif travel_type == "dangerous ungated corridor":
+            embed.add_field(
+                name="⭕ Ungated Corridor",
+                value="You are travelling through a dangerous **Ungated Corridor**. Stay alert for hazards and maintain emergency readiness.",
                 inline=False
             )
         
@@ -1762,7 +1987,7 @@ class ChannelManager:
                 activities = activity_manager.get_ship_activities(ship_id)
                 
                 if activities:
-                    activity_view = ShipActivityView(self.bot, ship_id, ship_name, char_name, destination)
+                    activity_view = ShipActivityView(self.bot, ship_id, ship_name, char_name, destination, is_transit=True)
                     activity_embed = discord.Embed(
                         title="🎯 Ship Activities",
                         description="Pass the time during transit with your ship's facilities:",
@@ -1772,8 +1997,8 @@ class ChannelManager:
                     
         except Exception as e:
             print(f"❌ Failed to send transit welcome: {e}")
-    async def immediate_logout_cleanup(self, guild: discord.Guild, location_id: int, ship_id: int = None):
-        """Immediately check and cleanup a location when someone logs out"""
+    async def immediate_logout_cleanup(self, guild: discord.Guild, location_id: int, ship_id: int = None, home_id: int = None):
+        """Immediately check and cleanup a location, ship, or home when someone logs out"""
         # Wait just a moment for database to update
         await asyncio.sleep(1)
         
@@ -1815,9 +2040,13 @@ class ChannelManager:
                         except Exception as e:
                             print(f"❌ Failed to cleanup location channel during logout: {e}")
         
-        # NEW: Handle ship cleanup if provided
+        # Handle ship cleanup if provided
         if ship_id:
             await self.immediate_ship_cleanup(guild, ship_id)
+        
+        # Handle home cleanup if provided
+        if home_id:
+            await self.immediate_home_cleanup(guild, home_id)
 
     async def restore_user_location_on_login(self, user: discord.Member, location_id: int) -> bool:
         """Restore or create location access when a user logs in"""
@@ -2035,7 +2264,7 @@ class ChannelManager:
         
         embed.add_field(
             name="🎮 Available Actions",
-            value="• Use the activity buttons below to interact with your ship\n• `/ship interior leave` - Exit the ship\n• `/character inventory` - Check your items\n• `/character ship` - Check ship status",
+            value="• Use the activity buttons below to interact with your ship\n• Use the **Leave** button or `/shipinterior interior leave` - Exit the ship\n• `/character inventory` - Check your items\n• `/character ship` - Check ship status",
             inline=False
         )
         
@@ -2135,6 +2364,10 @@ class CharacterDeleteConfirmView(discord.ui.View):
 
         # Delete character identity (add this line)
         self.bot.db.execute_query("DELETE FROM character_identity WHERE user_id = ?", (self.user_id,))
+        
+        # Delete character inventory
+        self.bot.db.execute_query("DELETE FROM character_inventory WHERE user_id = ?", (self.user_id,))
+        self.bot.db.execute_query("DELETE FROM inventory WHERE owner_id = ?", (self.user_id,))
 
         if ship_id:
             self.bot.db.execute_query("DELETE FROM ships WHERE ship_id = ?", (ship_id,))

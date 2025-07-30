@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Tuple
 from utils.npc_data import generate_npc_name
 import asyncio
+import gc
 
 class HistoryGenerator:
     """Generates galactic history events for locations and notable figures"""
@@ -85,114 +86,261 @@ class HistoryGenerator:
         ]
 
     async def generate_galaxy_history(self, start_year: int, current_date: str) -> int:
-        """Generate comprehensive galactic history for all major locations using transactions"""
-        print("📚 Generating galactic history...")
+        """Generate comprehensive galactic history using chunked transactions to prevent hangs"""
+        print("📚 Generating galactic history with chunked processing...")
+        print(f"🔧 DEBUG: Starting history generation for start_year={start_year}, current_date={current_date}")
         
-        # Use transaction for bulk history generation
-        conn = self.db.begin_transaction()
         try:
-            # Clear existing history
-            self.db.execute_in_transaction(conn, "DELETE FROM galactic_history")
+            # Clear existing history first in a separate transaction
+            await self._clear_existing_history()
             
-            # Get all locations
-            try:
-                locations = self.db.execute_in_transaction(conn,
-                    "SELECT location_id, name, location_type, establishment_date FROM locations WHERE is_generated = 1",
-                    fetch='all'
-                )
-            except Exception as e:
-                if "no such column: establishment_date" in str(e):
-                    print("⚠️ establishment_date column missing, adding it now...")
-                    
-                    # Set default dates for existing locations
-                    self.db.execute_in_transaction(conn, """
-                        UPDATE locations 
-                        SET establishment_date = '01-01-2750'
-                        WHERE establishment_date IS NULL AND is_generated = 1
-                    """)
-                    print("✅ Added establishment_date column and set default dates")
-                    
-                    # Retry the query
-                    locations = self.db.execute_in_transaction(conn,
-                        "SELECT location_id, name, location_type, establishment_date FROM locations WHERE is_generated = 1",
-                        fetch='all'
-                    )
-                else:
-                    raise e
+            # Get all locations for processing
+            locations = await self._get_locations_for_history()
+            if not locations:
+                print("⚠️ No locations found for history generation.")
+                return await self._generate_general_history_only(start_year, current_date)
             
-            # Limit locations for very large galaxies to prevent hanging
-            if len(locations) > 200:
-                locations = random.sample(locations, 200)
-                print(f"📚 Limited history generation to 200 locations (out of {len(locations)} total)")
-            
-            # Pre-fetch all NPCs in one query for efficiency
-            all_npcs = {}
-            if locations:
-                location_ids = [loc[0] for loc in locations]
-                # Create placeholders for IN clause
-                placeholders = ','.join(['?' for _ in location_ids])
-                npc_query = f"SELECT location_id, name FROM static_npcs WHERE location_id IN ({placeholders})"
-                all_npcs_list = self.db.execute_in_transaction(conn, npc_query, location_ids, fetch='all')
-                
-                # Group NPCs by location
-                for loc_id, npc_name in all_npcs_list:
-                    if loc_id not in all_npcs:
-                        all_npcs[loc_id] = []
-                    all_npcs[loc_id].append(npc_name)
-            
+            # Process locations in smaller chunks to prevent database hangs
+            chunk_size = 15  # Process 15 locations per transaction (reduced from 25)
             total_events = 0
-            current_date_obj = datetime.strptime(current_date, '%Y-%m-%d')
             
-            # Collect all history events to insert in bulk
-            all_history_events = []
+            print(f"📚 Processing {len(locations)} locations in chunks of {chunk_size}")
             
-            # Generate events for each location with progress tracking
-            print(f"📚 Generating history for {len(locations)} locations...")
-            for i, (location_id, name, location_type, establishment_date) in enumerate(locations):
-                # Reduced from 10 to 3-5 events per location
-                num_events = random.randint(3, 5)
-                location_events = await self._prepare_location_history_data_optimized(
-                    conn, location_id, name, location_type, establishment_date, 
-                    start_year, current_date_obj, all_npcs.get(location_id, []), num_events
-                )
-                all_history_events.extend(location_events)
-                total_events += len(location_events)
+            for i in range(0, len(locations), chunk_size):
+                chunk = locations[i:i + chunk_size]
+                chunk_events = await self._process_location_chunk(chunk, start_year, current_date, i)
+                total_events += chunk_events
                 
-                # Yield control every 25 locations
-                if i % 25 == 0:
-                    await asyncio.sleep(0.05)
-                    if i % 100 == 0:
-                        progress = (i / len(locations)) * 100
-                        print(f"    History progress: {progress:.0f}% ({i}/{len(locations)})")
-            
-            # Generate fewer general galactic events (reduced from 25 to 10)
-            print("📚 Generating general galactic events...")
-            general_events = await self._prepare_general_history_data_optimized(start_year, current_date_obj, 10)
-            all_history_events.extend(general_events)
-            total_events += len(general_events)
-            
-            # Bulk insert all history events in batches
-            if all_history_events:
-                batch_size = 500
-                query = '''INSERT INTO galactic_history 
-                           (location_id, event_title, event_description, historical_figure, event_date, event_type)
-                           VALUES (?, ?, ?, ?, ?, ?)'''
+                # Progress reporting
+                progress = min(100, ((i + chunk_size) / len(locations)) * 100)
+                print(f"    History progress: {progress:.0f}% ({i + len(chunk)}/{len(locations)})")
                 
-                for i in range(0, len(all_history_events), batch_size):
-                    batch = all_history_events[i:i + batch_size]
-                    self.db.executemany_in_transaction(conn, query, batch)
-                    await asyncio.sleep(0.1)  # Yield between batches
+                # Longer pause between chunks for better database safety
+                await asyncio.sleep(0.1)
             
-            # Commit the transaction
-            self.db.commit_transaction(conn)
+            # Generate general galactic events in a separate transaction
+            general_events = await self._generate_general_history_chunked(start_year, current_date)
+            total_events += general_events
             
-            print(f"📚 Generated {total_events} historical events")
+            # Memory cleanup after intensive history generation
+            gc.collect()
+            print("🧩 Memory cleanup completed after history generation")
+            
+            print(f"📚 Generated {total_events} historical events using chunked processing")
             return total_events
             
         except Exception as e:
             print(f"❌ Error generating galactic history: {e}")
-            self.db.rollback_transaction(conn)
+            import traceback
+            print(f"❌ DEBUG: Full error traceback:\n{traceback.format_exc()}")
             raise e
+    
+    async def _clear_existing_history(self):
+        """Clear existing history in a separate transaction"""
+        print("🔧 DEBUG: Clearing existing galactic history...")
+        max_retries = 5
+        for attempt in range(max_retries):
+            conn = None
+            try:
+                if attempt > 0:
+                    await asyncio.sleep(0.5 + attempt * 0.5)  # More aggressive exponential backoff
+                
+                conn = self.db.begin_transaction()
+                self.db.execute_in_transaction(conn, "DELETE FROM galactic_history")
+                self.db.commit_transaction(conn)
+                conn = None
+                print("🔧 DEBUG: Existing history cleared successfully")
+                return
+            except Exception as e:
+                if conn:
+                    try:
+                        self.db.rollback_transaction(conn)
+                    except Exception as cleanup_error:
+                        print(f"⚠️ Error during connection cleanup: {cleanup_error}")
+                    finally:
+                        conn = None
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    print(f"🔧 Database locked during history clear, retry {attempt + 1}/{max_retries}")
+                    continue
+                raise e
+    
+    async def _get_locations_for_history(self):
+        """Get all locations for history generation with retry logic"""
+        max_retries = 5
+        for attempt in range(max_retries):
+            conn = None
+            try:
+                if attempt > 0:
+                    await asyncio.sleep(0.5 + attempt * 0.5)  # More aggressive exponential backoff
+                
+                conn = self.db.begin_transaction()
+                try:
+                    locations = self.db.execute_in_transaction(conn,
+                        "SELECT location_id, name, location_type, establishment_date FROM locations WHERE is_generated = 1",
+                        fetch='all'
+                    )
+                    self.db.commit_transaction(conn)
+                    conn = None
+                    
+                    if locations and len(locations) > 150:
+                        locations = random.sample(locations, 150)
+                        print(f"📚 Limited history generation to 150 locations (out of {len(locations)} total)")
+                    
+                    print(f"🔧 Found {len(locations) if locations else 0} locations for history generation")
+                    return locations
+                    
+                except Exception as e:
+                    if conn:
+                        self.db.rollback_transaction(conn)
+                        conn = None
+                    if "no such column: establishment_date" in str(e):
+                        print("⚠️ establishment_date column missing, setting defaults...")
+                        # Try again with simpler query using read-only operation
+                        locations = self.db.execute_query(
+                            "SELECT location_id, name, location_type, '01-01-2750' as establishment_date FROM locations WHERE is_generated = 1",
+                            fetch='all'
+                        )
+                        if locations and len(locations) > 150:
+                            locations = random.sample(locations, 150)
+                        return locations
+                    raise e
+                    
+            except Exception as e:
+                if conn:
+                    try:
+                        self.db.rollback_transaction(conn)
+                    except Exception as cleanup_error:
+                        print(f"⚠️ Error during connection cleanup: {cleanup_error}")
+                    finally:
+                        conn = None
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    print(f"🔧 Database locked getting locations, retry {attempt + 1}/{max_retries}")
+                    continue
+                raise e
+    
+    async def _process_location_chunk(self, locations_chunk, start_year: int, current_date: str, chunk_index: int):
+        """Process a chunk of locations in a single transaction"""
+        max_retries = 5
+        for attempt in range(max_retries):
+            conn = None
+            try:
+                if attempt > 0:
+                    await asyncio.sleep(0.5 + attempt * 0.5)  # More aggressive exponential backoff
+                
+                conn = self.db.begin_transaction()
+                
+                try:
+                    current_date_obj = datetime.strptime(current_date, '%Y-%m-%d')
+                    total_events = 0
+                    
+                    # Pre-fetch NPCs for this chunk
+                    location_ids = [loc[0] for loc in locations_chunk]
+                    placeholders = ','.join(['?' for _ in location_ids])
+                    npc_query = f"SELECT location_id, name FROM static_npcs WHERE location_id IN ({placeholders})"
+                    all_npcs_list = self.db.execute_in_transaction(conn, npc_query, location_ids, fetch='all')
+                    
+                    # Group NPCs by location
+                    npcs_by_location = {}
+                    for loc_id, npc_name in all_npcs_list:
+                        if loc_id not in npcs_by_location:
+                            npcs_by_location[loc_id] = []
+                        npcs_by_location[loc_id].append(npc_name)
+                    
+                    # Process each location in this chunk
+                    query = '''INSERT INTO galactic_history 
+                               (location_id, event_title, event_description, historical_figure, event_date, event_type)
+                               VALUES (?, ?, ?, ?, ?, ?)'''
+                    
+                    all_events = []
+                    for location_id, name, location_type, establishment_date in locations_chunk:
+                        existing_npcs = npcs_by_location.get(location_id, [])
+                        num_events = random.randint(2, 3)  # Further reduced events per location for safety
+                        
+                        location_events = await self._prepare_location_history_data_optimized(
+                            conn, location_id, name, location_type, establishment_date, 
+                            start_year, current_date_obj, existing_npcs, num_events
+                        )
+                        all_events.extend(location_events)
+                        total_events += len(location_events)
+                    
+                    # Insert all events for this chunk
+                    if all_events:
+                        self.db.executemany_in_transaction(conn, query, all_events)
+                    
+                    self.db.commit_transaction(conn)
+                    conn = None
+                    return total_events
+                    
+                except Exception as e:
+                    if conn:
+                        self.db.rollback_transaction(conn)
+                        conn = None
+                    raise e
+                    
+            except Exception as e:
+                if conn:
+                    try:
+                        self.db.rollback_transaction(conn)
+                    except Exception as cleanup_error:
+                        print(f"⚠️ Error during connection cleanup: {cleanup_error}")
+                    finally:
+                        conn = None
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    print(f"🔧 Database locked processing chunk {chunk_index}, retry {attempt + 1}/{max_retries}")
+                    continue
+                print(f"❌ Error processing location chunk {chunk_index}: {e}")
+                return 0  # Return 0 events for failed chunk but don't crash
+    
+    async def _generate_general_history_chunked(self, start_year: int, current_date: str):
+        """Generate general galactic events in a separate transaction"""
+        max_retries = 5
+        for attempt in range(max_retries):
+            conn = None
+            try:
+                if attempt > 0:
+                    await asyncio.sleep(0.5 + attempt * 0.5)  # More aggressive exponential backoff
+                
+                conn = self.db.begin_transaction()
+                
+                try:
+                    current_date_obj = datetime.strptime(current_date, '%Y-%m-%d')
+                    general_events = await self._prepare_general_history_data_optimized(start_year, current_date_obj, 10)
+                    
+                    if general_events:
+                        query = '''INSERT INTO galactic_history 
+                                   (location_id, event_title, event_description, historical_figure, event_date, event_type)
+                                   VALUES (?, ?, ?, ?, ?, ?)'''
+                        self.db.executemany_in_transaction(conn, query, general_events)
+                    
+                    self.db.commit_transaction(conn)
+                    conn = None
+                    print(f"📚 Generated {len(general_events)} general galactic events")
+                    return len(general_events)
+                    
+                except Exception as e:
+                    if conn:
+                        self.db.rollback_transaction(conn)
+                        conn = None
+                    raise e
+                    
+            except Exception as e:
+                if conn:
+                    try:
+                        self.db.rollback_transaction(conn)
+                    except Exception as cleanup_error:
+                        print(f"⚠️ Error during connection cleanup: {cleanup_error}")
+                    finally:
+                        conn = None
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    print(f"🔧 Database locked generating general history, retry {attempt + 1}/{max_retries}")
+                    continue
+                print(f"❌ Error generating general history: {e}")
+                return 0  # Return 0 events but don't crash
+    
+    async def _generate_general_history_only(self, start_year: int, current_date: str):
+        """Generate only general galactic events when no locations exist"""
+        print("📚 Generating general galactic events only (no locations available)")
+        return await self._generate_general_history_chunked(start_year, current_date)
             
     async def _prepare_location_history_data(self, conn, location_id: int, location_name: str, 
                                            location_type: str, establishment_date: str, 
@@ -454,6 +602,9 @@ class HistoryGenerator:
             first_name, last_name = generate_npc_name()
             historical_figures.append(f"{first_name} {last_name}")
         
+        # Yield to prevent blocking the event loop
+        await asyncio.sleep(0)
+        
         # Parse establishment date (reuse existing logic but simplified)
         try:
             if establishment_date and establishment_date.strip() and '-' in establishment_date:
@@ -498,6 +649,10 @@ class HistoryGenerator:
                 location_id, event_title, event_description, figure, 
                 event_date.strftime('%Y-%m-%d'), event_type
             ))
+            
+            # Yield control more frequently during event generation
+            if _ % 1 == 0:  # Every event
+                await asyncio.sleep(0)
         
         return history_events
 
@@ -507,7 +662,7 @@ class HistoryGenerator:
         start_date = datetime(start_year - 100, 1, 1)  # Reduced history span
         
         # Generate fewer general galactic events
-        for _ in range(num_events):
+        for i in range(num_events):
             # Random date between early history and current date
             time_span = current_date - start_date
             random_days = random.randint(0, time_span.days)
@@ -532,6 +687,10 @@ class HistoryGenerator:
                 None, event_title, event_description, figure, 
                 event_date.strftime('%Y-%m-%d'), 'general'
             ))
+            
+            # Yield control every few events
+            if i % 3 == 0:
+                await asyncio.sleep(0)
         
         return history_events
     async def get_random_history_event(self, location_id: int = None) -> Dict:

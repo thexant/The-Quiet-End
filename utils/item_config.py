@@ -1,4 +1,5 @@
 import random
+import json
 from typing import Dict, List, Tuple, Any
 
 class ItemConfig:
@@ -89,6 +90,15 @@ class ItemConfig:
             "single_use": True,
             "rarity": "uncommon"
         },
+        "Radio Beacon": {
+            "type": "equipment",
+            "description": "One-time use radio broadcaster that repeats messages hourly for 6 hours",
+            "base_value": 250,
+            "usage_type": "radio_beacon",
+            "effect_value": 1,
+            "single_use": True,
+            "rarity": "uncommon"
+        },
         "Personal Log": {
             "type": "equipment",
             "description": "A digital logbook for recording personal entries and memories",
@@ -128,15 +138,7 @@ class ItemConfig:
             "single_use": True,
             "rarity": "common"
         },
-        "Recycled Brew": {
-            "type": "consumable",
-            "description": "Cheap, dubious alcohol distilled from reclaimed water. Tastes like regret.",
-            "base_value": 4,
-            "usage_type": "heal_hp",
-            "effect_value": 2,
-            "single_use": True,
-            "rarity": "common"
-        },
+
         "Space Soda": {
             "type": "consumable",
             "description": "Sweet and fizzy space soda",
@@ -156,15 +158,7 @@ class ItemConfig:
             "rarity": "common"
         },
 
-        "Synthetic Coffee": {
-            "type": "consumable",
-            "description": "A bitter cup of lab-grown coffee substitute. Keeps you awake, at least.",
-            "base_value": 5,
-            "usage_type": "heal_hp",
-            "effect_value": 2,
-            "single_use": True,
-            "rarity": "common"
-        },
+
 
         "Dried Fruit Pack": {
             "type": "consumable",
@@ -186,15 +180,6 @@ class ItemConfig:
             "rarity": "common"
         },
 
-        "Energy Drink": {
-            "type": "consumable",
-            "description": "Energy drink. High in caffeine, low in everything else.",
-            "base_value": 3,
-            "usage_type": "heal_hp",
-            "effect_value": 2,
-            "single_use": True,
-            "rarity": "common"
-        },
         "Protein Bars": {
             "type": "consumable",
             "description": "High-energy manufactured food",
@@ -631,6 +616,564 @@ class ItemConfig:
             "effect_value": 100,  # Full heal
             "single_use": True,
             "rarity": "legendary"
+        },
+
+        # Equipment Items - Stat Modifying Gear
+        "Neural Interface Headset": {
+            "type": "equipment",
+            "description": "Advanced neural interface that enhances cognitive processing",
+            "base_value": 2500,
+            "equippable": True,
+            "equipment_slot": "head",
+            "stat_modifiers": {"engineering": 3, "medical": 2},
+            "rarity": "rare"
+        },
+        "Navigational Aide Headset": {
+            "type": "equipment",
+            "description": "An advanced headset that provides navigational guidance and assistance.",
+            "base_value": 2750,
+            "equippable": True,
+            "equipment_slot": "head",
+            "stat_modifiers": {"navigation": 4},
+            "rarity": "rare"
+        },
+        "Tactical Goggles": {
+            "type": "equipment", 
+            "description": "Military-grade targeting and analysis goggles",
+            "base_value": 1200,
+            "equippable": True,
+            "equipment_slot": "eyes",
+            "stat_modifiers": {"combat": 2, "navigation": 1},
+            "rarity": "uncommon"
+        },
+        "Reinforced Vest": {
+            "type": "equipment",
+            "description": "Armored vest that provides protection and confidence",
+            "base_value": 1800,
+            "equippable": True,
+            "equipment_slot": "torso", 
+            "stat_modifiers": {"hp": 20, "combat": 1},
+            "rarity": "uncommon"
+        },
+        "Shoulder Plate (Left)": {
+            "type": "equipment",
+            "description": "A reinforced metal shoulder plating, for industrial or combat use.",
+            "base_value": 1200,
+            "equippable": True,
+            "equipment_slot": "arms_left",
+            "stat_modifiers": {"defense": 4},
+            "rarity": "rare"
+        },
+        "Exo Arm (Left)": {
+            "type": "equipment",
+            "description": "Mechanical arm augment with enhanced strength and precision",
+            "base_value": 5000,
+            "equippable": True,
+            "equipment_slot": "arms_left",
+            "stat_modifiers": {"engineering": 4, "combat": 2},
+            "rarity": "rare"
+        },
+        "Exo Arm (Right)": {
+            "type": "equipment",
+            "description": "Mechanical arm augment with enhanced strength and precision",
+            "base_value": 5000,
+            "equippable": True,
+            "equipment_slot": "arms_right", 
+            "stat_modifiers": {"engineering": 4, "combat": 2},
+            "rarity": "rare"
+        },
+        "Pilot's Gloves": {
+            "type": "equipment",
+            "description": "Specialized gloves that improve ship handling",
+            "base_value": 800,
+            "equippable": True,
+            "equipment_slot": "hands_both",  # Special case for paired items
+            "stat_modifiers": {"navigation": 3},
+            "rarity": "common"
+        },
+        "Medical Scanner Glove (Left)": {
+            "type": "equipment",
+            "description": "Medical diagnostic glove with built-in sensors",
+            "base_value": 1500,
+            "equippable": True,
+            "equipment_slot": "hands_left",
+            "stat_modifiers": {"medical": 3},
+            "rarity": "uncommon"
+        },
+        "Tool Grip Glove (Right)": {
+            "type": "equipment",
+            "description": "Enhanced grip glove for precision engineering work",
+            "base_value": 900,
+            "equippable": True,
+            "equipment_slot": "hands_right",
+            "stat_modifiers": {"engineering": 2},
+            "rarity": "common"
+        },
+        "Combat Leg Brace (Left)": {
+            "type": "equipment",
+            "description": "Reinforced leg brace that improves stability in combat",
+            "base_value": 1100,
+            "equippable": True,
+            "equipment_slot": "legs_left",
+            "stat_modifiers": {"combat": 2},
+            "rarity": "uncommon"
+        },
+        "Navigation Leg Brace (Right)": {
+            "type": "equipment", 
+            "description": "Leg brace with built-in navigation sensors",
+            "base_value": 1100,
+            "equippable": True,
+            "equipment_slot": "legs_right",
+            "stat_modifiers": {"navigation": 2},
+            "rarity": "uncommon"
+        },
+        "Magnetic Boots": {
+            "type": "equipment",
+            "description": "Boots with magnetic soles for zero-g movement",
+            "base_value": 1400,
+            "equippable": True,
+            "equipment_slot": "feet_both",  # Special case for paired items
+            "stat_modifiers": {"navigation": 2, "engineering": 1},
+            "rarity": "uncommon"
+        },
+
+        # Armor Items with Defense
+        "Military Helmet": {
+            "type": "equipment",
+            "description": "Combat-grade protective helmet with reinforced plating",
+            "base_value": 950,
+            "equippable": True,
+            "equipment_slot": "head",
+            "stat_modifiers": {"defense": 8},
+            "rarity": "uncommon"
+        },
+        "Safety Goggles": {
+            "type": "equipment", 
+            "description": "Transparent protective goggles for industrial use.",
+            "base_value": 80,
+            "equippable": True,
+            "equipment_slot": "eyes",
+            "stat_modifiers": {"defense": 1},
+            "rarity": "common"
+        },
+        "Ballistic Vest": {
+            "type": "equipment",
+            "description": "Heavy ballistic protection vest with ceramic plates",
+            "base_value": 2100,
+            "equippable": True,
+            "equipment_slot": "torso",
+            "stat_modifiers": {"defense": 15, "max_hp": 10},
+            "rarity": "rare"
+        },
+        "Light Tactical Vest": {
+            "type": "equipment",
+            "description": "Lightweight tactical vest offering moderate protection",
+            "base_value": 1750,
+            "equippable": True,
+            "equipment_slot": "torso",
+            "stat_modifiers": {"defense": 8, "navigation": 1},
+            "rarity": "uncommon"
+        },
+        "Armored Gloves": {
+            "type": "equipment",
+            "description": "Heavy-duty protective gloves with reinforced knuckles",
+            "base_value": 400,
+            "equippable": True,
+            "equipment_slot": "hands_both",
+            "stat_modifiers": {"defense": 4, "combat": 1},
+            "rarity": "uncommon"
+        },
+        "Shin Guards": {
+            "type": "equipment",
+            "description": "Protective leg armor for hazardous environments",
+            "base_value": 320,
+            "equippable": True,
+            "equipment_slot": "legs_both",
+            "stat_modifiers": {"defense": 3},
+            "rarity": "common"
+        },
+        "Knee Pads": {
+            "type": "equipment",
+            "description": "Reinforced knee guards for mobile operations",
+            "base_value": 275,
+            "equippable": True,
+            "equipment_slot": "legs_both",
+            "stat_modifiers": {"defense": 2},
+            "rarity": "common"
+        },
+        "Combat Boots": {
+            "type": "equipment",
+            "description": "Military-grade boots with steel toe protection",
+            "base_value": 1600,
+            "equippable": True,
+            "equipment_slot": "feet_both",
+            "stat_modifiers": {"defense": 5, "combat": 1},
+            "rarity": "uncommon"
+        },
+        "Powered Exoskeleton": {
+            "type": "equipment",
+            "description": "Full-body powered armor with integrated life support",
+            "base_value": 15000,
+            "equippable": True,
+            "equipment_slot": "torso",
+            "stat_modifiers": {"defense": 30, "engineering": 3, "max_hp": 25},
+            "rarity": "legendary"
+        },
+
+        # Cosmetic Clothing Items (0 Defense)
+        "Casual Cap": {
+            "type": "clothing",
+            "description": "A simple baseball cap for everyday wear",
+            "base_value": 25,
+            "equippable": True,
+            "equipment_slot": "head",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Gateworker Slacks": {
+            "type": "clothing",
+            "description": "Standard-issue Gate Technician pants with reinforced seams.",
+            "base_value": 60,
+            "equippable": True,
+            "equipment_slot": "legs_both",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Clown Mask": {
+            "type": "clothing",
+            "description": "A rubber clown mask, complete with a wig made of synthetic hairs.",
+            "base_value": 160,
+            "equippable": True,
+            "equipment_slot": "head",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "rare"
+        },
+        "Platform Boots": {
+            "type": "clothing",
+            "description": "Clunky, elevated boots popular with urban youth.",
+            "base_value": 90,
+            "equippable": True,
+            "equipment_slot": "feet_both",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "uncommon"
+        },
+        "Vintage Flight Cap": {
+            "type": "clothing",
+            "description": "Replica of an old-Earth pilot’s cap, complete with faux leather straps.",
+            "base_value": 50,
+            "equippable": True,
+            "equipment_slot": "head",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Checkered Pants": {
+            "type": "clothing",
+            "description": "Loud patterned pants, a favorite among station performers and eccentrics.",
+            "base_value": 80,
+            "equippable": True,
+            "equipment_slot": "legs_both",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "uncommon"
+        },
+        "Crop Top": {
+            "type": "clothing",
+            "description": "A minimalist top. Popular in warmer colonies.",
+            "base_value": 55,
+            "equippable": True,
+            "equipment_slot": "torso",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Polo Shirt": {
+            "type": "clothing",
+            "description": "Synthetic-collar shirt with a faded logo printed on the chest.",
+            "base_value": 50,
+            "equippable": True,
+            "equipment_slot": "torso",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Folded Bandana": {
+            "type": "clothing",
+            "description": "A thin band of cloth tied around the head, often used to keep sweat out of optics.",
+            "base_value": 25,
+            "equippable": True,
+            "equipment_slot": "head",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Tuxedo Graphic T-Shirt": {
+            "type": "clothing",
+            "description": "A printed tee that looks like formalwear from ten meters away. Maybe.",
+            "base_value": 60,
+            "equippable": True,
+            "equipment_slot": "torso",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "uncommon"
+        },
+        "Clown Shoes": {
+            "type": "clothing",
+            "description": "Oversized red shoes that squeak with each step. You wear these, you live with the consequences.",
+            "base_value": 140,
+            "equippable": True,
+            "equipment_slot": "feet_both",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "rare"
+        },
+        "Cargo Jorts": {
+            "type": "clothing",
+            "description": "A pair of denim cargo shorts.",
+            "base_value": 95,
+            "equippable": True,
+            "equipment_slot": "legs_both",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "rare"
+        },
+        "Stylish Sunglasses": {
+            "type": "clothing",
+            "description": "Fashionable sunglasses that make you look cool",
+            "base_value": 40,
+            "equippable": True,
+            "equipment_slot": "eyes", 
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Casual Shirt": {
+            "type": "clothing",
+            "description": "Comfortable everyday clothing",
+            "base_value": 50,
+            "equippable": True,
+            "equipment_slot": "torso",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Work Gloves": {
+            "type": "clothing",
+            "description": "Basic work gloves for manual labor",
+            "base_value": 30,
+            "equippable": True,
+            "equipment_slot": "hands_both",
+            "stat_modifiers": {"defense": 0, "engineering": 1},
+            "rarity": "common"
+        },
+        "Work Pants": {
+            "type": "clothing",
+            "description": "Formal pants for professional appearances",
+            "base_value": 80,
+            "equippable": True,
+            "equipment_slot": "legs_left",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },        
+        "Insulated Boots": {
+            "type": "clothing",
+            "description": "Thick boots for warmth.",
+            "base_value": 80,
+            "equippable": True,
+            "equipment_slot": "feet_both",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Sweatpants": {
+            "type": "clothing",
+            "description": "Basic fabric sweatpants.",
+            "base_value": 40,
+            "equippable": True,
+            "equipment_slot": "legs_both",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Formal Shoes": {
+            "type": "clothing",
+            "description": "Polished shoes for formal occasions",
+            "base_value": 120,
+            "equippable": True,
+            "equipment_slot": "feet_both",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Cowboy Hat": {
+            "type": "clothing",
+            "description": "A wide brimmed cowboy hat.",
+            "base_value": 75,
+            "equippable": True,
+            "equipment_slot": "head",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Leather Jacket": {
+            "type": "clothing",
+            "description": "A slick leather jacket.",
+            "base_value": 110,
+            "equippable": True,
+            "equipment_slot": "torso",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Casual Skirt": {
+            "type": "clothing",
+            "description": "A casual skirt made of synthetic fabric.",
+            "base_value": 60,
+            "equippable": True,
+            "equipment_slot": "legs_both",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Shutter Shades": {
+            "type": "clothing",
+            "description": "A relic of another time.",
+            "base_value": 90,
+            "equippable": True,
+            "equipment_slot": "eyes",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "rare"
+        },
+        
+        # Work/Industrial Clothing (better for gates/outposts)
+        "Safety Helmet": {
+            "type": "clothing",
+            "description": "Hard hat for industrial work environments",
+            "base_value": 45,
+            "equippable": True,
+            "equipment_slot": "head",
+            "stat_modifiers": {"defense": 1, "engineering": 1},
+            "rarity": "common"
+        },
+        "Work Coveralls": {
+            "type": "clothing",
+            "description": "Durable jumpsuit for mechanical work",
+            "base_value": 85,
+            "equippable": True,
+            "equipment_slot": "torso",
+            "stat_modifiers": {"defense": 1, "engineering": 2},
+            "rarity": "common"
+        },
+        "Steel-Toe Boots": {
+            "type": "clothing",
+            "description": "Heavy-duty boots with reinforced toes",
+            "base_value": 65,
+            "equippable": True,
+            "equipment_slot": "feet_both",
+            "stat_modifiers": {"defense": 2},
+            "rarity": "common"
+        },
+        "Reflective Vest": {
+            "type": "clothing",
+            "description": "High-visibility safety vest for hazardous areas",
+            "base_value": 40,
+            "equippable": True,
+            "equipment_slot": "torso",
+            "stat_modifiers": {"defense": 1},
+            "rarity": "common"
+        },
+        
+        # Casual/Civilian Clothing (better for colonies)
+        "Designer Jacket": {
+            "type": "clothing",
+            "description": "Fashionable jacket with synthetic fur lining",
+            "base_value": 150,
+            "equippable": True,
+            "equipment_slot": "torso",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "uncommon"
+        },
+        "Comfortable Sneakers": {
+            "type": "clothing",
+            "description": "Soft, cushioned shoes for everyday wear",
+            "base_value": 70,
+            "equippable": True,
+            "equipment_slot": "feet_both",
+            "stat_modifiers": {"defense": 0, "navigation": 1},
+            "rarity": "common"
+        },
+        "Casual Jeans": {
+            "type": "clothing",
+            "description": "Classic denim pants in good condition",
+            "base_value": 90,
+            "equippable": True,
+            "equipment_slot": "legs_both",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        "Soft Scarf": {
+            "type": "clothing",
+            "description": "Warm knitted scarf for comfort",
+            "base_value": 35,
+            "equippable": True,
+            "equipment_slot": "head",
+            "stat_modifiers": {"defense": 0},
+            "rarity": "common"
+        },
+        # Consumable Stat Modifiers
+        "Performance Stimulant": {
+            "type": "consumable",
+            "description": "Chemical stimulant that temporarily enhances all abilities",
+            "base_value": 300,
+            "usage_type": "stat_modifier",
+            "stat_modifiers": {"hp": 10, "engineering": 2, "navigation": 2, "combat": 2, "medical": 2},
+            "modifier_duration": 3600,  # 1 hour
+            "single_use": True,
+            "rarity": "rare"
+        },
+        "Focus Pills": {
+            "type": "consumable",
+            "description": "Medication that improves concentration and technical skills",
+            "base_value": 150,
+            "usage_type": "stat_modifier", 
+            "stat_modifiers": {"engineering": 3, "medical": 3},
+            "modifier_duration": 1800,  # 30 minutes
+            "single_use": True,
+            "rarity": "uncommon"
+        },
+        "Recycled Brew": {
+            "type": "consumable",
+            "description": "Cheap, dubious alcohol distilled from reclaimed water. Tastes like regret. Gets you drunk.",
+            "base_value": 30,
+            "usage_type": "stat_modifier",
+            "stat_modifiers": {"navigation": -5},
+            "modifier_duration": 300,  # 15 minutes
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Synthetic Coffee": {
+            "type": "consumable",
+            "description": "A bitter cup of lab-grown coffee substitute. Keeps you awake, at least.",
+            "base_value": 30,
+            "usage_type": "stat_modifier",
+            "stat_modifiers": {"navigation": 1},
+            "modifier_duration": 900,  # 45 minutes
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Energy Drink": {
+            "type": "consumable",
+            "description": "Energy drink. High in caffeine, low in everything else.",
+            "base_value": 40,
+            "usage_type": "stat_modifier",
+            "stat_modifiers": {"combat": 1, "medical": -2},
+            "modifier_duration": 300,  # 15 minutes
+            "single_use": True,
+            "rarity": "common"
+        },
+        "Combat Adrenaline Shot": {
+            "type": "consumable",
+            "description": "Emergency injection that boosts combat effectiveness",
+            "base_value": 200,
+            "usage_type": "stat_modifier",
+            "stat_modifiers": {"combat": 5, "hp": 15},
+            "modifier_duration": 900,  # 15 minutes
+            "single_use": True,
+            "rarity": "uncommon"
+        },
+        "Navigator 'Juice'": {
+            "type": "consumable", 
+            "description": "A very special juice of secret origin that sharpens navigation skills",
+            "base_value": 50,
+            "usage_type": "stat_modifier",
+            "stat_modifiers": {"navigation": 2},
+            "modifier_duration": 2700,  # 45 minutes
+            "single_use": True,
+            "rarity": "common"
         }
     }
     
@@ -666,7 +1209,8 @@ class ItemConfig:
         "colony": {
             "medical": 1.2,
             "consumable": 1.3,
-            "equipment": 1.0,
+            "equipment": 0.8,  # Less functional equipment
+            "clothing": 1.4,   # More casual/civilian clothing
             "fuel": 1.1,
             "trade": 0.8,
             "upgrade": 0.6
@@ -675,6 +1219,7 @@ class ItemConfig:
             "medical": 1.1,
             "consumable": 0.9,
             "equipment": 1.3,
+            "clothing": 1.1,   # Mixed clothing types
             "fuel": 1.2,
             "trade": 1.2,
             "upgrade": 1.4
@@ -683,6 +1228,7 @@ class ItemConfig:
             "medical": 0.8,
             "consumable": 1.1,
             "equipment": 1.2,
+            "clothing": 0.9,   # Some work clothing
             "fuel": 1.0,
             "trade": 0.7,
             "upgrade": 0.5
@@ -690,7 +1236,8 @@ class ItemConfig:
         "gate": {
             "medical": 0.6,
             "consumable": 0.7,
-            "equipment": 1.1,
+            "equipment": 1.3,  # More functional/work equipment
+            "clothing": 0.7,   # Less casual clothing, more work garments
             "fuel": 1.3,
             "trade": 0.9,
             "upgrade": 0.8
@@ -805,3 +1352,79 @@ class ItemConfig:
         metadata = {k: v for k, v in metadata.items() if v is not None}
         
         return json.dumps(metadata)
+
+    @staticmethod
+    def ensure_item_metadata(item_name: str, existing_metadata: str = None) -> str:
+        """
+        Ensures an item has proper metadata, creating it if missing or invalid.
+        
+        Args:
+            item_name: Name of the item
+            existing_metadata: Existing metadata string (JSON) or None
+            
+        Returns:
+            Valid JSON metadata string
+        """
+        # Return existing metadata if it's valid and not empty
+        if existing_metadata:
+            try:
+                # Test if it's valid JSON
+                json.loads(existing_metadata)
+                return existing_metadata
+            except (json.JSONDecodeError, TypeError):
+                pass
+        
+        # Try to create metadata from ItemConfig definition
+        try:
+            return ItemConfig.create_item_metadata(item_name)
+        except:
+            # Fallback to basic metadata for items without definitions
+            fallback_metadata = {
+                "usage_type": "consumable",
+                "effect_value": 10,
+                "single_use": True,
+                "uses_remaining": 1,
+                "rarity": "common"
+            }
+            return json.dumps(fallback_metadata)
+
+    @classmethod
+    def is_equippable(cls, item_name: str) -> bool:
+        """Check if an item is equippable"""
+        item_data = cls.get_item_definition(item_name)
+        return item_data.get("equippable", False)
+
+    @classmethod
+    def get_equipment_slot(cls, item_name: str) -> str:
+        """Get the equipment slot for an item"""
+        item_data = cls.get_item_definition(item_name)
+        return item_data.get("equipment_slot")
+
+    @classmethod
+    def get_stat_modifiers(cls, item_name: str) -> Dict[str, int]:
+        """Get stat modifiers for an item"""
+        item_data = cls.get_item_definition(item_name)
+        return item_data.get("stat_modifiers", {})
+
+    @classmethod
+    def get_modifier_duration(cls, item_name: str) -> int:
+        """Get modifier duration for consumable items (in seconds)"""
+        item_data = cls.get_item_definition(item_name)
+        return item_data.get("modifier_duration", 0)
+
+    @classmethod
+    def get_equippable_items(cls) -> List[str]:
+        """Get all equippable item names"""
+        return [name for name, data in cls.ITEM_DEFINITIONS.items() 
+                if data.get("equippable", False)]
+
+    @classmethod
+    def get_valid_equipment_slots(cls) -> List[str]:
+        """Get all valid equipment slot names"""
+        return [
+            "head", "eyes", "torso", 
+            "arms_left", "arms_right",
+            "hands_left", "hands_right", "hands_both",
+            "legs_left", "legs_right", "legs_both",
+            "feet_left", "feet_right", "feet_both"
+        ]

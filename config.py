@@ -4,16 +4,18 @@ Configuration settings for the Discord RPG Bot
 Modify these values to customize your server experience
 """
 
+import os
+
 # Bot Configuration
 BOT_CONFIG = {
-    'token': 'FUCKYOU',  # REPLACE WITH YOUR ACTUAL TOKEN OR USE ENVIRONMENT VARIABLE
-    'command_prefix': '!',           # Prefix for text commands (slash commands don't use this)
+    'token': os.getenv('DISCORD_TOKEN', 'YOUR_BOT_TOKEN'),  # Use environment variable for security
+    'command_prefix': os.getenv('COMMAND_PREFIX', '!'),     # Prefix for text commands (slash commands don't use this)
     'description': 'A 27th century sci-fi RPG',
-    'activity_name': 'Entropy',  # Bot status message
+    'activity_name': os.getenv('ACTIVITY_NAME', 'Entropy'), # Bot status message
 }
 
-
-ALLOWED_GUILD_ID = 1391985652001800333
+# Use environment variable for guild ID, fallback to default if not set
+ALLOWED_GUILD_ID = int(os.getenv('ALLOWED_GUILD_ID', '1391985652001800333'))
 
 
 # Galaxy Generation Settings

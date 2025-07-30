@@ -188,6 +188,204 @@ class SubLocationManager:
                 'location_types': ['colony', 'space_station'],
                 'min_wealth': 4
             },
+            # New Gate sub-locations
+            'cargo_inspection': {
+                'name': 'Cargo Inspection Bay',
+                'description': 'Mandatory freight verification and customs scanning for corridor transit.',
+                'icon': '⚖️',
+                'location_types': ['gate']
+            },
+            'vessel_wash': {
+                'name': 'Hull Cleaning Bay',
+                'description': 'Automated decontamination facility removing space debris and radiation.',
+                'icon': '🧽',
+                'location_types': ['gate']
+            },
+            'pilot_quarters': {
+                'name': 'Pilot Rest Quarters',
+                'description': 'Basic sleeping pods for exhausted freight haulers and long-haul pilots.',
+                'icon': '🛌',
+                'location_types': ['gate']
+            },
+            'freight_depot': {
+                'name': 'Freight Storage Depot',
+                'description': 'Temporary cargo storage awaiting corridor transport connections.',
+                'icon': '📦',
+                'location_types': ['gate']
+            },
+            'component_shop': {
+                'name': 'Ship Components Shop',
+                'description': 'Essential spare parts and emergency supplies for corridor voyages.',
+                'icon': '🔩',
+                'location_types': ['gate']
+            },
+            'travel_cafe': {
+                'name': 'Transit Café',
+                'description': 'Quick-serve eatery offering hot meals and caffeine to weary travelers.',
+                'icon': '☕',
+                'location_types': ['gate']
+            },
+            'family_area': {
+                'name': 'Family Rest Area',
+                'description': 'Quiet space with amenities for traveling families and children.',
+                'icon': '👶',
+                'location_types': ['gate']
+            },
+            'passenger_pods': {
+                'name': 'Sleep Pods',
+                'description': 'Private rest capsules for passengers on extended corridor journeys.',
+                'icon': '🛏️',
+                'location_types': ['gate']
+            },
+            'entertainment_lounge': {
+                'name': 'Entertainment Hub',
+                'description': 'Holo-games, music, and virtual reality for passenger entertainment.',
+                'icon': '🎮',
+                'location_types': ['gate']
+            },
+            'travel_services': {
+                'name': 'Travel Services Desk',
+                'description': 'Booking assistance, route planning, and passenger coordination.',
+                'icon': '🎫',
+                'location_types': ['gate']
+            },
+            # New Outpost sub-locations
+            'survey_lab': {
+                'name': 'Survey Laboratory',
+                'description': 'Geological analysis station for mineral and resource assessment.',
+                'icon': '🔬',
+                'location_types': ['outpost']
+            },
+            'core_storage': {
+                'name': 'Core Sample Storage',
+                'description': 'Climate-controlled vault storing planetary drilling samples.',
+                'icon': '🗃️',
+                'location_types': ['outpost']
+            },
+            'mining_control': {
+                'name': 'Mining Operations Control',
+                'description': 'Remote operation center for automated mining equipment.',
+                'icon': '⛏️',
+                'location_types': ['outpost']
+            },
+            'refinery_module': {
+                'name': 'Mineral Processing Unit',
+                'description': 'Compact refinery for basic ore processing and purification.',
+                'icon': '🏭',
+                'location_types': ['outpost']
+            },
+            'sensor_array': {
+                'name': 'Sensor Array Control',
+                'description': 'Command center for long-range detection and monitoring systems.',
+                'icon': '📊',
+                'location_types': ['outpost']
+            },
+            'beacon_control': {
+                'name': 'Navigation Beacon Control',
+                'description': 'Maintenance station for critical navigation infrastructure.',
+                'icon': '🚨',
+                'location_types': ['outpost']
+            },
+            'weather_station': {
+                'name': 'Environmental Monitoring',
+                'description': 'Atmospheric and radiation tracking for planetary conditions.',
+                'icon': '🌡️',
+                'location_types': ['outpost']
+            },
+            'supply_depot': {
+                'name': 'Supply Cache',
+                'description': 'Emergency provisions and equipment for extended operations.',
+                'icon': '📦',
+                'location_types': ['outpost']
+            },
+            'drone_bay': {
+                'name': 'Drone Operations Bay',
+                'description': 'Launch and maintenance facility for survey and work drones.',
+                'icon': '🤖',
+                'location_types': ['outpost']
+            },
+            'isolation_ward': {
+                'name': 'Isolation Quarantine',
+                'description': 'Medical containment for unknown pathogens or contamination.',
+                'icon': '☣️',
+                'location_types': ['outpost']
+            },
+            # New Space Station/Colony sub-locations
+            'manufacturing_bay': {
+                'name': 'Manufacturing Bay',
+                'description': 'Automated production facility for ships, components, and equipment.',
+                'icon': '🏭',
+                'location_types': ['space_station', 'colony'],
+                'min_wealth': 3
+            },
+            'fusion_reactor': {
+                'name': 'Fusion Reactor Core',
+                'description': 'Primary power generation facility maintaining station operations.',
+                'icon': '⚛️',
+                'location_types': ['space_station'],
+                'min_wealth': 2
+            },
+            'cargo_bay': {
+                'name': 'Primary Cargo Bay',
+                'description': 'Massive storage facility for bulk goods and freight operations.',
+                'icon': '📦',
+                'location_types': ['space_station', 'colony']
+            },
+            'recycling_center': {
+                'name': 'Recycling Center',
+                'description': 'Waste processing and material reclamation facility.',
+                'icon': '♻️',
+                'location_types': ['space_station', 'colony']
+            },
+            'chapel': {
+                'name': 'Interfaith Chapel',
+                'description': 'Quiet spiritual space serving multiple religious traditions.',
+                'icon': '🕊️',
+                'location_types': ['space_station', 'colony'],
+                'min_wealth': 2
+            },
+            'art_gallery': {
+                'name': 'Cultural Gallery',
+                'description': 'Exhibition space showcasing local and galactic artwork.',
+                'icon': '🎨',
+                'location_types': ['colony', 'space_station'],
+                'min_wealth': 4
+            },
+            'theater': {
+                'name': 'Performance Theater',
+                'description': 'Entertainment venue for live shows and community events.',
+                'icon': '🎭',
+                'location_types': ['colony'],
+                'min_wealth': 5
+            },
+            'plaza': {
+                'name': 'Central Plaza',
+                'description': 'Open gathering space for markets, events, and social interaction.',
+                'icon': '🏛️',
+                'location_types': ['colony'],
+                'min_wealth': 3
+            },
+            'customs_office': {
+                'name': 'Customs Office',
+                'description': 'Import/export processing and trade regulation enforcement.',
+                'icon': '🛃',
+                'location_types': ['space_station'],
+                'min_wealth': 2
+            },
+            'immigration_office': {
+                'name': 'Immigration Services',
+                'description': 'Residency permits, citizenship processing, and population registry.',
+                'icon': '🎫',
+                'location_types': ['colony'],
+                'min_wealth': 3
+            },
+            'casino': {
+                'name': 'Casino',
+                'description': "Gambling establishment with slots, card games, and dice tables.",
+                'icon': '🎰',
+                'location_types': ['colony', 'space_station'],
+                'min_wealth': 6
+            },
         }
     
     async def get_available_sub_locations(self, parent_location_id: int) -> List[Dict]:
@@ -397,7 +595,7 @@ class SubLocationManager:
         
         embed.add_field(
             name="ℹ️ Thread Info",
-            value="This thread will auto-archive after 1 hour of inactivity. Use it to roleplay and interact with this specific area.\n Use `/area leave` to leave this area.",
+            value="This thread will auto-archive after 1 hour of inactivity. Use it to roleplay and interact with this specific area.\n Use `/area leave` or the 'Leave' button to leave this area.",
             inline=False
         )
         
@@ -577,7 +775,7 @@ class SubLocationManager:
             created_count += 1
         
         return created_count
-    def get_persistent_sub_locations_data(self, parent_location_id: int, location_type: str, wealth_level: int, is_derelict: bool = False) -> List[Tuple]:
+    async def get_persistent_sub_locations_data(self, parent_location_id: int, location_type: str, wealth_level: int, is_derelict: bool = False) -> List[Tuple]:
         """Return persistent sub-location data as tuples for bulk insertion during galaxy generation"""
         
         sub_locations_data = []
@@ -880,7 +1078,7 @@ class SubLocationServiceView(discord.ui.View):
                 label="Traveler Info", 
                 emoji="🗺️", 
                 style=discord.ButtonStyle.secondary,
-                service_type="traveler_info"
+                service_type="travel_info"
             ))
             
         elif self.sub_type == 'checkpoint':
@@ -1096,6 +1294,608 @@ class SubLocationServiceView(discord.ui.View):
                 style=discord.ButtonStyle.secondary,
                 service_type="study_figures"
             ))  
+        # Outpost sub-location services
+        elif self.sub_type == 'survey_lab':
+            self.add_item(SubLocationButton(
+                label="Review Samples", 
+                emoji="🔬", 
+                style=discord.ButtonStyle.primary,
+                service_type="review_samples"
+            ))
+            self.add_item(SubLocationButton(
+                label="Data Analysis", 
+                emoji="📊", 
+                style=discord.ButtonStyle.secondary,
+                service_type="data_analysis"
+            ))
+            self.add_item(SubLocationButton(
+                label="Equipment Check", 
+                emoji="⚗️", 
+                style=discord.ButtonStyle.secondary,
+                service_type="equipment_check"
+            ))
+        elif self.sub_type == 'core_storage':
+            self.add_item(SubLocationButton(
+                label="Sample Catalog", 
+                emoji="📂", 
+                style=discord.ButtonStyle.primary,
+                service_type="sample_catalog"
+            ))
+            self.add_item(SubLocationButton(
+                label="Access Records", 
+                emoji="📋", 
+                style=discord.ButtonStyle.secondary,
+                service_type="access_records"
+            ))
+            self.add_item(SubLocationButton(
+                label="Environmental Check", 
+                emoji="🌡️", 
+                style=discord.ButtonStyle.secondary,
+                service_type="environmental_check"
+            ))
+        elif self.sub_type == 'mining_control':
+            self.add_item(SubLocationButton(
+                label="Monitor Operations", 
+                emoji="📊", 
+                style=discord.ButtonStyle.primary,
+                service_type="monitor_operations"
+            ))
+            self.add_item(SubLocationButton(
+                label="Equipment Status", 
+                emoji="⚙️", 
+                style=discord.ButtonStyle.secondary,
+                service_type="equipment_status"
+            ))
+            self.add_item(SubLocationButton(
+                label="Production Reports", 
+                emoji="📈", 
+                style=discord.ButtonStyle.secondary,
+                service_type="production_reports"
+            ))
+        elif self.sub_type == 'refinery_module':
+            self.add_item(SubLocationButton(
+                label="Check Processing", 
+                emoji="🏭", 
+                style=discord.ButtonStyle.primary,
+                service_type="check_processing"
+            ))
+            self.add_item(SubLocationButton(
+                label="Quality Control", 
+                emoji="✅", 
+                style=discord.ButtonStyle.success,
+                service_type="quality_control"
+            ))
+            self.add_item(SubLocationButton(
+                label="Output Status", 
+                emoji="📋", 
+                style=discord.ButtonStyle.secondary,
+                service_type="output_status"
+            ))
+        elif self.sub_type == 'sensor_array':
+            self.add_item(SubLocationButton(
+                label="Scan Readings", 
+                emoji="📡", 
+                style=discord.ButtonStyle.primary,
+                service_type="scan_readings"
+            ))
+            self.add_item(SubLocationButton(
+                label="Calibrate Sensors", 
+                emoji="🎛️", 
+                style=discord.ButtonStyle.secondary,
+                service_type="calibrate_sensors"
+            ))
+            self.add_item(SubLocationButton(
+                label="Alert Status", 
+                emoji="🚨", 
+                style=discord.ButtonStyle.danger,
+                service_type="alert_status"
+            ))
+        elif self.sub_type == 'beacon_control':
+            self.add_item(SubLocationButton(
+                label="Navigation Status", 
+                emoji="🚨", 
+                style=discord.ButtonStyle.danger,
+                service_type="navigation_status"
+            ))
+            self.add_item(SubLocationButton(
+                label="Signal Strength", 
+                emoji="📶", 
+                style=discord.ButtonStyle.secondary,
+                service_type="signal_strength"
+            ))
+            self.add_item(SubLocationButton(
+                label="Maintenance Log", 
+                emoji="📋", 
+                style=discord.ButtonStyle.secondary,
+                service_type="maintenance_log"
+            ))
+        elif self.sub_type == 'weather_station':
+            self.add_item(SubLocationButton(
+                label="Weather Data", 
+                emoji="🌡️", 
+                style=discord.ButtonStyle.primary,
+                service_type="weather_data"
+            ))
+            self.add_item(SubLocationButton(
+                label="Storm Tracking", 
+                emoji="⛈️", 
+                style=discord.ButtonStyle.secondary,
+                service_type="storm_tracking"
+            ))
+            self.add_item(SubLocationButton(
+                label="Atmospheric Report", 
+                emoji="📊", 
+                style=discord.ButtonStyle.secondary,
+                service_type="atmospheric_report"
+            ))
+        elif self.sub_type == 'supply_depot':
+            self.add_item(SubLocationButton(
+                label="Inventory Check", 
+                emoji="📦", 
+                style=discord.ButtonStyle.primary,
+                service_type="inventory_check"
+            ))
+            self.add_item(SubLocationButton(
+                label="Request Supplies", 
+                emoji="📝", 
+                style=discord.ButtonStyle.secondary,
+                service_type="request_supplies"
+            ))
+            self.add_item(SubLocationButton(
+                label="Emergency Cache", 
+                emoji="🆘", 
+                style=discord.ButtonStyle.danger,
+                service_type="emergency_cache"
+            ))
+        elif self.sub_type == 'drone_bay':
+            self.add_item(SubLocationButton(
+                label="Launch Drone", 
+                emoji="🚁", 
+                style=discord.ButtonStyle.primary,
+                service_type="launch_drone"
+            ))
+            self.add_item(SubLocationButton(
+                label="Maintenance Check", 
+                emoji="🔧", 
+                style=discord.ButtonStyle.secondary,
+                service_type="maintenance_check"
+            ))
+            self.add_item(SubLocationButton(
+                label="Mission Planning", 
+                emoji="📋", 
+                style=discord.ButtonStyle.secondary,
+                service_type="mission_planning"
+            ))
+        elif self.sub_type == 'isolation_ward':
+            self.add_item(SubLocationButton(
+                label="Containment Status", 
+                emoji="☣️", 
+                style=discord.ButtonStyle.danger,
+                service_type="containment_status"
+            ))
+            self.add_item(SubLocationButton(
+                label="Decontamination", 
+                emoji="🧼", 
+                style=discord.ButtonStyle.success,
+                service_type="decontamination"
+            ))
+            self.add_item(SubLocationButton(
+                label="Emergency Protocol", 
+                emoji="🚨", 
+                style=discord.ButtonStyle.danger,
+                service_type="emergency_protocol"
+            ))
+        elif self.sub_type == 'manufacturing_bay':
+            self.add_item(SubLocationButton(
+                label="Production Status", 
+                emoji="🏭", 
+                style=discord.ButtonStyle.primary,
+                service_type="production_status"
+            ))
+            self.add_item(SubLocationButton(
+                label="Quality Control", 
+                emoji="✅", 
+                style=discord.ButtonStyle.success,
+                service_type="quality_control"
+            ))
+            self.add_item(SubLocationButton(
+                label="Order Processing", 
+                emoji="📋", 
+                style=discord.ButtonStyle.secondary,
+                service_type="order_processing"
+            ))
+        elif self.sub_type == 'fusion_reactor':
+            self.add_item(SubLocationButton(
+                label="Reactor Status", 
+                emoji="⚛️", 
+                style=discord.ButtonStyle.primary,
+                service_type="reactor_status"
+            ))
+            self.add_item(SubLocationButton(
+                label="Safety Check", 
+                emoji="🛡️", 
+                style=discord.ButtonStyle.success,
+                service_type="safety_check"
+            ))
+            self.add_item(SubLocationButton(
+                label="Power Output", 
+                emoji="⚡", 
+                style=discord.ButtonStyle.secondary,
+                service_type="power_output"
+            ))
+        elif self.sub_type == 'cargo_bay':
+            self.add_item(SubLocationButton(
+                label="Inventory Check", 
+                emoji="📦", 
+                style=discord.ButtonStyle.primary,
+                service_type="inventory_check"
+            ))
+            self.add_item(SubLocationButton(
+                label="Loading Schedule", 
+                emoji="🚚", 
+                style=discord.ButtonStyle.secondary,
+                service_type="loading_schedule"
+            ))
+            self.add_item(SubLocationButton(
+                label="Storage Request", 
+                emoji="📝", 
+                style=discord.ButtonStyle.secondary,
+                service_type="storage_request"
+            ))
+        elif self.sub_type == 'recycling_center':
+            self.add_item(SubLocationButton(
+                label="Waste Processing", 
+                emoji="♻️", 
+                style=discord.ButtonStyle.success,
+                service_type="waste_processing"
+            ))
+            self.add_item(SubLocationButton(
+                label="Material Status", 
+                emoji="📊", 
+                style=discord.ButtonStyle.secondary,
+                service_type="material_status"
+            ))
+            self.add_item(SubLocationButton(
+                label="Drop Off Items", 
+                emoji="🗂️", 
+                style=discord.ButtonStyle.primary,
+                service_type="drop_off_items"
+            ))
+        elif self.sub_type == 'chapel':
+            self.add_item(SubLocationButton(
+                label="Quiet Reflection", 
+                emoji="🕊️", 
+                style=discord.ButtonStyle.secondary,
+                service_type="quiet_reflection"
+            ))
+            self.add_item(SubLocationButton(
+                label="Community Service", 
+                emoji="🤝", 
+                style=discord.ButtonStyle.success,
+                service_type="community_service"
+            ))
+            self.add_item(SubLocationButton(
+                label="Spiritual Guidance", 
+                emoji="📿", 
+                style=discord.ButtonStyle.primary,
+                service_type="spiritual_guidance"
+            ))
+        elif self.sub_type == 'art_gallery':
+            self.add_item(SubLocationButton(
+                label="View Exhibitions", 
+                emoji="🎨", 
+                style=discord.ButtonStyle.primary,
+                service_type="view_exhibitions"
+            ))
+            self.add_item(SubLocationButton(
+                label="Artist Information", 
+                emoji="👨‍🎨", 
+                style=discord.ButtonStyle.secondary,
+                service_type="artist_information"
+            ))
+            self.add_item(SubLocationButton(
+                label="Cultural Events", 
+                emoji="🎭", 
+                style=discord.ButtonStyle.success,
+                service_type="cultural_events"
+            ))
+        elif self.sub_type == 'theater':
+            self.add_item(SubLocationButton(
+                label="Check Shows", 
+                emoji="🎭", 
+                style=discord.ButtonStyle.primary,
+                service_type="check_shows"
+            ))
+            self.add_item(SubLocationButton(
+                label="Book Tickets", 
+                emoji="🎫", 
+                style=discord.ButtonStyle.success,
+                service_type="book_tickets"
+            ))
+            self.add_item(SubLocationButton(
+                label="Performance Schedule", 
+                emoji="📅", 
+                style=discord.ButtonStyle.secondary,
+                service_type="performance_schedule"
+            ))
+        elif self.sub_type == 'plaza':
+            self.add_item(SubLocationButton(
+                label="Browse Market", 
+                emoji="🏛️", 
+                style=discord.ButtonStyle.primary,
+                service_type="browse_market"
+            ))
+            self.add_item(SubLocationButton(
+                label="Meet People", 
+                emoji="👥", 
+                style=discord.ButtonStyle.secondary,
+                service_type="meet_people"
+            ))
+            self.add_item(SubLocationButton(
+                label="Attend Events", 
+                emoji="🎉", 
+                style=discord.ButtonStyle.success,
+                service_type="attend_events"
+            ))
+        elif self.sub_type == 'customs_office':
+            self.add_item(SubLocationButton(
+                label="Declare Goods", 
+                emoji="📋", 
+                style=discord.ButtonStyle.primary,
+                service_type="declare_goods"
+            ))
+            self.add_item(SubLocationButton(
+                label="Tax Information", 
+                emoji="💰", 
+                style=discord.ButtonStyle.secondary,
+                service_type="tax_information"
+            ))
+            self.add_item(SubLocationButton(
+                label="Trade Permits", 
+                emoji="📜", 
+                style=discord.ButtonStyle.success,
+                service_type="trade_permits"
+            ))
+        elif self.sub_type == 'immigration_office':
+            self.add_item(SubLocationButton(
+                label="Residency Info", 
+                emoji="🎫", 
+                style=discord.ButtonStyle.primary,
+                service_type="residency_info"
+            ))
+            self.add_item(SubLocationButton(
+                label="Citizenship Process", 
+                emoji="📄", 
+                style=discord.ButtonStyle.secondary,
+                service_type="citizenship_process"
+            ))
+            self.add_item(SubLocationButton(
+                label="Documentation", 
+                emoji="📋", 
+                style=discord.ButtonStyle.success,
+                service_type="documentation"
+            ))
+            
+        elif self.sub_type == 'cargo_inspection':
+            self.add_item(SubLocationButton(
+                label="Inspect Cargo", 
+                emoji="⚖️", 
+                style=discord.ButtonStyle.primary,
+                service_type="inspect_cargo"
+            ))
+            self.add_item(SubLocationButton(
+                label="File Manifest", 
+                emoji="📋", 
+                style=discord.ButtonStyle.secondary,
+                service_type="file_manifest"
+            ))
+            self.add_item(SubLocationButton(
+                label="Pay Transit Fee", 
+                emoji="💳", 
+                style=discord.ButtonStyle.success,
+                service_type="pay_transit_fee"
+            ))
+            
+        elif self.sub_type == 'vessel_wash':
+            self.add_item(SubLocationButton(
+                label="Hull Cleaning - 75C", 
+                emoji="🧽", 
+                style=discord.ButtonStyle.primary,
+                service_type="hull_cleaning"
+            ))
+            self.add_item(SubLocationButton(
+                label="Radiation Scrub - 50C", 
+                emoji="☢️", 
+                style=discord.ButtonStyle.secondary,
+                service_type="radiation_scrub"
+            ))
+            self.add_item(SubLocationButton(
+                label="Basic Decon - 30C", 
+                emoji="🛡️", 
+                style=discord.ButtonStyle.success,
+                service_type="basic_decon"
+            ))
+            
+        elif self.sub_type == 'pilot_quarters':
+            self.add_item(SubLocationButton(
+                label="Rest in Pod", 
+                emoji="🛌", 
+                style=discord.ButtonStyle.primary,
+                service_type="rest_in_pod"
+            ))
+            self.add_item(SubLocationButton(
+                label="Shower Facilities", 
+                emoji="🚿", 
+                style=discord.ButtonStyle.secondary,
+                service_type="shower_facilities"
+            ))
+            self.add_item(SubLocationButton(
+                label="Pilot Lounge", 
+                emoji="☕", 
+                style=discord.ButtonStyle.success,
+                service_type="pilot_lounge"
+            ))
+            
+        elif self.sub_type == 'freight_depot':
+            self.add_item(SubLocationButton(
+                label="Scan Cargo", 
+                emoji="📦", 
+                style=discord.ButtonStyle.primary,
+                service_type="store_cargo"
+            ))
+            self.add_item(SubLocationButton(
+                label="Retrieve Cargo", 
+                emoji="📤", 
+                style=discord.ButtonStyle.secondary,
+                service_type="retrieve_cargo"
+            ))
+            self.add_item(SubLocationButton(
+                label="Cargo Insurance", 
+                emoji="🛡️", 
+                style=discord.ButtonStyle.success,
+                service_type="cargo_insurance"
+            ))
+            
+        elif self.sub_type == 'component_shop':
+            self.add_item(SubLocationButton(
+                label="Buy Components", 
+                emoji="🔩", 
+                style=discord.ButtonStyle.primary,
+                service_type="buy_components"
+            ))
+            self.add_item(SubLocationButton(
+                label="Emergency Repair Kit", 
+                emoji="🧰", 
+                style=discord.ButtonStyle.secondary,
+                service_type="emergency_repair_kit"
+            ))
+            self.add_item(SubLocationButton(
+                label="Spare Parts", 
+                emoji="⚙️", 
+                style=discord.ButtonStyle.success,
+                service_type="spare_parts"
+            ))
+            
+        elif self.sub_type == 'travel_cafe':
+            self.add_item(SubLocationButton(
+                label="Order Coffee", 
+                emoji="☕", 
+                style=discord.ButtonStyle.primary,
+                service_type="order_coffee"
+            ))
+            self.add_item(SubLocationButton(
+                label="Quick Meal", 
+                emoji="🍕", 
+                style=discord.ButtonStyle.secondary,
+                service_type="quick_meal"
+            ))
+            self.add_item(SubLocationButton(
+                label="Energy Drinks", 
+                emoji="⚡", 
+                style=discord.ButtonStyle.success,
+                service_type="energy_drinks"
+            ))
+            
+        elif self.sub_type == 'family_area':
+            self.add_item(SubLocationButton(
+                label="Kids Play Area", 
+                emoji="👶", 
+                style=discord.ButtonStyle.primary,
+                service_type="kids_play_area"
+            ))
+            self.add_item(SubLocationButton(
+                label="Baby Care Station", 
+                emoji="🍼", 
+                style=discord.ButtonStyle.secondary,
+                service_type="baby_care_station"
+            ))
+            self.add_item(SubLocationButton(
+                label="Family Rest", 
+                emoji="🛋️", 
+                style=discord.ButtonStyle.success,
+                service_type="family_rest"
+            ))
+            
+        elif self.sub_type == 'passenger_pods':
+            self.add_item(SubLocationButton(
+                label="Rent Sleep Pod", 
+                emoji="🛏️", 
+                style=discord.ButtonStyle.primary,
+                service_type="rent_sleep_pod"
+            ))
+            self.add_item(SubLocationButton(
+                label="Premium Pod", 
+                emoji="✨", 
+                style=discord.ButtonStyle.secondary,
+                service_type="premium_pod"
+            ))
+            self.add_item(SubLocationButton(
+                label="Pod Services", 
+                emoji="🔧", 
+                style=discord.ButtonStyle.success,
+                service_type="pod_services"
+            ))
+            
+        elif self.sub_type == 'entertainment_lounge':
+            self.add_item(SubLocationButton(
+                label="Holo-Games", 
+                emoji="🎮", 
+                style=discord.ButtonStyle.primary,
+                service_type="holo_games"
+            ))
+            self.add_item(SubLocationButton(
+                label="Virtual Reality", 
+                emoji="🥽", 
+                style=discord.ButtonStyle.secondary,
+                service_type="virtual_reality"
+            ))
+            self.add_item(SubLocationButton(
+                label="Music & Media", 
+                emoji="🎵", 
+                style=discord.ButtonStyle.success,
+                service_type="music_media"
+            ))
+            
+        elif self.sub_type == 'travel_services':
+            self.add_item(SubLocationButton(
+                label="Book Passage", 
+                emoji="🎫", 
+                style=discord.ButtonStyle.primary,
+                service_type="book_passage"
+            ))
+            self.add_item(SubLocationButton(
+                label="Route Planning", 
+                emoji="🗺️", 
+                style=discord.ButtonStyle.secondary,
+                service_type="route_planning"
+            ))
+            self.add_item(SubLocationButton(
+                label="Travel Insurance", 
+                emoji="🛡️", 
+                style=discord.ButtonStyle.success,
+                service_type="travel_insurance"
+            ))
+            
+        elif self.sub_type == 'casino':
+            self.add_item(SubLocationButton(
+                label="🎰 Slot Machine", 
+                emoji="🎰", 
+                style=discord.ButtonStyle.primary,
+                service_type="slot_machine"
+            ))
+            self.add_item(SubLocationButton(
+                label="🃏 Blackjack", 
+                emoji="🃏", 
+                style=discord.ButtonStyle.primary,
+                service_type="blackjack"
+            ))
+            self.add_item(SubLocationButton(
+                label="🎲 Dice Roll", 
+                emoji="🎲", 
+                style=discord.ButtonStyle.primary,
+                service_type="dice_roll"
+            ))
+            
         # Derelict area services
         elif self.sub_type in ['abandoned_quarters', 'emergency_shelter', 'salvage_yard', 'power_core', 'scavenger_den']:
             self.add_item(SubLocationButton(
@@ -1252,6 +2052,8 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_traveler_info(interaction, char_name)
         elif service_type == "security_scan":
             await self._handle_security_scan(interaction, char_name)
+        elif service_type == "report_incident":
+            await self._handle_report_incident(interaction, char_name)
         elif service_type == "transit_papers":
             await self._handle_transit_papers(interaction, char_name, money)
         elif service_type == "priority_refuel":
@@ -1274,6 +2076,12 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_deep_space_scan(interaction, char_name)
         elif service_type == "navigation_data":
             await self._handle_navigation_data(interaction, char_name)
+        elif service_type == "slot_machine":
+            await self._handle_slot_machine(interaction, char_name, money)
+        elif service_type == "blackjack":
+            await self._handle_blackjack(interaction, char_name, money)
+        elif service_type == "dice_roll":
+            await self._handle_dice_roll(interaction, char_name, money)
         elif service_type == "check_prices":
             await self._handle_check_prices(interaction, char_name)
         elif service_type == "specialty_vendors":
@@ -1323,7 +2131,7 @@ class SubLocationServiceView(discord.ui.View):
         elif service_type == "check_schedules":
             await self._handle_check_schedules(interaction, char_name)
         elif service_type == "travel_info":
-            await self._handle_travel_info(interaction, char_name)
+            await self._handle_traveler_info(interaction, char_name)
         elif service_type == "security_consult":
             await self._handle_security_consult(interaction, char_name)
         elif service_type == "browse_archives":
@@ -1332,6 +2140,258 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_research_records(interaction, char_name)
         elif service_type == "study_figures":
             await self._handle_study_figures(interaction, char_name)
+        # Gate service types
+        elif service_type == "manifest_review":
+            await self._handle_manifest_review(interaction, char_name)
+        elif service_type == "customs_declaration":
+            await self._handle_customs_declaration(interaction, char_name)
+        elif service_type == "cargo_scan":
+            await self._handle_cargo_scan(interaction, char_name)
+        elif service_type == "schedule_cleaning":
+            await self._handle_schedule_cleaning(interaction, char_name)
+        elif service_type == "decontamination_check":
+            await self._handle_decontamination_check(interaction, char_name)
+        elif service_type == "hull_inspection":
+            await self._handle_hull_inspection(interaction, char_name)
+        elif service_type == "reserve_bunk":
+            await self._handle_reserve_bunk(interaction, char_name)
+        elif service_type == "check_in_out":
+            await self._handle_check_in_out(interaction, char_name)
+        elif service_type == "amenities_info":
+            await self._handle_amenities_info(interaction, char_name)
+        elif service_type == "storage_inquiry":
+            await self._handle_storage_inquiry(interaction, char_name)
+        elif service_type == "schedule_pickup":
+            await self._handle_schedule_pickup(interaction, char_name)
+        elif service_type == "track_shipment":
+            await self._handle_track_shipment(interaction, char_name)
+        elif service_type == "browse_parts":
+            await self._handle_browse_parts(interaction, char_name)
+        elif service_type == "emergency_kit":
+            await self._handle_emergency_kit(interaction, char_name)
+        elif service_type == "technical_support":
+            await self._handle_technical_support(interaction, char_name)
+        elif service_type == "order_food":
+            await self._handle_order_food(interaction, char_name)
+        elif service_type == "local_specialties":
+            await self._handle_local_specialties(interaction, char_name)
+        elif service_type == "take_break":
+            await self._handle_take_break(interaction, char_name)
+        elif service_type == "child_care_info":
+            await self._handle_child_care_info(interaction, char_name)
+        elif service_type == "family_services":
+            await self._handle_family_services(interaction, char_name)
+        elif service_type == "rest_together":
+            await self._handle_rest_together(interaction, char_name)
+        elif service_type == "book_pod":
+            await self._handle_book_pod(interaction, char_name)
+        elif service_type == "check_availability":
+            await self._handle_check_availability(interaction, char_name)
+        elif service_type == "pod_services":
+            await self._handle_pod_services(interaction, char_name)
+        elif service_type == "play_holo_games":
+            await self._handle_play_holo_games(interaction, char_name)
+        elif service_type == "vr_experience":
+            await self._handle_vr_experience(interaction, char_name)
+        elif service_type == "social_activities":
+            await self._handle_social_activities(interaction, char_name)
+        elif service_type == "route_planning":
+            await self._handle_route_planning(interaction, char_name)
+        elif service_type == "book_passage":
+            await self._handle_book_passage(interaction, char_name)
+        elif service_type == "travel_insurance":
+            await self._handle_travel_insurance(interaction, char_name)
+        # Outpost service types
+        elif service_type == "review_samples":
+            await self._handle_review_samples(interaction, char_name)
+        elif service_type == "data_analysis":
+            await self._handle_data_analysis(interaction, char_name)
+        elif service_type == "equipment_check":
+            await self._handle_equipment_check(interaction, char_name)
+        elif service_type == "sample_catalog":
+            await self._handle_sample_catalog(interaction, char_name)
+        elif service_type == "access_records":
+            await self._handle_access_records(interaction, char_name)
+        elif service_type == "environmental_check":
+            await self._handle_environmental_check(interaction, char_name)
+        elif service_type == "monitor_operations":
+            await self._handle_monitor_operations(interaction, char_name)
+        elif service_type == "equipment_status":
+            await self._handle_equipment_status(interaction, char_name)
+        elif service_type == "production_reports":
+            await self._handle_production_reports(interaction, char_name)
+        elif service_type == "check_processing":
+            await self._handle_check_processing(interaction, char_name)
+        elif service_type == "quality_control":
+            await self._handle_quality_control(interaction, char_name)
+        elif service_type == "output_status":
+            await self._handle_output_status(interaction, char_name)
+        elif service_type == "scan_readings":
+            await self._handle_scan_readings(interaction, char_name)
+        elif service_type == "calibrate_sensors":
+            await self._handle_calibrate_sensors(interaction, char_name)
+        elif service_type == "alert_status":
+            await self._handle_alert_status(interaction, char_name)
+        elif service_type == "navigation_status":
+            await self._handle_navigation_status(interaction, char_name)
+        elif service_type == "signal_strength":
+            await self._handle_signal_strength(interaction, char_name)
+        elif service_type == "maintenance_log":
+            await self._handle_maintenance_log(interaction, char_name)
+        elif service_type == "weather_data":
+            await self._handle_weather_data(interaction, char_name)
+        elif service_type == "storm_tracking":
+            await self._handle_storm_tracking(interaction, char_name)
+        elif service_type == "atmospheric_report":
+            await self._handle_atmospheric_report(interaction, char_name)
+        elif service_type == "inventory_check":
+            await self._handle_inventory_check(interaction, char_name)
+        elif service_type == "request_supplies":
+            await self._handle_request_supplies(interaction, char_name)
+        elif service_type == "emergency_cache":
+            await self._handle_emergency_cache(interaction, char_name)
+        elif service_type == "launch_drone":
+            await self._handle_launch_drone(interaction, char_name)
+        elif service_type == "maintenance_check":
+            await self._handle_maintenance_check(interaction, char_name)
+        elif service_type == "mission_planning":
+            await self._handle_mission_planning(interaction, char_name)
+        elif service_type == "containment_status":
+            await self._handle_containment_status(interaction, char_name)
+        elif service_type == "decontamination":
+            await self._handle_decontamination(interaction, char_name)
+        elif service_type == "emergency_protocol":
+            await self._handle_emergency_protocol(interaction, char_name)
+        # Station/Colony service types
+        elif service_type == "production_status":
+            await self._handle_production_status(interaction, char_name)
+        elif service_type == "order_processing":
+            await self._handle_order_processing(interaction, char_name)
+        elif service_type == "reactor_status":
+            await self._handle_reactor_status(interaction, char_name)
+        elif service_type == "safety_check":
+            await self._handle_safety_check(interaction, char_name)
+        elif service_type == "power_output":
+            await self._handle_power_output(interaction, char_name)
+        elif service_type == "loading_schedule":
+            await self._handle_loading_schedule(interaction, char_name)
+        elif service_type == "storage_request":
+            await self._handle_storage_request(interaction, char_name)
+        elif service_type == "waste_processing":
+            await self._handle_waste_processing(interaction, char_name)
+        elif service_type == "material_status":
+            await self._handle_material_status(interaction, char_name)
+        elif service_type == "drop_off_items":
+            await self._handle_drop_off_items(interaction, char_name)
+        elif service_type == "quiet_reflection":
+            await self._handle_quiet_reflection(interaction, char_name)
+        elif service_type == "community_service":
+            await self._handle_community_service(interaction, char_name)
+        elif service_type == "spiritual_guidance":
+            await self._handle_spiritual_guidance(interaction, char_name)
+        elif service_type == "view_exhibitions":
+            await self._handle_view_exhibitions(interaction, char_name)
+        elif service_type == "artist_information":
+            await self._handle_artist_information(interaction, char_name)
+        elif service_type == "cultural_events":
+            await self._handle_cultural_events(interaction, char_name)
+        elif service_type == "check_shows":
+            await self._handle_check_shows(interaction, char_name)
+        elif service_type == "book_tickets":
+            await self._handle_book_tickets(interaction, char_name)
+        elif service_type == "performance_schedule":
+            await self._handle_performance_schedule(interaction, char_name)
+        elif service_type == "browse_market":
+            await self._handle_browse_market(interaction, char_name)
+        elif service_type == "meet_people":
+            await self._handle_meet_people(interaction, char_name)
+        elif service_type == "attend_events":
+            await self._handle_attend_events(interaction, char_name)
+        elif service_type == "declare_goods":
+            await self._handle_declare_goods(interaction, char_name)
+        elif service_type == "tax_information":
+            await self._handle_tax_information(interaction, char_name)
+        elif service_type == "trade_permits":
+            await self._handle_trade_permits(interaction, char_name)
+        elif service_type == "residency_info":
+            await self._handle_residency_info(interaction, char_name)
+        elif service_type == "citizenship_process":
+            await self._handle_citizenship_process(interaction, char_name)
+        elif service_type == "documentation":
+            await self._handle_documentation(interaction, char_name)
+        
+        # Cargo Inspection Bay services
+        elif service_type == "inspect_cargo":
+            await self._handle_inspect_cargo(interaction, char_name)
+        elif service_type == "file_manifest":
+            await self._handle_file_manifest(interaction, char_name)
+        elif service_type == "pay_transit_fee":
+            await self._handle_pay_transit_fee(interaction, char_name)
+        
+        # Hull Cleaning Bay services
+        elif service_type == "hull_cleaning":
+            await self._handle_hull_cleaning(interaction, char_name)
+        elif service_type == "radiation_scrub":
+            await self._handle_radiation_scrub(interaction, char_name)
+        elif service_type == "basic_decon":
+            await self._handle_basic_decon(interaction, char_name)
+        
+        # Pilot Rest Quarters services
+        elif service_type == "rest_in_pod":
+            await self._handle_rest_in_pod(interaction, char_name)
+        elif service_type == "shower_facilities":
+            await self._handle_shower_facilities(interaction, char_name)
+        elif service_type == "pilot_lounge":
+            await self._handle_pilot_lounge(interaction, char_name)
+        
+        # Freight Storage Depot services
+        elif service_type == "store_cargo":
+            await self._handle_store_cargo(interaction, char_name)
+        elif service_type == "retrieve_cargo":
+            await self._handle_retrieve_cargo(interaction, char_name)
+        elif service_type == "cargo_insurance":
+            await self._handle_cargo_insurance(interaction, char_name)
+        
+        # Ship Components Shop services
+        elif service_type == "buy_components":
+            await self._handle_buy_components(interaction, char_name)
+        elif service_type == "emergency_repair_kit":
+            await self._handle_emergency_repair_kit(interaction, char_name)
+        elif service_type == "spare_parts":
+            await self._handle_spare_parts(interaction, char_name)
+        
+        # Transit Café services
+        elif service_type == "order_coffee":
+            await self._handle_order_coffee(interaction, char_name)
+        elif service_type == "quick_meal":
+            await self._handle_quick_meal(interaction, char_name)
+        elif service_type == "energy_drinks":
+            await self._handle_energy_drinks(interaction, char_name)
+        
+        # Family Rest Area services
+        elif service_type == "kids_play_area":
+            await self._handle_kids_play_area(interaction, char_name)
+        elif service_type == "baby_care_station":
+            await self._handle_baby_care_station(interaction, char_name)
+        elif service_type == "family_rest":
+            await self._handle_family_rest(interaction, char_name)
+        
+        # Sleep Pods services
+        elif service_type == "rent_sleep_pod":
+            await self._handle_rent_sleep_pod(interaction, char_name)
+        elif service_type == "premium_pod":
+            await self._handle_premium_pod(interaction, char_name)
+        elif service_type == "pod_services":
+            await self._handle_pod_services(interaction, char_name)
+        
+        # Entertainment Hub services
+        elif service_type == "holo_games":
+            await self._handle_holo_games(interaction, char_name)
+        elif service_type == "virtual_reality":
+            await self._handle_virtual_reality(interaction, char_name)
+        elif service_type == "music_media":
+            await self._handle_music_media(interaction, char_name)
+        
         else:
             # Generic flavor response for unimplemented services
             await self._handle_generic_service(interaction, service_type, char_name)
@@ -1655,10 +2715,12 @@ class SubLocationServiceView(discord.ui.View):
             return
         
         # Apply modification (add to inventory as an upgrade)
+        from utils.item_config import ItemConfig
+        metadata = ItemConfig.create_item_metadata(mod_name)
         self.db.execute_query(
-            '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
-               VALUES (?, ?, ?, ?, ?, ?)''',
-            (interaction.user.id, mod_name, "ship_modification", 1, description, cost)
+            '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+            (interaction.user.id, mod_name, "ship_modification", 1, description, cost, metadata)
         )
         
         # Deduct cost
@@ -1861,10 +2923,12 @@ class SubLocationServiceView(discord.ui.View):
             return
         
         # Add item to inventory
+        from utils.item_config import ItemConfig
+        metadata = ItemConfig.create_item_metadata(item_name)
         self.db.execute_query(
-            '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
-               VALUES (?, ?, ?, ?, ?, ?)''',
-            (interaction.user.id, item_name, item_type, 1, description, cost)
+            '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+            (interaction.user.id, item_name, item_type, 1, description, cost, metadata)
         )
         
         # Deduct cost
@@ -1910,10 +2974,12 @@ class SubLocationServiceView(discord.ui.View):
             item_name, item_type, quantity, description, value = random.choice(salvaged_items)
             
             # Add to inventory
+            from utils.item_config import ItemConfig
+            metadata = ItemConfig.create_item_metadata(item_name)
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (interaction.user.id, item_name, item_type, quantity, description, value)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, item_name, item_type, quantity, description, value, metadata)
             )
             
             embed = discord.Embed(
@@ -2421,10 +3487,12 @@ class SubLocationServiceView(discord.ui.View):
             embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
         else:
             # Add item to inventory
+            from utils.item_config import ItemConfig
+            metadata = ItemConfig.create_item_metadata(item_name)
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (interaction.user.id, item_name, "medical", 1, description, cost)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, item_name, "medical", 1, description, cost, metadata)
             )
             
             # Deduct money
@@ -2805,6 +3873,54 @@ class SubLocationServiceView(discord.ui.View):
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_report_incident(self, interaction: discord.Interaction, char_name: str):
+        """Handle reporting a security incident."""
+        import random
+        
+        incident_types = [
+            "suspicious activity",
+            "theft or vandalism",
+            "safety hazard",
+            "harassment or threats",
+            "equipment malfunction",
+            "unknown individuals"
+        ]
+        
+        incident_id = f"INC-{random.randint(10000, 99999)}"
+        incident_type = random.choice(incident_types)
+        
+        responses = [
+            "Security has been notified and will investigate promptly.",
+            "An officer will review your report and follow up if needed.",
+            "Your report has been logged with high priority status.",
+            "Security teams are taking immediate action based on your report."
+        ]
+        response = random.choice(responses)
+        
+        embed = discord.Embed(
+            title="🚨 Security Incident Report",
+            description=f"**{char_name}** files an incident report regarding **{incident_type}**.",
+            color=0xff4500
+        )
+        embed.add_field(
+            name="Incident ID",
+            value=incident_id,
+            inline=True
+        )
+        embed.add_field(
+            name="Status",
+            value=response,
+            inline=False
+        )
+        embed.add_field(
+            name="Next Steps",
+            value="Keep your incident ID for any follow-up inquiries.",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
     async def _handle_file_complaint(self, interaction: discord.Interaction, char_name: str):
         """Handle filing a complaint with the security office."""
         import random
@@ -2965,7 +4081,7 @@ class SubLocationServiceView(discord.ui.View):
             description=f"**{char_name}** browses the available shops.",
             color=0x708090
         )
-        embed.add_field(name="📋 Status", value="Use `/shop list` to see available items for purchase.", inline=False)
+        embed.add_field(name="📋 Status", value="Use `/tqe` to see available items for purchase.", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_apply_permits(self, interaction: discord.Interaction, char_name: str, money: int):
@@ -3114,10 +4230,12 @@ class SubLocationServiceView(discord.ui.View):
             item_name, item_type, quantity, description, value = random.choice(found_items)
             
             # Add to inventory
+            from utils.item_config import ItemConfig
+            metadata = ItemConfig.create_item_metadata(item_name)
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (interaction.user.id, item_name, item_type, quantity, description, value)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, item_name, item_type, quantity, description, value, metadata)
             )
             
             embed = discord.Embed(
@@ -3731,6 +4849,8 @@ class SubLocationServiceView(discord.ui.View):
 
     async def _handle_wait_comfortably(self, interaction, char_name: str, hp: int, max_hp: int):
         """Handle waiting comfortably in transit lounge"""  
+        message = "You find peace in the quiet moments, letting the gentle hum of the station wash over you."
+        
         embed = discord.Embed(
             title="🛋️ Comfortable Wait",
             description=f"**{char_name}** settles into the comfortable transit lounge.",
@@ -3841,6 +4961,1642 @@ class SubLocationServiceView(discord.ui.View):
         except:
             pass
 
+    # Gate service handlers
+    async def _handle_manifest_review(self, interaction: discord.Interaction, char_name: str):
+        """Handle cargo inspection - manifest review"""
+        embed = discord.Embed(
+            title="📋 Manifest Review",
+            description=f"**{char_name}** reviews cargo manifests with gate security. All documentation appears to be in order.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🔍 Status", value="Documentation verified", inline=True)
+        embed.add_field(name="📊 Result", value="All cargo properly declared", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_customs_declaration(self, interaction: discord.Interaction, char_name: str):
+        """Handle cargo inspection - customs declaration"""
+        embed = discord.Embed(
+            title="📋 Customs Declaration",
+            description=f"**{char_name}** submits customs documentation. All items properly declared and fees paid.",
+            color=0x4169E1
+        )
+        embed.add_field(name="📋 Forms", value="Completed successfully", inline=True)
+        embed.add_field(name="💰 Fees", value="All duties settled", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_cargo_scan(self, interaction: discord.Interaction, char_name: str):
+        """Handle cargo inspection - cargo scan"""
+        embed = discord.Embed(
+            title="🔍 Cargo Scan",
+            description=f"**{char_name}** submits to cargo scanning procedures. All items cleared for transit.",
+            color=0x4169E1
+        )
+        embed.add_field(name="📡 Scan Result", value="No contraband detected", inline=True)
+        embed.add_field(name="✅ Status", value="Cleared for passage", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_schedule_cleaning(self, interaction: discord.Interaction, char_name: str):
+        """Handle vessel wash - schedule cleaning"""
+        embed = discord.Embed(
+            title="🚿 Schedule Cleaning",
+            description=f"**{char_name}** schedules vessel cleaning services. Your ship will be spotless for the next leg of your journey.",
+            color=0x4169E1
+        )
+        embed.add_field(name="⏰ Time Slot", value="Next available bay", inline=True)
+        embed.add_field(name="🧽 Service", value="Full exterior wash", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_decontamination_check(self, interaction: discord.Interaction, char_name: str):
+        """Handle vessel wash - decontamination check"""
+        embed = discord.Embed(
+            title="🧪 Decontamination Check",
+            description=f"**{char_name}** undergoes decontamination screening. No harmful substances detected.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🔬 Scan Result", value="All clear", inline=True)
+        embed.add_field(name="✅ Status", value="Decontamination complete", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_hull_inspection(self, interaction: discord.Interaction, char_name: str):
+        """Handle vessel wash - hull inspection"""
+        embed = discord.Embed(
+            title="🔍 Hull Inspection",
+            description=f"**{char_name}** requests hull integrity inspection. Your vessel passes all safety checks.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🔧 Integrity", value="Structural sound", inline=True)
+        embed.add_field(name="📋 Report", value="No repairs needed", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_reserve_bunk(self, interaction: discord.Interaction, char_name: str):
+        """Handle pilot quarters - reserve bunk"""
+        embed = discord.Embed(
+            title="🛏️ Reserve Bunk",
+            description=f"**{char_name}** reserves a sleeping quarters. A comfortable bunk awaits your rest.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🏠 Accommodation", value="Standard pilot quarters", inline=True)
+        embed.add_field(name="⏰ Duration", value="8-hour standard rest", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_check_in_out(self, interaction: discord.Interaction, char_name: str):
+        """Handle pilot quarters - check in/out"""
+        embed = discord.Embed(
+            title="📝 Check In/Out",
+            description=f"**{char_name}** completes quarters check-in procedures. Welcome to your temporary accommodations.",
+            color=0x4169E1
+        )
+        embed.add_field(name="📋 Status", value="Successfully checked in", inline=True)
+        embed.add_field(name="🔑 Access", value="Quarters unlocked", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_amenities_info(self, interaction: discord.Interaction, char_name: str):
+        """Handle pilot quarters - amenities info"""
+        embed = discord.Embed(
+            title="ℹ️ Amenities Information",
+            description=f"**{char_name}** reviews available amenities. Standard quarters include shower, comm terminal, and refreshment station.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🚿 Facilities", value="Private refresher", inline=True)
+        embed.add_field(name="📡 Comms", value="Standard terminal", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_storage_inquiry(self, interaction: discord.Interaction, char_name: str):
+        """Handle freight depot - storage inquiry"""
+        embed = discord.Embed(
+            title="📦 Storage Inquiry",
+            description=f"**{char_name}** inquires about storage options. Various freight storage solutions are available.",
+            color=0x4169E1
+        )
+        embed.add_field(name="📊 Capacity", value="Multiple bay sizes", inline=True)
+        embed.add_field(name="💰 Rates", value="Competitive pricing", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_schedule_pickup(self, interaction: discord.Interaction, char_name: str):
+        """Handle freight depot - schedule pickup"""
+        embed = discord.Embed(
+            title="🚚 Schedule Pickup",
+            description=f"**{char_name}** schedules freight pickup. Your cargo will be ready for collection.",
+            color=0x4169E1
+        )
+        embed.add_field(name="⏰ Time", value="Next available slot", inline=True)
+        embed.add_field(name="📋 Status", value="Pickup scheduled", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_track_shipment(self, interaction: discord.Interaction, char_name: str):
+        """Handle freight depot - track shipment"""
+        embed = discord.Embed(
+            title="📍 Track Shipment",
+            description=f"**{char_name}** checks shipment tracking. All cargo accounted for and on schedule.",
+            color=0x4169E1
+        )
+        embed.add_field(name="📦 Status", value="In transit", inline=True)
+        embed.add_field(name="📍 Location", value="On schedule", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_browse_parts(self, interaction: discord.Interaction, char_name: str):
+        """Handle component shop - browse parts"""
+        embed = discord.Embed(
+            title="🔧 Browse Parts",
+            description=f"**{char_name}** browses available components. Standard ship parts and upgrades in stock.",
+            color=0x4169E1
+        )
+        embed.add_field(name="⚙️ Inventory", value="Well stocked", inline=True)
+        embed.add_field(name="🔍 Quality", value="Certified components", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_emergency_kit(self, interaction: discord.Interaction, char_name: str):
+        """Handle component shop - emergency kit"""
+        embed = discord.Embed(
+            title="🆘 Emergency Kit",
+            description=f"**{char_name}** examines emergency repair kits. Essential supplies for critical repairs.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🔧 Contents", value="Basic repair tools", inline=True)
+        embed.add_field(name="✅ Status", value="Ready for use", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_technical_support(self, interaction: discord.Interaction, char_name: str):
+        """Handle component shop - technical support"""
+        embed = discord.Embed(
+            title="💬 Technical Support",
+            description=f"**{char_name}** consults with technical specialists. Expert advice on ship maintenance and repairs.",
+            color=0x4169E1
+        )
+        embed.add_field(name="👨‍🔧 Expert", value="Certified technician", inline=True)
+        embed.add_field(name="📋 Advice", value="Maintenance tips provided", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_order_food(self, interaction: discord.Interaction, char_name: str):
+        """Handle travel cafe - order food"""
+        embed = discord.Embed(
+            title="🍽️ Order Food",
+            description=f"**{char_name}** orders from the travel cafe menu. Fresh meals to fuel your journey.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🍕 Menu", value="Traveler favorites", inline=True)
+        embed.add_field(name="⏰ Service", value="Quick preparation", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_local_specialties(self, interaction: discord.Interaction, char_name: str):
+        """Handle travel cafe - local specialties"""
+        embed = discord.Embed(
+            title="🌟 Local Specialties",
+            description=f"**{char_name}** samples regional cuisine. Unique flavors from across the galaxy.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🍜 Specialty", value="Regional delicacies", inline=True)
+        embed.add_field(name="👨‍🍳 Chef", value="Local recipes", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_take_break(self, interaction: discord.Interaction, char_name: str):
+        """Handle travel cafe - take break"""
+        embed = discord.Embed(
+            title="☕ Take Break",
+            description=f"**{char_name}** takes a relaxing break. A moment to recharge before continuing your journey.",
+            color=0x4169E1
+        )
+        embed.add_field(name="😌 Relaxation", value="Well-deserved rest", inline=True)
+        embed.add_field(name="☕ Refreshment", value="Energy restored", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_child_care_info(self, interaction: discord.Interaction, char_name: str):
+        """Handle family area - child care info"""
+        embed = discord.Embed(
+            title="👶 Child Care Information",
+            description=f"**{char_name}** learns about family services. Safe and supervised activities for young travelers.",
+            color=0x4169E1
+        )
+        embed.add_field(name="👨‍👩‍👧‍👦 Services", value="Family-friendly facilities", inline=True)
+        embed.add_field(name="🎮 Activities", value="Safe entertainment", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_family_services(self, interaction: discord.Interaction, char_name: str):
+        """Handle family area - family services"""
+        embed = discord.Embed(
+            title="👨‍👩‍👧‍👦 Family Services",
+            description=f"**{char_name}** explores family amenities. Comfortable spaces designed for traveling families.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🏠 Facilities", value="Family-oriented spaces", inline=True)
+        embed.add_field(name="🤝 Support", value="Family assistance available", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_rest_together(self, interaction: discord.Interaction, char_name: str):
+        """Handle family area - rest together"""
+        embed = discord.Embed(
+            title="🛋️ Rest Together",
+            description=f"**{char_name}** enjoys quality family time. A peaceful moment together during your travels.",
+            color=0x4169E1
+        )
+        embed.add_field(name="👨‍👩‍👧‍👦 Together", value="Family bonding time", inline=True)
+        embed.add_field(name="😌 Peaceful", value="Relaxing atmosphere", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_book_pod(self, interaction: discord.Interaction, char_name: str):
+        """Handle passenger pods - book pod"""
+        embed = discord.Embed(
+            title="🚀 Book Pod",
+            description=f"**{char_name}** reserves a passenger pod. Comfortable private transit for your journey.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🎫 Booking", value="Pod reserved", inline=True)
+        embed.add_field(name="🛏️ Comfort", value="Premium seating", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_check_availability(self, interaction: discord.Interaction, char_name: str):
+        """Handle passenger pods - check availability"""
+        embed = discord.Embed(
+            title="📅 Check Availability",
+            description=f"**{char_name}** checks pod availability. Multiple options for your travel schedule.",
+            color=0x4169E1
+        )
+        embed.add_field(name="📊 Status", value="Pods available", inline=True)
+        embed.add_field(name="⏰ Schedule", value="Flexible timing", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_pod_services(self, interaction: discord.Interaction, char_name: str):
+        """Handle passenger pods - pod services"""
+        embed = discord.Embed(
+            title="🛎️ Pod Services",
+            description=f"**{char_name}** reviews pod amenities. Premium services for comfortable travel.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🍽️ Catering", value="In-pod dining", inline=True)
+        embed.add_field(name="📺 Entertainment", value="Personal screens", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_play_holo_games(self, interaction: discord.Interaction, char_name: str):
+        """Handle entertainment lounge - play holo games"""
+        embed = discord.Embed(
+            title="🎮 Holo Games",
+            description=f"**{char_name}** enjoys holographic entertainment. Immersive gaming experiences await.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🎯 Games", value="Multiple options", inline=True)
+        embed.add_field(name="🌟 Experience", value="Fully immersive", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_holo_games(self, interaction: discord.Interaction, char_name: str):
+        """Handle entertainment hub - holo games"""
+        embed = discord.Embed(
+            title="🎮 Holographic Games",
+            description=f"**{char_name}** accesses the holographic game system. Advanced entertainment technology provides immersive experiences.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🎯 Available Games", value="Strategy, adventure, simulation", inline=True)
+        embed.add_field(name="🌟 Features", value="Full sensory immersion", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_vr_experience(self, interaction: discord.Interaction, char_name: str):
+        """Handle entertainment lounge - VR experience"""
+        embed = discord.Embed(
+            title="🥽 VR Experience",
+            description=f"**{char_name}** enters virtual reality worlds. Escape to fantastic digital realms.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🌍 Worlds", value="Endless possibilities", inline=True)
+        embed.add_field(name="✨ Reality", value="Breathtaking visuals", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_virtual_reality(self, interaction: discord.Interaction, char_name: str):
+        """Handle entertainment hub - virtual reality"""
+        embed = discord.Embed(
+            title="🥽 Virtual Reality",
+            description=f"**{char_name}** enters an advanced virtual reality chamber. Next-generation immersion technology awaits.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🌍 Virtual Worlds", value="Limitless exploration", inline=True)
+        embed.add_field(name="🎮 Experiences", value="Interactive adventures", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_music_media(self, interaction: discord.Interaction, char_name: str):
+        """Handle entertainment hub - music and media"""
+        embed = discord.Embed(
+            title="🎵 Music & Media",
+            description=f"**{char_name}** accesses the multimedia entertainment system. High-quality audio and visual content from across the galaxy.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🎶 Music Library", value="Galactic collection", inline=True)
+        embed.add_field(name="📺 Media Center", value="Movies, shows, documentaries", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_social_activities(self, interaction: discord.Interaction, char_name: str):
+        """Handle entertainment lounge - social activities"""
+        embed = discord.Embed(
+            title="👥 Social Activities",
+            description=f"**{char_name}** joins other travelers. Meet fellow explorers and share stories.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🤝 Community", value="Fellow travelers", inline=True)
+        embed.add_field(name="💬 Stories", value="Shared experiences", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_route_planning(self, interaction: discord.Interaction, char_name: str):
+        """Handle travel services - route planning"""
+        embed = discord.Embed(
+            title="🗺️ Route Planning",
+            description=f"**{char_name}** plans optimal travel routes. Expert guidance for efficient journeys.",
+            color=0x4169E1
+        )
+        embed.add_field(name="📍 Routes", value="Optimized paths", inline=True)
+        embed.add_field(name="⏱️ Efficiency", value="Time-saving routes", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_book_passage(self, interaction: discord.Interaction, char_name: str):
+        """Handle travel services - book passage"""
+        embed = discord.Embed(
+            title="🎫 Book Passage",
+            description=f"**{char_name}** books travel arrangements. Secure your journey to distant destinations.",
+            color=0x4169E1
+        )
+        embed.add_field(name="✈️ Transport", value="Passage confirmed", inline=True)
+        embed.add_field(name="📋 Details", value="All arrangements set", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_travel_insurance(self, interaction: discord.Interaction, char_name: str):
+        """Handle travel services - travel insurance"""
+        embed = discord.Embed(
+            title="🛡️ Travel Insurance",
+            description=f"**{char_name}** reviews insurance options. Protect yourself against the unexpected.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🔒 Coverage", value="Comprehensive protection", inline=True)
+        embed.add_field(name="💰 Value", value="Affordable peace of mind", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # Outpost service handlers
+    async def _handle_review_samples(self, interaction: discord.Interaction, char_name: str):
+        """Handle survey lab - review samples"""
+        embed = discord.Embed(
+            title="🧪 Review Samples",
+            description=f"**{char_name}** examines collected specimens. Scientific analysis reveals interesting discoveries.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🔬 Analysis", value="Specimens catalogued", inline=True)
+        embed.add_field(name="📋 Results", value="Data recorded", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_data_analysis(self, interaction: discord.Interaction, char_name: str):
+        """Handle survey lab - data analysis"""
+        embed = discord.Embed(
+            title="📊 Data Analysis",
+            description=f"**{char_name}** processes survey data. Complex patterns emerge from the scientific measurements.",
+            color=0x9932CC
+        )
+        embed.add_field(name="📈 Processing", value="Data analyzed", inline=True)
+        embed.add_field(name="🎯 Patterns", value="Correlations found", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_equipment_check(self, interaction: discord.Interaction, char_name: str):
+        """Handle survey lab - equipment check"""
+        embed = discord.Embed(
+            title="🔧 Equipment Check",
+            description=f"**{char_name}** inspects laboratory equipment. All instruments are calibrated and functioning properly.",
+            color=0x9932CC
+        )
+        embed.add_field(name="⚙️ Status", value="All systems nominal", inline=True)
+        embed.add_field(name="📏 Calibration", value="Within specifications", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_sample_catalog(self, interaction: discord.Interaction, char_name: str):
+        """Handle core storage - sample catalog"""
+        embed = discord.Embed(
+            title="📂 Sample Catalog",
+            description=f"**{char_name}** reviews the specimen inventory. Extensive collection of geological and biological samples.",
+            color=0x9932CC
+        )
+        embed.add_field(name="📚 Catalog", value="Comprehensive database", inline=True)
+        embed.add_field(name="🗃️ Storage", value="Organized by type", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_access_records(self, interaction: discord.Interaction, char_name: str):
+        """Handle core storage - access records"""
+        embed = discord.Embed(
+            title="📝 Access Records",
+            description=f"**{char_name}** checks storage access logs. All sample retrievals properly documented.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🔐 Security", value="Access controlled", inline=True)
+        embed.add_field(name="📋 Logs", value="All activities tracked", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_environmental_check(self, interaction: discord.Interaction, char_name: str):
+        """Handle core storage - environmental check"""
+        embed = discord.Embed(
+            title="🌡️ Environmental Check",
+            description=f"**{char_name}** monitors storage conditions. Temperature and humidity within optimal ranges.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🌡️ Temperature", value="Stable conditions", inline=True)
+        embed.add_field(name="💧 Humidity", value="Controlled environment", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_monitor_operations(self, interaction: discord.Interaction, char_name: str):
+        """Handle mining control - monitor operations"""
+        embed = discord.Embed(
+            title="⛏️ Monitor Operations",
+            description=f"**{char_name}** oversees mining activities. All extraction operations proceeding smoothly.",
+            color=0x9932CC
+        )
+        embed.add_field(name="⚡ Operations", value="Running efficiently", inline=True)
+        embed.add_field(name="📊 Output", value="Meeting quotas", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_equipment_status(self, interaction: discord.Interaction, char_name: str):
+        """Handle mining control - equipment status"""
+        embed = discord.Embed(
+            title="🔧 Equipment Status",
+            description=f"**{char_name}** checks mining machinery. All systems operational and maintenance up to date.",
+            color=0x9932CC
+        )
+        embed.add_field(name="⚙️ Machinery", value="Fully operational", inline=True)
+        embed.add_field(name="🔧 Maintenance", value="Scheduled and current", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_production_reports(self, interaction: discord.Interaction, char_name: str):
+        """Handle mining control - production reports"""
+        embed = discord.Embed(
+            title="📈 Production Reports",
+            description=f"**{char_name}** reviews extraction statistics. Output levels consistent with projections.",
+            color=0x9932CC
+        )
+        embed.add_field(name="📊 Output", value="On target", inline=True)
+        embed.add_field(name="📈 Trends", value="Steady progress", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_check_processing(self, interaction: discord.Interaction, char_name: str):
+        """Handle refinery module - check processing"""
+        embed = discord.Embed(
+            title="⚗️ Check Processing",
+            description=f"**{char_name}** monitors refinery operations. Raw materials being processed efficiently.",
+            color=0x9932CC
+        )
+        embed.add_field(name="⚗️ Refining", value="Processing smoothly", inline=True)
+        embed.add_field(name="📊 Efficiency", value="Optimal throughput", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_quality_control(self, interaction: discord.Interaction, char_name: str):
+        """Handle refinery module - quality control"""
+        embed = discord.Embed(
+            title="✅ Quality Control",
+            description=f"**{char_name}** inspects refined products. All output meets quality standards.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🔍 Inspection", value="Standards met", inline=True)
+        embed.add_field(name="✅ Quality", value="Certified grade", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_output_status(self, interaction: discord.Interaction, char_name: str):
+        """Handle refinery module - output status"""
+        embed = discord.Embed(
+            title="📦 Output Status",
+            description=f"**{char_name}** checks refined material stockpiles. Inventory levels adequate for operations.",
+            color=0x9932CC
+        )
+        embed.add_field(name="📦 Inventory", value="Well stocked", inline=True)
+        embed.add_field(name="📊 Status", value="Production on schedule", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_scan_readings(self, interaction: discord.Interaction, char_name: str):
+        """Handle sensor array - scan readings"""
+        embed = discord.Embed(
+            title="📡 Scan Readings",
+            description=f"**{char_name}** reviews sensor data. Long-range scans detecting various astronomical phenomena.",
+            color=0x9932CC
+        )
+        embed.add_field(name="📡 Sensors", value="Detecting activity", inline=True)
+        embed.add_field(name="📊 Data", value="Anomalies catalogued", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_calibrate_sensors(self, interaction: discord.Interaction, char_name: str):
+        """Handle sensor array - calibrate sensors"""
+        embed = discord.Embed(
+            title="🎯 Calibrate Sensors",
+            description=f"**{char_name}** fine-tunes sensor arrays. Detection accuracy improved across all frequencies.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🎯 Precision", value="Calibration complete", inline=True)
+        embed.add_field(name="📈 Accuracy", value="Enhanced sensitivity", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_alert_status(self, interaction: discord.Interaction, char_name: str):
+        """Handle sensor array - alert status"""
+        embed = discord.Embed(
+            title="🚨 Alert Status",
+            description=f"**{char_name}** checks threat detection systems. All monitoring systems active and responsive.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🚨 Alerts", value="Systems active", inline=True)
+        embed.add_field(name="👁️ Monitoring", value="Continuous surveillance", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_navigation_status(self, interaction: discord.Interaction, char_name: str):
+        """Handle beacon control - navigation status"""
+        embed = discord.Embed(
+            title="🧭 Navigation Status",
+            description=f"**{char_name}** checks navigation beacon systems. All guidance signals broadcasting clearly.",
+            color=0x9932CC
+        )
+        embed.add_field(name="📡 Beacon", value="Signal strong", inline=True)
+        embed.add_field(name="🧭 Navigation", value="Routes updated", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_signal_strength(self, interaction: discord.Interaction, char_name: str):
+        """Handle beacon control - signal strength"""
+        embed = discord.Embed(
+            title="📶 Signal Strength",
+            description=f"**{char_name}** monitors transmission power. Navigation signals maintaining optimal range.",
+            color=0x9932CC
+        )
+        embed.add_field(name="📶 Strength", value="Maximum range", inline=True)
+        embed.add_field(name="🔋 Power", value="Operating efficiently", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_maintenance_log(self, interaction: discord.Interaction, char_name: str):
+        """Handle beacon control - maintenance log"""
+        embed = discord.Embed(
+            title="📋 Maintenance Log",
+            description=f"**{char_name}** reviews system maintenance records. All service schedules up to date.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🔧 Maintenance", value="Current and complete", inline=True)
+        embed.add_field(name="📅 Schedule", value="Next service planned", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_weather_data(self, interaction: discord.Interaction, char_name: str):
+        """Handle weather station - weather data"""
+        embed = discord.Embed(
+            title="🌤️ Weather Data",
+            description=f"**{char_name}** reviews atmospheric conditions. Current weather patterns stable across the region.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🌡️ Conditions", value="Stable patterns", inline=True)
+        embed.add_field(name="📊 Data", value="Comprehensive readings", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_storm_tracking(self, interaction: discord.Interaction, char_name: str):
+        """Handle weather station - storm tracking"""
+        embed = discord.Embed(
+            title="⛈️ Storm Tracking",
+            description=f"**{char_name}** monitors severe weather systems. All major storm fronts tracked and predicted.",
+            color=0x9932CC
+        )
+        embed.add_field(name="⛈️ Storms", value="Tracking systems", inline=True)
+        embed.add_field(name="📈 Predictions", value="Advance warnings issued", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_atmospheric_report(self, interaction: discord.Interaction, char_name: str):
+        """Handle weather station - atmospheric report"""
+        embed = discord.Embed(
+            title="🌬️ Atmospheric Report",
+            description=f"**{char_name}** analyzes atmospheric composition. All readings within normal parameters.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🌬️ Atmosphere", value="Composition normal", inline=True)
+        embed.add_field(name="📋 Report", value="Detailed analysis", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_inventory_check(self, interaction: discord.Interaction, char_name: str):
+        """Handle supply depot - inventory check"""
+        embed = discord.Embed(
+            title="📦 Inventory Check",
+            description=f"**{char_name}** reviews supply levels. Essential materials well stocked for operations.",
+            color=0x9932CC
+        )
+        embed.add_field(name="📦 Supplies", value="Adequate stock", inline=True)
+        embed.add_field(name="📊 Status", value="Inventory updated", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_request_supplies(self, interaction: discord.Interaction, char_name: str):
+        """Handle supply depot - request supplies"""
+        embed = discord.Embed(
+            title="📋 Request Supplies",
+            description=f"**{char_name}** submits supply requisition. Essential materials ordered for delivery.",
+            color=0x9932CC
+        )
+        embed.add_field(name="📋 Request", value="Submitted successfully", inline=True)
+        embed.add_field(name="🚚 Delivery", value="Scheduled arrival", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_emergency_cache(self, interaction: discord.Interaction, char_name: str):
+        """Handle supply depot - emergency cache"""
+        embed = discord.Embed(
+            title="🆘 Emergency Cache",
+            description=f"**{char_name}** inspects emergency supplies. Critical resources secured and accessible.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🆘 Emergency", value="Supplies ready", inline=True)
+        embed.add_field(name="🔐 Security", value="Access verified", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_launch_drone(self, interaction: discord.Interaction, char_name: str):
+        """Handle drone bay - launch drone"""
+        embed = discord.Embed(
+            title="🚁 Launch Drone",
+            description=f"**{char_name}** deploys reconnaissance drone. Automated survey mission initiated.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🚁 Drone", value="Mission launched", inline=True)
+        embed.add_field(name="📡 Telemetry", value="Signal established", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_maintenance_check(self, interaction: discord.Interaction, char_name: str):
+        """Handle drone bay - maintenance check"""
+        embed = discord.Embed(
+            title="🔧 Maintenance Check",
+            description=f"**{char_name}** inspects drone fleet. All units serviced and ready for deployment.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🔧 Service", value="Maintenance complete", inline=True)
+        embed.add_field(name="✅ Status", value="Fleet ready", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_mission_planning(self, interaction: discord.Interaction, char_name: str):
+        """Handle drone bay - mission planning"""
+        embed = discord.Embed(
+            title="📋 Mission Planning",
+            description=f"**{char_name}** designs drone operations. Survey routes optimized for maximum coverage.",
+            color=0x9932CC
+        )
+        embed.add_field(name="📋 Planning", value="Mission designed", inline=True)
+        embed.add_field(name="🎯 Objectives", value="Routes optimized", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_containment_status(self, interaction: discord.Interaction, char_name: str):
+        """Handle isolation ward - containment status"""
+        embed = discord.Embed(
+            title="🔒 Containment Status",
+            description=f"**{char_name}** checks isolation protocols. All containment systems operating normally.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🔒 Containment", value="Secure protocols", inline=True)
+        embed.add_field(name="✅ Status", value="Systems nominal", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_decontamination(self, interaction: discord.Interaction, char_name: str):
+        """Handle isolation ward - decontamination"""
+        embed = discord.Embed(
+            title="🧼 Decontamination",
+            description=f"**{char_name}** undergoes sterilization procedures. All contamination risks eliminated.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🧼 Sterilization", value="Procedure complete", inline=True)
+        embed.add_field(name="✅ Clear", value="No contamination", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_emergency_protocol(self, interaction: discord.Interaction, char_name: str):
+        """Handle isolation ward - emergency protocol"""
+        embed = discord.Embed(
+            title="🚨 Emergency Protocol",
+            description=f"**{char_name}** reviews emergency procedures. All safety protocols current and accessible.",
+            color=0x9932CC
+        )
+        embed.add_field(name="🚨 Protocol", value="Procedures ready", inline=True)
+        embed.add_field(name="📋 Safety", value="Measures in place", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # Station/Colony service handlers
+    async def _handle_production_status(self, interaction: discord.Interaction, char_name: str):
+        """Handle manufacturing bay - production status"""
+        embed = discord.Embed(
+            title="🏭 Production Status",
+            description=f"**{char_name}** reviews manufacturing operations. All production lines operating at optimal capacity.",
+            color=0x228B22
+        )
+        embed.add_field(name="🏭 Manufacturing", value="Full capacity", inline=True)
+        embed.add_field(name="📊 Output", value="Meeting targets", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_order_processing(self, interaction: discord.Interaction, char_name: str):
+        """Handle manufacturing bay - order processing"""
+        embed = discord.Embed(
+            title="📋 Order Processing",
+            description=f"**{char_name}** checks manufacturing orders. Current queue being processed efficiently.",
+            color=0x228B22
+        )
+        embed.add_field(name="📋 Orders", value="Queue processing", inline=True)
+        embed.add_field(name="⏰ Schedule", value="On time delivery", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_reactor_status(self, interaction: discord.Interaction, char_name: str):
+        """Handle fusion reactor - reactor status"""
+        embed = discord.Embed(
+            title="⚛️ Reactor Status",
+            description=f"**{char_name}** monitors fusion reactor core. All systems operating within normal parameters.",
+            color=0x228B22
+        )
+        embed.add_field(name="⚛️ Fusion", value="Stable reaction", inline=True)
+        embed.add_field(name="📊 Output", value="Optimal efficiency", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_safety_check(self, interaction: discord.Interaction, char_name: str):
+        """Handle fusion reactor - safety check"""
+        embed = discord.Embed(
+            title="🛡️ Safety Check",
+            description=f"**{char_name}** performs safety inspection. All reactor safety systems functioning properly.",
+            color=0x228B22
+        )
+        embed.add_field(name="🛡️ Safety", value="All systems green", inline=True)
+        embed.add_field(name="🔐 Security", value="Containment secure", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_power_output(self, interaction: discord.Interaction, char_name: str):
+        """Handle fusion reactor - power output"""
+        embed = discord.Embed(
+            title="⚡ Power Output",
+            description=f"**{char_name}** monitors energy generation. Power grid receiving steady, reliable energy.",
+            color=0x228B22
+        )
+        embed.add_field(name="⚡ Generation", value="Stable output", inline=True)
+        embed.add_field(name="🔋 Grid", value="Full capacity", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_loading_schedule(self, interaction: discord.Interaction, char_name: str):
+        """Handle cargo bay - loading schedule"""
+        embed = discord.Embed(
+            title="📦 Loading Schedule",
+            description=f"**{char_name}** reviews cargo operations. All shipments scheduled for efficient loading.",
+            color=0x228B22
+        )
+        embed.add_field(name="📦 Cargo", value="Scheduled loading", inline=True)
+        embed.add_field(name="⏰ Timeline", value="On schedule", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_storage_request(self, interaction: discord.Interaction, char_name: str):
+        """Handle cargo bay - storage request"""
+        embed = discord.Embed(
+            title="🗃️ Storage Request",
+            description=f"**{char_name}** submits storage requisition. Bay space allocated for your cargo needs.",
+            color=0x228B22
+        )
+        embed.add_field(name="🗃️ Space", value="Bay allocated", inline=True)
+        embed.add_field(name="📋 Request", value="Approved", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_waste_processing(self, interaction: discord.Interaction, char_name: str):
+        """Handle recycling center - waste processing"""
+        embed = discord.Embed(
+            title="♻️ Waste Processing",
+            description=f"**{char_name}** monitors recycling operations. Material recovery systems operating efficiently.",
+            color=0x228B22
+        )
+        embed.add_field(name="♻️ Processing", value="Active recycling", inline=True)
+        embed.add_field(name="📊 Recovery", value="High efficiency", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_material_status(self, interaction: discord.Interaction, char_name: str):
+        """Handle recycling center - material status"""
+        embed = discord.Embed(
+            title="📊 Material Status",
+            description=f"**{char_name}** checks recyclable inventory. Good variety of materials available for processing.",
+            color=0x228B22
+        )
+        embed.add_field(name="📊 Inventory", value="Well stocked", inline=True)
+        embed.add_field(name="♻️ Types", value="Various materials", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_drop_off_items(self, interaction: discord.Interaction, char_name: str):
+        """Handle recycling center - drop off items"""
+        embed = discord.Embed(
+            title="📦 Drop Off Items",
+            description=f"**{char_name}** delivers materials for recycling. Items accepted for processing.",
+            color=0x228B22
+        )
+        embed.add_field(name="📦 Delivery", value="Materials accepted", inline=True)
+        embed.add_field(name="♻️ Processing", value="Queue added", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_quiet_reflection(self, interaction: discord.Interaction, char_name: str):
+        """Handle chapel - quiet reflection"""
+        embed = discord.Embed(
+            title="🕊️ Quiet Reflection",
+            description=f"**{char_name}** finds peace in meditation. A moment of tranquility amid the vast cosmos.",
+            color=0x228B22
+        )
+        embed.add_field(name="🧘 Meditation", value="Inner peace", inline=True)
+        embed.add_field(name="🕊️ Serenity", value="Mind cleared", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_community_service(self, interaction: discord.Interaction, char_name: str):
+        """Handle chapel - community service"""
+        embed = discord.Embed(
+            title="🤝 Community Service",
+            description=f"**{char_name}** participates in community outreach. Contributing to the welfare of fellow residents.",
+            color=0x228B22
+        )
+        embed.add_field(name="🤝 Service", value="Community aid", inline=True)
+        embed.add_field(name="❤️ Contribution", value="Helping others", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_spiritual_guidance(self, interaction: discord.Interaction, char_name: str):
+        """Handle chapel - spiritual guidance"""
+        embed = discord.Embed(
+            title="✨ Spiritual Guidance",
+            description=f"**{char_name}** seeks wisdom and comfort. Finding strength in spiritual contemplation.",
+            color=0x228B22
+        )
+        embed.add_field(name="✨ Guidance", value="Wisdom shared", inline=True)
+        embed.add_field(name="💫 Comfort", value="Spirit renewed", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_view_exhibitions(self, interaction: discord.Interaction, char_name: str):
+        """Handle art gallery - view exhibitions"""
+        embed = discord.Embed(
+            title="🎨 View Exhibitions",
+            description=f"**{char_name}** explores artistic displays. Remarkable works from across the galaxy on display.",
+            color=0x228B22
+        )
+        embed.add_field(name="🎨 Art", value="Diverse collections", inline=True)
+        embed.add_field(name="🌌 Culture", value="Galactic heritage", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_artist_information(self, interaction: discord.Interaction, char_name: str):
+        """Handle art gallery - artist information"""
+        embed = discord.Embed(
+            title="👨‍🎨 Artist Information",
+            description=f"**{char_name}** learns about featured artists. Fascinating stories behind the creative minds.",
+            color=0x228B22
+        )
+        embed.add_field(name="👨‍🎨 Artists", value="Background stories", inline=True)
+        embed.add_field(name="📚 History", value="Creative journeys", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_cultural_events(self, interaction: discord.Interaction, char_name: str):
+        """Handle art gallery - cultural events"""
+        embed = discord.Embed(
+            title="🎭 Cultural Events",
+            description=f"**{char_name}** reviews upcoming cultural activities. Rich schedule of artistic programming.",
+            color=0x228B22
+        )
+        embed.add_field(name="🎭 Events", value="Upcoming shows", inline=True)
+        embed.add_field(name="📅 Schedule", value="Regular programming", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_check_shows(self, interaction: discord.Interaction, char_name: str):
+        """Handle theater - check shows"""
+        embed = discord.Embed(
+            title="🎭 Check Shows",
+            description=f"**{char_name}** browses performance listings. Excellent productions scheduled for entertainment.",
+            color=0x228B22
+        )
+        embed.add_field(name="🎭 Productions", value="Quality shows", inline=True)
+        embed.add_field(name="🎫 Availability", value="Tickets available", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_book_tickets(self, interaction: discord.Interaction, char_name: str):
+        """Handle theater - book tickets"""
+        embed = discord.Embed(
+            title="🎫 Book Tickets",
+            description=f"**{char_name}** reserves performance seats. Your entertainment is secured for the evening.",
+            color=0x228B22
+        )
+        embed.add_field(name="🎫 Tickets", value="Seats reserved", inline=True)
+        embed.add_field(name="🎭 Show", value="Performance confirmed", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_performance_schedule(self, interaction: discord.Interaction, char_name: str):
+        """Handle theater - performance schedule"""
+        embed = discord.Embed(
+            title="📅 Performance Schedule",
+            description=f"**{char_name}** reviews show times. Comprehensive listing of all upcoming performances.",
+            color=0x228B22
+        )
+        embed.add_field(name="📅 Schedule", value="All show times", inline=True)
+        embed.add_field(name="🎭 Variety", value="Multiple genres", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_browse_market(self, interaction: discord.Interaction, char_name: str):
+        """Handle plaza - browse market"""
+        embed = discord.Embed(
+            title="🛒 Browse Market",
+            description=f"**{char_name}** explores the marketplace. Vendors offering goods from across the system.",
+            color=0x228B22
+        )
+        embed.add_field(name="🛒 Market", value="Diverse vendors", inline=True)
+        embed.add_field(name="🌟 Goods", value="Unique items", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_meet_people(self, interaction: discord.Interaction, char_name: str):
+        """Handle plaza - meet people"""
+        embed = discord.Embed(
+            title="👥 Meet People",
+            description=f"**{char_name}** socializes with other residents. Building connections in the community.",
+            color=0x228B22
+        )
+        embed.add_field(name="👥 Social", value="New connections", inline=True)
+        embed.add_field(name="🤝 Community", value="Friendly atmosphere", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_attend_events(self, interaction: discord.Interaction, char_name: str):
+        """Handle plaza - attend events"""
+        embed = discord.Embed(
+            title="🎉 Attend Events",
+            description=f"**{char_name}** participates in plaza activities. Community gatherings bring people together.",
+            color=0x228B22
+        )
+        embed.add_field(name="🎉 Events", value="Community activities", inline=True)
+        embed.add_field(name="👨‍👩‍👧‍👦 Gathering", value="Social engagement", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_declare_goods(self, interaction: discord.Interaction, char_name: str):
+        """Handle customs office - declare goods"""
+        embed = discord.Embed(
+            title="📋 Declare Goods",
+            description=f"**{char_name}** submits customs declaration. All items properly documented for import.",
+            color=0x228B22
+        )
+        embed.add_field(name="📋 Declaration", value="Forms completed", inline=True)
+        embed.add_field(name="✅ Status", value="Goods declared", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_tax_information(self, interaction: discord.Interaction, char_name: str):
+        """Handle customs office - tax information"""
+        embed = discord.Embed(
+            title="💰 Tax Information",
+            description=f"**{char_name}** reviews import duties. Current tax rates and exemptions clearly explained.",
+            color=0x228B22
+        )
+        embed.add_field(name="💰 Duties", value="Rates current", inline=True)
+        embed.add_field(name="📋 Info", value="Guidelines provided", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_trade_permits(self, interaction: discord.Interaction, char_name: str):
+        """Handle customs office - trade permits"""
+        embed = discord.Embed(
+            title="📜 Trade Permits",
+            description=f"**{char_name}** applies for trading authorization. Commercial permits processed efficiently.",
+            color=0x228B22
+        )
+        embed.add_field(name="📜 Permits", value="Authorization issued", inline=True)
+        embed.add_field(name="💼 Trade", value="Commerce approved", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_residency_info(self, interaction: discord.Interaction, char_name: str):
+        """Handle immigration office - residency info"""
+        embed = discord.Embed(
+            title="🏠 Residency Information",
+            description=f"**{char_name}** inquires about permanent residence. Comprehensive immigration services available.",
+            color=0x228B22
+        )
+        embed.add_field(name="🏠 Residency", value="Options explained", inline=True)
+        embed.add_field(name="📋 Process", value="Steps outlined", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_citizenship_process(self, interaction: discord.Interaction, char_name: str):
+        """Handle immigration office - citizenship process"""
+        embed = discord.Embed(
+            title="🎖️ Citizenship Process",
+            description=f"**{char_name}** learns about naturalization. Path to full citizenship clearly defined.",
+            color=0x228B22
+        )
+        embed.add_field(name="🎖️ Citizenship", value="Process explained", inline=True)
+        embed.add_field(name="📚 Requirements", value="Criteria outlined", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_documentation(self, interaction: discord.Interaction, char_name: str):
+        """Handle immigration office - documentation"""
+        embed = discord.Embed(
+            title="📑 Documentation",
+            description=f"**{char_name}** submits required paperwork. All immigration documents processed efficiently.",
+            color=0x228B22
+        )
+        embed.add_field(name="📑 Documents", value="Papers filed", inline=True)
+        embed.add_field(name="✅ Status", value="Processing begun", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # Cargo Inspection Bay handlers
+    async def _handle_inspect_cargo(self, interaction: discord.Interaction, char_name: str):
+        """Handle cargo inspection service"""
+        import random
+        
+        # Get character data for money check
+        char_info = self.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message("Character data not found.", ephemeral=False)
+            return
+        
+        money = char_info[0]
+        cost = 50
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="❌ Insufficient Credits",
+                description=f"**{char_name}** cannot afford cargo inspection services.",
+                color=0xff4500
+            )
+            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Deduct cost
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
+        )
+        
+        inspection_results = [
+            "All cargo containers verified - no contraband detected",
+            "Manifest records match physical inventory - inspection passed",
+            "Biometric seals intact - cargo authenticity confirmed",
+            "Standard freight inspection complete - cleared for transit",
+            "Documentation verified - all items within legal parameters"
+        ]
+        
+        inspection_details = [
+            "Scanner arrays analyze each container's contents",
+            "Automated systems cross-reference manifest data",
+            "Chemical sensors detect no prohibited substances",
+            "Weight and volume measurements confirm accuracy",
+            "Digital signatures validate cargo authentication"
+        ]
+        
+        result = random.choice(inspection_results)
+        detail = random.choice(inspection_details)
+        
+        embed = discord.Embed(
+            title="📦 Cargo Inspection Complete",
+            description=f"**{char_name}** submits cargo for mandatory inspection.",
+            color=0x4682b4
+        )
+        embed.add_field(name="🔍 Inspection Process", value=detail, inline=False)
+        embed.add_field(name="✅ Result", value=result, inline=False)
+        embed.add_field(name="📋 Status", value="Cleared for interstellar transport", inline=False)
+        embed.add_field(name="💰 Inspection Fee", value=f"{cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_file_manifest(self, interaction: discord.Interaction, char_name: str):
+        """Handle filing manifest paperwork"""
+        import random
+        
+        # Get character data for money check
+        char_info = self.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message("Character data not found.", ephemeral=False)
+            return
+        
+        money = char_info[0]
+        cost = 25
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="❌ Insufficient Credits",
+                description=f"**{char_name}** cannot afford manifest filing services.",
+                color=0xff4500
+            )
+            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Deduct cost
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
+        )
+        
+        manifest_types = [
+            "Standard Freight Manifest - Form CF-2847",
+            "Hazardous Materials Declaration - Form HM-1205",
+            "Live Cargo Transport Permit - Form LC-3991",
+            "High-Value Goods Manifest - Form HV-7432",
+            "Perishable Goods Declaration - Form PG-5618"
+        ]
+        
+        filing_details = [
+            "Digital signatures applied to all documentation",
+            "Biometric verification stamps cargo authenticity", 
+            "Automated systems update galactic freight database",
+            "Cross-referenced with customs and excise records",
+            "Blockchain verification ensures document integrity"
+        ]
+        
+        manifest_type = random.choice(manifest_types)
+        filing_detail = random.choice(filing_details)
+        reference_number = f"MF-{random.randint(100000, 999999)}"
+        
+        embed = discord.Embed(
+            title="📄 Manifest Filing Complete",
+            description=f"**{char_name}** files official cargo manifest paperwork.",
+            color=0x4169e1
+        )
+        embed.add_field(name="📋 Document Type", value=manifest_type, inline=False)
+        embed.add_field(name="🔢 Reference Number", value=reference_number, inline=True)
+        embed.add_field(name="⚙️ Processing", value=filing_detail, inline=False)
+        embed.add_field(name="✅ Status", value="Filed and registered in galactic database", inline=False)
+        embed.add_field(name="💰 Filing Fee", value=f"{cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_pay_transit_fee(self, interaction: discord.Interaction, char_name: str):
+        """Handle transit fee payment"""
+        import random
+        
+        # Get character data for money check
+        char_info = self.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message("Character data not found.", ephemeral=False)
+            return
+        
+        money = char_info[0]
+        base_cost = 75
+        
+        # Random surcharge system
+        surcharge_types = [
+            ("Standard Rate", 0),
+            ("Peak Hours Surcharge", 15),
+            ("Heavy Traffic Fee", 25),
+            ("Priority Lane Access", 35),
+            ("Express Processing", 20)
+        ]
+        
+        surcharge_name, surcharge_amount = random.choice(surcharge_types)
+        total_cost = base_cost + surcharge_amount
+        
+        if money < total_cost:
+            # Offer basic transit option
+            basic_cost = base_cost
+            if money >= basic_cost:
+                self.db.execute_query(
+                    "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                    (basic_cost, interaction.user.id)
+                )
+                embed = discord.Embed(
+                    title="🚀 Basic Transit Fee Paid",
+                    description=f"**{char_name}** pays standard transit fee.",
+                    color=0xffd700
+                )
+                embed.add_field(name="🎫 Transit Type", value="Standard Corridor Access", inline=False)
+                embed.add_field(name="⏰ Processing Time", value="Standard queue (30-45 minutes)", inline=False)
+                embed.add_field(name="💰 Fee Paid", value=f"{basic_cost} credits", inline=True)
+                embed.add_field(name="🏦 Remaining", value=f"{money - basic_cost} credits", inline=True)
+            else:
+                embed = discord.Embed(
+                    title="❌ Insufficient Credits",
+                    description=f"**{char_name}** cannot afford transit fees.",
+                    color=0xff4500
+                )
+                embed.add_field(name="💰 Required", value=f"{basic_cost} credits (basic transit)", inline=True)
+                embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Deduct full cost
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (total_cost, interaction.user.id)
+        )
+        
+        processing_benefits = [
+            "Priority lane access granted",
+            "Expedited customs processing", 
+            "VIP lounge access included",
+            "Express boarding privileges",
+            "Premium service tier activated"
+        ]
+        
+        gate_assignments = [
+            "Gate Alpha-7 (Premium Corridor)",
+            "Gate Beta-12 (Express Lane)",
+            "Gate Gamma-3 (Priority Access)",
+            "Gate Delta-9 (VIP Terminal)",
+            "Gate Epsilon-5 (Fast Track)"
+        ]
+        
+        benefit = random.choice(processing_benefits)
+        gate = random.choice(gate_assignments)
+        transit_id = f"TF-{random.randint(1000000, 9999999)}"
+        
+        embed = discord.Embed(
+            title="🎫 Transit Fee Payment Complete",
+            description=f"**{char_name}** successfully pays transit corridor fees.",
+            color=0x00ff00
+        )
+        embed.add_field(name="🚪 Gate Assignment", value=gate, inline=False)
+        embed.add_field(name="🎯 Service Level", value=surcharge_name, inline=True)
+        embed.add_field(name="✨ Benefits", value=benefit, inline=False)
+        embed.add_field(name="🆔 Transit ID", value=transit_id, inline=True)
+        embed.add_field(name="💰 Total Fee", value=f"{total_cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining", value=f"{money - total_cost} credits", inline=True)
+        
+        if surcharge_amount > 0:
+            embed.add_field(name="📊 Fee Breakdown", 
+                           value=f"Base: {base_cost} + {surcharge_name}: {surcharge_amount}", 
+                           inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # Hull Cleaning Bay handlers
+    async def _handle_hull_cleaning(self, interaction: discord.Interaction, char_name: str):
+        """Handle full hull cleaning service"""
+        import random
+        
+        char_data = self.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            embed = discord.Embed(title="🧽 Hull Cleaning Bay - 75C", description="Character data not found.", color=0xff0000)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        money = char_data[0]
+        cost = 75
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="❌ Insufficient Credits",
+                description=f"**{char_name}** cannot afford the full hull cleaning service.",
+                color=0xff4500
+            )
+            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
+            embed.add_field(name="ℹ️ Service Details", value="Complete hull cleaning removes all debris, micro-meteorite damage, and spatial contamination.", inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        self.db.execute_query("UPDATE characters SET money = money - ? WHERE user_id = ?", (cost, interaction.user.id))
+        
+        cleaning_outcomes = [
+            "Micro-meteorite scarring polished to pristine condition",
+            "Nebula particulates completely removed from hull plating",
+            "Ion storm residue cleared from external sensors",
+            "Deep space debris extraction and surface restoration",
+            "Quantum field contamination neutralized and cleaned"
+        ]
+        
+        embed = discord.Embed(
+            title="🧽 Hull Cleaning Complete",
+            description=f"**{char_name}**, your vessel has undergone comprehensive hull restoration.",
+            color=0x00ff00
+        )
+        embed.add_field(name="🔧 Service Performed", value=random.choice(cleaning_outcomes), inline=False)
+        embed.add_field(name="✨ Hull Condition", value="Restored to factory specifications", inline=False)
+        embed.add_field(name="💰 Service Cost", value=f"{cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining Credits", value=f"{money - cost}", inline=True)
+        embed.add_field(name="📋 Technical Notes", value="Hull integrity optimized • External sensors recalibrated • Protective coating renewed", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_radiation_scrub(self, interaction: discord.Interaction, char_name: str):
+        """Handle radiation decontamination service"""
+        import random
+        
+        char_data = self.db.execute_query("SELECT money FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+        
+        if not char_data:
+            embed = discord.Embed(title="☢️ Radiation Decontamination - 50C", description="Character data not found.", color=0xff0000)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        money = char_data[0]
+        cost = 50
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="❌ Insufficient Credits",
+                description=f"**{char_name}** cannot afford radiation decontamination services.",
+                color=0xff4500
+            )
+            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
+            embed.add_field(name="⚠️ Service Details", value="Specialized radiation scrubbing removes harmful isotopic contamination from hull surfaces.", inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        self.db.execute_query("UPDATE characters SET money = money - ? WHERE user_id = ?", (cost, interaction.user.id))
+        
+        radiation_sources = ["Pulsar proximity contamination", "Solar flare particle exposure", "Quantum tunnel radiation residue", "Asteroid belt radioactive dust", "Neutron star field contamination", "Cosmic ray bombardment traces"]
+        decon_methods = ["Ion beam neutralization protocol", "Electromagnetic field purging sequence", "Molecular disintegration chambers", "Quantum flux stabilization process", "Particle beam decontamination sweep"]
+        
+        embed = discord.Embed(
+            title="☢️ Radiation Scrub Complete",
+            description=f"**{char_name}**, your vessel has been successfully decontaminated.",
+            color=0x00ff00
+        )
+        embed.add_field(name="🔍 Contamination Source", value=random.choice(radiation_sources), inline=False)
+        embed.add_field(name="🧪 Decontamination Method", value=random.choice(decon_methods), inline=False)
+        embed.add_field(name="✅ Radiation Levels", value="Within safe operational parameters", inline=False)
+        embed.add_field(name="💰 Service Cost", value=f"{cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining Credits", value=f"{money - cost}", inline=True)
+        embed.add_field(name="🛡️ Safety Certification", value="Hull cleared for standard corridor transit • Crew exposure risk eliminated", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_basic_decon(self, interaction: discord.Interaction, char_name: str):
+        """Handle basic decontamination service"""
+        import random
+        
+        char_data = self.db.execute_query("SELECT money FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+        
+        if not char_data:
+            embed = discord.Embed(title="🛡️ Basic Decontamination - 30C", description="Character data not found.", color=0xff0000)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        money = char_data[0]
+        cost = 30
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="❌ Insufficient Credits",
+                description=f"**{char_name}** cannot afford basic decontamination services.",
+                color=0xff4500
+            )
+            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
+            embed.add_field(name="ℹ️ Service Details", value="Standard decontamination removes common space debris and surface contaminants.", inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        self.db.execute_query("UPDATE characters SET money = money - ? WHERE user_id = ?", (cost, interaction.user.id))
+        
+        basic_contaminants = ["Standard space dust accumulation", "Atmospheric entry burn residue", "Docking bay particulate matter", "Common stellar wind deposits", "Navigation beacon interference particles"]
+        cleaning_procedures = ["Automated spray wash cycle", "Sonic vibration cleaning", "Electrostatic dust removal", "Pressure wash and rinse sequence", "Standard decontamination protocol"]
+        
+        embed = discord.Embed(
+            title="🛡️ Basic Decontamination Complete",
+            description=f"**{char_name}**, your vessel has received standard cleaning services.",
+            color=0x00ff00
+        )
+        embed.add_field(name="🧹 Contaminants Removed", value=random.choice(basic_contaminants), inline=False)
+        embed.add_field(name="🔧 Cleaning Method", value=random.choice(cleaning_procedures), inline=False)
+        embed.add_field(name="✨ Hull Status", value="Clean and ready for operations", inline=False)
+        embed.add_field(name="💰 Service Cost", value=f"{cost} credits", inline=True)
+        embed.add_field(name="🏦 Remaining Credits", value=f"{money - cost}", inline=True)
+        embed.add_field(name="📋 Service Notes", value="Basic cleaning completed • Routine maintenance recommended after extended travel", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_baby_care_station(self, interaction: discord.Interaction, char_name: str):
+        """Handle family zone - baby care station"""
+        embed = discord.Embed(
+            title="👶 Baby Care Station",
+            description=f"**{char_name}** accesses dedicated childcare facilities.",
+            color=0xff69b4
+        )
+        embed.add_field(name="🍼 Feeding Area:", value="Clean and private", inline=True)
+        embed.add_field(name="🛏️ Changing Station:", value="Fully equipped", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_buy_components(self, interaction: discord.Interaction, char_name: str):
+        """Handle spare parts vendor - buy components"""
+        embed = discord.Embed(
+            title="🔧 Ship Components",
+            description=f"**{char_name}** browses available ship components at a stall, but the owner is absent.",
+            color=0x708090
+        )
+        embed.add_field(name="⚙️ Available Parts", value="Various components", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_cargo_insurance(self, interaction: discord.Interaction, char_name: str):
+        """Handle cargo storage - cargo insurance"""
+        embed = discord.Embed(
+            title="📋 Cargo Insurance",
+            description=f"**{char_name}** reviews insurance options for stored cargo. Protect your valuable shipments.",
+            color=0x4682b4
+        )
+        embed.add_field(name="🛡️ Coverage Options:", value="Comprehensive protection", inline=True)
+        embed.add_field(name="📊 Risk Assessment:", value="Professional evaluation", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_emergency_repair_kit(self, interaction: discord.Interaction, char_name: str):
+        """Handle spare parts vendor - emergency repair kit"""
+        embed = discord.Embed(
+            title="🚨 Emergency Repair Kit",
+            description=f"**{char_name}** examines emergency repair supplies, but they seem incompatible with their ship.",
+            color=0xff4500
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_energy_drinks(self, interaction: discord.Interaction, char_name: str):
+        """Handle quick food vendor - energy drinks"""
+        embed = discord.Embed(
+            title="⚡ Energy Drinks",
+            description=f"**{char_name}** selects from various energy beverages, high-caffeine drinks to keep spacers alert on long journeys.",
+            color=0x32cd32
+        )
+        embed.add_field(name="🥤 Drink Options:", value="Fruity, Sweet, Bitter, Tasteless and more.", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_family_rest(self, interaction: discord.Interaction, char_name: str):
+        """Handle family zone - family rest"""
+        embed = discord.Embed(
+            title="👨‍👩‍👧‍👦 Family Rest Area",
+            description=f"**{char_name}** accesses the family relaxation area, a comfortable space designed for families traveling together.",
+            color=0xffd700
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_kids_play_area(self, interaction: discord.Interaction, char_name: str):
+        """Handle family zone - kids play area"""
+        embed = discord.Embed(
+            title="🎪 Kids Play Area",
+            description=f"**{char_name}** visits the children's play zone.",
+            color=0xff6347
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_order_coffee(self, interaction: discord.Interaction, char_name: str):
+        """Handle quick food vendor - order coffee"""
+        embed = discord.Embed(
+            title="☕ Fresh Coffee",
+            description=f"**{char_name}** orders freshly brewed coffee.",
+            color=0x8b4513
+        )
+        embed.add_field(name="☕ Coffee Types:", value="Various synthetic blends available", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_pilot_lounge(self, interaction: discord.Interaction, char_name: str):
+        """Handle pilot rest quarters - pilot lounge"""
+        embed = discord.Embed(
+            title="✈️ Pilot Lounge",
+            description=f"**{char_name}** enters the exclusive pilot lounge, a relaxation space for certified pilots.",
+            color=0x4169e1
+        )
+        embed.add_field(name="👨‍✈️ Access Level:", value="Licensed pilots only", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_premium_pod(self, interaction: discord.Interaction, char_name: str):
+        """Handle pilot rest quarters - premium pod"""
+        embed = discord.Embed(
+            title="🏨 Premium Sleep Pod",
+            description=f"**{char_name}** books a luxury sleep pod. High-end accommodation for discerning travelers.",
+            color=0xffd700
+        )
+        embed.add_field(name="🛏️ Comfort Level:", value="Maximum luxury", inline=True)
+        embed.add_field(name="🌟 Features:", value="Premium amenities, inter-solar TV, in mattress massagers", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_quick_meal(self, interaction: discord.Interaction, char_name: str):
+        """Handle quick food vendor - quick meal"""
+        embed = discord.Embed(
+            title="🍽️ Quick Meal",
+            description=f"**{char_name}** orders a complimentary meal.",
+            color=0xff8c00
+        )
+        embed.add_field(name="🍱 Meal Options:", value="Varied and nutritional.", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_rent_sleep_pod(self, interaction: discord.Interaction, char_name: str):
+        """Handle pilot rest quarters - rent sleep pod"""
+        embed = discord.Embed(
+            title="🛏️ Sleep Pod Rental",
+            description=f"**{char_name}** rents a standard sleep pod..",
+            color=0x87ceeb
+        )
+        embed.add_field(name="🏠 Pod Features", value="Clean and comfortable", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_rest_in_pod(self, interaction: discord.Interaction, char_name: str):
+        """Handle pilot rest quarters - rest in pod"""
+        embed = discord.Embed(
+            title="😴 Rest in Pod",
+            description=f"**{char_name}** settles in for a quick rest. A private sleep pod provides peaceful environment for a nap.",
+            color=0x191970
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_retrieve_cargo(self, interaction: discord.Interaction, char_name: str):
+        """Handle cargo storage - retrieve cargo"""
+        embed = discord.Embed(
+            title="📦 Retrieve Cargo",
+            description=f"**{char_name}** accesses their cargo stored in the gate's hold.",
+            color=0x8b4513
+        )
+        embed.add_field(name="📋 Manifest", value="Passes inventory verification", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_shower_facilities(self, interaction: discord.Interaction, char_name: str):
+        """Handle pilot rest quarters - shower facilities"""
+        embed = discord.Embed(
+            title="🚿 Shower Facilities",
+            description=f"**{char_name}** uses the shower facilities to clean themselves.",
+            color=0x20b2aa
+        )
+        embed.add_field(name="🧼 Amenities:", value="Full hygiene facilities", inline=True)
+        embed.add_field(name="💧 Water System:", value="Recycled, purified and heated for comfort", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_spare_parts(self, interaction: discord.Interaction, char_name: str):
+        """Handle spare parts vendor - spare parts"""
+        embed = discord.Embed(
+            title="🔩 Spare Parts",
+            description=f"**{char_name}** browses through the spare parts bin but finds nothing useful.",
+            color=0x696969
+        )
+        embed.add_field(name="⚙️ Parts Available:", value="Junk", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_store_cargo(self, interaction: discord.Interaction, char_name: str):
+        """Handle cargo storage - store cargo"""
+        embed = discord.Embed(
+            title="📦 Scan Cargo",
+            description=f"**{char_name}** has their cargo processed and scanned for verification.",
+            color=0x8b4513
+        )
+        embed.add_field(name="📋 Verification:", value="Passing all checks", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_traveler_info(self, interaction: discord.Interaction, char_name: str):
+        """Handle transit center - traveler info"""
+        embed = discord.Embed(
+            title="ℹ️ Traveler Information",
+            description=f"**{char_name}** accesses traveler information services. Current routes, schedules, and travel advisories.",
+            color=0x4682b4
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+    
+    async def _handle_slot_machine(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle slot machine gambling game"""
+        casino_cog = self.bot.get_cog('CasinoCog')
+        if not casino_cog:
+            await interaction.response.send_message("❌ Casino games are currently unavailable.", ephemeral=True)
+            return
+        
+        view = casino_cog.create_slot_machine_view(interaction.user.id)
+        embed = discord.Embed(
+            title="🎰 Slot Machine",
+            description="**How to Play:**\n"
+                       "• Choose your bet amount (10-1000 credits)\n"
+                       "• Hit SPIN to play!\n"
+                       "• Match 3 symbols to win big!\n\n"
+                       "**Payouts:**\n"
+                       "🍒🍒🍒 = 2x bet\n"
+                       "🍋🍋🍋 = 3x bet\n"
+                       "🍊🍊🍊 = 5x bet\n"
+                       "💎💎💎 = 10x bet\n"
+                       "🎰🎰🎰 = 20x bet\n\n"
+                       f"**Your Balance:** {money:,} credits",
+            color=0xFFD700
+        )
+        embed.set_footer(text="⚠️ Gamble responsibly! The house always has an edge.")
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    async def _handle_blackjack(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle blackjack gambling game"""
+        casino_cog = self.bot.get_cog('CasinoCog')
+        if not casino_cog:
+            await interaction.response.send_message("❌ Casino games are currently unavailable.", ephemeral=True)
+            return
+        
+        view = casino_cog.create_blackjack_view(interaction.user.id)
+        embed = discord.Embed(
+            title="🃏 Blackjack",
+            description="**How to Play:**\n"
+                       "• Choose your bet amount (10-1000 credits)\n"
+                       "• Get as close to 21 as possible without going over\n"
+                       "• Aces = 1 or 11, Face cards = 10\n"
+                       "• Hit to draw cards, Stand to stop\n"
+                       "• Beat the dealer to win 2x your bet!\n\n"
+                       f"**Your Balance:** {money:,} credits",
+            color=0x000000
+        )
+        embed.set_footer(text="⚠️ Gamble responsibly! The house always has an edge.")
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    async def _handle_dice_roll(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle dice roll gambling game"""
+        casino_cog = self.bot.get_cog('CasinoCog')
+        if not casino_cog:
+            await interaction.response.send_message("❌ Casino games are currently unavailable.", ephemeral=True)
+            return
+        
+        view = casino_cog.create_dice_game_view(interaction.user.id)
+        embed = discord.Embed(
+            title="🎲 Dice Roll",
+            description="**How to Play:**\n"
+                       "• Choose your bet amount (10-1000 credits)\n"
+                       "• Predict if the roll will be HIGH (8-12) or LOW (2-6)\n"
+                       "• Rolling exactly 7 is a push (get your bet back)\n"
+                       "• Correct guess wins 2x your bet!\n\n"
+                       f"**Your Balance:** {money:,} credits",
+            color=0xFF4500
+        )
+        embed.set_footer(text="⚠️ Gamble responsibly! The house always has an edge.")
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 class SubLocationButton(discord.ui.Button):
     """Individual service button for sub-locations"""
@@ -3912,6 +6668,10 @@ class ChangeCharacterInfoModal(discord.ui.Modal):
         # This method will be overridden by subclasses
         raise NotImplementedError
 
+    # New service handlers for missing sub-location activities
+    
+
+
 class ChangeNameModal(ChangeCharacterInfoModal):
     async def update_database(self, interaction: discord.Interaction, new_value: str):
         self.db.execute_query(
@@ -3926,14 +6686,120 @@ class ChangeNameModal(ChangeCharacterInfoModal):
         except Exception as e:
             print(f"❌ Error changing nickname for {interaction.user.name}: {e}")
 
-class ChangeDescriptionModal(ChangeCharacterInfoModal):
+class ChangeDescriptionModal(discord.ui.Modal):
+    """Modal for changing character appearance with higher character limit."""
+    def __init__(self, title: str, field_label: str, placeholder: str, current_value: str, cost: int, bot):
+        super().__init__(title=title)
+        self.bot = bot
+        self.db = bot.db
+        self.cost = cost
+        
+        self.new_value_input = discord.ui.TextInput(
+            label=f"{field_label} (Cost: {cost:,} credits)",
+            placeholder=placeholder,
+            default=current_value,
+            style=discord.TextStyle.paragraph,
+            max_length=2000
+        )
+        self.add_item(self.new_value_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        
+        # Check character funds
+        money = self.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not money or money[0] < self.cost:
+            await interaction.followup.send(
+                f"❌ You don't have enough credits. This change costs {self.cost:,} credits.",
+                ephemeral=False
+            )
+            return
+
+        # Update database
+        try:
+            await self.update_database(interaction, self.new_value_input.value)
+            
+            # Deduct cost
+            self.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (self.cost, interaction.user.id)
+            )
+            
+            await interaction.followup.send(
+                f"✅ Your information has been updated for {self.cost:,} credits.",
+                ephemeral=False
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Error updating information: {str(e)}",
+                ephemeral=False
+            )
+
     async def update_database(self, interaction: discord.Interaction, new_value: str):
         self.db.execute_query(
             "UPDATE characters SET appearance = ? WHERE user_id = ?",
             (new_value, interaction.user.id)
         )
 
-class ChangeBioModal(ChangeCharacterInfoModal):
+class ChangeBioModal(discord.ui.Modal):
+    """Modal for changing character biography with higher character limit."""
+    def __init__(self, title: str, field_label: str, placeholder: str, current_value: str, cost: int, bot):
+        super().__init__(title=title)
+        self.bot = bot
+        self.db = bot.db
+        self.cost = cost
+        
+        self.new_value_input = discord.ui.TextInput(
+            label=f"{field_label} (Cost: {cost:,} credits)",
+            placeholder=placeholder,
+            default=current_value,
+            style=discord.TextStyle.paragraph,
+            max_length=2000
+        )
+        self.add_item(self.new_value_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        
+        # Check character funds
+        money = self.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not money or money[0] < self.cost:
+            await interaction.followup.send(
+                f"❌ You don't have enough credits. This change costs {self.cost:,} credits.",
+                ephemeral=False
+            )
+            return
+
+        # Update database
+        try:
+            await self.update_database(interaction, self.new_value_input.value)
+            
+            # Deduct cost
+            self.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (self.cost, interaction.user.id)
+            )
+            
+            await interaction.followup.send(
+                f"✅ Your information has been updated for {self.cost:,} credits.",
+                ephemeral=False
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Error updating information: {str(e)}",
+                ephemeral=False
+            )
+
     async def update_database(self, interaction: discord.Interaction, new_value: str):
         self.db.execute_query(
             "UPDATE character_identity SET biography = ? WHERE user_id = ?",
