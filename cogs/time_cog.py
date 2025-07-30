@@ -23,7 +23,7 @@ class TimeCog(commands.Cog, name="Time"):
             )
             return
         
-        galaxy_name, start_date_str, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame = galaxy_info
+        galaxy_name, start_date_str, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame, is_manually_paused = galaxy_info
         
         # Calculate current time
         current_datetime = self.time_system.calculate_current_ingame_time()
@@ -92,7 +92,8 @@ class TimeCog(commands.Cog, name="Time"):
         if is_paused:
             embed.set_footer(text="⚠️ Time system is currently paused by administrators")
         else:
-            embed.set_footer(text="Time flows at 4x speed (6 hours real = 1 day in-game)")
+            hours_real_per_game_day = 24 / time_scale
+            embed.set_footer(text=f"Time flows at {time_scale}x speed ({hours_real_per_game_day:.1f} hours real = 1 day in-game)")
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
     
@@ -162,9 +163,13 @@ class TimeCog(commands.Cog, name="Time"):
                 value=formatted_time,
                 inline=False
             )
+            # Get current time scale
+            galaxy_info = self.time_system.get_galaxy_info()
+            time_scale = galaxy_info[2] if galaxy_info else 4.0
+            
             embed.add_field(
                 name="ℹ️ Note",
-                value="Time will now continue flowing at 4x speed.",
+                value=f"Time will now continue flowing at {time_scale}x speed.",
                 inline=False
             )
             
@@ -222,9 +227,12 @@ class TimeCog(commands.Cog, name="Time"):
                 value=formatted_time,
                 inline=False
             )
+            # Get current time scale
+            time_scale = galaxy_info[2] if galaxy_info else 4.0
+            
             embed.add_field(
                 name="ℹ️ Note",
-                value="Time will now continue flowing from this point at 4x speed.",
+                value=f"Time will now continue flowing from this point at {time_scale}x speed.",
                 inline=False
             )
             
@@ -292,7 +300,7 @@ class TimeCog(commands.Cog, name="Time"):
             await interaction.response.send_message("❌ No galaxy found.", ephemeral=True)
             return
         
-        name, start_date, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame = galaxy_info
+        name, start_date, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame, is_manually_paused = galaxy_info
         
         embed = discord.Embed(title="🔧 Time System Debug", color=0xff9900)
         embed.add_field(name="Galaxy Name", value=name, inline=True)
@@ -301,8 +309,13 @@ class TimeCog(commands.Cog, name="Time"):
         embed.add_field(name="Started At (Real)", value=time_started_at, inline=False)
         embed.add_field(name="Galaxy Created At", value=created_at, inline=False)
         embed.add_field(name="Is Paused", value="Yes" if is_paused else "No", inline=True)
+        embed.add_field(name="Is Manually Paused", value="Yes" if is_manually_paused else "No", inline=True)
         embed.add_field(name="Paused At", value=paused_at or "N/A", inline=True)
         embed.add_field(name="Current In-Game", value=current_ingame or "N/A", inline=True)
+        
+        # Add player count to debug info
+        player_count = self.time_system.get_logged_in_player_count()
+        embed.add_field(name="Players Online", value=str(player_count), inline=True)
         
         # Calculate current time
         current_time = self.time_system.calculate_current_ingame_time()

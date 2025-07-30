@@ -113,7 +113,7 @@ class ConfirmPurchaseView(discord.ui.View):
         )
         embed.add_field(
             name="Next Steps",
-            value="• Use `/home interior enter` to enter your home\n• Use `/homes view` to see all your properties",
+            value="• Use `/tqe` to enter your home\n• Use `/tqe` to see all your properties",
             inline=False
         )
         await self.initialize_home_features(self.home['home_id'], self.home['home_type'])
@@ -621,7 +621,7 @@ class HomesCog(commands.Cog):
         )
         
         if current_home and current_home[0]:
-            await interaction.followup.send("You are already inside a home! Use `/home interior leave` first.", ephemeral=True)
+            await interaction.followup.send("You are already inside a home! Use `/tqe` to leave your home first.", ephemeral=True)
             return
         
         # Get character location
@@ -677,6 +677,30 @@ class HomesCog(commands.Cog):
                 "UPDATE characters SET current_home_id = ? WHERE user_id = ?",
                 (home_id, interaction.user.id)
             )
+            
+            # Send area movement embed to location channel
+            char_name = self.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )[0]
+            
+            # Get location channel
+            location_channel_id = self.db.execute_query(
+                "SELECT channel_id FROM locations WHERE location_id = ?",
+                (location_id,),
+                fetch='one'
+            )
+            
+            if location_channel_id:
+                location_channel = self.bot.get_channel(location_channel_id[0])
+                if location_channel:
+                    embed = discord.Embed(
+                        title="🚪 Area Movement",
+                        description=f"**{char_name}** enters the **{home_name}**.",
+                        color=0x7289DA
+                    )
+                    await location_channel.send(embed=embed)
             
             # Remove from location channel
             await channel_manager.remove_user_location_access(interaction.user, location_id)
@@ -767,6 +791,30 @@ class HomesCog(commands.Cog):
             fetch='one'
         )[0]
         
+        # Send area movement embed to location channel
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        # Get location channel
+        location_channel_id = self.db.execute_query(
+            "SELECT channel_id FROM locations WHERE location_id = ?",
+            (current_location,),
+            fetch='one'
+        )
+        
+        if location_channel_id:
+            location_channel = self.bot.get_channel(location_channel_id[0])
+            if location_channel:
+                embed = discord.Embed(
+                    title="🚪 Area Movement",
+                    description=f"**{char_name}** enters the **{home_name}**.",
+                    color=0x7289DA
+                )
+                await location_channel.send(embed=embed)
+        
         # Remove from location channel
         await channel_manager.remove_user_location_access(interaction.user, current_location)
         
@@ -848,7 +896,7 @@ class HomesCog(commands.Cog):
         
         # Notify the invitee
         try:
-            await player.send(f"{interaction.user.mention} has invited you to their home '{home_name}'. Use `/home interior accept` to enter.")
+            await player.send(f"{interaction.user.mention} has invited you to their home '{home_name}'. Use `/tqe` to enter.")
         except:
             pass
 
@@ -888,8 +936,33 @@ class HomesCog(commands.Cog):
         from utils.channel_manager import ChannelManager
         channel_manager = ChannelManager(self.bot)
         self.bot.dispatch('home_leave', interaction.user.id)
-        # Give user access back to location
-        await channel_manager.give_user_location_access(interaction.user, location_id)
+        
+        # Send area movement embed to location channel
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        # Get location channel
+        location_channel_id = self.db.execute_query(
+            "SELECT channel_id FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if location_channel_id:
+            location_channel = self.bot.get_channel(location_channel_id[0])
+            if location_channel:
+                embed = discord.Embed(
+                    title="🚪 Area Movement",
+                    description=f"**{char_name}** has exited the **{home_name}**.",
+                    color=0xFF6600
+                )
+                await location_channel.send(embed=embed)
+        
+        # Give user access back to location (suppress arrival notification for home departures)
+        await channel_manager.give_user_location_access(interaction.user, location_id, send_arrival_notification=False)
         
         # Remove from home channel
         await channel_manager.remove_user_home_access(interaction.user, home_id)
@@ -924,9 +997,9 @@ class HomesCog(commands.Cog):
                     except:
                         pass
         
-        # Clean up home channel if empty
+        # Clean up home channel if empty (check only logged-in users)
         remaining_users = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE current_home_id = ?",
+            "SELECT COUNT(*) FROM characters WHERE current_home_id = ? AND is_logged_in = 1",
             (home_id,),
             fetch='one'
         )[0]

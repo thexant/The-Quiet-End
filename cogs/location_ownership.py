@@ -344,12 +344,12 @@ class LocationOwnershipCog(commands.Cog):
             )
             embed.add_field(
                 name="Create a Faction",
-                value="Use `/faction create` to establish your own faction",
+                value="Use `/tqe` and the 'Extras > Factions' menu to establish your own faction",
                 inline=False
             )
             embed.add_field(
                 name="Join a Faction", 
-                value="Use `/faction join` if you have an invitation or there are public factions nearby",
+                value="Use `/tqe` and the 'Extras > Factions' menu if you have an invitation or there are public factions nearby",
                 inline=False
             )
             return await interaction.response.send_message(embed=embed, ephemeral=True)

@@ -13,6 +13,59 @@ class NPCInteractionsCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
 
+    async def _calculate_travel_time(self, start_id: int, end_id: int) -> int:
+        """Calculate estimated travel time in seconds between two locations using BFS pathfinding"""
+        # Get all active corridors
+        corridors = self.db.execute_query(
+            "SELECT origin_location, destination_location, corridor_id, name, travel_time FROM corridors WHERE is_active = 1",
+            fetch='all'
+        )
+        
+        # Build adjacency graph
+        graph = {}
+        corridor_info = {}
+        
+        for origin, dest, corridor_id, corridor_name, travel_time in corridors:
+            if origin not in graph:
+                graph[origin] = []
+            graph[origin].append(dest)
+            corridor_info[(origin, dest)] = {
+                'corridor_id': corridor_id,
+                'name': corridor_name,
+                'travel_time': travel_time
+            }
+        
+        # BFS to find shortest path
+        if start_id not in graph:
+            return 300  # Default fallback: 5 minutes
+            
+        from collections import deque
+        queue = deque([(start_id, [start_id])])
+        visited = {start_id}
+        
+        while queue:
+            current, path = queue.popleft()
+            
+            if current == end_id:
+                # Calculate total travel time for this path
+                total_time = 0
+                for i in range(len(path) - 1):
+                    origin, dest = path[i], path[i + 1]
+                    if (origin, dest) in corridor_info:
+                        total_time += corridor_info[(origin, dest)]['travel_time']
+                
+                # Apply default ship efficiency (assuming average efficiency of 6.5)
+                efficiency_modifier = 1.6 - (6.5 * 0.08)  # 1.08
+                return max(int(total_time * efficiency_modifier), 120)
+            
+            if current in graph:
+                for neighbor in graph[current]:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append((neighbor, path + [neighbor]))
+        
+        return 300  # Default fallback if no route found
+
     @app_commands.command(name="npc", description="Interact with NPCs at your current location")
     async def npc_interact(self, interaction: discord.Interaction):
         # Get character's current location
@@ -102,12 +155,18 @@ class NPCInteractionsCog(commands.Cog):
                 if valid_destinations:
                     dest_id, dest_name, jumps = random.choice(valid_destinations)
                     
-                    # Create escort job
+                    # Calculate actual travel time for more accurate pay
+                    estimated_travel_time = await self._calculate_travel_time(location_id, dest_id)
+                    travel_minutes = max(1, estimated_travel_time // 60)  # Convert to minutes, minimum 1
+                    
+                    # Create escort job with time-based pay (8-12 credits per minute)
+                    base_rate = random.randint(8, 12)
+                    reward = base_rate * travel_minutes + random.randint(10, 50)  # Small bonus
+                    
                     title = f"[ESCORT] Escort to {dest_name}"
-                    description = f"Safely escort this NPC from their current location to {dest_name}. The journey is estimated to be {jumps} jumps."
-                    reward = 150 * jumps + random.randint(50, 200)
+                    description = f"Safely escort this NPC from their current location to {dest_name}. The journey is estimated to be {jumps} jumps ({travel_minutes} min travel time)."
                     danger = jumps + random.randint(0, 2)
-                    duration = 10 * jumps  # Rough duration estimate
+                    duration = travel_minutes  # Use actual estimated time
 
                     self.db.execute_query(
                         '''INSERT INTO npc_jobs 
@@ -118,32 +177,238 @@ class NPCInteractionsCog(commands.Cog):
                     )
                     return # Stop after creating an escort job
 
-        # Job templates based on occupation
+        def get_occupation_category(occupation: str) -> str:
+            """Map occupation variants to job template categories"""
+            occupation_lower = occupation.lower()
+            
+            # Agriculture category
+            if any(word in occupation_lower for word in ['farmer']):
+                return "agriculture"
+            
+            # Mining category
+            if any(word in occupation_lower for word in ['miner']):
+                return "mining"
+            
+            # Communications category (check before security to avoid conflicts)
+            if any(word in occupation_lower for word in ['communications']):
+                return "communications"
+            
+            # Technical category (engineering, systems, technical roles)
+            if any(word in occupation_lower for word in ['engineer', 'technician', 'systems analyst', 'flight controller', 'network administrator', 'systems engineer', 'gate technician', 'monitor technician', 'transit operator', 'traffic monitor', 'research director', 'research supervisor']):
+                return "technical"
+            
+            # Medical category
+            if any(word in occupation_lower for word in ['medic', 'medical']):
+                return "medical"
+            
+            # Security category (security, command, military roles)
+            if any(word in occupation_lower for word in ['security', 'guard']) or occupation_lower.endswith('commander'):
+                return "security"
+            
+            # Trade category (commerce, business, trade roles)
+            if any(word in occupation_lower for word in ['merchant', 'trade', 'quartermaster', 'executive', 'corporate', 'liaison', 'commission', 'shop clerk']):
+                return "trade"
+            
+            # Labor category (manual work, dock, cargo, handling)
+            if any(word in occupation_lower for word in ['laborer', 'dock worker', 'cargo handler', 'supply clerk', 'food service']):
+                return "labor"
+            
+            # Administrative category (management, coordination, admin)
+            if any(word in occupation_lower for word in ['administrator', 'admin', 'manager', 'director', 'coordinator', 'attaché', 'teacher', 'supervisor']):
+                return "administrative"
+            
+            
+            # Maintenance category (facility maintenance and cleaning)
+            if any(word in occupation_lower for word in ['maintenance worker', 'maintenance specialist', 'janitor']):
+                return "maintenance"
+            
+            # Default to labor for unknown occupations
+            return "labor"
+
+        # Job templates based on occupation categories
+        # Title, description, base pay, required skill or None, minimum skill level, danger, duration
         job_templates = {
-            "Farmer": [
-                ("Harvest Assistant Needed", "Help harvest crops during the busy season", 150, None, 0, 0, 15),          # Safe routine work
-                ("Livestock Care", "Tend to farm animals and ensure their health", 200, "medical", 5, 0, 20),           # Safe animal care  
-                ("Equipment Maintenance", "Repair and maintain farming equipment", 250, "engineering", 8, 1, 25)        # Slightly risky with machinery
+            "agriculture": [
+                ("Harvest Assistant Needed", "Help harvest crops during the busy season", 150, None, 0, 0, 10),
+                ("Livestock Care", "Tend to farm animals and ensure their health", 200, "medical", 5, 0, 12),
+                ("Equipment Maintenance", "Repair and maintain farming equipment", 250, "engineering", 8, 1, 15),
+                ("Crop Quality Control", "Inspect and sort harvested produce", 180, None, 0, 0, 10),
+                ("Irrigation Repair", "Fix and maintain water distribution systems", 220, "engineering", 6, 1, 12),
+                ("Seed Planting", "Assist with planting operations across fields", 120, None, 0, 0, 8),
+                ("Animal Feeding", "Feed and water livestock throughout the facility", 140, None, 0, 0, 12),
+                ("Greenhouse Monitoring", "Monitor environmental conditions in growing areas", 180, "engineering", 5, 0, 10),
+                ("Pest Control", "Apply pest management solutions to crops", 200, "medical", 7, 1, 10),
+                ("Soil Analysis", "Test soil composition and nutrient levels", 220, "medical", 8, 0, 12),
+                ("Hydroponics Specialist", "Manage advanced hydroponic systems for optimal yield", 280, "engineering", 10, 0, 15),
+                ("Crop Genetic Modification", "Assist in genetic modification of crops for resilience", 320, "medical", 15, 1, 20),
+                ("Automated Harvester Oversight", "Monitor and troubleshoot autonomous harvesting equipment", 240, "engineering", 8, 0, 12),
+                ("Atmospheric Regulator", "Adjust and maintain atmospheric conditions in enclosed farms", 260, "engineering", 9, 0, 10),
+                ("Nutrient Reclaimer", "Operate systems to recycle and re-balance agricultural nutrients", 230, "engineering", 7, 0, 10),
+                ("Crop Disease Analyst", "Diagnose and recommend treatments for plant pathogens", 290, "medical", 12, 0, 12),
             ],
-            "Engineer": [
-                ("System Diagnostics", "Run diagnostics on critical station systems", 300, "engineering", 10, 0, 20),   # Safe computer work
-                ("Equipment Calibration", "Calibrate sensitive technical equipment", 400, "engineering", 15, 1, 25),    # Slightly risky precision work
-                ("Emergency Repair", "Fix urgent system failures", 500, "engineering", 18, 2, 15)                     # Actually dangerous emergency work
+            "mining": [
+                ("Ore Extraction", "Assist with mining operations in the tunnels", 200, "engineering", 8, 2, 12),
+                ("Equipment Operation", "Operate heavy mining machinery", 280, "engineering", 12, 2, 15),
+                ("Safety Inspection", "Check mining equipment and tunnels for hazards", 220, "engineering", 10, 1, 10),
+                ("Sample Analysis", "Test ore samples for quality and composition", 180, "engineering", 6, 0, 10),
+                ("Tunnel Maintenance", "Repair and reinforce mining tunnel supports", 250, "engineering", 10, 2, 15),
+                ("Rock Hauling", "Transport extracted materials to processing areas", 150, None, 0, 1, 12),
+                ("Tool Maintenance", "Clean and maintain mining tools and equipment", 130, None, 0, 0, 10),
+                ("Air Quality Monitoring", "Check ventilation systems in mining areas", 190, "engineering", 5, 1, 8),
+                ("Mineral Sorting", "Sort and categorize extracted minerals", 160, None, 0, 0, 12),
+                ("Drilling Support", "Assist with drilling operations and setup", 170, "engineering", 5, 1, 10),
+                ("Deep Core Drilling", "Operate specialized drills for ultra-deep mineral extraction", 350, "engineering", 18, 3, 20),
+                ("Exotic Material Refiner", "Process rare and unstable materials from asteroid belts", 380, "engineering", 20, 3, 18),
+                ("Geological Surveyor", "Conduct surveys for new mineral deposits using advanced scanners", 300, "navigation", 15, 1, 15),
+                ("Hazardous Waste Sealer", "Contain and seal off areas with dangerous mineral byproducts", 310, "engineering", 16, 2, 12),
+                ("Resource Prospector", "Scout and evaluate potential mining sites in unexplored territories", 330, "navigation", 17, 2, 18)
             ],
-            "Medic": [
-                ("Medical Supply Inventory", "Organize and catalog medical supplies", 180, "medical", 5, 0, 15),        # Safe clerical work
-                ("Health Screening", "Assist with routine health examinations", 220, "medical", 10, 0, 25),            # Safe routine checkups
-                ("Emergency Response", "Provide medical aid during emergencies", 400, "medical", 15, 2, 10)            # Actually dangerous emergency work
+            "technical": [
+                ("System Diagnostics", "Run diagnostics on critical station systems", 250, "engineering", 10, 0, 10),
+                ("Equipment Calibration", "Calibrate sensitive technical equipment", 280, "engineering", 15, 1, 10),
+                ("Emergency Repair", "Fix urgent system failures", 300, "engineering", 15, 2, 12),
+                ("Network Maintenance", "Maintain communication and data networks", 260, "engineering", 12, 1, 15),
+                ("Software Update", "Install and configure system software", 220, "engineering", 8, 0, 12),
+                ("Circuit Testing", "Test electrical circuits and components", 190, "engineering", 6, 0, 8),
+                ("Data Backup", "Perform system data backup procedures", 150, None, 0, 0, 10),
+                ("Cable Management", "Organize and maintain cable infrastructure", 140, None, 0, 0, 12),
+                ("Component Installation", "Install and replace technical components", 210, "engineering", 8, 1, 10),
+                ("Performance Monitoring", "Monitor system performance and efficiency", 200, "engineering", 7, 0, 8),
+                ("Systems Technician", "Repair and maintain various service and industrial systems", 300, "engineering", 15, 1, 12),
+                ("Cybernetics Integrator", "Assist with the installation and calibration of cybernetic enhancements", 320, "medical", 18, 1, 10),
+                ("Energy Conduit Repair", "Fix and reroute high-energy power lines", 330, "engineering", 17, 2, 10),
+                ("Display Projection Specialist", "Calibrate and troubleshoot advanced display systems", 290, "engineering", 14, 0, 10),
+                ("Environmental Control Systems Engineer", "Manage and optimize the climate and atmospheric controls", 310, "engineering", 16, 1, 12)
             ],
-            "Merchant": [
-                ("Market Research", "Investigate trade opportunities", 200, "navigation", 8, 0, 20),                   # Safe research work
-                ("Price Negotiation", "Help negotiate better trade deals", 300, "navigation", 10, 0, 15),             # Safe business meeting
-                ("Cargo Escort", "Provide security for valuable shipments", 350, "combat", 12, 2, 25)                # Actually dangerous security work
+            "medical": [
+                ("Medical Supply Inventory", "Organize and catalog medical supplies", 180, "medical", 5, 0, 12),
+                ("Health Screening", "Assist with routine health examinations", 220, "medical", 10, 0, 12),
+                ("Emergency Response", "Provide medical aid during emergencies", 280, "medical", 15, 2, 10),
+                ("Patient Records", "Update and maintain medical database", 160, "medical", 3, 0, 12),
+                ("Equipment Sterilization", "Clean and prepare medical instruments", 140, "medical", 5, 0, 15),
+                ("Medication Dispensing", "Prepare and distribute prescribed medications", 190, "medical", 8, 0, 10),
+                ("Wound Care", "Provide basic wound cleaning and bandaging", 170, "medical", 6, 0, 8),
+                ("Vital Signs Monitoring", "Check and record patient vital signs", 150, "medical", 5, 0, 10),
+                ("Sample Collection", "Collect biological samples for testing", 200, "medical", 7, 1, 12),
+                ("Medical Equipment Setup", "Prepare medical devices for procedures", 160, None, 0, 0, 10),
+                ("Supply Restocking", "Restock medical supplies and materials", 130, None, 0, 0, 8),
+                ("Genetic Therapy Assistant", "Aid in the application of advanced genetic treatments", 300, "medical", 15, 1, 15),
+                ("Vacuum Bloom Sample Handler", "Safely process and analyze samples of Vacuum Bloom spores", 330, "medical", 18, 2, 12),
+                ("Psychological Support", "Provide mental health assistance to local personnel", 250, "medical", 12, 0, 10),
+                ("Bio-Hazard Containment", "Manage and sterilize areas exposed to dangerous biological agents", 310, "medical", 17, 2, 10),
+                ("Prosthetics Fabricator", "Create custom prosthetic limbs and organs", 290, "medical", 16, 0, 12),
+                ("Trauma Surgeon Assistant", "Assist in emergency surgical procedures for critical injuries", 340, "medical", 19, 3, 8),
+                ("Disease Outbreak Investigator", "Help trace and contain the spread of infectious diseases", 320, "medical", 18, 1, 15)
             ],
-            "Security Guard": [
-                ("Equipment Check", "Inspect and maintain security equipment", 200, "engineering", 8, 0, 15),         # Safe equipment inspection
-                ("Patrol Duty", "Conduct security patrols of the facility", 180, "combat", 5, 1, 20),                 # Slightly risky patrol
-                ("Threat Assessment", "Evaluate security risks and vulnerabilities", 300, "combat", 15, 1, 20)        # Slightly risky assessment
+            "security": [
+                ("Equipment Check", "Inspect and maintain security equipment", 200, "engineering", 8, 0, 15),
+                ("Patrol Duty", "Conduct security patrols of the facility", 180, "combat", 5, 1, 12),
+                ("Threat Assessment", "Evaluate security risks and vulnerabilities", 270, "combat", 15, 1, 10),
+                ("Access Control", "Monitor and verify personnel clearances", 160, "combat", 3, 0, 15),
+                ("Incident Response", "Respond to security alerts and emergencies", 290, "combat", 12, 2, 12),
+                ("Surveillance Monitoring", "Watch security cameras and monitoring systems", 150, None, 0, 0, 12),
+                ("Perimeter Check", "Inspect facility boundaries and barriers", 140, None, 0, 0, 10),
+                ("Weapon Maintenance", "Clean and maintain security weapons", 190, "combat", 6, 0, 8),
+                ("Guard Training", "Assist with security training exercises", 170, "combat", 7, 1, 10),
+                ("Evidence Collection", "Gather and document security incidents", 210, "combat", 8, 0, 12),
+                ("Covert Operations Specialist", "Conduct discreet surveillance and intelligence gathering", 320, "combat", 18, 2, 10),
+                ("Breach Response Team", "Respond to and neutralize a security breach", 350, "combat", 20, 3, 8),
+                ("Automated Defense Repairs", "Repair the automated asteroid defense systems", 290, "engineering", 15, 1, 12),
+                ("Prison Block Overseer", "Manage prisoners and routines at the local prison block.", 260, "combat", 12, 1, 15),
+                ("Smuggling Interdiction", "Identify and intercept illegal cargo and contraband", 280, "combat", 14, 1, 12),
+                ("Hostage Negotiation", "De-escalate critical situations involving captured personnel", 360, "combat", 21, 2, 10),
+                ("Asteroid Defense Sentry", "Operate and monitor external asteroid defense systems", 270, "combat", 13, 1, 15),
+                ("Internal Affairs Investigator", "Investigate misconduct and corruption within station personnel", 300, "combat", 16, 0, 12)
+            ],
+            "trade": [
+                ("Market Research", "Investigate trade opportunities", 200, "navigation", 8, 0, 10),
+                ("Price Negotiation", "Help negotiate better trade deals", 250, "navigation", 10, 0, 15),
+                ("Valuable Shipment Guard", "Provide security for high-value storage area", 280, "combat", 12, 2, 12),
+                ("Inventory Management", "Organize and track trade goods", 180, "navigation", 5, 0, 12),
+                ("Client Relations", "Maintain relationships with trading partners", 220, "navigation", 8, 0, 8),
+                ("Cargo Inspection", "Inspect incoming and outgoing shipments", 160, None, 0, 0, 10),
+                ("Sales Support", "Assist customers with trade inquiries", 140, None, 0, 0, 8),
+                ("Route Planning", "Plan efficient trade routes and schedules", 210, "navigation", 9, 0, 12),
+                ("Quality Assessment", "Evaluate the quality of trade goods", 190, "navigation", 6, 0, 10),
+                ("Documentation", "Process trade permits and paperwork", 150, None, 0, 0, 12),
+                ("Market Analyst", "Predict economic trends and identify profitable trade ventures", 300, "navigation", 15, 0, 12),
+                ("Customs Expedition", "Navigate complex inter-system customs regulations for cargo", 270, "navigation", 12, 0, 8),
+                ("Trade Route Cartography", "Map and optimize new, efficient trade routes from this location", 360, "navigation", 20, 1, 15),
+                ("Cargo Manifest Audit", "Verify and reconcile cargo manifests against physical inventory", 260, "navigation", 11, 0, 12),
+                ("Supply Chain Optimization", "Streamline the flow of goods from production to distribution", 290, "navigation", 14, 0, 10)
+            ],
+            "labor": [
+                ("General Labor", "Assist with various manual tasks", 120, None, 0, 0, 15),
+                ("Equipment Moving", "Transport heavy equipment and supplies", 150, None, 0, 1, 12),
+                ("Facility Maintenance", "Clean and maintain work areas", 130, None, 0, 0, 8),
+                ("Loading Operations", "Load and unload cargo shipments", 160, None, 0, 1, 12),
+                ("Construction Assist", "Help with basic construction tasks", 180, "engineering", 3, 1, 15),
+                ("Waste Management", "Collect and dispose of facility waste", 110, None, 0, 0, 10),
+                ("Supply Distribution", "Deliver supplies to various departments", 140, None, 0, 0, 12),
+                ("Painting Work", "Paint walls, equipment, and structures", 125, None, 0, 0, 10),
+                ("Floor Cleaning", "Deep clean floors and surfaces", 100, None, 0, 0, 8),
+                ("Heavy Lifting", "Move large objects and equipment", 135, None, 0, 1, 10),
+                ("Debris Clearing", "Remove hazardous debris from active work zones", 180, None, 0, 1, 10),
+                ("Waste Recycling", "Operate advanced systems for processing and recycling waste", 200, "engineering", 5, 0, 12),
+                ("Habitat Construction", "Assist in the assembly of new living and working modules", 220, "engineering", 7, 1, 15),
+                ("Heavy Machinery Operation", "Operate large construction and transport vehicles", 250, "engineering", 10, 2, 12),
+                ("Atmospheric Scrubber Cleaner", "Clean and maintain large-scale air filtration systems", 230, None, 0, 1, 12),
+                ("Cargo Bay Organizer", "Efficiently arrange and secure goods within cargo bays", 170, None, 0, 0, 10)
+            ],
+            "administrative": [
+                ("Paperwork Processing", "Handle routine administrative documents", 150, None, 0, 0, 10),
+                ("Coordination Tasks", "Coordinate between different departments", 180, "navigation", 5, 0, 8),
+                ("Information Gathering", "Collect and organize local information", 160, "navigation", 5, 0, 12),
+                ("Meeting Assistance", "Provide support during official meetings", 140, None, 0, 0, 10),
+                ("Record Keeping", "Maintain and update official records", 130, None, 0, 0, 12),
+                ("Data Entry", "Input information into computer systems", 120, None, 0, 0, 8),
+                ("Filing Work", "Organize and file important documents", 110, None, 0, 0, 10),
+                ("Schedule Management", "Coordinate appointments and schedules", 170, "navigation", 6, 0, 8),
+                ("Communication Relay", "Relay messages between departments", 145, None, 0, 0, 10),
+                ("Resource Allocation", "Track and distribute office resources", 165, "navigation", 7, 0, 12),
+                ("Logistics Coordination", "Oversee the movement and scheduling of personnel and cargo", 250, "navigation", 10, 0, 12),
+                ("Diplomatic Liaison", "Handle communications and negotiations with external groups", 280, "navigation", 15, 0, 10),
+                ("Archivist", "Manage and preserve historical and critical station data", 220, None, 0, 0, 15),
+                ("Personnel Recruiter", "Identify and onboard new talent for various station roles", 260, None, 0, 0, 10),
+                ("Grants and Funding Officer", "Secure financial grants and manage funding applications", 290, "navigation", 13, 0, 12),
+                ("Inter-Departmental Courier", "Deliver sensitive documents and small packages between departments", 180, None, 0, 0, 8),
+                ("Citizen Services Representative", "Assist station residents with inquiries and administrative needs", 230, None, 0, 0, 10)
+            ],
+            "communications": [
+                ("Message Relay", "Transmit communications between stations", 180, "navigation", 5, 0, 12),
+                ("System Monitoring", "Monitor communication networks for issues", 200, "engineering", 8, 0, 15),
+                ("Data Processing", "Process and organize incoming data streams", 170, "engineering", 6, 0, 10),
+                ("Signal Analysis", "Analyze and decode communication signals", 220, "engineering", 10, 0, 12),
+                ("Network Troubleshooting", "Diagnose communication system problems", 250, "engineering", 12, 1, 8),
+                ("Equipment Testing", "Test communication devices and systems", 190, "engineering", 7, 0, 10),
+                ("Frequency Monitoring", "Monitor radio frequencies for activity", 160, None, 0, 0, 12),
+                ("Transmission Logging", "Record and catalog communication activity", 150, None, 0, 0, 8),
+                ("Antenna Maintenance", "Maintain communication antenna arrays", 210, "engineering", 8, 1, 12),
+                ("Protocol Updates", "Update communication protocols and procedures", 180, "engineering", 6, 0, 10),
+                ("Deep Space Signal Interception", "Intercept and analyze faint signals from distant regions", 300, "engineering", 15, 1, 15),
+                ("Encryption Specialist", "Develop and implement secure communication protocols", 330, "engineering", 18, 0, 12),
+                ("Emergency Beacon Technician", "Maintain and deploy emergency distress beacons", 270, "engineering", 12, 1, 10),
+                ("Distress Call Response", "Monitor emergency frequencies and coordinate rescue efforts", 310, "navigation", 16, 1, 12),
+                ("Subspace Relay Maintenance", "Repair and calibrate critical subspace communication relays", 320, "engineering", 17, 2, 15)
+            ],
+            "maintenance": [
+                ("Equipment Repair", "Fix broken equipment and machinery", 190, "engineering", 7, 1, 12),
+                ("Preventive Maintenance", "Perform routine maintenance checks", 160, "engineering", 5, 0, 10),
+                ("Facility Upkeep", "Maintain building systems and infrastructure", 140, None, 0, 0, 15),
+                ("HVAC Service", "Service heating and ventilation systems", 200, "engineering", 8, 1, 10),
+                ("Electrical Work", "Perform basic electrical repairs", 220, "engineering", 10, 2, 12),
+                ("Plumbing Tasks", "Fix water and waste management systems", 180, "engineering", 6, 1, 10),
+                ("Cleaning Operations", "Deep clean facilities and work areas", 110, None, 0, 0, 8),
+                ("Tool Management", "Organize and maintain repair tools", 120, None, 0, 0, 10),
+                ("Safety Inspections", "Inspect facilities for safety hazards", 170, "engineering", 6, 0, 12),
+                ("Waste Disposal", "Manage facility waste and recycling", 130, None, 0, 0, 8),
+                ("Life Support Repairs", "Maintain and repair critical life support systems", 280, "engineering", 15, 2, 15),
+                ("Hull Integrity Inspection", "Inspect and repair the location's outer hull for breaches", 300, "engineering", 18, 2, 12),
+                ("Environmental Systems Engineer", "Manage and optimize air, water, and waste treatment systems", 260, "engineering", 12, 1, 10),
+                ("Gravity Plating Repair", "Fix and calibrate artificial gravity generators", 290, "engineering", 16, 2, 10),
+                ("Power Grid Stabilization", "Monitor and balance the location's power distribution grid", 310, "engineering", 17, 2, 15),
+                ("Waste Incinerator Technician", "Maintain and repair high-temperature waste disposal units", 270, "engineering", 13, 1, 10),
+                ("Structural Reinforcement Specialist", "Apply and repair structural supports in high-stress areas", 320, "engineering", 19, 2, 12)
             ]
         }
 
@@ -151,11 +416,17 @@ class NPCInteractionsCog(commands.Cog):
         default_jobs = [
             ("General Labor", "Assist with various manual tasks", 100, None, 0, 0, 15),                               # Safe manual work
             ("Information Gathering", "Collect and organize local information", 150, "navigation", 5, 0, 12),        # Safe clerical work  
-            ("Equipment Testing", "Test functionality of various devices", 200, "engineering", 8, 0, 20)             # Safe testing work
+            ("Equipment Testing", "Test functionality of various devices", 200, "engineering", 8, 0, 20),             # Safe testing work
+            ("Errand Running", "Deliver messages and small items around the location", 90, None, 0, 0, 6),
+            ("Janitorial Assistance", "Help keep common areas clean and tidy", 85, None, 0, 0, 7),
+            ("Supply Orginzation", "Sort and arrange general supplies in storage areas", 110, None, 0, 0, 9),
+            ("Waste Disposal Crew", "Collect and transport general waste to disposal units", 95, None, 0, 0, 8),
+            ("Visitor Greeting", "Direct new arrivals and provide basic information", 105, None, 0, 0, 10)
         ]
         
-        # Get appropriate job templates
-        templates = job_templates.get(occupation, default_jobs)
+        # Get appropriate job templates using occupation mapping
+        occupation_category = get_occupation_category(occupation or "Unknown")
+        templates = job_templates.get(occupation_category, default_jobs)
         
         # Generate 1-3 jobs
         num_jobs = random.randint(1, 3)
@@ -1009,12 +1280,6 @@ class NPCActionView(discord.ui.View):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This is not your interaction!", ephemeral=True)
             return
-        if random.random() > 0.35:  # 75% chance of no jobs
-            await interaction.response.send_message(
-                "This NPC doesn't have any work available right now. Try checking with other NPCs or look for location-based jobs.",
-                ephemeral=True
-            )
-            return
         # Get available jobs from this NPC
         jobs = self.bot.db.execute_query(
             '''SELECT npc_job_id, job_title, job_description, reward_money, reward_items,
@@ -1243,7 +1508,7 @@ class NPCJobSelectView(discord.ui.View):
             ],
             "Merchant": [
                 ("Market Research", "Investigate trade opportunities", 200, "navigation", 8, 1, 60),
-                ("Cargo Escort", "Provide security for valuable shipments", 350, "combat", 12, 3, 90),
+                ("Valuable Shipment Guard", "Provide security for high-value storage area", 350, "combat", 12, 3, 90),
                 ("Price Negotiation", "Help negotiate better trade deals", 300, "navigation", 10, 1, 45)
             ],
             "Security Guard": [
@@ -1314,6 +1579,33 @@ class NPCJobSelectView(discord.ui.View):
         is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
                           any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
 
+        # For transport jobs, find a valid destination location
+        destination_location_id = None
+        if is_transport_job:
+            # Get available destinations from current location using same logic as standard system
+            available_destinations = self.bot.db.execute_query(
+                '''SELECT DISTINCT l.location_id, l.name
+                   FROM corridors c 
+                   JOIN locations l ON c.destination_location = l.location_id
+                   WHERE c.origin_location = ? AND c.is_active = 1''',
+                (char_location_id,),
+                fetch='all'
+            )
+            
+            if available_destinations:
+                # Pick a random destination
+                destination_location_id = random.choice(available_destinations)[0]
+                # Update description to include destination
+                dest_name = next(name for loc_id, name in available_destinations if loc_id == destination_location_id)
+                desc = f"{desc} Deliver to {dest_name}."
+            else:
+                # No destinations available - convert to stationary job by removing transport elements
+                is_transport_job = False
+                # Rewrite description to be location-based instead of transport-based
+                if "cargo escort" in title.lower():
+                    title = title.replace("Cargo Escort", "Security Guard")
+                    desc = "Provide security services at this location"
+
         # Generate a unique timestamp to help identify our job
         unique_timestamp = datetime.now().isoformat()
         expire_time = datetime.now() + timedelta(hours=6)
@@ -1321,15 +1613,15 @@ class NPCJobSelectView(discord.ui.View):
         # Start a transaction to ensure atomicity
         conn = self.bot.db.begin_transaction()
         try:
-            # Insert the job
+            # Insert the job with destination_location_id for transport jobs
             self.bot.db.execute_in_transaction(
                 conn,
                 '''INSERT INTO jobs 
                    (location_id, title, description, reward_money, required_skill, min_skill_level,
-                    danger_level, duration_minutes, expires_at, is_taken, taken_by, taken_at, job_status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'active')''',
+                    danger_level, duration_minutes, expires_at, is_taken, taken_by, taken_at, job_status, destination_location_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'active', ?)''',
                 (char_location_id, title, desc, reward_money, required_skill, min_skill_level, danger_level, 
-                 duration_minutes, expire_time.isoformat(), interaction.user.id, unique_timestamp)
+                 duration_minutes, expire_time.isoformat(), interaction.user.id, unique_timestamp, destination_location_id)
             )
             
             # Get the job_id we just inserted using our unique identifiers
@@ -1393,8 +1685,8 @@ class NPCJobSelectView(discord.ui.View):
         
         # Send success message
         embed = discord.Embed(
-            title="✅ Job Accepted",
-            description=f"You have accepted: **{title}**",
+            title="✅ Job Accepted & Started",
+            description=f"You have accepted: **{title}**\n🔄 **Job is now active** - work in progress!",
             color=0x00ff00
         )
         
@@ -1449,10 +1741,13 @@ class NPCTradeSelectView(discord.ui.View):
                 
                 rarity_emoji = {"common": "⚪", "uncommon": "🟢", "rare": "🔵", "legendary": "🟣"}[rarity]
                 
+                # Format category name (using rarity as category for NPC trades)
+                category_name = self._format_category_name(rarity)
+                
                 options.append(
                     discord.SelectOption(
                         label=f"{name} (x{quantity}) - {price_text}",
-                        description=f"{rarity_emoji} {description[:80]}{'...' if len(description) > 80 else ''}",
+                        description=f"[{category_name}] {rarity_emoji} {description[:65]}{'...' if len(description) > 65 else ''}",
                         value=str(trade_item_id)
                     )
                 )
@@ -1461,6 +1756,12 @@ class NPCTradeSelectView(discord.ui.View):
                 select = discord.ui.Select(placeholder="Choose an item to trade for...", options=options)
                 select.callback = self.item_selected
                 self.add_item(select)
+    
+    def _format_category_name(self, rarity: str) -> str:
+        """Convert rarity to user-friendly category name."""
+        if not rarity:
+            return "General"
+        return rarity.replace('_', ' ').title()
     
     async def item_selected(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:

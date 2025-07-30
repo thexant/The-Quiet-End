@@ -116,7 +116,7 @@ class LocationLogsCog(commands.Cog):
         
         embed.add_field(
             name="✍️ Add Entry",
-            value="Use `/logs add <message>` to add your own entry to this log.",
+            value="Use `/tqe` and access the logbook in location 'Services' to add your own entry to this log.",
             inline=False
         )
         

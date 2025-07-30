@@ -12,8 +12,9 @@ import numpy as np
 import re
 import io
 import asyncio
-from typing import List, Tuple, Dict, Any, Optional
+import sqlite3
 from datetime import datetime, timedelta
+from typing import List, Tuple, Dict, Any, Optional
 from utils.history_generator import HistoryGenerator
 import collections
 
@@ -22,6 +23,7 @@ class GalaxyGeneratorCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
         self.auto_shift_task = None
+        self.gate_check_task = None
         # Lore-appropriate name lists
         self.location_prefixes = [
             "A-1", "AO", "Acheron", "Aegis", "Alpha", "Amber", "Anchor", "Annex",
@@ -288,14 +290,35 @@ class GalaxyGeneratorCog(commands.Cog):
         if self.auto_shift_task and not self.auto_shift_task.done():
             self.auto_shift_task.cancel()
             print("🌌 Cancelled automatic corridor shift task.")
+    
+    def start_gate_check_task(self):
+        """Starts the gate check task if not running."""
+        if self.gate_check_task is None or self.gate_check_task.done():
+            self.gate_check_task = self.bot.loop.create_task(self._gate_check_loop())
+            print("🔄 Started gate reconnection check task.")
+    
+    def stop_gate_check_task(self):
+        """Stops/Cancels the gate check task."""
+        if self.gate_check_task and not self.gate_check_task.done():
+            self.gate_check_task.cancel()
+            print("🔄 Cancelled gate reconnection check task.")
 
     async def cog_load(self):
         """Called when the cog is loaded"""
         self.start_auto_shift_task()
+        self.start_gate_check_task()
+        
+        # Check for moving gates on startup
+        try:
+            await self._check_and_reconnect_moving_gates()
+            print("🔄 Checked for moving gates on startup")
+        except Exception as e:
+            print(f"⚠️ Error checking moving gates on startup: {e}")
 
     async def cog_unload(self):
         """Clean up background tasks when cog is unloaded"""
         self.stop_auto_shift_task()
+        self.stop_gate_check_task()
             
     
     galaxy_group = app_commands.Group(name="galaxy", description="Galaxy generation and mapping")
@@ -327,12 +350,19 @@ class GalaxyGeneratorCog(commands.Cog):
                         print("⚠️ Database query timeout in auto-shift, skipping this cycle")
                         await asyncio.sleep(3600)  # Wait 1 hour and try again
                         continue
-                    except Exception as e:
+                    except (RuntimeError, sqlite3.Error, sqlite3.OperationalError) as e:
                         print(f"⚠️ Database error in auto-shift: {e}")
+                        await asyncio.sleep(3600)  # Wait 1 hour and try again
+                        continue
+                    except Exception as e:
+                        print(f"⚠️ Unexpected error in auto-shift: {e}")
                         await asyncio.sleep(3600)  # Wait 1 hour and try again
                         continue
                     
                     if location_count > 0:
+                        # Check for moving gates that need reconnection
+                        await self._check_and_reconnect_moving_gates()
+                        
                         await self._execute_automatic_shift()
                     
                     # Schedule next shift (6-24 hours)
@@ -374,20 +404,64 @@ class GalaxyGeneratorCog(commands.Cog):
             connectivity_issues = await self._check_critical_connectivity_issues()
             if connectivity_issues:
                 print(f"⚠️ Connectivity issues detected post-shift: {connectivity_issues}")
-                # Auto-fix critical issues
-                await self._auto_fix_critical_connectivity()
+                # Auto-fix critical issues with validation
+                max_fix_attempts = 3
+                fix_attempt = 0
+                
+                while connectivity_issues and fix_attempt < max_fix_attempts:
+                    try:
+                        await self._auto_fix_critical_connectivity()
+                        
+                        # Validate the fix worked
+                        if await self._validate_galaxy_connectivity():
+                            print("✅ Connectivity issues resolved successfully")
+                            break
+                        else:
+                            connectivity_issues = await self._check_critical_connectivity_issues()
+                            fix_attempt += 1
+                            print(f"⚠️ Fix attempt {fix_attempt} incomplete, retrying...")
+                            
+                    except Exception as fix_error:
+                        fix_attempt += 1
+                        import traceback
+                        print(f"❌ Fix attempt {fix_attempt} failed: {fix_error}")
+                        print(f"📋 Fix error details: {traceback.format_exc()}")
+                        if fix_attempt >= max_fix_attempts:
+                            print("⚠️ Maximum fix attempts reached, manual intervention may be required")
+                            # Log current galaxy state for troubleshooting
+                            try:
+                                total_locations = self.db.execute_query("SELECT COUNT(*) FROM locations", fetch='one')[0]
+                                active_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1", fetch='one')[0]
+                                dormant_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 0", fetch='one')[0]
+                                print(f"🔍 Galaxy state: {total_locations} locations, {active_corridors} active corridors, {dormant_corridors} dormant corridors")
+                            except Exception as state_error:
+                                print(f"⚠️ Could not gather galaxy state: {state_error}")
+                            break
         
         except Exception as e:
+            import traceback
             print(f"❌ Error executing automatic shift: {e}")
+            print(f"📋 Shift error details: {traceback.format_exc()}")
+            # Log error context for debugging
+            try:
+                current_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1", fetch='one')[0]
+                print(f"🔍 Current active corridors: {current_corridors}")
+            except Exception as context_error:
+                print(f"⚠️ Could not gather error context: {context_error}")
 
     async def _broadcast_major_shift_alert(self, intensity: int, results: Dict):
         """Trigger news broadcast for major corridor shifts"""
         
-        # Instead of sending to main channels, just call the news system
-        news_cog = self.bot.get_cog('GalacticNewsCog')
-        if news_cog:
-            await news_cog.post_corridor_shift_news(results, intensity)
-        print(f"🌌 Major shift broadcast triggered: +{results['activated']} routes, -{results['deactivated']} routes")
+        try:
+            # Instead of sending to main channels, just call the news system
+            news_cog = self.bot.get_cog('GalacticNewsCog')
+            if news_cog:
+                await news_cog.post_corridor_shift_news(results, intensity)
+            print(f"🌌 Major shift broadcast triggered: +{results['activated']} routes, -{results['deactivated']} routes")
+        except Exception as e:
+            print(f"❌ Error in _broadcast_major_shift_alert: {e}")
+            import traceback
+            traceback.print_exc()
         
     async def _check_critical_connectivity_issues(self) -> str:
         """Check for critical connectivity issues that need immediate fixing"""
@@ -556,51 +630,178 @@ class GalaxyGeneratorCog(commands.Cog):
                     danger = 4  # Emergency corridors are dangerous
                     travel_time = self._calculate_ungated_route_time(best_distance)
                     
-                    # Create bidirectional emergency corridor
-                    self.db.execute_query(
-                        '''INSERT INTO corridors 
-                           (name, origin_location, destination_location, travel_time, fuel_cost, 
-                            danger_level, is_active, is_generated)
-                           VALUES (?, ?, ?, ?, ?, ?, 1, 1)''',
-                        (name, loc_a['id'], loc_b['id'], travel_time, fuel_cost, danger)
-                    )
-                    
-                    self.db.execute_query(
-                        '''INSERT INTO corridors 
-                           (name, origin_location, destination_location, travel_time, fuel_cost, 
-                            danger_level, is_active, is_generated)
-                           VALUES (?, ?, ?, ?, ?, ?, 1, 1)''',
-                        (f"{name} Return", loc_b['id'], loc_a['id'], travel_time, fuel_cost, danger)
-                    )
+                    # Create bidirectional emergency corridor atomically
+                    emergency_conn = self.db.begin_transaction()
+                    try:
+                        corridor_id_1 = self.db.execute_in_transaction(
+                            emergency_conn,
+                            '''INSERT INTO corridors 
+                               (name, origin_location, destination_location, travel_time, fuel_cost, 
+                                danger_level, is_active, is_generated)
+                               VALUES (?, ?, ?, ?, ?, ?, 1, 1)''',
+                            (name, loc_a['id'], loc_b['id'], travel_time, fuel_cost, danger),
+                            fetch='lastrowid'
+                        )
+                        
+                        corridor_id_2 = self.db.execute_in_transaction(
+                            emergency_conn,
+                            '''INSERT INTO corridors 
+                               (name, origin_location, destination_location, travel_time, fuel_cost, 
+                                danger_level, is_active, is_generated)
+                               VALUES (?, ?, ?, ?, ?, ?, 1, 1)''',
+                            (f"{name} Return", loc_b['id'], loc_a['id'], travel_time, fuel_cost, danger),
+                            fetch='lastrowid'
+                        )
+                        
+                        # Validate both corridors were created
+                        if not corridor_id_1 or not corridor_id_2:
+                            raise Exception("Failed to create both directions of emergency corridor")
+                        
+                        self.db.commit_transaction(emergency_conn)
+                    except Exception as corridor_error:
+                        self.db.rollback_transaction(emergency_conn)
+                        print(f"❌ Failed to create emergency corridor: {corridor_error}")
+                        continue  # Skip this component, try next one
+                    finally:
+                        emergency_conn = None
                     
                     fixes_applied += 1
                     print(f"🆘 Created emergency corridor: {loc_a['name']} ↔ {loc_b['name']}")
         
         if fixes_applied > 0:
             print(f"🔧 Applied {fixes_applied} connectivity fixes")
+
+    async def _validate_galaxy_connectivity(self) -> bool:
+        """Validate critical galaxy connectivity constraints"""
+        try:
+            # Check for isolated locations
+            all_locations = self.db.execute_query(
+                "SELECT location_id FROM locations", fetch='all'
+            )
+            
+            if not all_locations:
+                return True  # No locations to validate
+            
+            # Build connectivity graph
+            graph = {loc[0]: set() for loc in all_locations}
+            active_corridors = self.db.execute_query(
+                "SELECT origin_location, destination_location FROM corridors WHERE is_active = 1",
+                fetch='all'
+            )
+            
+            for origin, dest in active_corridors:
+                graph[origin].add(dest)
+                graph[dest].add(origin)
+            
+            # Find connected components using DFS
+            visited = set()
+            components = []
+            
+            for loc_id in graph:
+                if loc_id not in visited:
+                    component = set()
+                    stack = [loc_id]
+                    
+                    while stack:
+                        current = stack.pop()
+                        if current not in visited:
+                            visited.add(current)
+                            component.add(current)
+                            stack.extend(graph[current] - visited)
+                    
+                    components.append(component)
+            
+            # Critical validation: no more than 1 major component
+            # Allow small isolated components (1-2 locations) but not large ones
+            major_components = [comp for comp in components if len(comp) > 2]
+            
+            if len(major_components) > 1:
+                print(f"⚠️ Connectivity validation failed: {len(major_components)} major disconnected components")
+                return False
+            
+            # Check for completely isolated major locations (not outposts)
+            major_location_types = ['station', 'colony', 'colony_world']
+            isolated_major = []
+            
+            for comp in components:
+                if len(comp) == 1:  # Single isolated location
+                    loc_id = list(comp)[0]
+                    loc_type = self.db.execute_query(
+                        "SELECT location_type FROM locations WHERE location_id = ?",
+                        (loc_id,), fetch='one'
+                    )
+                    if loc_type and loc_type[0] in major_location_types:
+                        isolated_major.append(loc_id)
+            
+            if isolated_major:
+                print(f"⚠️ Connectivity validation failed: {len(isolated_major)} isolated major locations")
+                return False
+            
+            print("✅ Galaxy connectivity validation passed")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error during connectivity validation: {e}")
+            return False
     @galaxy_group.command(name="generate", description="Generate a new galaxy - THIS CAN TAKE A WHILE")
     @app_commands.describe(
         num_locations="Number of major locations to generate (10-500, random if not specified)",
         clear_existing="Whether to clear existing generated locations first",
         galaxy_name="Name for your galaxy (random if not specified)",
-        start_date="Galaxy start date (DD-MM-YYYY format, random 2700-2799 if not specified)"
+        start_date="Galaxy start date (DD-MM-YYYY format, random 2700-2799 if not specified)",
+        debug_mode="Skip data clearing and use minimal generation for testing"
     )
     async def generate_galaxy(self, interaction: discord.Interaction, 
                              num_locations: int = None, 
                              clear_existing: bool = False,
                              galaxy_name: str = None,
-                             start_date: str = None):
+                             start_date: str = None,
+                             debug_mode: bool = False):
+        # Initialize all variables at function start to prevent undefined variable errors
+        major_locations = []
+        gates = []
+        corridors = []
+        corridor_routes = []
         black_markets = 0
         federal_depots = 0
-        corridor_routes = []  # Make sure this is accessible                     
-        # Generate random values for unspecified parameters
+        total_homes = 0
+        total_sub_locations = 0
+        built_repeaters = 0
+        log_books_created = 0
+        total_history_events = 0
+        conn = None  # Initialize database connection variable                     
+        
+        # Validate permissions first
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        # Debug mode overrides for testing
+        if debug_mode:
+            print("🔧 DEBUG MODE: Using minimal settings for testing")
+            num_locations = 3  # Just a few locations for testing
+            clear_existing = False  # Never clear in debug mode
+            print(f"🔧 DEBUG: Set to {num_locations} locations, clear_existing={clear_existing}")
+        
+        # Validate and generate random values for unspecified parameters
         if num_locations is None:
             num_locations = random.randint(75, 150)
             print(f"🎲 Randomly selected {num_locations} locations to generate")
+        elif num_locations < 10 or num_locations > 500:
+            await interaction.response.send_message("Number of locations must be between 10 and 500.", ephemeral=True)
+            return
 
         if galaxy_name is None:
             galaxy_name = random.choice(self.galaxy_names)
             print(f"🎲 Randomly selected galaxy name: {galaxy_name}")
+        else:
+            # Validate galaxy name
+            if len(galaxy_name) > 100:
+                await interaction.response.send_message("Galaxy name must be 100 characters or less.", ephemeral=True)
+                return
+            if not re.match(r'^[a-zA-Z0-9\s\-\'\.]+$', galaxy_name):
+                await interaction.response.send_message("Galaxy name contains invalid characters. Use only letters, numbers, spaces, hyphens, apostrophes, and periods.", ephemeral=True)
+                return
 
         if start_date is None:
             # Generate random date between 2700-2799
@@ -615,13 +816,6 @@ class GalaxyGeneratorCog(commands.Cog):
                 day = random.randint(1, 28)
             start_date = f"{day:02d}-{month:02d}-{year}"
             print(f"🎲 Randomly selected start date: {start_date}")
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
-            return
-        
-        if num_locations < 3 or num_locations > 9999:
-            await interaction.response.send_message("Number of locations must be between 10 and 500.", ephemeral=True)
-            return
         
         from utils.time_system import TimeSystem
         time_system = TimeSystem(self.bot)
@@ -645,15 +839,36 @@ class GalaxyGeneratorCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         progress_msg = await interaction.followup.send("🌌 **Galaxy Generation Started**\n⏳ Pausing background tasks...", ephemeral=True)
         
-        # Stop ALL background tasks more thoroughly
-        print("🛑 Stopping all background tasks aggressively...")
-        self.bot.stop_background_tasks()
+        # Stop ALL background tasks with proper coordination
+        print("🛑 Stopping all background tasks with coordination...")
+        
+        # Collect all tasks that need to be stopped
+        tasks_to_stop = []
+        
+        # Stop main bot background tasks
+        try:
+            self.bot.stop_background_tasks()
+            print("🛑 Requested stop for main bot tasks")
+        except Exception as e:
+            print(f"⚠️ Error stopping main bot tasks: {e}")
 
-        # Stop status updater specifically
+        # Stop status updater specifically and wait for it
         status_updater_cog = self.bot.get_cog('StatusUpdaterCog')
-        if status_updater_cog:
-            status_updater_cog.update_status_channels.cancel()
-            print("🛑 Stopped status updater")
+        if status_updater_cog and hasattr(status_updater_cog, 'update_status_channels'):
+            try:
+                task_loop = status_updater_cog.update_status_channels
+                if task_loop.is_running():
+                    task_loop.cancel()
+                    # Give it time to actually stop
+                    for _ in range(10):  # Wait up to 1 second
+                        if not task_loop.is_running():
+                            break
+                        await asyncio.sleep(0.1)
+                    print("🛑 Status updater stopped")
+                else:
+                    print("🛑 Status updater was not running")
+            except Exception as e:
+                print(f"⚠️ Error stopping status updater: {e}")
 
         # Stop channel manager background tasks specifically
         channel_manager = getattr(self.bot, 'channel_manager', None)
@@ -661,34 +876,45 @@ class GalaxyGeneratorCog(commands.Cog):
             channel_manager.auto_cleanup_enabled = False
             print("🛑 Disabled channel manager auto-cleanup")
 
-        # Also stop any cog-specific tasks
+        # Stop any cog-specific tasks
         events_cog = self.bot.get_cog('EventsCog')
-        if events_cog:
-            events_cog.stop_all_tasks()
+        if events_cog and hasattr(events_cog, 'stop_all_tasks'):
+            try:
+                events_cog.stop_all_tasks()
+                print("🛑 Requested stop for events cog tasks")
+            except Exception as e:
+                print(f"⚠️ Error stopping events cog tasks: {e}")
 
-        # Give more time for tasks to actually stop
-        await asyncio.sleep(3.0)
+        # Stop our own corridor shift task if running
+        if self.auto_shift_task and not self.auto_shift_task.done():
+            self.auto_shift_task.cancel()
+            try:
+                await asyncio.wait_for(self.auto_shift_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            print("🛑 Stopped corridor shift task")
+
+        # Final coordination delay with progress feedback
+        print("🛑 Allowing tasks to complete shutdown...")
+        await asyncio.sleep(1.0)
+        print("✅ Background task shutdown coordination complete")
         
-        # Initialize safe defaults for all variables
-        major_locations = []
-        gates = []
-        corridors = []
-        corridor_routes = []
-        black_markets = 0
-        federal_depots = 0
-        total_homes = 0
-        total_sub_locations = 0
-        built_repeaters = 0
-        log_books_created = 0
-        total_history_events = 0
+        # Variables already initialized at function start
         
         try:
             # Phase 1: Galaxy setup and locations (single transaction)
+            print("🔧 DEBUG: Starting Phase 1 - Beginning transaction...")
+            import time
+            start_time = time.time()
             conn = self.db.begin_transaction()
+            print(f"🔧 DEBUG: Transaction started successfully in {time.time() - start_time:.2f}s")
             try:
+                print("🔧 DEBUG: Updating progress message...")
                 await progress_msg.edit(content="🌌 **Galaxy Generation**\n🗑️ Setting up galaxy...")
+                print("🔧 DEBUG: Progress message updated")
                 
                 # Galaxy info and clearing
+                print("🔧 DEBUG: Inserting galaxy info...")
                 current_time = datetime.now()
                 self.db.execute_in_transaction(conn,
                     """INSERT OR REPLACE INTO galaxy_info 
@@ -696,24 +922,43 @@ class GalaxyGeneratorCog(commands.Cog):
                        VALUES (1, ?, ?, 4.0, ?, 0, ?)""",
                     (galaxy_name, start_date, current_time.isoformat(), start_date_obj.isoformat())
                 )
+                print("🔧 DEBUG: Galaxy info inserted successfully")
                 
                 if clear_existing:
+                    print("🔧 DEBUG: Starting to clear existing galaxy data...")
                     await self._clear_existing_galaxy_data(conn)
+                    print("🔧 DEBUG: Finished clearing existing galaxy data")
                 await asyncio.sleep(0.5)
+                print("🔧 DEBUG: About to update progress for major locations...")
                 await progress_msg.edit(content="🌌 **Galaxy Generation**\n🏭 Creating major locations...")
+                print("🔧 DEBUG: Starting major location generation...")
                 major_locations = await self._generate_major_locations(conn, num_locations, start_date_obj.year)
+                print(f"🔧 DEBUG: Generated {len(major_locations)} major locations")
                 
+                # Cleanup memory after major location generation
+                self._cleanup_large_arrays()
+                print("🧹 Memory cleanup completed after location generation")
+                
+                print("🔧 DEBUG: Committing transaction...")
                 self.db.commit_transaction(conn)
                 conn = None
+                print("🔧 DEBUG: Transaction committed, starting WAL checkpoint...")
                 # Force WAL checkpoint to ensure data is written
-                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+                try:
+                    self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+                    print("🔧 DEBUG: WAL checkpoint completed")
+                except Exception as checkpoint_error:
+                    print(f"⚠️ WAL checkpoint failed (continuing): {checkpoint_error}")
+                    # Continue - checkpoint failure shouldn't break generation
             except Exception as e:
+                print(f"🔧 DEBUG: Exception in Phase 1: {e}")
                 if conn:
+                    print("🔧 DEBUG: Rolling back transaction...")
                     self.db.rollback_transaction(conn)
                 raise
             
-            await asyncio.sleep(1.0)
-            await asyncio.sleep(0.5)
+            # Allow other coroutines to run after transaction completion
+            await asyncio.sleep(0.1)
                 
             # Phase 2: Routes and infrastructure (separate transactions to avoid locks)
             try:
@@ -741,7 +986,11 @@ class GalaxyGeneratorCog(commands.Cog):
                 corridors = await self._create_corridors(None, corridor_routes, all_locations)
                 
                 # Force checkpoint to ensure data is written
-                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+                try:
+                    self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+                    print("✅ Phase 2 WAL checkpoint completed")
+                except Exception as checkpoint_error:
+                    print(f"⚠️ Phase 2 WAL checkpoint failed (continuing): {checkpoint_error}")
                 await asyncio.sleep(1.0)
 
             except Exception as e:
@@ -749,6 +998,10 @@ class GalaxyGeneratorCog(commands.Cog):
                 raise
                 
             if 'all_locations' not in locals():
+                # Ensure gates is defined, fallback to empty list if not
+                if 'gates' not in locals():
+                    gates = []
+                    print("⚠️ Gates not defined due to Phase 2 error, using empty list")
                 all_locations = major_locations + gates
                 print(f"📍 Defined all_locations: {len(major_locations)} major + {len(gates)} gates = {len(all_locations)} total")
                 
@@ -771,7 +1024,11 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Commit this transaction before log generation
                 self.db.commit_transaction(conn)
                 conn = None
-                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+                try:
+                    self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+                    print("✅ Phase 3 WAL checkpoint completed")
+                except Exception as checkpoint_error:
+                    print(f"⚠️ Phase 3 WAL checkpoint failed (continuing): {checkpoint_error}")
                 await asyncio.sleep(1.0)
 
                 # Generate logs in separate transaction
@@ -784,8 +1041,13 @@ class GalaxyGeneratorCog(commands.Cog):
                     log_books_created = 0  # Continue even if log generation fails
                 
                 # Force checkpoint before dormant corridor generation
-                self.db.execute_query("PRAGMA wal_checkpoint(TRUNCATE)")
-                await asyncio.sleep(2.0)
+                try:
+                    self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")  # Changed from TRUNCATE to PASSIVE for safety
+                    print("✅ Pre-dormant corridor WAL checkpoint completed")
+                except Exception as checkpoint_error:
+                    print(f"⚠️ Pre-dormant corridor WAL checkpoint failed (continuing): {checkpoint_error}")
+                # Brief yield to allow checkpoint completion
+                await asyncio.sleep(0.1)
                 
                 try:
                     # Generate dormant corridors (this now handles its own transactions)
@@ -793,6 +1055,9 @@ class GalaxyGeneratorCog(commands.Cog):
                     if corridor_routes:  # Only if we have active routes
                         await self._create_dormant_corridors(None, all_locations, corridor_routes)
                         print("✅ Dormant corridor generation completed")
+                        # Clean up memory after intensive corridor generation
+                        self._cleanup_large_arrays()
+                        print("🧹 Memory cleanup completed after dormant corridor generation")
                     else:
                         print("⚠️ Skipping dormant corridors - no active routes to base them on")
                     
@@ -806,7 +1071,13 @@ class GalaxyGeneratorCog(commands.Cog):
 
             except Exception as e:
                 if conn:
-                    self.db.rollback_transaction(conn)
+                    try:
+                        self.db.rollback_transaction(conn)
+                        print("🔧 Rolled back Phase 3 transaction due to error")
+                    except Exception as rollback_error:
+                        print(f"⚠️ Error during Phase 3 rollback: {rollback_error}")
+                    finally:
+                        conn = None
                 raise
                 
             await asyncio.sleep(0.5)
@@ -814,14 +1085,18 @@ class GalaxyGeneratorCog(commands.Cog):
             # Phase 4: NPC Generation (completely outside any transaction)
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n🤖 Populating with inhabitants...")
 
-            # Ensure ALL transactions are committed before NPC generation
-            await asyncio.sleep(0.5)  # Give time for any pending operations
+            # Ensure database consistency before NPC generation with explicit checkpoint
+            try:
+                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+                print("✅ Database checkpoint completed before NPC generation")
+            except Exception as checkpoint_error:
+                print(f"⚠️ Checkpoint before NPC generation failed (continuing): {checkpoint_error}")
 
             # Now generate NPCs without any active transactions
             await self._create_npcs_outside_transaction(all_locations, progress_msg)
 
-            # Add another delay before history generation
-            await asyncio.sleep(0.5)
+            # Brief yield before history generation
+            await asyncio.sleep(0.1)
             
             # Step 8: Generate homes for colonies and space stations
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n🏠 Creating residential properties...")
@@ -833,9 +1108,26 @@ class GalaxyGeneratorCog(commands.Cog):
                 await npc_cog.spawn_initial_dynamic_npcs()
 
             # Generate history outside transaction to avoid deadlock
-            await progress_msg.edit(content="🌌 **Galaxy Generation**\n📚 Documenting galactic history...")
-            history_gen = HistoryGenerator(self.bot)
-            total_history_events = await history_gen.generate_galaxy_history(start_date_obj.year, start_date_obj.strftime('%Y-%m-%d'))
+            if debug_mode:
+                print("🔧 DEBUG MODE: Skipping history generation for faster testing")
+                total_history_events = 0
+            else:
+                await progress_msg.edit(content="🌌 **Galaxy Generation**\n📚 Documenting galactic history...")
+                history_gen = HistoryGenerator(self.bot)
+                total_history_events = 0
+                try:
+                    # Perform database readiness check before history generation
+                    print("🔧 Checking database readiness for history generation...")
+                    await self._ensure_database_ready_for_history()
+                    
+                    print("🔧 Starting optimized history generation...")
+                    total_history_events = await history_gen.generate_galaxy_history(start_date_obj.year, start_date_obj.strftime('%Y-%m-%d'))
+                    print(f"🔧 History generation completed successfully with {total_history_events} events")
+                except Exception as history_e:
+                    print(f"⚠️ History generation failed: {history_e}")
+                    print("🔧 Galaxy generation will continue without historical events")
+                    total_history_events = 0
+                    # Don't raise - allow galaxy generation to complete without history
 
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n✅ **Generation Complete!**")
 
@@ -843,7 +1135,62 @@ class GalaxyGeneratorCog(commands.Cog):
             print(f"❌ Error during galaxy generation: {e}")
             import traceback
             traceback.print_exc()
+            # Ensure any open connection is cleaned up
+            if conn:
+                try:
+                    self.db.rollback_transaction(conn)
+                    print("🔧 Rolled back any open transaction due to error")
+                except Exception as rollback_error:
+                    print(f"⚠️ Error during rollback: {rollback_error}")
+                finally:
+                    conn = None
             # Continue to try sending an embed even if generation partially failed
+        
+        finally:
+            # Ensure database connections are cleaned up in all cases
+            if conn:
+                try:
+                    self.db.rollback_transaction(conn)
+                    print("🔧 Cleaned up connection in finally block")
+                except Exception as cleanup_error:
+                    print(f"⚠️ Error during connection cleanup: {cleanup_error}")
+                finally:
+                    conn = None
+            
+            # Restart background tasks to ensure they always restart regardless of generation outcome
+            try:
+                await progress_msg.edit(content="🔄 **Galaxy Generation**\n🔄 Resuming background tasks...")
+                # Longer delay before restarting
+                await asyncio.sleep(2.0)
+
+                # Restart background tasks
+                print("🔄 Restarting background tasks...")
+                self.bot.start_background_tasks()
+
+                status_updater_cog = self.bot.get_cog('StatusUpdaterCog')
+                if status_updater_cog:
+                    # Check if the task exists and use correct Loop methods
+                    if hasattr(status_updater_cog, 'update_status_channels'):
+                        task_loop = status_updater_cog.update_status_channels
+                        # Use is_running() instead of done() for discord.ext.tasks.Loop
+                        if not task_loop.is_running():
+                            try:
+                                task_loop.restart()
+                                print("🔄 Restarted status updater")
+                            except Exception as restart_error:
+                                print(f"⚠️ Could not restart status updater: {restart_error}")
+                        else:
+                            print("🔄 Status updater already running")
+                    else:
+                        print("⚠️ Status updater task not found")
+
+                # Re-enable channel manager cleanup
+                channel_manager = getattr(self.bot, 'channel_manager', None)
+                if channel_manager:
+                    channel_manager.auto_cleanup_enabled = True
+                    print("🔄 Re-enabled channel manager auto-cleanup")
+            except Exception as restart_error:
+                print(f"❌ Error restarting background tasks: {restart_error}")
 
         # MOVED: Embed creation and sending outside of try blocks with safe defaults
         try:
@@ -931,50 +1278,18 @@ class GalaxyGeneratorCog(commands.Cog):
             except Exception as fallback_error:
                 print(f"❌ Error sending fallback message: {fallback_error}")
 
-        # Restart background tasks in finally block to ensure they always restart
-        try:
-            await progress_msg.edit(content="🔄 **Galaxy Generation**\n🔄 Resuming background tasks...")
-            # Longer delay before restarting
-            await asyncio.sleep(2.0)
-
-            # Restart background tasks
-            print("🔄 Restarting background tasks...")
-            self.bot.start_background_tasks()
-
-            status_updater_cog = self.bot.get_cog('StatusUpdaterCog')
-            if status_updater_cog:
-                # Check if the task exists and use correct Loop methods
-                if hasattr(status_updater_cog, 'update_status_channels'):
-                    task_loop = status_updater_cog.update_status_channels
-                    # Use is_running() instead of done() for discord.ext.tasks.Loop
-                    if not task_loop.is_running():
-                        try:
-                            task_loop.restart()
-                            print("🔄 Restarted status updater")
-                        except Exception as restart_error:
-                            print(f"⚠️ Could not restart status updater: {restart_error}")
-                    else:
-                        print("🔄 Status updater already running")
-                else:
-                    print("⚠️ Status updater task not found")
-
-            # Re-enable channel manager cleanup
-            channel_manager = getattr(self.bot, 'channel_manager', None)
-            if channel_manager:
-                channel_manager.auto_cleanup_enabled = True
-                print("🔄 Re-enabled channel manager auto-cleanup")
-        except Exception as restart_error:
-            print(f"❌ Error restarting background tasks: {restart_error}")
 
     async def _create_earth(self, conn, start_year: int) -> Dict[str, Any]:
         """Creates the static Earth location within a transaction."""
+        print("🔧 DEBUG: _create_earth starting...")
         description = (
             "Earth still exists but is a hollowed-out symbol more than a paradise. Centuries of overuse, industrial exploitation, "
             "and political decay have rendered the planet nearly unable to system natural ecosystems. It supports its population "
             "consisting of a shrinking bureaucratic core and the wealthy only through imports from its colonies, yet its ability to govern or support "
             "those colonies is minimal. Some colonies remain loyal out of habit or necessity; others are functionally independent, and some actively oppose "
-            "Earth’s influence, which now functions more like inertia than active control."
+            "Earth's influence, which now functions more like inertia than active control."
         )
+        print("🔧 DEBUG: Creating Earth location data...")
         location = {
             'name': "Earth", 'type': 'colony', 'x_coord': 0, 'y_coord': 0,
             'system_name': "Sol", 'description': description, 'wealth_level': 10,
@@ -984,7 +1299,9 @@ class GalaxyGeneratorCog(commands.Cog):
             'has_fuel': True, 'has_upgrades': True, 'has_black_market': False,
             'is_generated': True, 'is_derelict': False, 'has_shipyard': True
         }
+        print("🔧 DEBUG: Saving Earth to database...")
         location['id'] = self._save_location_to_db(conn, location)
+        print(f"🔧 DEBUG: Earth saved with ID {location['id']}")
         print("🌍 Created static location: Earth in Sol system.")
         return location
     async def _create_npcs_outside_transaction(self, all_locations: List[Dict], progress_msg=None):
@@ -1005,7 +1322,8 @@ class GalaxyGeneratorCog(commands.Cog):
                 'population': location.get('population', 100),
                 'type': location['type'],
                 'wealth_level': location['wealth_level'],
-                'has_black_market': location.get('has_black_market', False)
+                'has_black_market': location.get('has_black_market', False),
+                'is_derelict': location.get('is_derelict', False)
             }
         
         for i, location in enumerate(all_locations):
@@ -1017,13 +1335,18 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Yield control
                 await asyncio.sleep(0.05)
             
+            # Skip NPC generation for derelict locations
+            if location_data_map[location['id']]['is_derelict']:
+                continue
+                
             # Get NPC data without database calls
             npc_data_list = npc_cog.generate_static_npc_batch_data(
                 location['id'],
                 location_data_map[location['id']]['population'],
                 location_data_map[location['id']]['type'],
                 location_data_map[location['id']]['wealth_level'],
-                location_data_map[location['id']]['has_black_market']
+                location_data_map[location['id']]['has_black_market'],
+                location_data_map[location['id']]['is_derelict']
             )
             
             current_batch.extend(npc_data_list)
@@ -1071,23 +1394,61 @@ class GalaxyGeneratorCog(commands.Cog):
     
     def _cleanup_large_arrays(self):
         """Clear large arrays from memory to prevent buildup"""
-        # Force garbage collection of large message arrays
         import gc
+        
+        # Clear any large class-level arrays that might have accumulated
+        # (The location name arrays are static and should not be cleared)
+        
+        # Force garbage collection to reclaim memory from temporary variables
+        before_count = len(gc.get_objects())
+        gc.collect()
+        after_count = len(gc.get_objects())
+        
+        if before_count - after_count > 1000:  # Only log significant cleanups
+            print(f"🧹 Memory cleanup: freed {before_count - after_count} objects")
+            
+    def _cleanup_large_variables(self, **local_vars):
+        """Clean up large local variables to free memory"""
+        import gc
+        
+        # Identify large data structures
+        large_vars_to_clear = []
+        for name, value in local_vars.items():
+            if isinstance(value, (list, dict, set)):
+                if len(value) > 1000:  # Arbitrary threshold for "large"
+                    large_vars_to_clear.append(name)
+                    
+        if large_vars_to_clear:
+            print(f"🧹 Clearing large variables: {', '.join(large_vars_to_clear)}")
+            
+        # Clear the variables
+        for name in large_vars_to_clear:
+            if name in local_vars:
+                local_vars[name].clear() if hasattr(local_vars[name], 'clear') else None
+                
+        # Force garbage collection
         gc.collect()
         
     async def _generate_major_locations(self, conn, num_locations: int, start_year: int) -> List[Dict]:
         """Generate colonies, space stations, and outposts within a transaction."""
+        print(f"🔧 DEBUG: Starting _generate_major_locations with {num_locations} locations")
         distributions = {'colony': 0.30, 'space_station': 0.35, 'outpost': 0.40}
         major_locations = []
         used_names = set()
         used_systems = set()
 
+        print("🔧 DEBUG: Creating Earth location...")
         earth_location = await self._create_earth(conn, start_year)
+        print(f"🔧 DEBUG: Earth location created: {earth_location.get('name', 'Unknown')}")
         major_locations.append(earth_location)
         used_names.add(earth_location['name'])
         used_systems.add(earth_location['system_name'])
 
+        print(f"🔧 DEBUG: Starting loop to create {num_locations - 1} additional locations...")
         for i in range(num_locations - 1):  # -1 because Earth is included
+            if i % 10 == 0:
+                print(f"🔧 DEBUG: Creating location {i+1}/{num_locations-1}")
+            
             loc_type = random.choices(list(distributions.keys()), list(distributions.values()))[0]
             name = self._generate_unique_name(loc_type, used_names)
             used_names.add(name)
@@ -1097,15 +1458,19 @@ class GalaxyGeneratorCog(commands.Cog):
             establishment_year = start_year - random.randint(5, 350)
             establishment_date = f"{establishment_year}-{random.randint(1,12):02d}-{random.randint(1,28):02d}"
             
+            print(f"🔧 DEBUG: Creating location data for {name}...")
             location_data = self._create_location_data(name, loc_type, system, establishment_date)
+            print(f"🔧 DEBUG: Saving location {name} to database...")
             location_id = self._save_location_to_db(conn, location_data)
+            print(f"🔧 DEBUG: Location {name} saved with ID {location_id}")
             location_data['id'] = location_id
             major_locations.append(location_data)
             
             # Yield control every 10 locations
             if i % 10 == 0:
                 await asyncio.sleep(0)
-                
+        
+        print(f"🔧 DEBUG: _generate_major_locations completed, created {len(major_locations)} locations")        
         return major_locations
     async def _create_npcs_for_galaxy(self, conn):
         """Creates NPCs for all locations within the transaction."""
@@ -1116,17 +1481,21 @@ class GalaxyGeneratorCog(commands.Cog):
 
         # Get location data needed for NPC generation
         all_locations = self.db.execute_in_transaction(conn,
-            "SELECT location_id, population, location_type, wealth_level, has_black_market FROM locations",
+            "SELECT location_id, population, location_type, wealth_level, has_black_market, is_derelict FROM locations",
             fetch='all'
         )
         
         npcs_to_insert = []
         locations_processed = 0
         
-        for loc_id, pop, loc_type, wealth, has_black_market in all_locations:
+        for loc_id, pop, loc_type, wealth, has_black_market, is_derelict in all_locations:
+            # Skip NPC generation for derelict locations
+            if is_derelict:
+                continue
+                
             # Pass all required data to avoid database calls within the method
             npc_data_list = npc_cog.generate_static_npc_batch_data(
-                loc_id, pop, loc_type, wealth, has_black_market
+                loc_id, pop, loc_type, wealth, has_black_market, is_derelict
             )
             npcs_to_insert.extend(npc_data_list)
             locations_processed += 1
@@ -1377,6 +1746,8 @@ class GalaxyGeneratorCog(commands.Cog):
                 'has_repairs': False,
                 'has_fuel': False,   
                 'has_upgrades': False,
+                'has_shipyard': False,
+                'has_federal_supplies': False,
                 'has_black_market': False,
                 'is_generated': True,
                 'is_derelict': True
@@ -1399,6 +1770,8 @@ class GalaxyGeneratorCog(commands.Cog):
                 'has_repairs': True,
                 'has_fuel': True,
                 'has_upgrades': False,
+                'has_shipyard': False,
+                'has_federal_supplies': False,
                 'has_black_market': False,
                 'is_generated': True,
                 'is_derelict': False
@@ -1916,7 +2289,7 @@ class GalaxyGeneratorCog(commands.Cog):
                         stock = random.randint(2, 5)
                     
                     federal_items_to_insert.append(
-                        (location['id'], item_name, item_type, final_price, description, stock, "federal")
+                        (location['id'], item_name, item_type, final_price, description, stock, "federal", False)
                     )
                 
                 print(f"🏛️  Created federal depot at {location['name']}")
@@ -1934,8 +2307,8 @@ class GalaxyGeneratorCog(commands.Cog):
         if federal_items_to_insert:
             self.db.executemany_in_transaction(
                 conn,
-                '''INSERT INTO shop_items (location_id, item_name, item_type, price, description, stock, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                '''INSERT INTO shop_items (location_id, item_name, item_type, price, description, stock, metadata, sold_by_player)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                 federal_items_to_insert
             )
             
@@ -2561,107 +2934,308 @@ class GalaxyGeneratorCog(commands.Cog):
         
         return total_homes
         
-    async def _simulate_gate_movements(self, intensity: int) -> Dict:
-        """Simulate the movement of gates during corridor shifts"""
+    async def _simulate_gate_movements_for_affected(self, affected_gate_ids: list, intensity: int) -> Dict:
+        """Simulate gate status changes for gates that had corridors deactivated"""
         
         results = {
             'gates_moved': 0,
             'gates_abandoned': 0,
-            'new_gate_locations': 0,
             'affected_gates': []
         }
         
-        # Get all active gates
-        active_gates = self.db.execute_query(
-            "SELECT location_id, name, x_coord, y_coord FROM locations WHERE location_type = 'gate' AND gate_status = 'active'",
+        if not affected_gate_ids:
+            return results
+        
+        # Get details for affected gates
+        gate_placeholders = ','.join('?' * len(affected_gate_ids))
+        affected_gates = self.db.execute_query(
+            f"SELECT location_id, name FROM locations WHERE location_id IN ({gate_placeholders}) AND location_type = 'gate' AND gate_status = 'active'",
+            affected_gate_ids,
             fetch='all'
         )
         
-        if not active_gates:
-            return results
-        
-        # Calculate how many gates might be affected based on intensity
-        max_affected = min(len(active_gates) // (6 - intensity), len(active_gates) // 2)
-        gates_to_affect = random.sample(active_gates, min(max_affected, random.randint(0, max_affected)))
-        
-        for gate in gates_to_affect:
-            gate_id, gate_name, gate_x, gate_y = gate
+        for gate in affected_gates:
+            gate_id, gate_name = gate
             
-            # Determine what happens to this gate
-            fate_roll = random.random()
+            # Check how many active corridors this gate still has after the shift
+            remaining_corridors = self.db.execute_query(
+                """SELECT COUNT(*) FROM corridors 
+                   WHERE (origin_location = ? OR destination_location = ?) 
+                   AND is_active = 1
+                   AND name NOT LIKE '%Approach%' 
+                   AND name NOT LIKE '%Arrival%' 
+                   AND name NOT LIKE '%Departure%'""",
+                (gate_id, gate_id),
+                fetch='one'
+            )[0]
             
-            if fate_roll < 0.4:  # 40% chance - Gate relocates
-                # Find a new location for the gate
-                new_x = gate_x + random.uniform(-20, 20)
-                new_y = gate_y + random.uniform(-20, 20)
-                
-                # Update gate position and status
-                self.db.execute_query(
-                    "UPDATE locations SET x_coord = ?, y_coord = ?, gate_status = 'active' WHERE location_id = ?",
-                    (new_x, new_y, gate_id)
-                )
-                
-                # Update any corridors connected to this gate
-                await self._update_gate_corridor_distances(gate_id, new_x, new_y)
-                
-                results['gates_moved'] += 1
-                results['affected_gates'].append(f"🔄 {gate_name} relocated to new coordinates")
-                print(f"🔄 Gate {gate_name} moved to new position ({new_x:.1f}, {new_y:.1f})")
-                
-            elif fate_roll < 0.7:  # 30% chance - Gate becomes unused but remains
-                self.db.execute_query(
-                    "UPDATE locations SET gate_status = 'unused' WHERE location_id = ?",
-                    (gate_id,)
-                )
-                
-                # Deactivate corridors connected to this gate
-                self.db.execute_query(
-                    "UPDATE corridors SET is_active = 0 WHERE origin_location = ? OR destination_location = ?",
-                    (gate_id, gate_id)
-                )
-                
-                results['gates_abandoned'] += 1
-                results['affected_gates'].append(f"⚫ {gate_name} became unused")
-                print(f"⚫ Gate {gate_name} became unused")
-                
-            # 30% chance - Gate remains active and in place (no change)
+            # Gates with no remaining main corridors are disconnected
+            if remaining_corridors == 0:
+                # Gate becomes either moving or abandoned
+                if random.random() < 0.6:  # 60% chance to become moving
+                    hours_until_reconnection = random.randint(4, 24)
+                    reconnection_time = datetime.now() + timedelta(hours=hours_until_reconnection)
+                    
+                    self.db.execute_query(
+                        "UPDATE locations SET gate_status = 'moving', reconnection_eta = ? WHERE location_id = ?",
+                        (reconnection_time, gate_id)
+                    )
+                    
+                    # Ensure moving gate has local space connections
+                    await self._ensure_moving_gate_local_connections(gate_id, gate_name)
+                    
+                    results['gates_abandoned'] += 1
+                    results['affected_gates'].append(f"🔄 {gate_name} is moving - reconnecting in {hours_until_reconnection} hours")
+                    print(f"🔄 Gate {gate_name} lost connections, now moving - will reconnect in {hours_until_reconnection} hours")
+                    
+                else:  # 40% chance to become unused/abandoned
+                    current_time = datetime.now()
+                    self.db.execute_query(
+                        """UPDATE locations SET 
+                           gate_status = 'unused', 
+                           abandoned_since = ?,
+                           has_shops = 0, 
+                           has_medical = 0,
+                           has_repairs = 0,
+                           has_fuel = 0,
+                           population = 0
+                           WHERE location_id = ?""",
+                        (current_time, gate_id)
+                    )
+                    
+                    # Remove static NPCs from abandoned gates
+                    self.db.execute_query(
+                        "DELETE FROM static_npcs WHERE location_id = ?",
+                        (gate_id,)
+                    )
+                    
+                    results['gates_abandoned'] += 1
+                    results['affected_gates'].append(f"⚫ {gate_name} became unused due to lost connections")
+                    print(f"⚫ Gate {gate_name} lost all connections and became abandoned")
+                    
+            elif remaining_corridors <= 2:  # Gates with few connections might become unstable
+                # Small chance (based on intensity) that low-connectivity gates also become affected
+                instability_chance = intensity * 0.05  # 5% per intensity level
+                if random.random() < instability_chance:
+                    hours_until_reconnection = random.randint(2, 8)  # Shorter time for partially connected gates
+                    reconnection_time = datetime.now() + timedelta(hours=hours_until_reconnection)
+                    
+                    self.db.execute_query(
+                        "UPDATE locations SET gate_status = 'moving', reconnection_eta = ? WHERE location_id = ?",
+                        (reconnection_time, gate_id)
+                    )
+                    
+                    # Ensure moving gate has local space connections
+                    await self._ensure_moving_gate_local_connections(gate_id, gate_name)
+                    
+                    results['gates_abandoned'] += 1
+                    results['affected_gates'].append(f"🔄 {gate_name} destabilized - reconnecting in {hours_until_reconnection} hours")
+                    print(f"🔄 Gate {gate_name} destabilized by corridor shifts - will reconnect in {hours_until_reconnection} hours")
         
         return results
 
-    async def _update_gate_corridor_distances(self, gate_id: int, new_x: float, new_y: float):
-        """Update travel times and fuel costs for corridors connected to a moved gate"""
+
+    async def _check_and_reconnect_moving_gates(self):
+        """Check for moving gates that have reached their reconnection time"""
         
-        # Get all corridors connected to this gate
-        connected_corridors = self.db.execute_query(
-            """SELECT c.corridor_id, c.origin_location, c.destination_location,
-                      l1.x_coord as origin_x, l1.y_coord as origin_y,
-                      l2.x_coord as dest_x, l2.y_coord as dest_y
-               FROM corridors c
-               JOIN locations l1 ON c.origin_location = l1.location_id
-               JOIN locations l2 ON c.destination_location = l2.location_id
-               WHERE c.origin_location = ? OR c.destination_location = ?""",
-            (gate_id, gate_id),
+        # Find gates that are ready to reconnect
+        moving_gates = self.db.execute_query(
+            """SELECT location_id, name, x_coord, y_coord, reconnection_eta 
+               FROM locations 
+               WHERE location_type = 'gate' 
+               AND gate_status = 'moving' 
+               AND reconnection_eta IS NOT NULL 
+               AND reconnection_eta <= datetime('now')""",
             fetch='all'
         )
         
-        for corridor in connected_corridors:
-            corridor_id, origin_id, dest_id, origin_x, origin_y, dest_x, dest_y = corridor
+        if not moving_gates:
+            return
+        
+        for gate in moving_gates:
+            gate_id, gate_name, gate_x, gate_y, eta = gate
             
-            # Use new coordinates if this gate moved
-            if origin_id == gate_id:
-                origin_x, origin_y = new_x, new_y
-            if dest_id == gate_id:
-                dest_x, dest_y = new_x, new_y
+            print(f"🔄 Reconnecting gate: {gate_name}")
             
-            # Recalculate distance and update corridor properties
-            distance = math.sqrt((dest_x - origin_x)**2 + (dest_y - origin_y)**2)
-            travel_time = max(180, int(distance * 3))  # Minimum 3 minutes
-            fuel_cost = max(10, int(distance * 0.5))
-            
+            # Update gate status back to active and restore services with correct gate defaults
+            gate_population = random.randint(15, 40)  # Gates have small operational crews
             self.db.execute_query(
-                "UPDATE corridors SET travel_time = ?, fuel_cost = ? WHERE corridor_id = ?",
-                (travel_time, fuel_cost, corridor_id)
+                """UPDATE locations SET 
+                   gate_status = 'active', 
+                   reconnection_eta = NULL,
+                   population = ?,
+                   has_shops = 1,
+                   has_medical = 1,
+                   has_repairs = 1,
+                   has_fuel = 1,
+                   has_upgrades = 0
+                   WHERE location_id = ?""",
+                (gate_population, gate_id)
             )
+            
+            # Use existing NPC system to restore NPCs
+            npc_cog = self.bot.get_cog('NPCCog')
+            if npc_cog:
+                await npc_cog.create_static_npcs_for_location(gate_id, gate_population, 'gate')
+            
+            # Find nearby gates to connect to (within reasonable distance)
+            nearby_gates = self.db.execute_query(
+                """SELECT location_id, name, x_coord, y_coord 
+                   FROM locations 
+                   WHERE location_type = 'gate' 
+                   AND gate_status = 'active' 
+                   AND location_id != ?
+                   ORDER BY ((x_coord - ?) * (x_coord - ?) + (y_coord - ?) * (y_coord - ?))
+                   LIMIT 3""",
+                (gate_id, gate_x, gate_x, gate_y, gate_y),
+                fetch='all'
+            )
+            
+            # Create new corridors to nearby gates
+            for target_gate in nearby_gates:
+                target_id, target_name, target_x, target_y = target_gate
+                
+                # Check if corridor already exists
+                existing = self.db.execute_query(
+                    """SELECT corridor_id FROM corridors 
+                       WHERE (origin_location = ? AND destination_location = ?)
+                       OR (origin_location = ? AND destination_location = ?)""",
+                    (gate_id, target_id, target_id, gate_id),
+                    fetch='one'
+                )
+                
+                if not existing:
+                    # Calculate distance for travel time using gated route calculations
+                    distance = math.sqrt((target_x - gate_x)**2 + (target_y - gate_y)**2)
+                    approach_time, main_time = self._calculate_gated_route_times(distance)
+                    fuel_cost = max(20, int(distance * 0.8))
+                    danger_level = random.randint(2, 4)  # Gated corridor danger
+                    
+                    # Create proper gated corridor (gate to gate should be gated, not local space)
+                    corridor_name = f"{gate_name} - {target_name} Route"
+                    
+                    # Create bidirectional gated corridors
+                    self.db.execute_query(
+                        """INSERT INTO corridors (name, origin_location, destination_location, 
+                           travel_time, fuel_cost, danger_level, is_active, is_generated)
+                           VALUES (?, ?, ?, ?, ?, ?, 1, 1)""",
+                        (corridor_name, gate_id, target_id, main_time, fuel_cost, danger_level)
+                    )
+                    
+                    self.db.execute_query(
+                        """INSERT INTO corridors (name, origin_location, destination_location, 
+                           travel_time, fuel_cost, danger_level, is_active, is_generated)
+                           VALUES (?, ?, ?, ?, ?, ?, 1, 1)""",
+                        (f"{target_name} - {gate_name} Route", target_id, gate_id, main_time, fuel_cost, danger_level)
+                    )
+                    
+                    print(f"  ✅ Connected {gate_name} ↔ {target_name} (gated corridors)")
+            
+            # Reactivate any deactivated corridors from when it became moving
+            self.db.execute_query(
+                """UPDATE corridors 
+                   SET is_active = 1 
+                   WHERE (origin_location = ? OR destination_location = ?)
+                   AND is_active = 0""",
+                (gate_id, gate_id)
+            )
+            
+            print(f"✅ Gate {gate_name} successfully reconnected to the network")
+    
+    async def _check_for_gates_to_reactivate(self):
+        """Check for long-abandoned gates that can potentially start moving again"""
+        
+        # Find gates that have been abandoned for at least 3 days
+        cutoff_time = datetime.now() - timedelta(days=3)
+        
+        long_abandoned_gates = self.db.execute_query(
+            """SELECT location_id, name, abandoned_since 
+               FROM locations 
+               WHERE location_type = 'gate' 
+               AND gate_status = 'unused' 
+               AND abandoned_since IS NOT NULL 
+               AND abandoned_since <= ?""",
+            (cutoff_time,),
+            fetch='all'
+        )
+        
+        if not long_abandoned_gates:
+            return
+        
+        for gate in long_abandoned_gates:
+            gate_id, gate_name, abandoned_since = gate
+            
+            # 10% chance per check (every 30 minutes) that an abandoned gate starts moving
+            # This roughly translates to about 48% chance per day for gates abandoned 3+ days
+            if random.random() < 0.1:
+                print(f"🔄 Abandoned gate {gate_name} is beginning to move after long abandonment")
+                
+                # Calculate reconnection time (6-48 hours from now)
+                hours_until_reconnection = random.randint(6, 48)
+                reconnection_time = datetime.now() + timedelta(hours=hours_until_reconnection)
+                
+                # Start restoring some basic services as the gate prepares to move
+                basic_population = random.randint(5, 15)  # Skeleton crew for gates
+                
+                self.db.execute_query(
+                    """UPDATE locations SET 
+                       gate_status = 'moving',
+                       reconnection_eta = ?,
+                       abandoned_since = NULL,
+                       population = ?,
+                       has_fuel = 1,
+                       has_repairs = 1
+                       WHERE location_id = ?""",
+                    (reconnection_time, basic_population, gate_id)
+                )
+                
+                # Ensure moving gate has local space connections
+                await self._ensure_moving_gate_local_connections(gate_id, gate_name)
+                
+                print(f"  Gate will reconnect in {hours_until_reconnection} hours with basic services")
+    
+    
+    async def _gate_check_loop(self):
+        """Background task to check for moving gates more frequently"""
+        try:
+            await self.bot.wait_until_ready()
+            
+            # Initial delay before first check (30 minutes)
+            await asyncio.sleep(1800)
+            
+            while not self.bot.is_closed():
+                try:
+                    # Check if galaxy exists
+                    location_count = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self.db.execute_query,
+                            "SELECT COUNT(*) FROM locations",
+                            fetch='one'
+                        ),
+                        timeout=10.0
+                    )
+                    location_count = location_count[0] if location_count else 0
+                    
+                    if location_count > 0:
+                        # Check for moving gates that need reconnection
+                        await self._check_and_reconnect_moving_gates()
+                        
+                        # Check for long-abandoned gates that can start moving
+                        await self._check_for_gates_to_reactivate()
+                    
+                    # Wait 30 minutes before next check
+                    await asyncio.sleep(1800)
+                    
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    print(f"⚠️ Error in gate check loop: {e}")
+                    await asyncio.sleep(1800)  # Wait 30 minutes on error
+                    
+        except asyncio.CancelledError:
+            print("🔄 Gate check task cancelled")
+        except Exception as e:
+            print(f"❌ Fatal error in gate check loop: {e}")
     def _create_minimum_spanning_tree(self, locations: List[Dict]) -> List[Dict]:
         """Create minimum spanning tree to ensure all locations are connected"""
         if not locations:
@@ -2930,8 +3504,20 @@ class GalaxyGeneratorCog(commands.Cog):
         active_pairs = {tuple(sorted([r['from']['id'], r['to']['id']])) for r in active_routes}
         num_locs = len(all_locations)
         
-        # Calculate target dormant corridors to maintain ratio
-        target_dormant_total = int(num_locs * 15)  # Maintain same ratio as before
+        # Calculate target dormant corridors with reduced density for better gameplay
+        # Scale based on galaxy size to prevent exponential growth
+        if num_locs <= 50:
+            multiplier = 1.5  # Small galaxies can handle more density
+        elif num_locs <= 150:
+            multiplier = 1.3  # Medium galaxies need moderation
+        else:
+            multiplier = 1.2  # Large galaxies must be sparse
+        
+        target_dormant_total = int(num_locs * multiplier)
+        
+        # Cap total dormant corridors to prevent overcrowding
+        max_dormant_cap = min(500, num_locs * 5)  # Never exceed 5x locations or 500 total
+        target_dormant_total = min(target_dormant_total, max_dormant_cap)
         
         print(f"🌫️ Generating {target_dormant_total} dormant corridors for {num_locs} locations using spatial optimization...")
         
@@ -2978,10 +3564,14 @@ class GalaxyGeneratorCog(commands.Cog):
             danger = random.randint(2, 5)
             travel_time = self._calculate_ungated_route_time(distance)
             
+            # Determine corridor types for both directions
+            corridor_type_ab = self._determine_corridor_type(loc_a['id'], loc_b['id'], f"{name} (Dormant)")
+            corridor_type_ba = self._determine_corridor_type(loc_b['id'], loc_a['id'], f"{name} Return (Dormant)")
+            
             # Add to batch (bidirectional)
             current_batch.extend([
-                (f"{name} (Dormant)", loc_a['id'], loc_b['id'], travel_time, fuel, danger),
-                (f"{name} Return (Dormant)", loc_b['id'], loc_a['id'], travel_time, fuel, danger)
+                (f"{name} (Dormant)", loc_a['id'], loc_b['id'], travel_time, fuel, danger, corridor_type_ab),
+                (f"{name} Return (Dormant)", loc_b['id'], loc_a['id'], travel_time, fuel, danger, corridor_type_ba)
             ])
             
             active_pairs.add(pair)
@@ -3054,8 +3644,8 @@ class GalaxyGeneratorCog(commands.Cog):
         try:
             query = '''INSERT INTO corridors 
                        (name, origin_location, destination_location, travel_time, fuel_cost, 
-                        danger_level, is_active, is_generated)
-                       VALUES (?, ?, ?, ?, ?, ?, 0, 1)'''
+                        danger_level, corridor_type, is_active, is_generated)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)'''
             self.db.executemany_in_transaction(micro_conn, query, batch_data)
             self.db.commit_transaction(micro_conn)
         except Exception as e:
@@ -3085,11 +3675,11 @@ class GalaxyGeneratorCog(commands.Cog):
                 'total_fixed': 0
             }
             
-            # Batch fetch all required data upfront
+            # Batch fetch all required data upfront - ONLY ACTIVE GATES
             all_gates = self.db.execute_query(
                 """SELECT location_id, name, x_coord, y_coord 
                    FROM locations 
-                   WHERE location_type = 'gate'""",
+                   WHERE location_type = 'gate' AND gate_status = 'active'""",
                 fetch='all'
             )
             
@@ -3183,7 +3773,7 @@ class GalaxyGeneratorCog(commands.Cog):
                    AND c.name NOT LIKE '%Approach%'
                    AND c.name NOT LIKE '%Arrival%'
                    AND c.name NOT LIKE '%Departure%'
-                   AND c.name NOT LIKE '%Ungated%'
+                   AND c.corridor_type != 'ungated'
                    AND c.is_active = 1""",
                 fetch='all'
             )
@@ -3278,6 +3868,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     name="📊 Shift Results",
                     value=f"• Activated: {shift_results['activated']} corridors\n"
                           f"• Deactivated: {shift_results['deactivated']} corridors\n"
+                          f"• Destinations changed: {shift_results.get('destinations_changed', 0)} corridors\n"
                           f"• New dormant: {shift_results['new_dormant']} corridors",
                     inline=False
                 )
@@ -3290,11 +3881,1271 @@ class GalaxyGeneratorCog(commands.Cog):
                 inline=False
             )
             
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             
         except Exception as e:
             print(f"Error in fix_routes: {str(e)}")
             await interaction.followup.send(f"Error fixing routes: {str(e)}", ephemeral=True)
+
+    @galaxy_group.command(name="fix_moving_gates", description="Fix moving gates to have proper local space connections")
+    async def fix_moving_gates(self, interaction: discord.Interaction):
+        """Fix moving gates that may be missing local space connections"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            # Find all moving gates
+            moving_gates = self.db.execute_query(
+                """SELECT location_id, name FROM locations 
+                   WHERE location_type = 'gate' AND gate_status = 'moving'""",
+                fetch='all'
+            )
+            
+            if not moving_gates:
+                await interaction.followup.send("✅ No moving gates found.", ephemeral=True)
+                return
+            
+            fixed_count = 0
+            for gate_id, gate_name in moving_gates:
+                # Check if gate has any local space connections
+                local_connections = self.db.execute_query(
+                    """SELECT COUNT(*) FROM corridors 
+                       WHERE (origin_location = ? OR destination_location = ?)
+                       AND is_active = 1
+                       AND (name LIKE '%Local Space%' OR name LIKE '%Approach%' OR 
+                            name LIKE '%Arrival%' OR name LIKE '%Departure%')""",
+                    (gate_id, gate_id),
+                    fetch='one'
+                )[0]
+                
+                if local_connections == 0:
+                    print(f"🔧 Fixing moving gate with no local connections: {gate_name}")
+                    await self._ensure_moving_gate_local_connections(gate_id, gate_name)
+                    fixed_count += 1
+                else:
+                    print(f"✅ Moving gate {gate_name} already has {local_connections} local connections")
+            
+            embed = discord.Embed(
+                title="🔄 Moving Gates Fixed",
+                description=f"Fixed {fixed_count} moving gates that were missing local space connections.",
+                color=0x00ff00
+            )
+            
+            embed.add_field(
+                name="Gates Processed",
+                value=f"{len(moving_gates)} moving gates checked",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="Gates Fixed",
+                value=f"{fixed_count} gates needed local space connections",
+                inline=True
+            )
+            
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            print(f"Error in fix_moving_gates: {str(e)}")
+            await interaction.followup.send(f"Error fixing moving gates: {str(e)}", ephemeral=True)
+
+    @galaxy_group.command(name="activate_gate_routes", description="Force activate all routes from current moving gate")
+    async def activate_gate_routes(self, interaction: discord.Interaction):
+        """Force activate all corridors from current location if it's a moving gate"""
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Get user's current location
+            char_location = self.db.execute_query(
+                "SELECT current_location FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not char_location or not char_location[0]:
+                await interaction.followup.send("You don't have a current location set.", ephemeral=True)
+                return
+                
+            location_id = char_location[0]
+            
+            # Check if it's a moving gate
+            location_info = self.db.execute_query(
+                "SELECT name, location_type, gate_status FROM locations WHERE location_id = ?",
+                (location_id,), fetch='one'
+            )
+            
+            if not location_info:
+                await interaction.followup.send("Location not found.", ephemeral=True)
+                return
+                
+            loc_name, loc_type, gate_status = location_info
+            
+            if loc_type != 'gate' or gate_status != 'moving':
+                await interaction.followup.send(f"This only works for moving gates. Current: {loc_type} ({gate_status or 'N/A'})", ephemeral=True)
+                return
+            
+            # Activate ALL corridors from this moving gate
+            updated = self.db.execute_query(
+                "UPDATE corridors SET is_active = 1 WHERE origin_location = ? AND is_active = 0",
+                (location_id,)
+            )
+            
+            activated_count = self.db.cursor.rowcount if hasattr(self.db, 'cursor') else 0
+            
+            await interaction.followup.send(f"✅ Activated {activated_count} inactive corridors from {loc_name}. Try `/travel routes` now!", ephemeral=True)
+            
+        except Exception as e:
+            print(f"Error in activate_gate_routes: {str(e)}")
+            await interaction.followup.send(f"Error: {str(e)}", ephemeral=True)
+
+    @galaxy_group.command(name="fix_all_moving_gate_routes", description="Fix route visibility for ALL moving gates galaxy-wide")
+    async def fix_all_moving_gate_routes(self, interaction: discord.Interaction):
+        """Activate all inactive local space corridors for moving gates across the galaxy"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+            
+        await interaction.response.defer()
+        
+        try:
+            # Find all moving gates with inactive local space corridors
+            inactive_corridors = self.db.execute_query(
+                """SELECT c.corridor_id, l.name as gate_name, c.name as corridor_name
+                   FROM corridors c
+                   JOIN locations l ON c.origin_location = l.location_id
+                   WHERE l.location_type = 'gate' 
+                   AND l.gate_status = 'moving'
+                   AND c.is_active = 0
+                   AND (c.name LIKE '%Local Space%' OR c.name LIKE '%Approach%' OR 
+                        c.name LIKE '%Arrival%' OR c.name LIKE '%Departure%')""",
+                fetch='all'
+            )
+            
+            if not inactive_corridors:
+                await interaction.followup.send("✅ All moving gates already have active local space routes.", ephemeral=False)
+                return
+            
+            # Activate all inactive local space corridors for moving gates
+            activated = self.db.execute_query(
+                """UPDATE corridors SET is_active = 1 
+                   WHERE corridor_id IN (
+                       SELECT c.corridor_id
+                       FROM corridors c
+                       JOIN locations l ON c.origin_location = l.location_id
+                       WHERE l.location_type = 'gate' 
+                       AND l.gate_status = 'moving'
+                       AND c.is_active = 0
+                       AND (c.name LIKE '%Local Space%' OR c.name LIKE '%Approach%' OR 
+                            c.name LIKE '%Arrival%' OR c.name LIKE '%Departure%')
+                   )""",
+            )
+            
+            # Get count of affected gates
+            affected_gates = self.db.execute_query(
+                """SELECT COUNT(DISTINCT l.location_id)
+                   FROM corridors c
+                   JOIN locations l ON c.origin_location = l.location_id
+                   WHERE l.location_type = 'gate' 
+                   AND l.gate_status = 'moving'""",
+                fetch='one'
+            )[0]
+            
+            embed = discord.Embed(
+                title="🔄 Moving Gate Routes Fixed",
+                description=f"Activated {len(inactive_corridors)} inactive local space corridors across {affected_gates} moving gates.",
+                color=0x00ff00
+            )
+            
+            if len(inactive_corridors) <= 10:
+                # Show details if not too many
+                routes_fixed = ""
+                for corridor_id, gate_name, corridor_name in inactive_corridors:
+                    routes_fixed += f"✅ {gate_name}: {corridor_name}\n"
+                
+                embed.add_field(
+                    name="Routes Activated",
+                    value=routes_fixed,
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="Scale",
+                    value=f"Fixed routes for {affected_gates} moving gates across the galaxy",
+                    inline=False
+                )
+            
+            await interaction.followup.send(embed=embed, ephemeral=False)
+            print(f"🔧 Activated {len(inactive_corridors)} inactive local space corridors for moving gates")
+            
+        except Exception as e:
+            print(f"Error in fix_all_moving_gate_routes: {str(e)}")
+            await interaction.followup.send(f"Error fixing moving gate routes: {str(e)}", ephemeral=True)
+
+    @galaxy_group.command(name="debug_travel_query", description="Test the exact travel query for current location")
+    async def debug_travel_query(self, interaction: discord.Interaction):
+        """Run the exact same query that travel.py uses to see what's wrong"""
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Get user's current location
+            char_location = self.db.execute_query(
+                "SELECT current_location FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not char_location or not char_location[0]:
+                await interaction.followup.send("You don't have a current location set.", ephemeral=True)
+                return
+                
+            current_location_id = char_location[0]
+            
+            # Run the EXACT same query that travel.py uses
+            routes = self.db.execute_query(
+                '''SELECT c.corridor_id,
+                          c.name,
+                          l.name AS dest_name,
+                          c.travel_time,
+                          c.fuel_cost,
+                          l.location_type,
+                          lo.location_type AS origin_type,
+                          CASE WHEN lo.system_name = l.system_name THEN 1 ELSE 0 END AS same_system
+                   FROM corridors c
+                   JOIN locations l ON c.destination_location = l.location_id
+                   JOIN locations lo ON c.origin_location = lo.location_id
+                   WHERE c.origin_location = ? AND c.is_active = 1
+                   ORDER BY c.travel_time''',
+                (current_location_id,),
+                fetch='all'
+            )
+            
+            location_info = self.db.execute_query(
+                "SELECT name, location_type, gate_status FROM locations WHERE location_id = ?",
+                (current_location_id,), fetch='one'
+            )
+            
+            loc_name, loc_type, gate_status = location_info if location_info else ("Unknown", "Unknown", "Unknown")
+            
+            embed = discord.Embed(
+                title=f"🔍 Travel Query Debug: {loc_name}",
+                description=f"Type: {loc_type} | Status: {gate_status or 'N/A'}",
+                color=0xff0000 if not routes else 0x00ff00
+            )
+            
+            if routes:
+                routes_text = ""
+                for route in routes[:10]:  # Limit to 10 for display
+                    corridor_id, corridor_name, dest_name, travel_time, fuel_cost, dest_type, origin_type, same_system = route
+                    routes_text += f"✅ **{corridor_name}** → {dest_name} ({dest_type})\n"
+                    routes_text += f"   Time: {travel_time}s | Fuel: {fuel_cost}\n\n"
+                
+                embed.add_field(
+                    name=f"Travel Query Results ({len(routes)} found)",
+                    value=routes_text,
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="Travel Query Results",
+                    value="❌ No routes found by travel.py query\nThis is why you see 'No active routes from this location'",
+                    inline=False
+                )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            print(f"Error in debug_travel_query: {str(e)}")
+            await interaction.followup.send(f"Error: {str(e)}", ephemeral=True)
+
+    @galaxy_group.command(name="fix_broken_corridor_refs", description="Fix corridors with broken location references")
+    async def fix_broken_corridor_refs(self, interaction: discord.Interaction):
+        """Fix corridors that reference non-existent locations"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+            
+        await interaction.response.defer()
+        
+        try:
+            # Find corridors with broken destination references
+            broken_dest_corridors = self.db.execute_query(
+                """SELECT c.corridor_id, c.name, c.origin_location, c.destination_location
+                   FROM corridors c
+                   LEFT JOIN locations l ON c.destination_location = l.location_id
+                   WHERE l.location_id IS NULL AND c.is_active = 1""",
+                fetch='all'
+            )
+            
+            # Find corridors with broken origin references  
+            broken_origin_corridors = self.db.execute_query(
+                """SELECT c.corridor_id, c.name, c.origin_location, c.destination_location
+                   FROM corridors c
+                   LEFT JOIN locations lo ON c.origin_location = lo.location_id
+                   WHERE lo.location_id IS NULL AND c.is_active = 1""",
+                fetch='all'
+            )
+            
+            total_broken = len(broken_dest_corridors) + len(broken_origin_corridors)
+            
+            if total_broken == 0:
+                await interaction.followup.send("✅ No broken corridor references found.", ephemeral=True)
+                return
+            
+            # Delete broken corridors
+            for corridor_id, name, origin_id, dest_id in broken_dest_corridors:
+                self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+                print(f"🗑️ Deleted corridor with broken destination: {name} (dest_id: {dest_id})")
+                
+            for corridor_id, name, origin_id, dest_id in broken_origin_corridors:
+                self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+                print(f"🗑️ Deleted corridor with broken origin: {name} (origin_id: {origin_id})")
+            
+            # Now fix all moving gates by ensuring they have proper local connections
+            moving_gates = self.db.execute_query(
+                "SELECT location_id, name FROM locations WHERE location_type = 'gate' AND gate_status = 'moving'",
+                fetch='all'
+            )
+            
+            fixed_gates = 0
+            for gate_id, gate_name in moving_gates:
+                await self._ensure_moving_gate_local_connections(gate_id, gate_name)
+                fixed_gates += 1
+            
+            embed = discord.Embed(
+                title="🔧 Corridor References Fixed",
+                description=f"Removed {total_broken} corridors with broken location references and ensured {fixed_gates} moving gates have proper connections.",
+                color=0x00ff00
+            )
+            
+            embed.add_field(
+                name="Broken References Removed",
+                value=f"• {len(broken_dest_corridors)} corridors with invalid destinations\n• {len(broken_origin_corridors)} corridors with invalid origins",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="Moving Gates Fixed",
+                value=f"Ensured {fixed_gates} moving gates have local space connections",
+                inline=False
+            )
+            
+            await interaction.followup.send(embed=embed, ephemeral=False)
+            
+        except Exception as e:
+            print(f"Error in fix_broken_corridor_refs: {str(e)}")
+            await interaction.followup.send(f"Error: {str(e)}", ephemeral=True)
+
+    @galaxy_group.command(name="debug_join_failure", description="Debug why the travel JOIN is failing")
+    async def debug_join_failure(self, interaction: discord.Interaction):
+        """Debug the exact JOIN failure in travel query"""
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Get user's current location
+            char_location = self.db.execute_query(
+                "SELECT current_location FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not char_location or not char_location[0]:
+                await interaction.followup.send("You don't have a current location set.", ephemeral=True)
+                return
+                
+            current_location_id = char_location[0]
+            
+            # Get raw corridors from this location
+            raw_corridors = self.db.execute_query(
+                "SELECT corridor_id, name, origin_location, destination_location, is_active FROM corridors WHERE origin_location = ?",
+                (current_location_id,), fetch='all'
+            )
+            
+            # Test each part of the JOIN separately
+            if raw_corridors:
+                test_results = []
+                for corridor_id, corridor_name, origin_id, dest_id, is_active in raw_corridors:
+                    # Test destination location exists
+                    dest_exists = self.db.execute_query(
+                        "SELECT name FROM locations WHERE location_id = ?",
+                        (dest_id,), fetch='one'
+                    )
+                    
+                    # Test origin location exists  
+                    origin_exists = self.db.execute_query(
+                        "SELECT name FROM locations WHERE location_id = ?",
+                        (origin_id,), fetch='one'
+                    )
+                    
+                    test_results.append({
+                        'corridor_name': corridor_name,
+                        'corridor_id': corridor_id,
+                        'is_active': is_active,
+                        'dest_id': dest_id,
+                        'dest_exists': dest_exists[0] if dest_exists else None,
+                        'origin_id': origin_id,
+                        'origin_exists': origin_exists[0] if origin_exists else None
+                    })
+                
+                result_text = ""
+                for result in test_results[:5]:  # Limit to 5 for display
+                    status = "✅" if result['is_active'] else "❌"
+                    dest_status = "✅" if result['dest_exists'] else "❌"
+                    origin_status = "✅" if result['origin_exists'] else "❌"
+                    
+                    result_text += f"{status} **{result['corridor_name']}**\n"
+                    result_text += f"   Active: {result['is_active']} | Origin: {origin_status} | Dest: {dest_status}\n"
+                    result_text += f"   Dest: {result['dest_exists'] or 'MISSING'} (ID: {result['dest_id']})\n\n"
+                
+                embed = discord.Embed(
+                    title="🔍 JOIN Failure Debug",
+                    description=f"Found {len(raw_corridors)} corridors from this location",
+                    color=0xff9900
+                )
+                
+                embed.add_field(
+                    name="Corridor Analysis",
+                    value=result_text,
+                    inline=False
+                )
+                
+            else:
+                embed = discord.Embed(
+                    title="🔍 JOIN Failure Debug", 
+                    description="❌ No corridors found from this location at all",
+                    color=0xff0000
+                )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            print(f"Error in debug_join_failure: {str(e)}")
+            await interaction.followup.send(f"Error: {str(e)}", ephemeral=True)
+
+    @galaxy_group.command(name="create_missing_local_route", description="Create missing local space route for current moving gate")
+    async def create_missing_local_route(self, interaction: discord.Interaction):
+        """Create the missing local space corridor for current moving gate"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Get user's current location
+            char_location = self.db.execute_query(
+                "SELECT current_location FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not char_location or not char_location[0]:
+                await interaction.followup.send("You don't have a current location set.", ephemeral=True)
+                return
+                
+            gate_id = char_location[0]
+            
+            # Get gate info
+            gate_info = self.db.execute_query(
+                "SELECT name, location_type, gate_status, system_name, x_coord, y_coord FROM locations WHERE location_id = ?",
+                (gate_id,), fetch='one'
+            )
+            
+            if not gate_info:
+                await interaction.followup.send("Location not found.", ephemeral=True)
+                return
+                
+            gate_name, loc_type, gate_status, system_name, gate_x, gate_y = gate_info
+            
+            if loc_type != 'gate' or gate_status != 'moving':
+                await interaction.followup.send(f"This only works for moving gates. Current: {loc_type} ({gate_status})", ephemeral=True)
+                return
+            
+            # Find nearest location in same system
+            nearest_location = self.db.execute_query(
+                """SELECT location_id, name, x_coord, y_coord,
+                          ((x_coord - ?) * (x_coord - ?) + (y_coord - ?) * (y_coord - ?)) as distance_sq
+                   FROM locations 
+                   WHERE system_name = ? 
+                   AND location_type IN ('colony', 'space_station', 'outpost')
+                   AND location_id != ?
+                   ORDER BY distance_sq
+                   LIMIT 1""",
+                (gate_x, gate_x, gate_y, gate_y, system_name, gate_id),
+                fetch='one'
+            )
+            
+            if not nearest_location:
+                await interaction.followup.send(f"No major locations found in system {system_name} to connect to.", ephemeral=True)
+                return
+                
+            loc_id, loc_name, loc_x, loc_y, distance_sq = nearest_location
+            
+            # Create bidirectional local space corridors
+            approach_time = 180  # 3 minutes
+            fuel_cost = 10
+            
+            # Gate to Location
+            self.db.execute_query(
+                """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
+                   VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                (f"{gate_name} - {loc_name} Departure (Local Space)", gate_id, loc_id, approach_time, fuel_cost)
+            )
+            
+            # Location to Gate  
+            self.db.execute_query(
+                """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
+                   VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                (f"{loc_name} - {gate_name} Approach (Local Space)", loc_id, gate_id, approach_time, fuel_cost)
+            )
+            
+            await interaction.followup.send(f"✅ Created local space routes: {gate_name} ↔ {loc_name}. Try `/travel routes` now!", ephemeral=True)
+            print(f"✅ Created missing local space corridors for {gate_name}")
+            
+        except Exception as e:
+            print(f"Error in create_missing_local_route: {str(e)}")
+            await interaction.followup.send(f"Error: {str(e)}", ephemeral=True)
+
+    @galaxy_group.command(name="debug_gate_routes", description="Debug route visibility for current location")
+    async def debug_gate_routes(self, interaction: discord.Interaction):
+        """Debug why routes aren't showing for current location"""
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Get user's current location
+            char_location = self.db.execute_query(
+                "SELECT current_location FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not char_location or not char_location[0]:
+                await interaction.followup.send("You don't have a current location set.", ephemeral=True)
+                return
+                
+            location_id = char_location[0]
+            
+            # Get location details
+            location_info = self.db.execute_query(
+                "SELECT name, location_type, gate_status, system_name FROM locations WHERE location_id = ?",
+                (location_id,), fetch='one'
+            )
+            
+            if not location_info:
+                await interaction.followup.send("Location not found in database.", ephemeral=True)
+                return
+                
+            loc_name, loc_type, gate_status, system_name = location_info
+            
+            # Get ALL corridors from this location
+            all_corridors = self.db.execute_query(
+                """SELECT c.corridor_id, c.name, c.is_active, c.travel_time, c.fuel_cost, 
+                          l.name as dest_name, l.location_type as dest_type
+                   FROM corridors c
+                   JOIN locations l ON c.destination_location = l.location_id
+                   WHERE c.origin_location = ?
+                   ORDER BY c.is_active DESC, c.name""",
+                (location_id,), fetch='all'
+            )
+            
+            # Get what travel.py would find (only active)
+            travel_corridors = self.db.execute_query(
+                """SELECT c.corridor_id, c.name, c.travel_time, c.fuel_cost,
+                          l.name as dest_name, l.location_type as dest_type
+                   FROM corridors c
+                   JOIN locations l ON c.destination_location = l.location_id
+                   WHERE c.origin_location = ? AND c.is_active = 1
+                   ORDER BY c.travel_time""",
+                (location_id,), fetch='all'
+            )
+            
+            embed = discord.Embed(
+                title=f"🔍 Route Debug: {loc_name}",
+                description=f"Type: {loc_type} | Status: {gate_status or 'N/A'} | System: {system_name}",
+                color=0xffaa00
+            )
+            
+            # All corridors section
+            if all_corridors:
+                all_routes_text = ""
+                for corridor_id, name, is_active, travel_time, fuel_cost, dest_name, dest_type in all_corridors:
+                    status_icon = "✅" if is_active else "❌"
+                    all_routes_text += f"{status_icon} **{name}** → {dest_name} ({dest_type})\n"
+                    all_routes_text += f"   Time: {travel_time}s | Fuel: {fuel_cost} | Active: {is_active}\n\n"
+                
+                if len(all_routes_text) > 1024:
+                    all_routes_text = all_routes_text[:1000] + "...\n(truncated)"
+                    
+                embed.add_field(
+                    name=f"All Corridors ({len(all_corridors)} total)",
+                    value=all_routes_text or "None found",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="All Corridors",
+                    value="❌ No corridors found from this location",
+                    inline=False
+                )
+            
+            # What travel.py sees
+            if travel_corridors:
+                travel_routes_text = ""
+                for corridor_id, name, travel_time, fuel_cost, dest_name, dest_type in travel_corridors:
+                    travel_routes_text += f"✅ **{name}** → {dest_name} ({dest_type})\n"
+                    travel_routes_text += f"   Time: {travel_time}s | Fuel: {fuel_cost}\n\n"
+                
+                if len(travel_routes_text) > 1024:
+                    travel_routes_text = travel_routes_text[:1000] + "...\n(truncated)"
+                    
+                embed.add_field(
+                    name=f"Travel Command Sees ({len(travel_corridors)} active)",
+                    value=travel_routes_text,
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="Travel Command Sees",
+                    value="❌ No active corridors found (this is why no routes show!)",
+                    inline=False
+                )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            print(f"Error in debug_gate_routes: {str(e)}")
+            await interaction.followup.send(f"Error debugging routes: {str(e)}", ephemeral=True)
+
+    @galaxy_group.command(name="fix_gate_architecture", description="Fix existing galaxy to use proper local space connections")
+    async def fix_gate_architecture(self, interaction: discord.Interaction):
+        """Fix existing galaxy to use proper Major Location -> Local Space -> Gate architecture"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            print("🔧 Starting COMPREHENSIVE gate architecture fix...")
+            
+            # Use the new shared architecture validator
+            from utils.architecture_validator import ArchitectureValidator
+            validator = ArchitectureValidator(self.db)
+            fixes = await validator.validate_and_fix_architecture(silent=False)
+            
+            # Build response embed
+            total_fixes = sum(fixes.values())
+            
+            if total_fixes == 0:
+                embed = discord.Embed(
+                    title="✅ Gate Architecture Already Correct",
+                    description="No architectural violations found. Galaxy follows proper gate architecture.",
+                    color=0x00ff00
+                )
+            else:
+                embed = discord.Embed(
+                    title="🔧 Gate Architecture Fix Complete",
+                    description=f"Successfully processed {total_fixes} architectural violations",
+                    color=0x00ff00
+                )
+                
+                embed.add_field(
+                    name="🛠️ Architecture Fixes Applied",
+                    value=f"• Removed {fixes['cross_system_removed']} cross-system violations\n"
+                          f"• Fixed {fixes['major_to_gate_fixed']} major ↔ gate connections\n"
+                          f"• Removed {fixes['major_to_major_removed']} major-to-major gated routes\n"
+                          f"• Created {fixes['missing_local_created']} missing local connections\n"
+                          f"• Fixed {fixes['unused_gate_fixed']} unused gate violations\n"
+                          f"• Fixed {fixes['moving_gate_fixed']} moving gate violations\n"
+                          f"• Fixed {fixes['active_gate_fixed']} active gate violations\n"
+                          f"• Removed {fixes['gated_violations_removed']} gated architectural violations",
+                    inline=False
+                )
+                
+                embed.add_field(
+                    name="🌐 Proper Architecture",
+                    value="**Major Locations** → **Local Space** (🌌) → **Gates** → **Gated Corridors** (🔵) → **Gates** → **Local Space** (🌌) → **Major Locations**\n\n"
+                          "*Major locations can only connect to gates via local space routes (danger level 1)*",
+                    inline=False
+                )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            print(f"🎉 Gate architecture fix completed: {total_fixes} total fixes")
+            
+        except Exception as e:
+            print(f"Error in fix_gate_architecture: {str(e)}")
+            await interaction.followup.send(f"Error fixing gate architecture: {str(e)}", ephemeral=True)
+
+    @galaxy_group.command(name="fix_corridor_types", description="Validate and fix corridor type classifications")
+    async def fix_corridor_types(self, interaction: discord.Interaction):
+        """Fix misclassified corridor types based on location rules"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            print("🔧 Starting corridor type validation and fixes...")
+            
+            # Run the corridor classification fix
+            self.db._classify_existing_corridors()
+            
+            # Get statistics after fix
+            type_counts = self.db.execute_query("""
+                SELECT corridor_type, COUNT(*) as count
+                FROM corridors 
+                WHERE is_active = 1
+                GROUP BY corridor_type
+            """, fetch='all')
+            
+            # Build response embed
+            embed = discord.Embed(
+                title="🔧 Corridor Type Validation Complete",
+                description="Validated and corrected corridor type classifications based on location rules",
+                color=0x00ff00
+            )
+            
+            if type_counts:
+                type_summary = '\n'.join([f"• **{corridor_type.title()}**: {count}" for corridor_type, count in type_counts])
+                embed.add_field(
+                    name="📊 Current Corridor Distribution",
+                    value=type_summary,
+                    inline=False
+                )
+            
+            embed.add_field(
+                name="✅ Rules Applied",
+                value="• Major locations ↔ local gates = `local_space`\n"
+                      "• Gates in different systems = `gated`\n"
+                      "• Gates in same system = `local_space`\n"
+                      "• Major locations to major locations = `ungated`\n"
+                      "• Name-based detection for local space routes",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="🎯 Route Legend",
+                value="🌌 Local Space • 🔵 Gated • ⭕ Ungated",
+                inline=False
+            )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            print("🎉 Corridor type validation completed successfully")
+            
+        except Exception as e:
+            print(f"Error in fix_corridor_types: {str(e)}")
+            await interaction.followup.send(f"Error fixing corridor types: {str(e)}", ephemeral=True)
+
+    async def _fix_cross_system_violations(self, fixes):
+        """Remove any connections that violate system-based architecture"""
+        # Remove cross-system major↔gate connections
+        cross_system_violations = self.db.execute_query(
+            """SELECT c.corridor_id, c.name, lo.name as origin_name, ld.name as dest_name,
+                      lo.location_type as origin_type, ld.location_type as dest_type
+               FROM corridors c
+               JOIN locations lo ON c.origin_location = lo.location_id  
+               JOIN locations ld ON c.destination_location = ld.location_id
+               WHERE (
+                   (lo.location_type IN ('colony', 'space_station', 'outpost') AND ld.location_type = 'gate') OR
+                   (lo.location_type = 'gate' AND ld.location_type IN ('colony', 'space_station', 'outpost'))
+               )
+               AND lo.system_name != ld.system_name
+               AND c.corridor_type != 'ungated'""",
+            fetch='all'
+        )
+        
+        for corridor_id, name, origin_name, dest_name, origin_type, dest_type in cross_system_violations:
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+            fixes['cross_system_removed'] += 1
+            connection_type = f"{origin_type} ↔ {dest_type}"
+            print(f"🗑️ Removed cross-system violation: {name} - {connection_type} ({origin_name} → {dest_name})")
+
+    async def _ensure_local_space_connections(self, fixes):
+        """Ensure all major locations have proper local space connections to gates in their system"""
+        # Get all systems and their major locations and gates
+        systems_data = self.db.execute_query(
+            """SELECT DISTINCT l.system_name,
+                      GROUP_CONCAT(CASE WHEN l.location_type IN ('colony', 'space_station', 'outpost') 
+                                        THEN l.location_id || ':' || l.name END) as majors,
+                      GROUP_CONCAT(CASE WHEN l.location_type = 'gate' 
+                                        THEN l.location_id || ':' || l.name || ':' || l.gate_status END) as gates
+               FROM locations l
+               WHERE l.system_name IS NOT NULL 
+               AND l.location_type IN ('colony', 'space_station', 'outpost', 'gate')
+               GROUP BY l.system_name
+               HAVING majors IS NOT NULL AND gates IS NOT NULL""",
+            fetch='all'
+        )
+        
+        for system_name, majors_str, gates_str in systems_data:
+            if not majors_str or not gates_str:
+                continue
+                
+            # Parse major locations
+            majors = []
+            for major_data in majors_str.split(','):
+                if ':' in major_data:
+                    major_id, major_name = major_data.split(':', 1)
+                    majors.append((int(major_id), major_name))
+            
+            # Parse gates
+            gates = []
+            for gate_data in gates_str.split(','):
+                if gate_data.count(':') >= 2:
+                    parts = gate_data.split(':', 2)
+                    gate_id, gate_name, gate_status = int(parts[0]), parts[1], parts[2]
+                    gates.append((gate_id, gate_name, gate_status))
+            
+            # Ensure each major location connects to each gate via local space
+            for major_id, major_name in majors:
+                for gate_id, gate_name, gate_status in gates:
+                    await self._ensure_local_connection_exists(major_id, major_name, gate_id, gate_name, fixes)
+
+    async def _ensure_local_connection_exists(self, major_id, major_name, gate_id, gate_name, fixes):
+        """Ensure a local space connection exists between major location and gate"""
+        # Check if connection already exists
+        existing = self.db.execute_query(
+            """SELECT corridor_id, danger_level, travel_time FROM corridors 
+               WHERE ((origin_location = ? AND destination_location = ?) OR
+                      (origin_location = ? AND destination_location = ?))
+               AND corridor_type != 'ungated'""",
+            (major_id, gate_id, gate_id, major_id),
+            fetch='one'
+        )
+        
+        if existing:
+            corridor_id, danger_level, travel_time = existing
+            # Fix existing connection to be proper local space
+            if danger_level > 1 or travel_time > 300:
+                target_danger = 1
+                target_time = min(travel_time, 300)
+                
+                self.db.execute_query(
+                    """UPDATE corridors 
+                       SET danger_level = ?, travel_time = ?
+                       WHERE corridor_id = ?""",
+                    (target_danger, target_time, corridor_id)
+                )
+                fixes['major_to_gate_fixed'] += 1
+                print(f"✅ Fixed local connection: {major_name} ↔ {gate_name} (danger: {danger_level}→{target_danger}, time: {travel_time}→{target_time})")
+        else:
+            # Create missing local space connection
+            approach_time = random.randint(120, 300)  # 2-5 minutes
+            fuel_cost = random.randint(5, 15)
+            
+            # Create bidirectional local space corridors
+            self.db.execute_query(
+                """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
+                   VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                (f"{major_name} - {gate_name} Approach (Local Space)", major_id, gate_id, approach_time, fuel_cost)
+            )
+            
+            self.db.execute_query(
+                """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
+                   VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                (f"{gate_name} - {major_name} Departure (Local Space)", gate_id, major_id, approach_time, fuel_cost)
+            )
+            
+            fixes['missing_local_created'] += 2
+            print(f"➕ Created local connection: {major_name} ↔ {gate_name} (local space)")
+
+    async def _fix_gate_connectivity_by_status(self, fixes):
+        """Fix gate connectivity based on their status (active/unused/moving)"""
+        # Get all gates with their current connections
+        gates_data = self.db.execute_query(
+            """SELECT l.location_id, l.name, l.gate_status,
+                      COUNT(CASE WHEN c.corridor_type = 'gated' THEN 1 END) as gated_connections,
+                      COUNT(CASE WHEN c.corridor_type = 'local_space' THEN 1 END) as local_connections
+               FROM locations l
+               LEFT JOIN corridors c ON (c.origin_location = l.location_id OR c.destination_location = l.location_id)
+               WHERE l.location_type = 'gate'
+               GROUP BY l.location_id, l.name, l.gate_status""",
+            fetch='all'
+        )
+        
+        for gate_id, gate_name, gate_status, gated_connections, local_connections in gates_data:
+            if gate_status == 'unused':
+                # Unused gates should have ONLY local connections (max 1 system's worth)
+                if gated_connections > 0:
+                    await self._remove_gate_gated_connections(gate_id, gate_name)
+                    fixes['unused_gate_fixed'] += gated_connections
+                    print(f"🔧 Fixed unused gate {gate_name}: removed {gated_connections} gated connections")
+                    
+            elif gate_status == 'moving':
+                # Moving gates should have local connections but no gated connections (will get them when active)
+                if gated_connections > 0:
+                    await self._remove_gate_gated_connections(gate_id, gate_name)
+                    fixes['moving_gate_fixed'] += gated_connections
+                    print(f"🔧 Fixed moving gate {gate_name}: removed {gated_connections} gated connections")
+                
+                # Ensure moving gate has local space connections
+                await self._ensure_moving_gate_local_connections(gate_id, gate_name)
+                    
+            elif gate_status == 'active':
+                # Active gates should have both local connections AND gated connections to other active gates
+                # Ensure this active gate has proper gated connections
+                fixed_count = await self._ensure_active_gate_connections(gate_id, gate_name, gated_connections)
+                fixes['active_gate_fixed'] += fixed_count
+
+    async def _remove_gate_gated_connections(self, gate_id, gate_name):
+        """Remove all gated connections from a gate (keep only local space)"""
+        gated_corridors = self.db.execute_query(
+            """SELECT corridor_id FROM corridors 
+               WHERE (origin_location = ? OR destination_location = ?)
+               AND name NOT LIKE '%Local Space%' 
+               AND name NOT LIKE '%Approach%' 
+               AND name NOT LIKE '%Arrival%' 
+               AND name NOT LIKE '%Departure%'
+               AND corridor_type != 'ungated'""",
+            (gate_id, gate_id),
+            fetch='all'
+        )
+        
+        for (corridor_id,) in gated_corridors:
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+
+    async def _ensure_moving_gate_local_connections(self, gate_id, gate_name):
+        """Ensure a moving gate has active local space connections to nearby locations"""
+        # Find nearby major locations in the same system
+        gate_info = self.db.execute_query(
+            "SELECT system_name, x_coord, y_coord FROM locations WHERE location_id = ?",
+            (gate_id,), fetch='one'
+        )
+        
+        if not gate_info:
+            return
+            
+        system_name, gate_x, gate_y = gate_info
+        
+        # Find major locations in the same system
+        nearby_locations = self.db.execute_query(
+            """SELECT location_id, name, x_coord, y_coord,
+                      ((x_coord - ?) * (x_coord - ?) + (y_coord - ?) * (y_coord - ?)) as distance_sq
+               FROM locations 
+               WHERE system_name = ? 
+               AND location_type IN ('colony', 'space_station', 'outpost')
+               ORDER BY distance_sq
+               LIMIT 3""",
+            (gate_x, gate_x, gate_y, gate_y, system_name),
+            fetch='all'
+        )
+        
+        # Create local space connections to nearby locations if they don't exist
+        for loc_id, loc_name, loc_x, loc_y, distance_sq in nearby_locations:
+            # Check if FROM gate connection exists (this is what's missing!)
+            gate_to_loc_exists = self.db.execute_query(
+                """SELECT corridor_id FROM corridors 
+                   WHERE origin_location = ? AND destination_location = ? AND is_active = 1""",
+                (gate_id, loc_id),
+                fetch='one'
+            )
+            
+            # Check if TO gate connection exists  
+            loc_to_gate_exists = self.db.execute_query(
+                """SELECT corridor_id FROM corridors 
+                   WHERE origin_location = ? AND destination_location = ? AND is_active = 1""",
+                (loc_id, gate_id),
+                fetch='one'
+            )
+            
+            # Create FROM gate connection if missing
+            if not gate_to_loc_exists:
+                approach_time = random.randint(120, 300)  # 2-5 minutes
+                fuel_cost = random.randint(5, 15)
+                
+                self.db.execute_query(
+                    """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
+                       VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                    (f"{gate_name} - {loc_name} Departure (Local Space)", gate_id, loc_id, approach_time, fuel_cost)
+                )
+                print(f"  ✅ Created FROM gate route: {gate_name} → {loc_name}")
+            
+            # Create TO gate connection if missing
+            if not loc_to_gate_exists:
+                approach_time = random.randint(120, 300)  # 2-5 minutes
+                fuel_cost = random.randint(5, 15)
+                
+                self.db.execute_query(
+                    """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
+                       VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                    (f"{loc_name} - {gate_name} Approach (Local Space)", loc_id, gate_id, approach_time, fuel_cost)
+                )
+                print(f"  ✅ Created TO gate route: {loc_name} → {gate_name}")
+
+    async def _ensure_active_gate_connections(self, gate_id, gate_name, current_gated_connections):
+        """Ensure an active gate has proper gated connections to other active gates"""
+        fixes_made = 0
+        
+        # Active gates should have at least 1-3 gated connections to other active gates
+        if current_gated_connections < 1:
+            # Find nearby active gates to connect to
+            gate_info = self.db.execute_query(
+                "SELECT x_coord, y_coord FROM locations WHERE location_id = ?",
+                (gate_id,), fetch='one'
+            )
+            
+            if not gate_info:
+                return fixes_made
+                
+            gate_x, gate_y = gate_info
+            
+            # Find nearby active gates (not including this one)
+            nearby_gates = self.db.execute_query(
+                """SELECT location_id, name, x_coord, y_coord 
+                   FROM locations 
+                   WHERE location_type = 'gate' 
+                   AND gate_status = 'active' 
+                   AND location_id != ?
+                   ORDER BY ((x_coord - ?) * (x_coord - ?) + (y_coord - ?) * (y_coord - ?))
+                   LIMIT 3""",
+                (gate_id, gate_x, gate_x, gate_y, gate_y),
+                fetch='all'
+            )
+            
+            # Create gated connections to the nearest active gates
+            for target_id, target_name, target_x, target_y in nearby_gates:
+                # Check if bidirectional corridors already exist
+                forward_exists = self.db.execute_query(
+                    """SELECT corridor_id FROM corridors 
+                       WHERE origin_location = ? AND destination_location = ?
+                       AND name NOT LIKE '%Local Space%'""",
+                    (gate_id, target_id), fetch='one'
+                )
+                
+                backward_exists = self.db.execute_query(
+                    """SELECT corridor_id FROM corridors 
+                       WHERE origin_location = ? AND destination_location = ?
+                       AND name NOT LIKE '%Local Space%'""",
+                    (target_id, gate_id), fetch='one'
+                )
+                
+                # Calculate distance and travel time
+                distance = ((target_x - gate_x) ** 2 + (target_y - gate_y) ** 2) ** 0.5
+                travel_time = max(300, int(distance * 2))  # At least 5 minutes, scale with distance
+                fuel_cost = max(50, int(distance * 0.5))  # Scale fuel with distance
+                
+                # Create forward corridor if missing
+                if not forward_exists:
+                    self.db.execute_query(
+                        """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
+                           VALUES (?, ?, ?, ?, ?, 2, 1, 1)""",
+                        (f"{gate_name} - {target_name} Corridor", gate_id, target_id, travel_time, fuel_cost)
+                    )
+                    fixes_made += 1
+                    print(f"🔧 Fixed active gate {gate_name}: created gated connection to {target_name}")
+                
+                # Create backward corridor if missing
+                if not backward_exists:
+                    self.db.execute_query(
+                        """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
+                           VALUES (?, ?, ?, ?, ?, 2, 1, 1)""",
+                        (f"{target_name} - {gate_name} Corridor", target_id, gate_id, travel_time, fuel_cost)
+                    )
+                    fixes_made += 1
+                    print(f"🔧 Fixed active gate {gate_name}: created return gated connection from {target_name}")
+                
+                # Stop after creating connections to avoid over-connecting
+                if fixes_made >= 2:  # Forward + backward to one gate is enough
+                    break
+        
+        return fixes_made
+
+    async def _remove_major_to_major_gated(self, fixes):
+        """Remove direct gated connections between major locations (keep ungated only)"""
+        major_to_major_gated = self.db.execute_query(
+            """SELECT c.corridor_id, c.name, lo.name as origin_name, ld.name as dest_name
+               FROM corridors c
+               JOIN locations lo ON c.origin_location = lo.location_id  
+               JOIN locations ld ON c.destination_location = ld.location_id
+               WHERE lo.location_type IN ('colony', 'space_station', 'outpost')
+               AND ld.location_type IN ('colony', 'space_station', 'outpost')
+               AND c.corridor_type != 'ungated'""",
+            fetch='all'
+        )
+        
+        for corridor_id, name, origin_name, dest_name in major_to_major_gated:
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+            fixes['major_to_major_removed'] += 1
+            print(f"🗑️ Removed major-to-major gated: {name} ({origin_name} → {dest_name})")
+
+    async def _remove_gated_major_to_gate(self, fixes):
+        """Remove any direct gated connections from major locations to gates"""
+        gated_major_to_gate = self.db.execute_query(
+            """SELECT c.corridor_id, c.name, lo.name as origin_name, ld.name as dest_name,
+                      lo.location_type as origin_type, ld.location_type as dest_type
+               FROM corridors c
+               JOIN locations lo ON c.origin_location = lo.location_id  
+               JOIN locations ld ON c.destination_location = ld.location_id
+               WHERE (
+                   (lo.location_type IN ('colony', 'space_station', 'outpost') AND ld.location_type = 'gate') OR
+                   (lo.location_type = 'gate' AND ld.location_type IN ('colony', 'space_station', 'outpost'))
+               )
+               AND c.name NOT LIKE '%Local Space%' 
+               AND c.corridor_type != 'ungated'""",
+            fetch='all'
+        )
+        
+        for corridor_id, name, origin_name, dest_name, origin_type, dest_type in gated_major_to_gate:
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+            fixes['gated_violations_removed'] += 1
+            connection_type = f"{origin_type} ↔ {dest_type}"
+            print(f"🗑️ Removed gated major-gate connection: {name} - {connection_type} ({origin_name} → {dest_name})")
+
+    async def _detect_architecture_violations(self):
+        """Detect and return comprehensive architecture violations"""
+        violations = {
+            'cross_system_connections': [],
+            'major_to_major_gated': [],
+            'major_to_gate_gated': [],
+            'unused_gate_violations': [],
+            'moving_gate_violations': [],
+            'missing_local_connections': []
+        }
+        
+        # Detect cross-system major↔gate connections
+        cross_system = self.db.execute_query(
+            """SELECT c.name, lo.name as origin_name, ld.name as dest_name,
+                      lo.location_type as origin_type, ld.location_type as dest_type,
+                      lo.system_name as origin_system, ld.system_name as dest_system
+               FROM corridors c
+               JOIN locations lo ON c.origin_location = lo.location_id  
+               JOIN locations ld ON c.destination_location = ld.location_id
+               WHERE (
+                   (lo.location_type IN ('colony', 'space_station', 'outpost') AND ld.location_type = 'gate') OR
+                   (lo.location_type = 'gate' AND ld.location_type IN ('colony', 'space_station', 'outpost'))
+               )
+               AND lo.system_name != ld.system_name
+               AND c.corridor_type != 'ungated'""",
+            fetch='all'
+        )
+        violations['cross_system_connections'] = cross_system
+        
+        # Detect major-to-major gated connections
+        major_to_major = self.db.execute_query(
+            """SELECT c.name, lo.name as origin_name, ld.name as dest_name
+               FROM corridors c
+               JOIN locations lo ON c.origin_location = lo.location_id  
+               JOIN locations ld ON c.destination_location = ld.location_id
+               WHERE lo.location_type IN ('colony', 'space_station', 'outpost')
+               AND ld.location_type IN ('colony', 'space_station', 'outpost')
+               AND c.corridor_type != 'ungated'""",
+            fetch='all'
+        )
+        violations['major_to_major_gated'] = major_to_major
+        
+        # Detect major-to-gate gated connections (should be local space only)
+        major_to_gate_gated = self.db.execute_query(
+            """SELECT c.name, lo.name as origin_name, ld.name as dest_name,
+                      lo.location_type as origin_type, ld.location_type as dest_type
+               FROM corridors c
+               JOIN locations lo ON c.origin_location = lo.location_id  
+               JOIN locations ld ON c.destination_location = ld.location_id
+               WHERE (
+                   (lo.location_type IN ('colony', 'space_station', 'outpost') AND ld.location_type = 'gate') OR
+                   (lo.location_type = 'gate' AND ld.location_type IN ('colony', 'space_station', 'outpost'))
+               )
+               AND c.danger_level > 1
+               AND c.name NOT LIKE '%Local Space%' 
+               AND c.name NOT LIKE '%Approach%' 
+               AND c.name NOT LIKE '%Arrival%' 
+               AND c.name NOT LIKE '%Departure%'
+               AND c.corridor_type != 'ungated'""",
+            fetch='all'
+        )
+        violations['major_to_gate_gated'] = major_to_gate_gated
+        
+        # Detect unused gate violations (should have only local connections)
+        unused_gate_violations = self.db.execute_query(
+            """SELECT l.name as gate_name, COUNT(*) as gated_connections
+               FROM locations l
+               JOIN corridors c ON (c.origin_location = l.location_id OR c.destination_location = l.location_id)
+               WHERE l.location_type = 'gate' AND l.gate_status = 'unused'
+               AND c.name NOT LIKE '%Local Space%' AND c.name NOT LIKE '%Approach%' 
+               AND c.name NOT LIKE '%Arrival%' AND c.name NOT LIKE '%Departure%'
+               AND c.corridor_type != 'ungated'
+               GROUP BY l.location_id, l.name
+               HAVING gated_connections > 0""",
+            fetch='all'
+        )
+        violations['unused_gate_violations'] = unused_gate_violations
+        
+        # Detect moving gate violations (should have only local connections)
+        moving_gate_violations = self.db.execute_query(
+            """SELECT l.name as gate_name, COUNT(*) as gated_connections
+               FROM locations l
+               JOIN corridors c ON (c.origin_location = l.location_id OR c.destination_location = l.location_id)
+               WHERE l.location_type = 'gate' AND l.gate_status = 'moving'
+               AND c.name NOT LIKE '%Local Space%' AND c.name NOT LIKE '%Approach%' 
+               AND c.name NOT LIKE '%Arrival%' AND c.name NOT LIKE '%Departure%'
+               AND c.corridor_type != 'ungated'
+               GROUP BY l.location_id, l.name
+               HAVING gated_connections > 0""",
+            fetch='all'
+        )
+        violations['moving_gate_violations'] = moving_gate_violations
+        
+        return violations
+
+    async def _ensure_system_local_connections(self):
+        """Ensure all systems have proper local space connections between majors and gates"""
+        systems_needing_connections = []
+        
+        # Get all systems and check their internal connectivity
+        systems = self.db.execute_query(
+            """SELECT DISTINCT system_name FROM locations 
+               WHERE system_name IS NOT NULL 
+               AND location_type IN ('colony', 'space_station', 'outpost', 'gate')""",
+            fetch='all'
+        )
+        
+        for (system_name,) in systems:
+            # Get majors and gates in this system
+            locations = self.db.execute_query(
+                """SELECT location_id, name, location_type FROM locations
+                   WHERE system_name = ? 
+                   AND location_type IN ('colony', 'space_station', 'outpost', 'gate')""",
+                (system_name,),
+                fetch='all'
+            )
+            
+            majors = [(lid, name) for lid, name, ltype in locations if ltype in ('colony', 'space_station', 'outpost')]
+            gates = [(lid, name) for lid, name, ltype in locations if ltype == 'gate']
+            
+            missing_connections = []
+            
+            # Check if each major connects to each gate via local space
+            for major_id, major_name in majors:
+                for gate_id, gate_name in gates:
+                    connection_exists = self.db.execute_query(
+                        """SELECT COUNT(*) FROM corridors 
+                           WHERE ((origin_location = ? AND destination_location = ?) OR
+                                  (origin_location = ? AND destination_location = ?))
+                           AND (danger_level = 1 OR corridor_type = 'local_space')
+                           AND corridor_type != 'ungated'""",
+                        (major_id, gate_id, gate_id, major_id),
+                        fetch='one'
+                    )[0]
+                    
+                    if connection_exists == 0:
+                        missing_connections.append((major_name, gate_name))
+            
+            if missing_connections:
+                systems_needing_connections.append((system_name, missing_connections))
+        
+        return systems_needing_connections
         
     @galaxy_group.command(name="shift_corridors", description="Trigger corridor shifts to change galaxy connectivity")
     @app_commands.describe(
@@ -3312,165 +5163,1358 @@ class GalaxyGeneratorCog(commands.Cog):
             await interaction.response.send_message("Intensity must be between 1 and 5.", ephemeral=True)
             return
         
+        # Create shift type selection dropdown
+        shift_options = [
+            discord.SelectOption(
+                label="Mixed Shift", 
+                value="mixed",
+                description="All types: route changes, shuffles, and new routes",
+                emoji="🌌"
+            ),
+            discord.SelectOption(
+                label="Destination Shuffle", 
+                value="shuffle",
+                description="Change where existing corridors lead",
+                emoji="🔀"
+            ),
+            discord.SelectOption(
+                label="Route Changes", 
+                value="routes",
+                description="Open/close existing corridor routes",
+                emoji="🚧"
+            ),
+            discord.SelectOption(
+                label="New Routes", 
+                value="new",
+                description="Create new dormant corridor possibilities",
+                emoji="✨"
+            )
+        ]
+        
+        class ShiftTypeSelect(discord.ui.Select):
+            def __init__(self, cog_ref, intensity_val, target_region_val):
+                super().__init__(placeholder="Choose shift type...", options=shift_options)
+                self.cog = cog_ref
+                self.intensity = intensity_val
+                self.target_region = target_region_val
+            
+            async def callback(self, select_interaction: discord.Interaction):
+                await select_interaction.response.defer()
+                
+                try:
+                    await select_interaction.edit_original_response(content="Processing corridor shift...", view=None)
+                    
+                    shift_results = await self.cog._execute_corridor_shifts(
+                        self.intensity, self.target_region, self.values[0]
+                    )
+                    
+                    embed = discord.Embed(
+                        title="🌌 Corridor Shift Complete",
+                        description=f"Galactic infrastructure has undergone changes (Intensity {self.intensity}, Type: {self.values[0].title()})",
+                        color=0x4B0082
+                    )
+                    
+                    if shift_results['activated']:
+                        embed.add_field(
+                            name="🟢 New Corridors Activated",
+                            value=f"{shift_results['activated']} dormant routes opened",
+                            inline=True
+                        )
+                    
+                    if shift_results['deactivated']:
+                        embed.add_field(
+                            name="🔴 Corridors Collapsed", 
+                            value=f"{shift_results['deactivated']} active routes closed",
+                            inline=True
+                        )
+                    
+                    if shift_results['new_dormant']:
+                        embed.add_field(
+                            name="🌫️ New Potential Routes",
+                            value=f"{shift_results['new_dormant']} dormant corridors formed",
+                            inline=True
+                        )
+                    
+                    if shift_results.get('destinations_changed', 0):
+                        embed.add_field(
+                            name="🔀 Routes Redirected",
+                            value=f"{shift_results['destinations_changed']} corridors lead to new destinations",
+                            inline=True
+                        )
+                    
+                    connectivity_status = await self.cog._analyze_connectivity_post_shift()
+                    embed.add_field(
+                        name="📊 Connectivity Status",
+                        value=connectivity_status,
+                        inline=False
+                    )
+                    
+                    embed.add_field(
+                        name="⚠️ Advisory",
+                        value="Players in transit may experience route changes. Check `/travel routes` for updates.",
+                        inline=False
+                    )
+                    
+                    await select_interaction.edit_original_response(content=None, embed=embed, view=None)
+                    
+                    # Check for moving gates that should reconnect
+                    await self.cog._check_and_reconnect_moving_gates()
+                    
+                    # Notify active travelers
+                    await self.cog._notify_travelers_of_shifts(shift_results)
+                    news_cog = self.cog.bot.get_cog('GalacticNewsCog')
+                    if news_cog:
+                        await news_cog.post_corridor_shift_news(shift_results, self.intensity)  
+                    
+                except Exception as e:
+                    await select_interaction.edit_original_response(content=f"Error during corridor shift: {str(e)}", view=None)
+        
+        class ShiftView(discord.ui.View):
+            def __init__(self, cog_ref, intensity_val, target_region_val):
+                super().__init__(timeout=60)
+                self.add_item(ShiftTypeSelect(cog_ref, intensity_val, target_region_val))
+        
+        # Send initial message with dropdown
+        await interaction.response.send_message(
+            "Select the type of corridor shift to perform:",
+            view=ShiftView(self, intensity, target_region),
+            ephemeral=True
+        )
+
+    @galaxy_group.command(name="force_gate_check", description="Force immediate gate status update and reconnection check")
+    async def force_gate_check(self, interaction: discord.Interaction):
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
         await interaction.response.defer()
         
         try:
-            results = await self._execute_corridor_shifts(intensity, target_region)
+            results = {
+                'reconnected_gates': 0,
+                'started_moving': 0,
+                'gates_processed': []
+            }
             
+            # Check and reconnect moving gates
+            moving_gates = self.db.execute_query(
+                """SELECT location_id, name, reconnection_eta 
+                   FROM locations 
+                   WHERE location_type = 'gate' 
+                   AND gate_status = 'moving' 
+                   AND reconnection_eta IS NOT NULL 
+                   AND reconnection_eta <= datetime('now')""",
+                fetch='all'
+            )
+            
+            for gate in moving_gates:
+                gate_id, gate_name, _ = gate
+                
+                # Update gate status back to active and restore services
+                self.db.execute_query(
+                    """UPDATE locations SET 
+                       gate_status = 'active', 
+                       reconnection_eta = NULL,
+                       has_shops = 1,
+                       has_medical = 1, 
+                       has_repairs = 1,
+                       has_fuel = 1,
+                       population = ?
+                       WHERE location_id = ?""",
+                    (random.randint(50, 150), gate_id)
+                )
+                
+                # Find nearest major location for reconnection
+                nearest_major = self.db.execute_query(
+                    """SELECT l2.location_id, l2.name, l2.x_coord, l2.y_coord,
+                              SQRT((l1.x_coord - l2.x_coord) * (l1.x_coord - l2.x_coord) + 
+                                   (l1.y_coord - l2.y_coord) * (l1.y_coord - l2.y_coord)) as distance
+                       FROM locations l1
+                       JOIN locations l2 ON l2.location_type IN ('colony', 'space_station', 'outpost')
+                       WHERE l1.location_id = ?
+                       AND l2.gate_status = 'active'
+                       ORDER BY distance LIMIT 1""",
+                    (gate_id,),
+                    fetch='one'
+                )
+                
+                if nearest_major:
+                    # Reactivate any deactivated corridors from when it became moving
+                    self.db.execute_query(
+                        """UPDATE corridors SET is_active = 1 
+                           WHERE (origin_location = ? OR destination_location = ?)
+                           AND is_active = 0""",
+                        (gate_id, gate_id)
+                    )
+                
+                results['reconnected_gates'] += 1
+                results['gates_processed'].append(f"🟢 {gate_name} reconnected to network")
+            
+            # Check for long-abandoned gates that can start moving
+            long_abandoned_gates = self.db.execute_query(
+                """SELECT location_id, name, abandoned_since 
+                   FROM locations 
+                   WHERE location_type = 'gate' 
+                   AND gate_status = 'unused' 
+                   AND abandoned_since IS NOT NULL 
+                   AND abandoned_since <= datetime('now', '-3 days')""",
+                fetch='all'
+            )
+            
+            for gate in long_abandoned_gates:
+                gate_id, gate_name, _ = gate
+                
+                # 10% chance that an abandoned gate starts moving
+                if random.random() < 0.1:
+                    # Calculate reconnection time (4-24 hours from now)
+                    hours_until_reconnection = random.randint(4, 24)
+                    reconnection_time = datetime.now() + timedelta(hours=hours_until_reconnection)
+                    
+                    self.db.execute_query(
+                        """UPDATE locations SET 
+                           gate_status = 'moving',
+                           reconnection_eta = ?,
+                           abandoned_since = NULL
+                           WHERE location_id = ?""",
+                        (reconnection_time, gate_id)
+                    )
+                    
+                    # Ensure moving gate has local space connections
+                    await self._ensure_moving_gate_local_connections(gate_id, gate_name)
+                    
+                    results['started_moving'] += 1
+                    results['gates_processed'].append(f"🔄 {gate_name} started moving - will reconnect in {hours_until_reconnection} hours")
+            
+            # Create response embed
             embed = discord.Embed(
-                title="🌌 Corridor Shift Complete",
-                description=f"Galactic infrastructure has undergone changes (Intensity {intensity})",
-                color=0x4B0082
+                title="🔄 Gate Status Check Complete",
+                description="Forced gate status update has been completed",
+                color=0x00FF00
             )
             
-            if results['activated']:
+            if results['reconnected_gates'] > 0:
                 embed.add_field(
-                    name="🟢 New Corridors Activated",
-                    value=f"{results['activated']} dormant routes opened",
+                    name="🟢 Gates Reconnected",
+                    value=f"{results['reconnected_gates']} moving gates returned to active status",
                     inline=True
                 )
             
-            if results['deactivated']:
+            if results['started_moving'] > 0:
                 embed.add_field(
-                    name="🔴 Corridors Collapsed", 
-                    value=f"{results['deactivated']} active routes closed",
+                    name="🔄 Gates Started Moving", 
+                    value=f"{results['started_moving']} abandoned gates began relocation",
                     inline=True
                 )
             
-            if results['new_dormant']:
+            if not results['gates_processed']:
                 embed.add_field(
-                    name="🌫️ New Potential Routes",
-                    value=f"{results['new_dormant']} dormant corridors formed",
-                    inline=True
+                    name="ℹ️ Status",
+                    value="No gates required status updates at this time",
+                    inline=False
                 )
-            
-            connectivity_status = await self._analyze_connectivity_post_shift()
-            embed.add_field(
-                name="📊 Connectivity Status",
-                value=connectivity_status,
-                inline=False
-            )
-            
-            embed.add_field(
-                name="⚠️ Advisory",
-                value="Players in transit may experience route changes. Check `/travel routes` for updates.",
-                inline=False
-            )
+            else:
+                # Show first few processed gates
+                status_list = results['gates_processed'][:5]
+                if len(results['gates_processed']) > 5:
+                    status_list.append(f"... and {len(results['gates_processed']) - 5} more")
+                
+                embed.add_field(
+                    name="📋 Gates Processed",
+                    value="\n".join(status_list),
+                    inline=False
+                )
             
             await interaction.followup.send(embed=embed)
             
-            # Notify active travelers
-            await self._notify_travelers_of_shifts(results)
-            news_cog = self.bot.get_cog('GalacticNewsCog')
-            if news_cog:
-                await news_cog.post_corridor_shift_news(results, intensity)  
+        except Exception as e:
+            await interaction.followup.send(f"Error during gate check: {str(e)}")
+
+    @galaxy_group.command(name="debug_gates", description="Display gate status information with pagination")
+    @app_commands.describe(
+        status="Filter by gate status (active/moving/unused/all)",
+        page="Page number to display (20 gates per page)"
+    )
+    @app_commands.choices(status=[
+        app_commands.Choice(name="All Gates", value="all"),
+        app_commands.Choice(name="Active Gates", value="active"),
+        app_commands.Choice(name="Moving Gates", value="moving"), 
+        app_commands.Choice(name="Unused/Abandoned Gates", value="unused")
+    ])
+    async def debug_gates(self, interaction: discord.Interaction, status: str = "all", page: int = 1):
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            # Build query based on status filter
+            base_query = """
+                SELECT l.location_id, l.name, l.x_coord, l.y_coord, l.gate_status, 
+                       l.reconnection_eta, l.abandoned_since, l.population,
+                       COUNT(c.corridor_id) as connected_routes
+                FROM locations l
+                LEFT JOIN corridors c ON (c.origin_location = l.location_id OR c.destination_location = l.location_id) 
+                                      AND c.is_active = 1
+                WHERE l.location_type = 'gate'
+            """
+            
+            params = []
+            if status != "all":
+                base_query += " AND l.gate_status = ?"
+                params.append(status)
+            
+            base_query += """
+                GROUP BY l.location_id, l.name, l.x_coord, l.y_coord, l.gate_status, 
+                         l.reconnection_eta, l.abandoned_since, l.population
+                ORDER BY l.gate_status, l.name
+            """
+            
+            # Get all matching gates
+            all_gates = self.db.execute_query(base_query, params, fetch='all')
+            
+            if not all_gates:
+                embed = discord.Embed(
+                    title="🚪 Gate Debug - No Results",
+                    description=f"No gates found matching status filter: **{status}**",
+                    color=0xFF0000
+                )
+                await interaction.followup.send(embed=embed)
+                return
+            
+            # Calculate pagination
+            gates_per_page = 20
+            total_gates = len(all_gates)
+            total_pages = (total_gates + gates_per_page - 1) // gates_per_page
+            
+            if page < 1:
+                page = 1
+            elif page > total_pages:
+                page = total_pages
+            
+            start_idx = (page - 1) * gates_per_page
+            end_idx = min(start_idx + gates_per_page, total_gates)
+            page_gates = all_gates[start_idx:end_idx]
+            
+            # Count gates by status for summary
+            status_counts = {'active': 0, 'moving': 0, 'unused': 0}
+            for gate in all_gates:
+                gate_status = gate[4]  # gate_status column
+                if gate_status in status_counts:
+                    status_counts[gate_status] += 1
+            
+            # Create embed
+            embed = discord.Embed(
+                title=f"🚪 Gate Debug - {status.title()} Gates",
+                description=f"Showing {len(page_gates)} gates (Page {page}/{total_pages})",
+                color=0x4B0082
+            )
+            
+            # Add summary statistics
+            summary_text = f"**Total Gates:** {total_gates}\n"
+            summary_text += f"🟢 Active: {status_counts['active']} | "
+            summary_text += f"🔄 Moving: {status_counts['moving']} | "
+            summary_text += f"⚫ Unused: {status_counts['unused']}"
+            
+            embed.add_field(
+                name="📊 Summary",
+                value=summary_text,
+                inline=False
+            )
+            
+            # Display gates for this page
+            gate_lines = []
+            for gate in page_gates:
+                (gate_id, gate_name, x_coord, y_coord, gate_status, 
+                 reconnection_eta, abandoned_since, population, connected_routes) = gate
+                
+                # Format status indicator
+                if gate_status == 'active':
+                    status_icon = "🟢"
+                elif gate_status == 'moving':
+                    status_icon = "🔄"
+                else:  # unused
+                    status_icon = "⚫"
+                
+                # Format additional info based on status
+                extra_info = ""
+                if gate_status == 'moving' and reconnection_eta:
+                    try:
+                        eta = datetime.fromisoformat(reconnection_eta.replace('Z', '+00:00'))
+                        time_remaining = eta - datetime.now()
+                        if time_remaining.total_seconds() > 0:
+                            hours_remaining = int(time_remaining.total_seconds() // 3600)
+                            extra_info = f" (ETA: {hours_remaining}h)"
+                        else:
+                            extra_info = " (Ready to reconnect)"
+                    except:
+                        extra_info = " (ETA: Unknown)"
+                elif gate_status == 'unused' and abandoned_since:
+                    try:
+                        abandoned = datetime.fromisoformat(abandoned_since.replace('Z', '+00:00'))
+                        time_abandoned = datetime.now() - abandoned
+                        days_abandoned = int(time_abandoned.total_seconds() // 86400)
+                        extra_info = f" ({days_abandoned}d ago)"
+                    except:
+                        extra_info = " (Recently)"
+                
+                # Format line
+                gate_line = f"{status_icon} **{gate_name}**{extra_info}"
+                gate_line += f"\n   └ Routes: {connected_routes} | Pop: {population or 0} | ({x_coord:.1f}, {y_coord:.1f})"
+                
+                gate_lines.append(gate_line)
+            
+            # Split into multiple fields if too long
+            gates_text = "\n".join(gate_lines)
+            if len(gates_text) <= 1024:
+                embed.add_field(
+                    name=f"🗂️ Gates {start_idx + 1}-{end_idx}",
+                    value=gates_text,
+                    inline=False
+                )
+            else:
+                # Split into multiple fields
+                mid_point = len(gate_lines) // 2
+                first_half = "\n".join(gate_lines[:mid_point])
+                second_half = "\n".join(gate_lines[mid_point:])
+                
+                embed.add_field(
+                    name=f"🗂️ Gates {start_idx + 1}-{start_idx + mid_point}",
+                    value=first_half,
+                    inline=True
+                )
+                embed.add_field(
+                    name=f"🗂️ Gates {start_idx + mid_point + 1}-{end_idx}",
+                    value=second_half,
+                    inline=True
+                )
+            
+            # Add navigation info
+            if total_pages > 1:
+                nav_text = f"Use `/galaxy debug_gates status:{status} page:<number>` to navigate\n"
+                nav_text += f"Pages available: 1-{total_pages}"
+                embed.add_field(
+                    name="🧭 Navigation",
+                    value=nav_text,
+                    inline=False
+                )
+            
+            embed.set_footer(text=f"Gate connectivity and status as of {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            await interaction.followup.send(embed=embed)
             
         except Exception as e:
-            await interaction.followup.send(f"Error during corridor shift: {str(e)}")
+            await interaction.followup.send(f"Error displaying gate debug info: {str(e)}")
 
-    async def _execute_corridor_shifts(self, intensity: int, target_region: str = None) -> Dict:
-        """Execute corridor shifts based on intensity"""
+    @galaxy_group.command(name="debug_dormant_corridors", description="Diagnose dormant corridor accessibility issues")
+    async def debug_dormant_corridors(self, interaction: discord.Interaction):
+        """Debug dormant corridors that appear on galaxy map but aren't accessible"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("This command requires administrator permissions.", ephemeral=True)
+            return
+            
+        await interaction.response.defer()
+        
+        try:
+            # Get character location for context
+            character = self.db.execute_query(
+                "SELECT current_location FROM characters WHERE discord_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not character:
+                await interaction.followup.send("You need to be a registered character to use this command.", ephemeral=True)
+                return
+                
+            current_location_id = character[0]
+            
+            # Get location name
+            location_info = self.db.execute_query(
+                "SELECT name, location_type FROM locations WHERE location_id = ?",
+                (current_location_id,),
+                fetch='one'
+            )
+            
+            current_location_name = location_info[0] if location_info else "Unknown"
+            
+            # Check all corridors from current location
+            all_corridors = self.db.execute_query(
+                """SELECT c.corridor_id, c.name, c.is_active, c.last_shift,
+                          l.name as dest_name, l.location_type as dest_type
+                   FROM corridors c
+                   JOIN locations l ON c.destination_location = l.location_id
+                   WHERE c.origin_location = ?
+                   ORDER BY c.is_active DESC, c.name""",
+                (current_location_id,),
+                fetch='all'
+            )
+            
+            # Separate active and dormant corridors
+            active_corridors = [c for c in all_corridors if c[2] == 1]
+            dormant_corridors = [c for c in all_corridors if c[2] == 0]
+            
+            # Get overall corridor statistics
+            total_active = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1", fetch='one')[0]
+            total_dormant = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 0", fetch='one')[0]
+            
+            embed = discord.Embed(
+                title="🔍 Dormant Corridor Diagnostics",
+                description=f"**Current Location:** {current_location_name}\n**Location Type:** {location_info[1] if location_info else 'Unknown'}",
+                color=0x3498db
+            )
+            
+            # Galaxy-wide statistics
+            embed.add_field(
+                name="📊 Galaxy Statistics",
+                value=f"**Total Active Corridors:** {total_active}\n"
+                      f"**Total Dormant Corridors:** {total_dormant}\n"
+                      f"**Active/Dormant Ratio:** {total_active/(total_dormant or 1):.2f}",
+                inline=False
+            )
+            
+            # Local corridor analysis
+            if active_corridors:
+                active_list = []
+                for c in active_corridors[:5]:  # Limit to first 5
+                    shift_info = f" (Shift: {c[3][:10] if c[3] else 'Never'})" if c[3] else ""
+                    active_list.append(f"✅ **{c[1]}** → {c[4]}{shift_info}")
+                
+                if len(active_corridors) > 5:
+                    active_list.append(f"... and {len(active_corridors) - 5} more")
+                    
+                embed.add_field(
+                    name=f"🟢 Active Routes from Here ({len(active_corridors)})",
+                    value="\n".join(active_list) if active_list else "None",
+                    inline=False
+                )
+            
+            if dormant_corridors:
+                dormant_list = []
+                for c in dormant_corridors[:5]:  # Limit to first 5
+                    shift_info = f" (Shift: {c[3][:10] if c[3] else 'Never'})" if c[3] else ""
+                    dormant_list.append(f"⭕ **{c[1]}** → {c[4]}{shift_info}")
+                
+                if len(dormant_corridors) > 5:
+                    dormant_list.append(f"... and {len(dormant_corridors) - 5} more")
+                    
+                embed.add_field(
+                    name=f"🌫️ Dormant Routes from Here ({len(dormant_corridors)})",
+                    value="\n".join(dormant_list) if dormant_list else "None",
+                    inline=False
+                )
+                
+                # Analysis of dormant corridors
+                analysis = []
+                recent_shift_count = sum(1 for c in dormant_corridors if c[3] and 
+                                       (datetime.now() - datetime.fromisoformat(c[3])).days < 7)
+                                       
+                analysis.append(f"**Recent Shifts (7 days):** {recent_shift_count}/{len(dormant_corridors)}")
+                
+                if dormant_corridors:
+                    analysis.append("**Issue:** These dormant corridors are visible but inaccessible in travel menus")
+                    analysis.append("**Expected:** When visible, dormant corridors should function like active ones")
+                
+                embed.add_field(
+                    name="🔍 Analysis",
+                    value="\n".join(analysis),
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="🌫️ Dormant Routes from Here",
+                    value="No dormant corridors found from this location",
+                    inline=False
+                )
+            
+            embed.set_footer(text=f"Diagnostic run at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            await interaction.followup.send(f"Error running dormant corridor diagnostics: {str(e)}")
+
+    @galaxy_group.command(name="activate_dormant_corridors", description="Manually activate dormant corridors for better connectivity")
+    @app_commands.describe(
+        intensity="How many dormant corridors to activate (1-5, higher = more activations)"
+    )
+    async def activate_dormant_corridors(self, interaction: discord.Interaction, intensity: int = 2):
+        """Manually activate dormant corridors that should be accessible"""
+        
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("This command requires administrator permissions.", ephemeral=True)
+            return
+            
+        if intensity < 1 or intensity > 5:
+            await interaction.response.send_message("Intensity must be between 1 and 5.", ephemeral=True)
+            return
+            
+        await interaction.response.defer()
+        
+        try:
+            # Get all dormant corridors (excluding local space routes)
+            dormant_corridors = self.db.execute_query(
+                """SELECT corridor_id, name, origin_location, destination_location 
+                   FROM corridors 
+                   WHERE is_active = 0
+                   AND name NOT LIKE '%Approach%' 
+                   AND name NOT LIKE '%Arrival%' 
+                   AND name NOT LIKE '%Departure%'
+                   AND name NOT LIKE '%Local Space%'""",
+                fetch='all'
+            )
+            
+            if not dormant_corridors:
+                await interaction.followup.send("No dormant corridors found to activate.")
+                return
+            
+            # Calculate how many to activate based on intensity
+            max_activations = len(dormant_corridors) // (6 - intensity)
+            actual_activations = min(max_activations, len(dormant_corridors))
+            
+            if actual_activations == 0:
+                actual_activations = min(1, len(dormant_corridors))  # Activate at least 1 if possible
+            
+            # Randomly select corridors to activate
+            corridors_to_activate = random.sample(dormant_corridors, actual_activations)
+            
+            activated_list = []
+            affected_locations = set()
+            
+            for corridor in corridors_to_activate:
+                # Check if activation would improve connectivity
+                self.db.execute_query(
+                    "UPDATE corridors SET is_active = 1 WHERE corridor_id = ?",
+                    (corridor[0],)
+                )
+                
+                activated_list.append(corridor[1])
+                affected_locations.add(corridor[2])
+                affected_locations.add(corridor[3])
+                print(f"🟢 Manually activated corridor: {corridor[1]}")
+            
+            # Update last shift timestamp for activated corridors
+            corridor_ids = [c[0] for c in corridors_to_activate]
+            if corridor_ids:
+                self.db.execute_query(
+                    "UPDATE corridors SET last_shift = datetime('now') WHERE corridor_id IN ({})".format(
+                        ','.join('?' * len(corridor_ids))
+                    ),
+                    corridor_ids
+                )
+            
+            embed = discord.Embed(
+                title="🟢 Dormant Corridors Activated",
+                description=f"Successfully activated {len(activated_list)} dormant corridors for improved galaxy connectivity.",
+                color=0x27ae60
+            )
+            
+            if len(activated_list) <= 10:
+                embed.add_field(
+                    name="📍 Activated Routes",
+                    value="\n".join([f"• {name}" for name in activated_list]),
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="📍 Activated Routes",
+                    value="\n".join([f"• {name}" for name in activated_list[:10]]) + f"\n... and {len(activated_list) - 10} more",
+                    inline=False
+                )
+            
+            embed.add_field(
+                name="📊 Impact",
+                value=f"**Corridors Activated:** {len(activated_list)}\n"
+                      f"**Locations Affected:** {len(affected_locations)}\n"
+                      f"**Remaining Dormant:** {len(dormant_corridors) - len(activated_list)}",
+                inline=False
+            )
+            
+            embed.set_footer(text="These corridors are now accessible in travel menus")
+            
+            await interaction.followup.send(embed=embed)
+            
+            # Notify players about the changes
+            await self._notify_travelers_of_activations(activated_list, affected_locations)
+            
+        except Exception as e:
+            await interaction.followup.send(f"Error activating dormant corridors: {str(e)}")
+
+    async def _notify_travelers_of_activations(self, activated_corridors: list, affected_locations: set):
+        """Notify players about newly activated corridors"""
+        if not activated_corridors:
+            return
+            
+        # Find players in affected locations
+        travelers = self.db.execute_query(
+            f"""SELECT DISTINCT c.discord_id, l.name as location_name
+                FROM characters c
+                JOIN locations l ON c.current_location = l.location_id
+                WHERE c.current_location IN ({','.join(['?'] * len(affected_locations))})""",
+            list(affected_locations),
+            fetch='all'
+        )
+        
+        if travelers:
+            print(f"🌌 Notified {len(travelers)} travelers about {len(activated_corridors)} newly activated corridors")
+
+    async def _execute_corridor_shifts(self, intensity: int, target_region: str = None, shift_type: str = "mixed") -> Dict:
+        """Execute corridor shifts based on intensity - Enhanced with non-blocking operations"""
+        import asyncio
+        
+        # MEMORY LEAK FIX: Monitor database connections
+        initial_connections = self.db.get_active_connection_count()
+        print(f"🔍 Starting corridor shift - Initial DB connections: {initial_connections}")
         
         results = {
             'activated': 0,
             'deactivated': 0, 
             'new_dormant': 0,
+            'destinations_changed': 0,
             'affected_locations': set()
         }
         
-        # Get all corridors, EXCLUDING local space routes
-        active_corridors = self.db.execute_query(
-            """SELECT corridor_id, name, origin_location, destination_location 
-               FROM corridors 
-               WHERE is_active = 1 
-               AND name NOT LIKE '%Approach%' 
-               AND name NOT LIKE '%Arrival%' 
-               AND name NOT LIKE '%Departure%'""",
-            fetch='all'
-        )
+        # Get all corridors in a single batch operation
+        corridor_queries = [
+            ("""SELECT corridor_id, name, origin_location, destination_location, travel_time, fuel_cost, danger_level
+                FROM corridors 
+                WHERE is_active = 1 
+                AND name NOT LIKE '%Approach%' 
+                AND name NOT LIKE '%Arrival%' 
+                AND name NOT LIKE '%Departure%'
+                AND name NOT LIKE '%Local Space%'""", 'active'),
+            ("""SELECT corridor_id, name, origin_location, destination_location, travel_time, fuel_cost, danger_level
+                FROM corridors 
+                WHERE is_active = 0
+                AND name NOT LIKE '%Approach%' 
+                AND name NOT LIKE '%Arrival%' 
+                AND name NOT LIKE '%Departure%'
+                AND name NOT LIKE '%Local Space%'""", 'dormant'),
+            ("SELECT COUNT(*) FROM locations", 'count')
+        ]
         
-        dormant_corridors = self.db.execute_query(
-            """SELECT corridor_id, name, origin_location, destination_location 
-               FROM corridors 
-               WHERE is_active = 0
-               AND name NOT LIKE '%Approach%' 
-               AND name NOT LIKE '%Arrival%' 
-               AND name NOT LIKE '%Departure%'""",
-            fetch='all'
-        )
+        # Execute queries concurrently
+        active_corridors, dormant_corridors, total_locations = await self._execute_queries_batch(corridor_queries)
+        total_locations = total_locations[0] if total_locations else 0
         
-        # Calculate number of changes based on intensity
-        max_deactivations = min(len(active_corridors) // (6 - intensity), len(active_corridors) // 3)
-        max_activations = min(len(dormant_corridors) // (6 - intensity), len(dormant_corridors) // 2)
+        # Yield control to allow other operations
+        await asyncio.sleep(0.02)  # Increased yield time
         
-        # IMPORTANT: Ensure we don't activate more than we deactivate to prevent map bloat
-        # This maintains balance in the total number of active corridors
-        actual_deactivations = random.randint(max(1, max_deactivations // 2), max_deactivations)
-        actual_activations = random.randint(0, min(actual_deactivations, max_activations))
-        
-        # Deactivate some active corridors
-        corridors_to_deactivate = random.sample(active_corridors, 
-                                              min(actual_deactivations, len(active_corridors)))
-        
-        for corridor in corridors_to_deactivate:
-            # Don't deactivate if it would completely isolate a location
-            if not self._would_isolate_location(corridor[0], corridor[2], corridor[3]):
-                self.db.execute_query(
-                    "UPDATE corridors SET is_active = 0 WHERE corridor_id = ?",
-                    (corridor[0],)
-                )
-                results['deactivated'] += 1
-                results['affected_locations'].add(corridor[2])
-                results['affected_locations'].add(corridor[3])
-                print(f"🔴 Deactivated corridor: {corridor[1]}")
-        
-        # Activate some dormant corridors (never more than we deactivated)
-        if dormant_corridors and results['deactivated'] > 0:
-            num_to_activate = min(actual_activations, results['deactivated'], len(dormant_corridors))
-            corridors_to_activate = random.sample(dormant_corridors, num_to_activate)
+        # Execute different shift types based on selection
+        if shift_type in ["mixed", "shuffle"]:
+            # NEW FEATURE: Destination shuffling for active corridors
+            await self._shuffle_corridor_destinations(active_corridors, intensity, results)
             
-            for corridor in corridors_to_activate:
-                self.db.execute_query(
-                    "UPDATE corridors SET is_active = 1 WHERE corridor_id = ?",
-                    (corridor[0],)
-                )
-                results['activated'] += 1
-                results['affected_locations'].add(corridor[2])
-                results['affected_locations'].add(corridor[3])
-                print(f"🟢 Activated corridor: {corridor[1]}")
+            # Additional yield after shuffling to prevent database locks
+            await asyncio.sleep(0.02)
         
-        # Only replenish dormant corridors if we're running low
-        # This prevents the total corridor count from growing infinitely
-        current_dormant_count = len(dormant_corridors) - results['activated']
-        total_locations = self.db.execute_query(
-            "SELECT COUNT(*) FROM locations",
-            fetch='one'
-        )[0]
+        batch_operations = []
         
-        # Only add new dormant corridors if we have fewer than locations * 2
-        if current_dormant_count < total_locations * 2:
-            # Generate some new dormant corridors, but not too many
-            replenish_amount = min(intensity, max(0, (total_locations - current_dormant_count) // 4))
-            if replenish_amount > 0:
-                await self._replenish_dormant_corridors(replenish_amount)
-                results['new_dormant'] = replenish_amount
-        
-        # Update last shift timestamp for all affected corridors
-        affected_ids = [c[0] for c in corridors_to_deactivate[:results['deactivated']]]
-        affected_ids.extend([c[0] for c in corridors_to_activate[:results['activated']]])
-        
-        if affected_ids:
-            self.db.execute_query(
-                "UPDATE corridors SET last_shift = datetime('now') WHERE corridor_id IN ({})".format(
-                    ','.join('?' * len(affected_ids))
-                ),
-                affected_ids
+        if shift_type in ["mixed", "routes"]:
+            # Calculate balanced changes based on intensity - scale properly for large galaxies
+            corridor_pool_factor = min(len(active_corridors), len(dormant_corridors)) // (10 - intensity)
+            intensity_multiplier = intensity * (2 + intensity)  # More aggressive scaling: 1->3, 2->8, 3->15, 4->24, 5->35
+            base_changes = max(corridor_pool_factor, intensity_multiplier)
+            variance = max(1, int(base_changes * 0.3))  # 30% variance, minimum 1
+            
+            actual_deactivations = random.randint(
+                max(1, base_changes - variance), 
+                min(base_changes + variance, len(active_corridors))
             )
+            actual_activations = random.randint(
+                max(1, base_changes - variance), 
+                min(base_changes + variance, len(dormant_corridors))
+            )
+            
+            # Smart Corridor Redistribution: Conservation-based entropy shifts
+            redistribution_pairs = await self._calculate_smart_redistribution(
+                active_corridors, dormant_corridors, actual_deactivations, actual_activations
+            )
+            
+            # 3% chance of regional isolation during shifts
+            isolated_regions = []
+            if random.random() < 0.03 and intensity >= 3:  # Only at higher intensities
+                isolated_regions = await self._apply_regional_isolation()
+            
+            # Build redistribution batch operations
+            for deactivate_corridor, activate_corridor in redistribution_pairs:
+                # Deactivate old corridor
+                if not self._would_isolate_location(deactivate_corridor[0], deactivate_corridor[2], deactivate_corridor[3]):
+                    batch_operations.append(
+                        ("UPDATE corridors SET is_active = 0, last_shift = datetime('now') WHERE corridor_id = ?", 
+                         (deactivate_corridor[0],), 'deactivate', deactivate_corridor)
+                    )
+                    
+                    # Activate replacement corridor if available
+                    if activate_corridor:
+                        batch_operations.append(
+                            ("UPDATE corridors SET is_active = 1, last_shift = datetime('now') WHERE corridor_id = ?", 
+                             (activate_corridor[0],), 'activate', activate_corridor)
+                        )
+            
+            # Yield control to prevent database locks during preparation
+            await asyncio.sleep(0.02)
+        
+        # Execute all updates in batches to prevent blocking
+        await self._execute_corridor_updates_batch(batch_operations, results, intensity)
+        
+        # Handle dormant corridor replenishment based on shift type
+        if shift_type in ["mixed", "new"]:
+            current_dormant_count = len(dormant_corridors) - results['activated']
+            target_threshold = total_locations * 2 if shift_type == "mixed" else total_locations
+            
+            if current_dormant_count < target_threshold:
+                base_replenish = max(0, (total_locations - current_dormant_count) // 4)
+                if shift_type == "new":
+                    # For "new" type, create more dormant corridors
+                    replenish_amount = min(intensity * 2, base_replenish * 2)
+                else:
+                    # For "mixed" type, use normal amount
+                    replenish_amount = min(intensity, base_replenish)
+                
+                if replenish_amount > 0:
+                    await self._replenish_dormant_corridors(replenish_amount)
+                    results['new_dormant'] = replenish_amount
+        
+        # MEMORY LEAK FIX: Clear affected_locations set to release references
+        if 'affected_locations' in results:
+            # Convert set to count for return value before clearing
+            affected_count = len(results['affected_locations'])
+            results['affected_locations'].clear()  # Clear the set to free memory
+            results['affected_locations_count'] = affected_count  # Store count instead
+        
+        # MEMORY LEAK FIX: Monitor database connections after completion
+        final_connections = self.db.get_active_connection_count()
+        total_elapsed = time.time() - start_time if 'start_time' in locals() else 0
+        print(f"🔍 Corridor shift complete - Final DB connections: {final_connections} - Total time: {total_elapsed:.1f}s")
+        if final_connections > initial_connections:
+            print(f"⚠️ WARNING: Database connection leak detected! Increased by {final_connections - initial_connections}")
+        
+        print(f"🌌 Corridor shift results: +{results['activated']} -{results['deactivated']} ~{results['destinations_changed']} new:{results['new_dormant']}")
+        
+        # Execute the same 4-step post-shift cleanup sequence as manual admin commands
+        # This ensures automatic shifts follow the exact same validation rules as manual ones
+        print("🔧 Starting post-shift cleanup sequence (following manual command order)...")
+        
+        # Step 1: Fix routes (approach/arrival/departure routes) - matches /galaxy fix_routes
+        try:
+            print("🔧 Step 1/4: Fixing routes...")
+            route_fixes = await self._execute_fix_routes_logic()
+            
+            # Force database sync after route fixes
+            await asyncio.sleep(0.05)  # Small delay to ensure WAL completion
+            
+            if route_fixes['total_fixed'] > 0:
+                print(f"   ✅ Fixed {route_fixes['total_fixed']} route issues")
+                results['route_fixes'] = route_fixes['total_fixed']
+            else:
+                print("   ✅ All routes validated")
+        except Exception as e:
+            print(f"   ⚠️ Step 1 failed: {e}")
+        
+        # Step 2: Fix corridor types - matches /galaxy fix_corridor_types  
+        try:
+            print("🔧 Step 2/4: Fixing corridor types...")
+            
+            # Get corridor type counts before classification 
+            before_counts = self.db.execute_query("""
+                SELECT corridor_type, COUNT(*) as count
+                FROM corridors 
+                GROUP BY corridor_type
+            """, fetch='all')
+            
+            self.db._classify_existing_corridors()
+            
+            # Force database sync after classification
+            await asyncio.sleep(0.05)  # Ensure classification completes
+            
+            # Get corridor type counts after classification to show changes
+            after_counts = self.db.execute_query("""
+                SELECT corridor_type, COUNT(*) as count
+                FROM corridors 
+                GROUP BY corridor_type
+            """, fetch='all')
+            
+            # Calculate and log changes
+            before_dict = {ct: count for ct, count in before_counts}
+            after_dict = {ct: count for ct, count in after_counts}
+            
+            changes = []
+            for corridor_type in ['local_space', 'gated', 'ungated']:
+                before = before_dict.get(corridor_type, 0)
+                after = after_dict.get(corridor_type, 0)
+                if before != after:
+                    changes.append(f"{corridor_type}: {before}→{after}")
+            
+            if changes:
+                print(f"   ✅ Corridor types corrected: {', '.join(changes)}")
+                results['type_corrections'] = len(changes)
+            else:
+                print("   ✅ All corridor types already correctly classified")
+        except Exception as e:
+            print(f"   ⚠️ Step 2 failed: {e}")
+        
+        # Step 3: Fix gate architecture - matches /galaxy fix_gate_architecture
+        try:
+            print("🔧 Step 3/4: Fixing gate architecture...")
+            from utils.architecture_validator import ArchitectureValidator
+            validator = ArchitectureValidator(self.db)
+            fixes = await validator.validate_and_fix_architecture(silent=True)
+            
+            # Force database sync after architecture fixes
+            await asyncio.sleep(0.05)  # Ensure architecture fixes complete
+            
+            total_fixes = sum(fixes.values())
+            if total_fixes > 0:
+                print(f"   ✅ Applied {total_fixes} architecture fixes")
+                results['architecture_fixes'] = total_fixes
+            else:
+                print("   ✅ No architecture violations found")
+        except Exception as e:
+            print(f"   ⚠️ Step 3 failed: {e}")
+        
+        # Step 4: Fix long routes - matches /create fix_long_routes
+        try:
+            print("🔧 Step 4/4: Fixing long routes...")
+            creation_cog = self.bot.get_cog('CreationCog')
+            if creation_cog:
+                long_route_fixes = await creation_cog._execute_fix_long_routes_logic()
+                if long_route_fixes and long_route_fixes.get('routes_fixed', 0) > 0:
+                    print(f"   ✅ Fixed {long_route_fixes['routes_fixed']} long routes")
+                    results['long_route_fixes'] = long_route_fixes['routes_fixed']
+                else:
+                    print("   ✅ All route times validated")
+            else:
+                # Fallback to internal long route fix if CreationCog not available
+                long_route_results = await self._fix_overly_long_routes()
+                if long_route_results['routes_fixed'] > 0:
+                    print(f"   ✅ Fixed {long_route_results['routes_fixed']} long routes (fallback)")
+                    results['long_route_fixes'] = long_route_results['routes_fixed']
+                else:
+                    print("   ✅ All route times validated (fallback)")
+                    
+            # Final database sync to ensure all changes are committed
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            print(f"   ⚠️ Step 4 failed: {e}")
+        
+        # Log cleanup summary
+        cleanup_summary = []
+        if results.get('route_fixes', 0) > 0:
+            cleanup_summary.append(f"{results['route_fixes']} routes fixed")
+        if results.get('type_corrections', 0) > 0:
+            cleanup_summary.append(f"{results['type_corrections']} type corrections")
+        if results.get('architecture_fixes', 0) > 0:
+            cleanup_summary.append(f"{results['architecture_fixes']} architecture fixes")
+        if results.get('long_route_fixes', 0) > 0:
+            cleanup_summary.append(f"{results['long_route_fixes']} long route fixes")
+        
+        if cleanup_summary:
+            print(f"✅ Post-shift cleanup complete: {', '.join(cleanup_summary)}")
+        else:
+            print("✅ Post-shift cleanup complete - no fixes needed, all rules already followed!")
+        
+        return results
+    
+    async def _execute_queries_batch(self, queries: list) -> tuple:
+        """Execute multiple queries in batch to reduce database lock time"""
+        import asyncio
+        
+        results = []
+        for i, (query, query_type) in enumerate(queries):
+            # Yield control between EVERY query to prevent blocking
+            await asyncio.sleep(0.01)  # Increased from 0.001 to give more time
+            
+            try:
+                result = self.db.execute_query(query, fetch='all' if query_type != 'count' else 'one')
+                results.append(result)
+                
+                # Extra yield after database-intensive queries
+                if query_type == 'active' or query_type == 'dormant':
+                    await asyncio.sleep(0.02)
+                    
+            except Exception as e:
+                print(f"⚠️ Query failed in batch: {e}")
+                results.append([] if query_type != 'count' else [0])
+                await asyncio.sleep(0.05)  # Wait longer on errors
+        
+        return tuple(results)
+    
+    async def _execute_corridor_updates_batch(self, operations: list, results: dict, intensity: int):
+        """Execute corridor updates in small batches to prevent database hangs"""
+        import asyncio
+        
+        batch_size = 3  # REDUCED: Process only 3 corridors at a time to prevent locks
+        
+        for i in range(0, len(operations), batch_size):
+            batch = operations[i:i + batch_size]
+            
+            # Process each operation individually with frequent yielding
+            for j, (query, params, operation_type, corridor) in enumerate(batch):
+                try:
+                    # Execute query with quick commit to release database lock
+                    self.db.execute_query(query, params)
+                    
+                    if operation_type == 'deactivate':
+                        results['deactivated'] += 1
+                        # MEMORY LEAK FIX: Limit set size to prevent unbounded growth
+                        if len(results['affected_locations']) < 1000:  # Maximum 1000 locations
+                            results['affected_locations'].add(corridor[2])
+                            results['affected_locations'].add(corridor[3])
+                        print(f"🔴 Deactivated corridor: {corridor[1]}")
+                    elif operation_type == 'activate':
+                        results['activated'] += 1
+                        # MEMORY LEAK FIX: Limit set size to prevent unbounded growth
+                        if len(results['affected_locations']) < 1000:  # Maximum 1000 locations
+                            results['affected_locations'].add(corridor[2])
+                            results['affected_locations'].add(corridor[3])
+                        print(f"🟢 Activated corridor: {corridor[1]}")
+                    
+                    # Yield after EVERY single database operation
+                    await asyncio.sleep(0.01)
+                    
+                except Exception as e:
+                    print(f"⚠️ Error updating corridor {corridor[1]}: {e}")
+                    await asyncio.sleep(0.02)  # Wait longer on database errors
+            
+            # Additional yield after each batch to ensure other bot operations can run
+            await asyncio.sleep(0.02)
+        
+        # Simulate gate movements for gates affected by corridor shifts
+        affected_gates = set()
+        for _, _, operation_type, corridor in operations:
+            # Add both endpoints of deactivated corridors
+            origin_loc = self.db.execute_query(
+                "SELECT location_type FROM locations WHERE location_id = ?", 
+                (corridor[2],), fetch='one'
+            )
+            dest_loc = self.db.execute_query(
+                "SELECT location_type FROM locations WHERE location_id = ?", 
+                (corridor[3],), fetch='one'
+            )
+            
+            if origin_loc and origin_loc[0] == 'gate':
+                affected_gates.add(corridor[2])
+            if dest_loc and dest_loc[0] == 'gate':
+                affected_gates.add(corridor[3])
+        
+        if affected_gates:
+            gate_results = await self._simulate_gate_movements_for_affected(list(affected_gates), intensity)
+            print(f"🚪 Gate movements: {gate_results['gates_abandoned']} gates affected by corridor shifts")
+        
+        # MEMORY LEAK FIX: Explicit cleanup after batch operations
+        del operations  # Clear the operations list to free memory
+        affected_gates.clear()  # Clear the set to free memory
         
         return results
 
+    async def _shuffle_corridor_destinations(self, active_corridors: list, intensity: int, results: dict):
+        """
+        Shuffle corridor destinations to completely change the galaxy's route system.
+        This is the core enhancement - corridors stay active but lead to different places!
+        """
+        import asyncio
+        import time
+        
+        if not active_corridors:
+            return
+        
+        
+        # Progress tracking for large operations
+        start_time = time.time()
+        
+        # Calculate how many corridors to shuffle based on intensity - reduced for better gameplay
+        total_corridors = len(active_corridors)
+        shuffle_percentage = 0.05 + (intensity * 0.08)  # 5% to 45% based on intensity 1-5 (much lower)
+        corridors_to_shuffle = int(total_corridors * shuffle_percentage)
+        
+        # Ensure minimum of 1 and don't exceed available corridors
+        corridors_to_shuffle = max(1, min(corridors_to_shuffle, total_corridors))
+        
+        print(f"🔀 Shuffling destinations for {corridors_to_shuffle}/{total_corridors} corridors (intensity {intensity})")
+        
+        # Get all possible destinations (excluding local space connections)
+        try:
+            all_destinations = self.db.execute_query(
+                """SELECT location_id, name, location_type, x_coord, y_coord 
+                   FROM locations 
+                   WHERE location_type IN ('colony', 'space_station', 'outpost', 'gate')
+                   ORDER BY location_id""",
+                fetch='all'
+            )
+            print(f"🎯 Loaded {len(all_destinations)} destinations for shuffling")
+        except Exception as e:
+            print(f"❌ Failed to fetch destinations: {e}")
+            return
+        
+        # Yield control
+        await asyncio.sleep(0.01)
+        
+        if len(all_destinations) < 2:
+            print("⚠️ Not enough destinations for shuffling")
+            return
+            
+        # Select random corridors to shuffle
+        corridors_to_shuffle_list = random.sample(active_corridors, corridors_to_shuffle)
+        
+        # OPTIMIZATION: Pre-fetch ALL origin location data in one bulk query
+        origin_ids = [corridor[2] for corridor in corridors_to_shuffle_list]  # corridor[2] is origin_location
+        origin_ids_str = ','.join(map(str, origin_ids))
+        
+        origin_data = {}
+        try:
+            origin_locations = self.db.execute_query(
+                f"""SELECT location_id, x_coord, y_coord, system_name, location_type 
+                   FROM locations 
+                   WHERE location_id IN ({origin_ids_str})""",
+                fetch='all'
+            )
+            for loc_id, x, y, system, location_type in origin_locations:
+                origin_data[loc_id] = {'x': x, 'y': y, 'system': system, 'type': location_type}
+            print(f"⚡ Pre-loaded {len(origin_data)} origin locations for fast processing")
+        except Exception as e:
+            print(f"❌ Bulk origin fetch failed: {e}")
+            return
+        
+        # Prepare batch operations for corridor updates
+        shuffle_operations = []
+        
+        # OPTIMIZATION: Get all destination systems in one bulk query
+        dest_ids = [dest[0] for dest in all_destinations]
+        dest_ids_str = ','.join(map(str, dest_ids))
+        
+        destination_systems = {}
+        try:
+            dest_system_data = self.db.execute_query(
+                f"""SELECT location_id, system_name 
+                   FROM locations 
+                   WHERE location_id IN ({dest_ids_str})""",
+                fetch='all'
+            )
+            for loc_id, system in dest_system_data:
+                destination_systems[loc_id] = system
+            print(f"🗺️ Organized {len(destination_systems)} destinations by system for fast lookups")
+        except Exception as e:
+            print(f"❌ Destination systems fetch failed: {e}")
+            return
+        
+        # Pre-organize destinations by system for O(1) lookups
+        destination_by_system = {}
+        location_data = {}
+        for dest_id, dest_name, dest_type, dest_x, dest_y in all_destinations:
+            location_data[dest_id] = {
+                'name': dest_name,
+                'type': dest_type,
+                'x': dest_x,
+                'y': dest_y
+            }
+            
+            system_name = destination_systems.get(dest_id)
+            if system_name:
+                if system_name not in destination_by_system:
+                    destination_by_system[system_name] = []
+                destination_by_system[system_name].append((dest_id, dest_name, dest_type, dest_x, dest_y))
+        
+        # Process corridors in micro-batches with aggressive yielding for large operations
+        batch_size = 1  # Process just 1 corridor at a time for maximum non-blocking
+        processed_count = 0
+        
+        for i in range(0, len(corridors_to_shuffle_list), batch_size):
+            batch = corridors_to_shuffle_list[i:i + batch_size]
+            
+            # Progress reporting every 50 corridors for large operations
+            if processed_count % 50 == 0 and processed_count > 0:
+                progress_pct = (processed_count / len(corridors_to_shuffle_list)) * 100
+                elapsed = time.time() - start_time
+                rate = processed_count / elapsed if elapsed > 0 else 0
+                eta = (len(corridors_to_shuffle_list) - processed_count) / rate if rate > 0 else 0
+                print(f"🔀 Shuffle progress: {processed_count}/{len(corridors_to_shuffle_list)} ({progress_pct:.1f}%) - {rate:.1f}/sec - ETA: {eta:.0f}s")
+            
+            for corridor in batch:
+                corridor_id, name, origin_id, old_dest_id, travel_time, fuel_cost, danger_level = corridor
+                
+                # OPTIMIZATION: Use pre-fetched origin data instead of querying
+                origin_info = origin_data.get(origin_id)
+                if not origin_info:
+                    processed_count += 1
+                    continue
+                
+                origin_x, origin_y, origin_system, origin_type = origin_info['x'], origin_info['y'], origin_info['system'], origin_info['type']
+                
+                # OPTIMIZATION: Use pre-organized destinations by system for faster lookups
+                valid_destinations = []
+                for system_name, destinations in destination_by_system.items():
+                    if system_name != origin_system:  # Different system
+                        for dest_id, dest_name, dest_type, dest_x, dest_y in destinations:
+                            if dest_id != origin_id and dest_id != old_dest_id:
+                                valid_destinations.append((dest_id, dest_name, dest_type, dest_x, dest_y))
+                
+                if not valid_destinations:
+                    processed_count += 1
+                    continue
+                
+                # Filter destinations based on origin type to maintain proper gate logic
+                if origin_type == 'gate':
+                    # Gates should heavily prioritize connecting to other gates (gated corridors)
+                    gate_destinations = [dest for dest in valid_destinations if dest[2] == 'gate']
+                    
+                    # 85% chance to connect to another gate if available, 15% chance for ungated connection
+                    if gate_destinations and random.random() < 0.85:
+                        valid_destinations = gate_destinations
+                    else:
+                        # Rare ungated connection - remove other gates to avoid gate-to-gate ungated
+                        valid_destinations = [dest for dest in valid_destinations if dest[2] != 'gate']
+                
+                elif origin_type in ['colony', 'space_station', 'outpost']:
+                    # Non-gate locations should rarely connect to gates via ungated corridors
+                    gate_destinations = [dest for dest in valid_destinations if dest[2] == 'gate']
+                    non_gate_destinations = [dest for dest in valid_destinations if dest[2] != 'gate']
+                    
+                    # Only 10% chance for major locations to connect to gates ungated, 90% to other major locations
+                    if gate_destinations and non_gate_destinations and random.random() < 0.10:
+                        valid_destinations = gate_destinations
+                    elif non_gate_destinations:
+                        valid_destinations = non_gate_destinations
+                
+                if not valid_destinations:
+                    processed_count += 1
+                    continue
+                
+                # Pick new destination and calculate parameters
+                new_dest_id, new_dest_name, new_dest_type, new_dest_x, new_dest_y = random.choice(valid_destinations)
+                distance = ((new_dest_x - origin_x) ** 2 + (new_dest_y - origin_y) ** 2) ** 0.5
+                
+                # Adjust travel time and fuel cost based on new distance
+                new_travel_time = max(180, int(200 + distance * 15))  # Minimum 3 minutes
+                new_fuel_cost = max(10, int(15 + distance * 2))
+                
+                # Slightly randomize danger level
+                new_danger_level = max(1, min(5, danger_level + random.randint(-1, 1)))
+                
+                # Determine correct corridor type for new connection
+                new_corridor_type = self._determine_corridor_type(origin_id, new_dest_id, name)
+                
+                # Add to shuffle operations batch
+                shuffle_operations.append({
+                    'corridor_id': corridor_id,
+                    'name': name,
+                    'new_dest_id': new_dest_id,
+                    'new_dest_name': new_dest_name,
+                    'new_travel_time': new_travel_time,
+                    'new_fuel_cost': new_fuel_cost,
+                    'new_danger_level': new_danger_level,
+                    'new_corridor_type': new_corridor_type,
+                    'origin_id': origin_id,
+                    'old_dest_id': old_dest_id
+                })
+                
+                processed_count += 1
+            
+            # Smart yielding - only yield every 10 corridors to reduce overhead
+            if processed_count % 10 == 0:
+                await asyncio.sleep(0.001)  # Minimal yield for responsiveness
+        
+        # Execute all shuffle operations in batches
+        await self._execute_shuffle_operations_batch(shuffle_operations, results)
+    
+    async def _execute_shuffle_operations_batch(self, operations: list, results: dict):
+        """Execute corridor destination shuffles in batches to prevent database hangs"""
+        import asyncio
+        
+        batch_size = 50  # OPTIMIZATION: Process 50 operations at a time for better performance
+        operation_count = 0
+        
+        for i in range(0, len(operations), batch_size):
+            batch = operations[i:i + batch_size]
+            
+            # Progress reporting for large shuffle operations
+            if operation_count % 100 == 0 and operation_count > 0:
+                progress_pct = (operation_count / len(operations)) * 100
+                print(f"📝 Executing shuffle operations: {operation_count}/{len(operations)} ({progress_pct:.1f}%)")
+            
+            for op in batch:
+                try:
+                    # Update the corridor with new destination, parameters, and correct corridor type
+                    self.db.execute_query(
+                        """UPDATE corridors 
+                           SET destination_location = ?, travel_time = ?, fuel_cost = ?, danger_level = ?, corridor_type = ?, last_shift = datetime('now')
+                           WHERE corridor_id = ?""",
+                        (op['new_dest_id'], op['new_travel_time'], op['new_fuel_cost'], 
+                         op['new_danger_level'], op['new_corridor_type'], op['corridor_id'])
+                    )
+                    
+                    # Yield after main update to prevent blocking
+                    await asyncio.sleep(0.01)
+                    
+                    # Check for bidirectional corridors
+                    is_bidirectional = self.db.execute_query(
+                        "SELECT is_bidirectional FROM corridors WHERE corridor_id = ?",
+                        (op['corridor_id'],), fetch='one'
+                    )
+                    
+                    # Yield after query
+                    await asyncio.sleep(0.005)
+                    
+                    if is_bidirectional and is_bidirectional[0]:
+                        # Find the reverse corridor and update it too
+                        reverse_corridor = self.db.execute_query(
+                            """SELECT corridor_id FROM corridors 
+                               WHERE origin_location = ? AND destination_location = ? AND corridor_id != ?""",
+                            (op['old_dest_id'], op['origin_id'], op['corridor_id']), fetch='one'
+                        )
+                        
+                        # Yield after query
+                        await asyncio.sleep(0.005)
+                        
+                        if reverse_corridor:
+                            # Determine corridor type for reverse direction 
+                            reverse_corridor_type = self._determine_corridor_type(op['new_dest_id'], op['origin_id'], op['name'])
+                            
+                            self.db.execute_query(
+                                """UPDATE corridors 
+                                   SET origin_location = ?, travel_time = ?, fuel_cost = ?, danger_level = ?, corridor_type = ?, last_shift = datetime('now')
+                                   WHERE corridor_id = ?""",
+                                (op['new_dest_id'], op['new_travel_time'], op['new_fuel_cost'], 
+                                 op['new_danger_level'], reverse_corridor_type, reverse_corridor[0])
+                            )
+                            
+                            # Yield after reverse update
+                            await asyncio.sleep(0.01)
+                    
+                    # Track the change
+                    results['destinations_changed'] += 1
+                    # MEMORY LEAK FIX: Limit set size to prevent unbounded growth
+                    if len(results['affected_locations']) < 1000:  # Maximum 1000 locations
+                        results['affected_locations'].add(op['origin_id'])
+                        results['affected_locations'].add(op['old_dest_id'])
+                        results['affected_locations'].add(op['new_dest_id'])
+                    
+                    # Detailed logging for large operations (reduced frequency)
+                    if operation_count % 200 == 0:
+                        print(f"🔀 Shuffled {op['name']}: -> {op['new_dest_name']}")
+                    
+                    operation_count += 1
+                    
+                except Exception as e:
+                    print(f"⚠️ Error shuffling corridor {op['name']}: {e}")
+                    operation_count += 1
+                    await asyncio.sleep(0.02)  # Wait longer on errors
+            
+            # Yield control after each batch to prevent blocking
+            await asyncio.sleep(0.01)  # Yield after batch for responsiveness
+        
+        elapsed_time = time.time() - start_time if 'start_time' in locals() else 0
+        rate = len(operations) / elapsed_time if elapsed_time > 0 else 0
+        print(f"✅ Destination shuffle complete: {results['destinations_changed']} corridors redirected in {elapsed_time:.1f}s ({rate:.1f}/sec)")
+        
+        # MEMORY LEAK FIX: Explicit cleanup after shuffle operations
+        del operations  # Clear the operations list to free memory
+
     def _would_isolate_location(self, corridor_id: int, origin_id: int, dest_id: int) -> bool:
-        """Check if deactivating a corridor would completely isolate a location"""
+        """Check if deactivating a corridor would completely isolate a location or break gate connectivity"""
         
         # Count active connections for both endpoints
         origin_connections = self.db.execute_query(
@@ -3485,39 +6529,697 @@ class GalaxyGeneratorCog(commands.Cog):
             fetch='one'
         )[0]
         
-        # Don't allow isolation
-        return origin_connections <= 1 or dest_connections <= 1
-
-    async def _replenish_dormant_corridors(self, intensity: int):
-        """Create new dormant corridors to maintain future shift potential"""
-        
-        all_locations = self.db.execute_query(
-            "SELECT location_id, name, location_type, x_coord, y_coord, wealth_level FROM locations",
+        # Don't allow complete isolation
+        if origin_connections <= 1 or dest_connections <= 1:
+            return True
+            
+        # Special protection for gates - check if either endpoint is a gate
+        gate_info = self.db.execute_query(
+            "SELECT location_id, location_type, gate_status FROM locations WHERE location_id IN (?, ?)",
+            (origin_id, dest_id),
             fetch='all'
         )
         
-        # Convert to dict format
-        locations = []
-        for loc_id, name, loc_type, x, y, wealth in all_locations:
-            locations.append({
-                'id': loc_id,
-                'name': name, 
-                'type': loc_type,
-                'x_coord': x,
-                'y_coord': y,
-                'wealth_level': wealth
-            })
+        for location_id, location_type, gate_status in gate_info:
+            if location_type == 'gate' and gate_status == 'active':
+                # Check if this gate would lose all gated corridors (inter-system routes)
+                remaining_gated = self.db.execute_query(
+                    """SELECT COUNT(*) FROM corridors c
+                       JOIN locations lo ON c.origin_location = lo.location_id
+                       JOIN locations ld ON c.destination_location = ld.location_id
+                       WHERE (c.origin_location = ? OR c.destination_location = ?)
+                       AND c.is_active = 1 AND c.corridor_id != ?
+                       AND c.corridor_type = 'gated'
+                       AND lo.system_name != ld.system_name""",
+                    (location_id, location_id, corridor_id),
+                    fetch='one'
+                )[0]
+                
+                # Protect gates that would lose their last gated route
+                if remaining_gated == 0:
+                    return True
+                    
+        return False
+
+    async def _calculate_smart_redistribution(self, active_corridors, dormant_corridors, target_deactivations, target_activations):
+        """Calculate conservation-based corridor redistribution pairs to maintain connectivity"""
         
-        # Create additional dormant corridors based on intensity
-        target_new_dormant = intensity * random.randint(3, 8)
-        created = 0
+        redistribution_pairs = []
+        used_dormant = set()
         
-        for _ in range(target_new_dormant * 2):  # Try more attempts than needed
-            if created >= target_new_dormant:
+        # Separate gated and ungated corridors for smart pairing
+        active_gated = [c for c in active_corridors if self._is_gated_corridor(c[0])]
+        active_ungated = [c for c in active_corridors if not self._is_gated_corridor(c[0])]
+        dormant_gated = [c for c in dormant_corridors if self._is_gated_corridor(c[0])]
+        dormant_ungated = [c for c in dormant_corridors if not self._is_gated_corridor(c[0])]
+        
+        print(f"🔄 Smart redistribution: {len(active_gated)} active gated, {len(dormant_gated)} dormant gated available")
+        
+        deactivations_made = 0
+        max_attempts = target_deactivations * 3  # More attempts than needed
+        
+        for attempt in range(max_attempts):
+            if deactivations_made >= target_deactivations:
                 break
                 
-            # Pick two random locations
-            loc_a, loc_b = random.sample(locations, 2)
+            # Choose corridor to deactivate (prefer gated for better redistribution)
+            if active_gated and random.random() < 0.7:  # 70% chance to pick gated
+                corridor_to_deactivate = random.choice(active_gated)
+                active_gated.remove(corridor_to_deactivate)
+                replacement_pool = dormant_gated
+            else:
+                if active_ungated:
+                    corridor_to_deactivate = random.choice(active_ungated)
+                    active_ungated.remove(corridor_to_deactivate)
+                    replacement_pool = dormant_ungated
+                else:
+                    continue
+            
+            # Find smart replacement: prioritize maintaining connectivity for same gates
+            corridor_id, name, origin_id, dest_id = corridor_to_deactivate[:4]
+            replacement_corridor = None
+            
+            # Look for replacement that maintains connectivity for either endpoint
+            for candidate in replacement_pool:
+                cand_id, cand_name, cand_origin, cand_dest = candidate[:4]
+                if cand_id in used_dormant:
+                    continue
+                    
+                # Prefer corridors that maintain connectivity for same gates
+                if cand_origin == origin_id or cand_dest == dest_id or cand_origin == dest_id or cand_dest == origin_id:
+                    replacement_corridor = candidate
+                    break
+            
+            # If no perfect match, pick any available replacement
+            if not replacement_corridor:
+                available_candidates = [c for c in replacement_pool if c[0] not in used_dormant]
+                if available_candidates:
+                    replacement_corridor = random.choice(available_candidates)
+            
+            # Create redistribution pair
+            if replacement_corridor:
+                used_dormant.add(replacement_corridor[0])
+                replacement_pool = [c for c in replacement_pool if c[0] != replacement_corridor[0]]
+            
+            redistribution_pairs.append((corridor_to_deactivate, replacement_corridor))
+            deactivations_made += 1
+        
+        print(f"🔄 Created {len(redistribution_pairs)} redistribution pairs ({deactivations_made} corridors to shift)")
+        return redistribution_pairs
+
+    async def _apply_regional_isolation(self):
+        """Apply 3% chance regional isolation by cutting external corridors from random systems"""
+        
+        # Get all systems with gates
+        systems_with_gates = self.db.execute_query(
+            """SELECT DISTINCT system_name, COUNT(*) as gate_count 
+               FROM locations 
+               WHERE location_type = 'gate' AND system_name IS NOT NULL 
+               GROUP BY system_name 
+               HAVING gate_count > 0""",
+            fetch='all'
+        )
+        
+        if not systems_with_gates:
+            return []
+        
+        # Pick 1-2 systems to isolate (small chance, big impact)
+        num_to_isolate = min(2, max(1, len(systems_with_gates) // 20))  # ~5% of systems max
+        systems_to_isolate = random.sample(systems_with_gates, num_to_isolate)
+        
+        isolated_regions = []
+        
+        for system_name, gate_count in systems_to_isolate:
+            # Get all gates in this system
+            system_gates = self.db.execute_query(
+                "SELECT location_id FROM locations WHERE system_name = ? AND location_type = 'gate'",
+                (system_name,),
+                fetch='all'
+            )
+            
+            if not system_gates:
+                continue
+            
+            gate_ids = [gate[0] for gate in system_gates]
+            
+            # Deactivate ALL external corridors from this system (cross-system gated routes)
+            external_corridors_deactivated = 0
+            for gate_id in gate_ids:
+                # Find and deactivate gated corridors to other systems
+                external_corridors = self.db.execute_query(
+                    """SELECT c.corridor_id FROM corridors c
+                       JOIN locations lo ON c.origin_location = lo.location_id
+                       JOIN locations ld ON c.destination_location = ld.location_id
+                       WHERE (c.origin_location = ? OR c.destination_location = ?)
+                       AND c.corridor_type = 'gated' 
+                       AND c.is_active = 1
+                       AND lo.system_name != ld.system_name""",
+                    (gate_id, gate_id),
+                    fetch='all'
+                )
+                
+                for (corridor_id,) in external_corridors:
+                    self.db.execute_query(
+                        "UPDATE corridors SET is_active = 0, last_shift = datetime('now') WHERE corridor_id = ?",
+                        (corridor_id,)
+                    )
+                    external_corridors_deactivated += 1
+            
+            if external_corridors_deactivated > 0:
+                isolated_regions.append(system_name)
+                print(f"🌀 REGIONAL ISOLATION: {system_name} system cut off from galaxy ({external_corridors_deactivated} external routes severed)")
+        
+        return isolated_regions
+
+    def _is_gated_corridor(self, corridor_id):
+        """Check if a corridor is a gated corridor (gate-to-gate, cross-system)"""
+        corridor_info = self.db.execute_query(
+            """SELECT c.corridor_type, lo.location_type as origin_type, ld.location_type as dest_type,
+                      lo.system_name as origin_system, ld.system_name as dest_system
+               FROM corridors c
+               JOIN locations lo ON c.origin_location = lo.location_id
+               JOIN locations ld ON c.destination_location = ld.location_id
+               WHERE c.corridor_id = ?""",
+            (corridor_id,),
+            fetch='one'
+        )
+        
+        if not corridor_info:
+            return False
+            
+        corridor_type, origin_type, dest_type, origin_system, dest_system = corridor_info
+        
+        # Gated corridors: gate-to-gate, cross-system, or explicitly marked as gated
+        return (corridor_type == 'gated' or 
+                (origin_type == 'gate' and dest_type == 'gate' and origin_system != dest_system))
+
+    async def _validate_and_repair_gate_connectivity(self) -> Dict:
+        """Validate gate connectivity and repair isolated gates by activating dormant corridors"""
+        
+        repair_results = {
+            'gates_repaired': 0,
+            'corridors_activated': 0,
+            'gates_checked': 0
+        }
+        
+        # Find all active gates and check their gated corridor connections
+        isolated_gates = self.db.execute_query(
+            """SELECT g.location_id, g.name, g.system_name,
+                      COUNT(CASE WHEN c.corridor_type = 'gated' AND c.is_active = 1 
+                                 AND lo.system_name != ld.system_name THEN 1 END) as gated_routes
+               FROM locations g
+               LEFT JOIN corridors c ON (c.origin_location = g.location_id OR c.destination_location = g.location_id)
+               LEFT JOIN locations lo ON c.origin_location = lo.location_id
+               LEFT JOIN locations ld ON c.destination_location = ld.location_id
+               WHERE g.location_type = 'gate' AND g.gate_status = 'active'
+               GROUP BY g.location_id, g.name, g.system_name
+               HAVING gated_routes = 0""",
+            fetch='all'
+        )
+        
+        repair_results['gates_checked'] = len(isolated_gates)
+        
+        for gate_id, gate_name, gate_system, gated_routes in isolated_gates:
+            # Find dormant gated corridors connected to this gate
+            dormant_gated = self.db.execute_query(
+                """SELECT c.corridor_id, c.name, c.origin_location, c.destination_location
+                   FROM corridors c
+                   JOIN locations lo ON c.origin_location = lo.location_id
+                   JOIN locations ld ON c.destination_location = ld.location_id
+                   WHERE (c.origin_location = ? OR c.destination_location = ?)
+                   AND c.is_active = 0
+                   AND c.corridor_type = 'gated'
+                   AND lo.system_name != ld.system_name
+                   LIMIT 2""",  # Activate up to 2 gated routes per isolated gate
+                (gate_id, gate_id),
+                fetch='all'
+            )
+            
+            if dormant_gated:
+                for corridor_id, corridor_name, origin_id, dest_id in dormant_gated:
+                    # Activate the dormant gated corridor
+                    self.db.execute_query(
+                        "UPDATE corridors SET is_active = 1, last_shift = datetime('now') WHERE corridor_id = ?",
+                        (corridor_id,)
+                    )
+                    repair_results['corridors_activated'] += 1
+                
+                repair_results['gates_repaired'] += 1
+                print(f"🔧 Repaired isolated gate: {gate_name} - activated {len(dormant_gated)} gated routes")
+        
+        return repair_results
+
+    async def _validate_routing_complexity(self) -> Dict:
+        """Validate that routing remains complex after shifts and break overly direct routes"""
+        
+        complexity_results = {
+            'routes_broken': 0,
+            'paths_analyzed': 0
+        }
+        
+        # Sample some distant location pairs to check for overly direct routes
+        all_major_locations = self.db.execute_query(
+            "SELECT location_id, name, x_coord, y_coord, system_name FROM locations WHERE location_type IN ('colony', 'space_station', 'outpost')",
+            fetch='all'
+        )
+        
+        if len(all_major_locations) < 4:
+            return complexity_results
+        
+        # Test routing complexity for random distant pairs
+        test_pairs = min(10, len(all_major_locations) // 5)  # Test 10 pairs or 20% of locations
+        sampled_pairs = []
+        
+        for _ in range(test_pairs * 3):  # More attempts to find good test pairs
+            if len(sampled_pairs) >= test_pairs:
+                break
+                
+            loc_a, loc_b = random.sample(all_major_locations, 2)
+            loc_a_id, loc_a_name, loc_a_x, loc_a_y, loc_a_system = loc_a
+            loc_b_id, loc_b_name, loc_b_x, loc_b_y, loc_b_system = loc_b
+            
+            # Only test cross-system pairs (should require multiple hops)
+            if loc_a_system == loc_b_system:
+                continue
+                
+            # Only test reasonably distant pairs
+            distance = math.sqrt((loc_a_x - loc_b_x) ** 2 + (loc_a_y - loc_b_y) ** 2)
+            if distance < 50:  # Too close
+                continue
+                
+            sampled_pairs.append((loc_a, loc_b, distance))
+        
+        # Analyze routing complexity for each pair
+        for loc_a, loc_b, distance in sampled_pairs:
+            loc_a_id, loc_a_name, loc_a_x, loc_a_y, loc_a_system = loc_a
+            loc_b_id, loc_b_name, loc_b_x, loc_b_y, loc_b_system = loc_b
+            
+            complexity_results['paths_analyzed'] += 1
+            
+            # Check if there are any ungated corridors that make this too direct
+            direct_ungated = self.db.execute_query(
+                """SELECT c.corridor_id FROM corridors c
+                   WHERE ((c.origin_location = ? AND c.destination_location = ?) OR
+                          (c.origin_location = ? AND c.destination_location = ?))
+                   AND c.corridor_type = 'ungated' 
+                   AND c.is_active = 1""",
+                (loc_a_id, loc_b_id, loc_b_id, loc_a_id),
+                fetch='all'
+            )
+            
+            # If there's a direct ungated route over long distance, consider breaking it (entropy)
+            if direct_ungated and distance > 80:
+                for (corridor_id,) in direct_ungated:
+                    if random.random() < 0.4:  # 40% chance to break overly direct long routes
+                        self.db.execute_query(
+                            "UPDATE corridors SET is_active = 0, last_shift = datetime('now') WHERE corridor_id = ?",
+                            (corridor_id,)
+                        )
+                        complexity_results['routes_broken'] += 1
+            
+            # Check for too many parallel gated routes between same systems
+            if distance > 100:  # Only for very distant locations
+                # Count active gated routes between these systems
+                parallel_gated = self.db.execute_query(
+                    """SELECT COUNT(*) FROM corridors c
+                       JOIN locations lo ON c.origin_location = lo.location_id
+                       JOIN locations ld ON c.destination_location = ld.location_id
+                       WHERE lo.system_name = ? AND ld.system_name = ?
+                       AND c.corridor_type = 'gated' AND c.is_active = 1""",
+                    (loc_a_system, loc_b_system),
+                    fetch='one'
+                )[0]
+                
+                # If too many parallel routes, deactivate some (entropy effect)
+                if parallel_gated > 3:  # More than 3 parallel gated routes
+                    excess_routes = self.db.execute_query(
+                        """SELECT c.corridor_id FROM corridors c
+                           JOIN locations lo ON c.origin_location = lo.location_id
+                           JOIN locations ld ON c.destination_location = ld.location_id
+                           WHERE lo.system_name = ? AND ld.system_name = ?
+                           AND c.corridor_type = 'gated' AND c.is_active = 1
+                           ORDER BY RANDOM() LIMIT ?""",
+                        (loc_a_system, loc_b_system, parallel_gated - 2),  # Keep only 2 routes
+                        fetch='all'
+                    )
+                    
+                    for (corridor_id,) in excess_routes:
+                        if random.random() < 0.3:  # 30% chance to break excess parallel routes
+                            self.db.execute_query(
+                                "UPDATE corridors SET is_active = 0, last_shift = datetime('now') WHERE corridor_id = ?",
+                                (corridor_id,)
+                            )
+                            complexity_results['routes_broken'] += 1
+        
+        return complexity_results
+
+    async def _fix_overly_long_routes(self) -> Dict:
+        """Fix any routes with travel times over 15 minutes (global max)"""
+        
+        fix_results = {
+            'routes_fixed': 0,
+            'routes_checked': 0
+        }
+        
+        # Find routes over 15 minutes
+        long_routes = self.db.execute_query(
+            """SELECT corridor_id, name, origin_location, destination_location, travel_time
+               FROM corridors 
+               WHERE travel_time > 900 AND is_active = 1
+               ORDER BY travel_time DESC""",
+            fetch='all'
+        )
+        
+        fix_results['routes_checked'] = len(long_routes)
+        
+        for corridor_id, name, origin_id, dest_id, old_time in long_routes:
+            # Get location info
+            origin_info = self.db.execute_query(
+                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = ?",
+                (origin_id,), fetch='one'
+            )
+            dest_info = self.db.execute_query(
+                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = ?", 
+                (dest_id,), fetch='one'
+            )
+            
+            if not origin_info or not dest_info:
+                continue
+                
+            ox, oy, origin_type = origin_info
+            dx, dy, dest_type = dest_info
+            distance = math.sqrt((ox - dx)**2 + (oy - dy)**2)
+            
+            # Calculate new varied travel time
+            if "Approach" in name or "Arrival" in name or "Local Space" in name:
+                new_time = max(60, int(distance * 3) + 60)  # Local space: 1-3 minutes
+            elif origin_type == 'gate' and dest_type == 'gate':
+                # Gated corridors: ~8min average, 5-15min range with variation
+                approach_time, main_time = self._calculate_gated_route_times(distance)
+                new_time = main_time  # Use main corridor time for gate-to-gate
+            else:
+                # Ungated routes: ~6min average, 3-15min range with variation
+                new_time = self._calculate_ungated_route_time(distance)
+            
+            # Update the corridor
+            self.db.execute_query(
+                "UPDATE corridors SET travel_time = ? WHERE corridor_id = ?",
+                (new_time, corridor_id)
+            )
+            
+            fix_results['routes_fixed'] += 1
+        
+        return fix_results
+
+    async def _execute_fix_routes_logic(self) -> Dict:
+        """Execute the same logic as the fix_routes command - for automatic corridor shifts"""
+        return await self._fix_missing_local_space_routes()
+
+    async def _fix_missing_local_space_routes(self) -> Dict:
+        """Fix missing approach/arrival/departure routes for active gates"""
+        
+        route_fixes = {
+            'missing_approaches': 0,
+            'missing_arrivals': 0,
+            'missing_departures': 0,
+            'total_fixed': 0
+        }
+        
+        # Batch fetch all required data upfront - ONLY ACTIVE GATES
+        all_gates = self.db.execute_query(
+            """SELECT location_id, name, x_coord, y_coord 
+               FROM locations 
+               WHERE location_type = 'gate' AND gate_status = 'active'""",
+            fetch='all'
+        )
+        
+        all_major_locations = self.db.execute_query(
+            """SELECT location_id, name, x_coord, y_coord, location_type
+               FROM locations
+               WHERE location_type IN ('colony', 'space_station', 'outpost')""",
+            fetch='all'
+        )
+        
+        # Get ALL existing local space corridors in one query
+        existing_local_corridors = self.db.execute_query(
+            """SELECT origin_location, destination_location, name
+               FROM corridors
+               WHERE name LIKE '%Approach%' 
+                  OR name LIKE '%Arrival%' 
+                  OR name LIKE '%Departure%'""",
+            fetch='all'
+        )
+        
+        # Build lookup dictionaries for O(1) access
+        existing_corridors_lookup = {}
+        for origin, dest, name in existing_local_corridors:
+            key = f"{origin}-{dest}"
+            if 'Approach' in name:
+                existing_corridors_lookup[f"approach_{key}"] = True
+            elif 'Arrival' in name:
+                existing_corridors_lookup[f"arrival_{key}"] = True
+            elif 'Departure' in name:
+                existing_corridors_lookup[f"departure_{key}"] = True
+        
+        # Process each gate
+        for gate_id, gate_name, gx, gy in all_gates:
+            # Find nearest major location
+            nearest_loc = None
+            min_distance = float('inf')
+            
+            for loc_id, loc_name, lx, ly, loc_type in all_major_locations:
+                distance = math.sqrt((gx - lx) ** 2 + (gy - ly) ** 2)
+                if distance < min_distance:
+                    min_distance = distance
+                    nearest_loc = (loc_id, loc_name, lx, ly)
+            
+            if not nearest_loc:
+                continue
+                
+            loc_id, loc_name, lx, ly = nearest_loc
+            
+            # Check for missing Approach corridor
+            approach_key = f"approach_{loc_id}-{gate_id}"
+            if approach_key not in existing_corridors_lookup:
+                approach_time = int(min_distance * 3) + 60
+                fuel_cost = max(5, int(min_distance * 0.2))
+                
+                self.db.execute_query(
+                    """INSERT INTO corridors 
+                       (name, origin_location, destination_location, travel_time,
+                        fuel_cost, danger_level, corridor_type, is_active, is_generated)
+                       VALUES (?, ?, ?, ?, ?, 1, 'local_space', 1, 1)""",
+                    (f"{gate_name} Approach", loc_id, gate_id, approach_time, fuel_cost)
+                )
+                route_fixes['missing_approaches'] += 1
+            
+            # Check for missing Arrival corridor
+            arrival_key = f"arrival_{gate_id}-{loc_id}"
+            if arrival_key not in existing_corridors_lookup:
+                arrival_time = int(min_distance * 3) + 60
+                fuel_cost = max(5, int(min_distance * 0.2))
+                
+                self.db.execute_query(
+                    """INSERT INTO corridors 
+                       (name, origin_location, destination_location, travel_time,
+                        fuel_cost, danger_level, corridor_type, is_active, is_generated)
+                       VALUES (?, ?, ?, ?, ?, 1, 'local_space', 1, 1)""",
+                    (f"{gate_name} Arrival", gate_id, loc_id, arrival_time, fuel_cost)
+                )
+                route_fixes['missing_arrivals'] += 1
+        
+        # Check for missing return departures - batch fetch all gated corridors
+        gated_corridors = self.db.execute_query(
+            """SELECT DISTINCT c.corridor_id, c.name, c.origin_location, c.destination_location,
+                      lo.name as origin_name, ld.name as dest_name
+               FROM corridors c
+               JOIN locations lo ON c.origin_location = lo.location_id
+               JOIN locations ld ON c.destination_location = ld.location_id
+               WHERE lo.location_type = 'gate' 
+               AND ld.location_type = 'gate'
+               AND c.name NOT LIKE '%Return%'
+               AND c.name NOT LIKE '%Approach%'
+               AND c.name NOT LIKE '%Arrival%'
+               AND c.name NOT LIKE '%Departure%'
+               AND c.corridor_type != 'ungated'
+               AND c.is_active = 1""",
+            fetch='all'
+        )
+        
+        # Get all gate-to-location connections in one query
+        gate_connections = self.db.execute_query(
+            """SELECT c.origin_location as gate_id, c.destination_location as loc_id,
+                      l.name as loc_name, l.x_coord, l.y_coord,
+                      g.x_coord as gate_x, g.y_coord as gate_y
+               FROM corridors c
+               JOIN locations l ON c.destination_location = l.location_id
+               JOIN locations g ON c.origin_location = g.location_id
+               WHERE c.name LIKE '%Arrival%'
+               AND l.location_type != 'gate'
+               AND g.location_type = 'gate'""",
+            fetch='all'
+        )
+        
+        # Build gate connection lookup
+        gate_to_locations = {}
+        for gate_id, loc_id, loc_name, lx, ly, gx, gy in gate_connections:
+            if gate_id not in gate_to_locations:
+                gate_to_locations[gate_id] = []
+            gate_to_locations[gate_id].append((loc_id, loc_name, lx, ly, gx, gy))
+        
+        # Process return departures
+        for corridor_id, base_name, origin_gate, dest_gate, origin_name, dest_name in gated_corridors:
+            if dest_gate in gate_to_locations:
+                for loc_id, loc_name, lx, ly, gx, gy in gate_to_locations[dest_gate]:
+                    departure_name = f"{base_name} Return Departure"
+                    
+                    # Check if this specific departure exists
+                    exists = any(
+                        origin == loc_id and dest == dest_gate and departure_name in name
+                        for origin, dest, name in existing_local_corridors
+                    )
+                    
+                    if not exists:
+                        distance = math.sqrt((lx - gx) ** 2 + (ly - gy) ** 2)
+                        dep_time = int(distance * 3) + 60
+                        fuel_cost = max(5, int(distance * 0.2))
+                        
+                        self.db.execute_query(
+                            """INSERT INTO corridors 
+                               (name, origin_location, destination_location, travel_time,
+                                fuel_cost, danger_level, corridor_type, is_active, is_generated)
+                               VALUES (?, ?, ?, ?, ?, 1, 'local_space', 1, 1)""",
+                            (departure_name, loc_id, dest_gate, dep_time, fuel_cost)
+                        )
+                        route_fixes['missing_departures'] += 1
+        
+        route_fixes['total_fixed'] = route_fixes['missing_approaches'] + route_fixes['missing_arrivals'] + route_fixes['missing_departures']
+        
+        return route_fixes
+
+    async def _replenish_dormant_corridors(self, intensity: int):
+        """Create new dormant corridors to maintain future shift potential, heavily biased toward gate-to-gate routes"""
+        
+        # Get gates and major locations separately for targeted creation
+        gates = self.db.execute_query(
+            "SELECT location_id, name, x_coord, y_coord, system_name FROM locations WHERE location_type = 'gate'",
+            fetch='all'
+        )
+        
+        major_locations = self.db.execute_query(
+            "SELECT location_id, name, x_coord, y_coord, system_name, location_type FROM locations WHERE location_type IN ('colony', 'space_station', 'outpost')",
+            fetch='all'
+        )
+        
+        # Calculate how many dormant corridors to create (heavily biased toward gate-to-gate)
+        total_gates = len(gates)
+        
+        # Target ratio: for every 2-3 gates, ensure 1-4 gated corridors are available (including dormant)
+        current_gated_active = self.db.execute_query(
+            """SELECT COUNT(*) FROM corridors c
+               JOIN locations lo ON c.origin_location = lo.location_id
+               JOIN locations ld ON c.destination_location = ld.location_id
+               WHERE c.corridor_type = 'gated' AND c.is_active = 1
+               AND lo.location_type = 'gate' AND ld.location_type = 'gate'
+               AND lo.system_name != ld.system_name""",
+            fetch='one'
+        )[0]
+        
+        current_gated_dormant = self.db.execute_query(
+            """SELECT COUNT(*) FROM corridors c
+               JOIN locations lo ON c.origin_location = lo.location_id
+               JOIN locations ld ON c.destination_location = ld.location_id
+               WHERE c.corridor_type = 'gated' AND c.is_active = 0
+               AND lo.location_type = 'gate' AND ld.location_type = 'gate'
+               AND lo.system_name != ld.system_name""",
+            fetch='one'
+        )[0]
+        
+        total_gated_corridors = current_gated_active + current_gated_dormant
+        target_gated_corridors = max(total_gates // 2, total_gates * 2 // 3)  # Aim for robust connectivity
+        
+        gate_corridors_needed = max(0, target_gated_corridors - total_gated_corridors)
+        other_corridors_needed = max(1, intensity)  # Minimal non-gate corridors
+        
+        print(f"🔧 Replenishing dormant pool: need {gate_corridors_needed} more gate-to-gate, {other_corridors_needed} other routes")
+        
+        created_gated = 0
+        created_other = 0
+        
+        # Priority 1: Create gate-to-gate dormant corridors
+        if gate_corridors_needed > 0 and len(gates) >= 2:
+            for _ in range(gate_corridors_needed * 3):  # More attempts than needed
+                if created_gated >= gate_corridors_needed:
+                    break
+                
+                gate_a, gate_b = random.sample(gates, 2)
+                gate_a_id, gate_a_name, gate_a_x, gate_a_y, gate_a_system = gate_a
+                gate_b_id, gate_b_name, gate_b_x, gate_b_y, gate_b_system = gate_b
+                
+                # Only create cross-system gate connections (per rules)
+                if gate_a_system == gate_b_system:
+                    continue
+                
+                # Check if they already have any corridor between them
+                existing = self.db.execute_query(
+                    """SELECT COUNT(*) FROM corridors 
+                       WHERE (origin_location = ? AND destination_location = ?) 
+                          OR (origin_location = ? AND destination_location = ?)""",
+                    (gate_a_id, gate_b_id, gate_b_id, gate_a_id),
+                    fetch='one'
+                )[0]
+                
+                if existing > 0:
+                    continue
+                
+                distance = math.sqrt((gate_a_x - gate_b_x) ** 2 + (gate_a_y - gate_b_y) ** 2)
+                if distance > 150:  # Don't create extremely long routes
+                    continue
+                
+                # Create dormant gated corridor pair
+                corridor_name = f"{gate_a_name} - {gate_b_name} Route"
+                fuel_cost = max(15, int(distance * 1.2) + 10)
+                danger = random.randint(2, 4)  # Gated corridors are safer
+                approach_time, travel_time = self._calculate_gated_route_times(distance)
+                # Use main corridor time for gate-to-gate routes
+                
+                self.db.execute_query(
+                    '''INSERT INTO corridors 
+                       (name, origin_location, destination_location, travel_time, fuel_cost, 
+                        danger_level, corridor_type, is_active, is_generated)
+                       VALUES (?, ?, ?, ?, ?, ?, 'gated', 0, 1)''',
+                    (f"{corridor_name} (Dormant)", gate_a_id, gate_b_id, travel_time, fuel_cost, danger)
+                )
+                
+                self.db.execute_query(
+                    '''INSERT INTO corridors 
+                       (name, origin_location, destination_location, travel_time, fuel_cost, 
+                        danger_level, corridor_type, is_active, is_generated)
+                       VALUES (?, ?, ?, ?, ?, ?, 'gated', 0, 1)''',
+                    (f"{corridor_name} Return (Dormant)", gate_b_id, gate_a_id, travel_time, fuel_cost, danger)
+                )
+                
+                created_gated += 1
+        
+        # Priority 2: Create some other dormant corridors (ungated routes for variety)
+        all_locations = []
+        for gate_id, gate_name, gate_x, gate_y, gate_system in gates:
+            all_locations.append({'id': gate_id, 'name': gate_name, 'type': 'gate', 'x': gate_x, 'y': gate_y, 'system': gate_system})
+        for loc_id, loc_name, loc_x, loc_y, loc_system, loc_type in major_locations:
+            all_locations.append({'id': loc_id, 'name': loc_name, 'type': loc_type, 'x': loc_x, 'y': loc_y, 'system': loc_system})
+        
+        for _ in range(other_corridors_needed * 2):
+            if created_other >= other_corridors_needed:
+                break
+                
+            if len(all_locations) < 2:
+                break
+                
+            loc_a, loc_b = random.sample(all_locations, 2)
+            
+            # Skip if both are gates (we handled gate-to-gate above)
+            if loc_a['type'] == 'gate' and loc_b['type'] == 'gate':
+                continue
             
             # Check if they already have any corridor between them
             existing = self.db.execute_query(
@@ -3529,37 +7231,38 @@ class GalaxyGeneratorCog(commands.Cog):
             )[0]
             
             if existing > 0:
-                continue  # Already have corridor
-            
-            distance = self._calculate_distance(loc_a, loc_b)
-            if distance > 120:  # Don't create extremely long dormant corridors
                 continue
             
-            # Create dormant corridor pair
-            name = self._generate_corridor_name(loc_a, loc_b)
+            distance = math.sqrt((loc_a['x'] - loc_b['x']) ** 2 + (loc_a['y'] - loc_b['y']) ** 2)
+            if distance > 120:
+                continue
+            
+            # Create dormant ungated corridor pair
+            corridor_name = f"{loc_a['name']} - {loc_b['name']} Route"
             fuel_cost = max(10, int(distance * 0.8) + 5)
-            danger = random.randint(2, 5)
+            danger = random.randint(3, 5)  # Ungated routes are more dangerous
             travel_time = self._calculate_ungated_route_time(distance)
             
             self.db.execute_query(
                 '''INSERT INTO corridors 
                    (name, origin_location, destination_location, travel_time, fuel_cost, 
-                    danger_level, is_active, is_generated)
-                   VALUES (?, ?, ?, ?, ?, ?, 0, 1)''',
-                (f"{name} (Dormant)", loc_a['id'], loc_b['id'], 
-                 travel_time, fuel_cost, danger)
+                    danger_level, corridor_type, is_active, is_generated)
+                   VALUES (?, ?, ?, ?, ?, ?, 'ungated', 0, 1)''',
+                (f"{corridor_name} (Dormant)", loc_a['id'], loc_b['id'], travel_time, fuel_cost, danger)
             )
             
             self.db.execute_query(
                 '''INSERT INTO corridors 
                    (name, origin_location, destination_location, travel_time, fuel_cost, 
-                    danger_level, is_active, is_generated)
-                   VALUES (?, ?, ?, ?, ?, ?, 0, 1)''',
-                (f"{name} Return (Dormant)", loc_b['id'], loc_a['id'], 
-                 travel_time, fuel_cost, danger)
+                    danger_level, corridor_type, is_active, is_generated)
+                   VALUES (?, ?, ?, ?, ?, ?, 'ungated', 0, 1)''',
+                (f"{corridor_name} Return (Dormant)", loc_b['id'], loc_a['id'], travel_time, fuel_cost, danger)
             )
             
-            created += 1
+            created_other += 1
+        
+        if created_gated > 0 or created_other > 0:
+            print(f"🔧 Created {created_gated} dormant gated corridors and {created_other} dormant ungated corridors")
 
     async def _analyze_connectivity_post_shift(self) -> str:
         """Analyze connectivity after corridor shifts"""
@@ -3613,7 +7316,9 @@ class GalaxyGeneratorCog(commands.Cog):
     async def _notify_travelers_of_shifts(self, results: Dict):
         """Notify active travelers about corridor shifts"""
         
-        if not results['affected_locations']:
+        # MEMORY LEAK FIX: Handle cleared affected_locations set
+        if not results.get('affected_locations') or len(results['affected_locations']) == 0:
+            # If no affected locations or set was cleared, skip notification
             return
         
         # Find travelers who might be affected
@@ -3817,6 +7522,375 @@ class GalaxyGeneratorCog(commands.Cog):
             "shift_potential": shift_potential,
             "recommendations": recommendations_text
         }
+
+    @galaxy_group.command(name="check_density", description="Check corridor density and identify overcrowding issues")
+    async def check_corridor_density(self, interaction: discord.Interaction):
+        """Check corridor density and identify overcrowding issues"""
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            density_info = await self._check_corridor_density()
+            
+            if density_info['status'] == 'error':
+                await interaction.followup.send(
+                    f"❌ Error checking density: {density_info['message']}", 
+                    ephemeral=True
+                )
+                return
+            
+            # Create status embed
+            status_colors = {
+                'healthy': 0x00ff00,
+                'dense': 0xffa500, 
+                'overcrowded': 0xff0000
+            }
+            
+            embed = discord.Embed(
+                title="🌌 Corridor Density Analysis",
+                description=f"Galaxy corridor density status: **{density_info['status'].upper()}**",
+                color=status_colors.get(density_info['status'], 0x888888)
+            )
+            
+            # Add statistics
+            embed.add_field(
+                name="📊 Current Statistics",
+                value=f"• Total Locations: {density_info['total_locations']}\n"
+                      f"• Active Corridors: {density_info['active_corridors']}\n"
+                      f"• Dormant Corridors: {density_info['dormant_corridors']}\n"
+                      f"• Active Ratio: {density_info['active_ratio']:.1f}x locations\n"
+                      f"• Total Ratio: {density_info['total_ratio']:.1f}x locations",
+                inline=False
+            )
+            
+            # Add issues if any
+            if density_info['issues']:
+                embed.add_field(
+                    name="⚠️ Issues Detected",
+                    value="\n".join([f"• {issue}" for issue in density_info['issues']]),
+                    inline=False
+                )
+            
+            # Add recommendations
+            recommendations = []
+            if density_info['status'] == 'overcrowded':
+                recommendations.append("Use `/galaxy cleanup_corridors` to remove excess routes")
+                recommendations.append("Reduce corridor generation in future expansions")
+            elif density_info['status'] == 'dense':
+                recommendations.append("Monitor corridor growth during shifts")
+                recommendations.append("Consider selective cleanup if needed")
+            else:
+                recommendations.append("Corridor density is healthy!")
+            
+            if recommendations:
+                embed.add_field(
+                    name="💡 Recommendations",
+                    value="\n".join([f"• {rec}" for rec in recommendations]),
+                    inline=False
+                )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            print(f"❌ Error in check_corridor_density: {e}")
+            await interaction.followup.send(
+                f"❌ Error checking corridor density: {e}",
+                ephemeral=True
+            )
+
+    @galaxy_group.command(name="cleanup_corridors", description="Clean up excess corridors to reduce overcrowding")
+    @app_commands.describe(
+        max_cleanup="Maximum number of corridors to clean up (default: 50)"
+    )
+    async def cleanup_corridors(self, interaction: discord.Interaction, max_cleanup: int = 50):
+        """Clean up excess corridors to reduce overcrowding"""
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Validate max_cleanup
+            max_cleanup = max(1, min(max_cleanup, 2000))  # Clamp between 1-2000
+            
+            cleanup_result = await self._cleanup_excess_corridors(max_cleanup)
+            
+            embed = discord.Embed(
+                title="🧹 Corridor Cleanup Results",
+                color=0x00ff00 if cleanup_result['cleaned'] > 0 else 0x888888
+            )
+            
+            embed.add_field(
+                name="📊 Cleanup Summary",
+                value=f"• Corridors Cleaned: {cleanup_result['cleaned']}\n"
+                      f"• Status: {cleanup_result['message']}",
+                inline=False
+            )
+            
+            # Show before/after if cleanup occurred
+            if cleanup_result['cleaned'] > 0 and 'new_density' in cleanup_result:
+                new_density = cleanup_result['new_density']
+                embed.add_field(
+                    name="📈 Updated Statistics",
+                    value=f"• New Status: **{new_density['status'].upper()}**\n"
+                          f"• Active Corridors: {new_density['active_corridors']}\n"
+                          f"• Dormant Corridors: {new_density['dormant_corridors']}\n"
+                          f"• Active Ratio: {new_density['active_ratio']:.1f}x locations\n"
+                          f"• Total Ratio: {new_density['total_ratio']:.1f}x locations",
+                    inline=False
+                )
+                
+                if new_density['issues']:
+                    embed.add_field(
+                        name="⚠️ Remaining Issues",
+                        value="\n".join([f"• {issue}" for issue in new_density['issues']]),
+                        inline=False
+                    )
+                else:
+                    embed.add_field(
+                        name="✅ Resolution", 
+                        value="All density issues have been resolved!",
+                        inline=False
+                    )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            print(f"❌ Error in cleanup_corridors: {e}")
+            await interaction.followup.send(
+                f"❌ Error during corridor cleanup: {e}",
+                ephemeral=True
+            )
+
+    async def _check_corridor_density(self) -> Dict:
+        """Check corridor density and identify overcrowding issues"""
+        
+        # Get basic stats
+        total_locations = self.db.execute_query("SELECT COUNT(*) FROM locations", fetch='one')[0]
+        active_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1", fetch='one')[0]
+        dormant_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 0", fetch='one')[0]
+        
+        if not total_locations:
+            return {"status": "error", "message": "No locations found"}
+        
+        active_ratio = active_corridors / total_locations
+        total_ratio = (active_corridors + dormant_corridors) / total_locations
+        
+        # Check gate corridor compliance per ROUTE-LOCATION-RULES.md
+        gates = self.db.execute_query("""
+            SELECT location_id, name FROM locations 
+            WHERE location_type = 'gate'
+        """, fetch='all')
+        
+        gate_corridor_violations = 0
+        for gate_id, gate_name in gates:
+            # Count gated corridors for this gate using the new corridor_type column
+            gate_corridors = self.db.execute_query("""
+                SELECT COUNT(*) FROM corridors 
+                WHERE (origin_location = ? OR destination_location = ?) 
+                AND is_active = 1
+                AND corridor_type = 'gated'
+            """, (gate_id, gate_id), fetch='one')[0]
+            
+            # Rule: for every 2-3 active gates, no more than 1-4 gated corridors
+            if gate_corridors > 4:
+                gate_corridor_violations += 1
+        
+        # Density assessment
+        density_status = "healthy"
+        issues = []
+        
+        if active_ratio > 3:  # Too many active corridors
+            density_status = "overcrowded"
+            issues.append(f"Active corridor ratio too high: {active_ratio:.1f}x locations")
+        elif active_ratio > 2:
+            density_status = "dense"
+            issues.append(f"Active corridor density high: {active_ratio:.1f}x locations")
+        
+        if total_ratio > 5:  # Total corridors way too high
+            density_status = "overcrowded"
+            issues.append(f"Total corridor ratio excessive: {total_ratio:.1f}x locations")
+        elif total_ratio > 3:
+            if density_status == "healthy":
+                density_status = "dense"
+            issues.append(f"Total corridor count high: {total_ratio:.1f}x locations")
+        
+        if gate_corridor_violations > 0:
+            issues.append(f"{gate_corridor_violations} gates violate corridor rules")
+        
+        return {
+            "status": density_status,
+            "active_ratio": active_ratio,
+            "total_ratio": total_ratio,
+            "active_corridors": active_corridors,
+            "dormant_corridors": dormant_corridors,
+            "total_locations": total_locations,
+            "gate_violations": gate_corridor_violations,
+            "issues": issues
+        }
+
+    async def _cleanup_excess_corridors(self, max_cleanup: int = 50) -> Dict:
+        """Clean up excess corridors to reduce overcrowding"""
+        import asyncio
+        
+        density_check = await self._check_corridor_density()
+        
+        if density_check['status'] == 'healthy':
+            return {"cleaned": 0, "message": "No cleanup needed - density is healthy"}
+        
+        cleanup_count = 0
+        
+        # First: Remove dormant corridors that are too numerous
+        if density_check['total_ratio'] > 3:
+            target_dormant = int(density_check['total_locations'] * 1.5)  # Target 1.5x locations
+            excess_dormant = max(0, density_check['dormant_corridors'] - target_dormant)
+            
+            if excess_dormant > 0:
+                dormant_to_remove = min(excess_dormant, max_cleanup // 2)
+                
+                # Remove shortest/least strategic dormant corridors first
+                corridors_to_remove = self.db.execute_query("""
+                    SELECT corridor_id FROM corridors 
+                    WHERE is_active = 0 
+                    ORDER BY travel_time ASC, fuel_cost ASC
+                    LIMIT ?
+                """, (dormant_to_remove,), fetch='all')
+                
+                # Batch delete operations to prevent locks
+                if corridors_to_remove:
+                    batch_operations = []
+                    for (corridor_id,) in corridors_to_remove:
+                        batch_operations.append(("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,)))
+                    
+                    # Execute in small batches with yielding
+                    batch_size = 10
+                    for i in range(0, len(batch_operations), batch_size):
+                        batch = batch_operations[i:i + batch_size]
+                        for query, params in batch:
+                            self.db.execute_query(query, params)
+                            cleanup_count += 1
+                        
+                        # Yield control to prevent blocking
+                        await asyncio.sleep(0.01)
+        
+        # Second: Deactivate excess active corridors if still overcrowded
+        remaining_cleanup = max_cleanup - cleanup_count
+        if remaining_cleanup > 0 and density_check['active_ratio'] > 2:
+            target_active = int(density_check['total_locations'] * 2)  # Target 2x locations
+            excess_active = max(0, density_check['active_corridors'] - target_active)
+            
+            if excess_active > 0:
+                active_to_deactivate = min(excess_active, remaining_cleanup)
+                
+                # Deactivate non-critical corridors (avoid isolation)
+                corridors_to_deactivate = self.db.execute_query("""
+                    SELECT corridor_id, origin_location, destination_location FROM corridors 
+                    WHERE is_active = 1 
+                    AND corridor_type != 'local_space'
+                    ORDER BY travel_time DESC, danger_level DESC
+                    LIMIT ?
+                """, (active_to_deactivate * 2,), fetch='all')  # Get more candidates
+                
+                # Batch deactivation operations to prevent locks
+                deactivation_operations = []
+                for corridor_id, origin_id, dest_id in corridors_to_deactivate:
+                    if cleanup_count >= max_cleanup:
+                        break
+                    
+                    # Check if deactivation would isolate a location
+                    if not self._would_isolate_location(corridor_id, origin_id, dest_id):
+                        deactivation_operations.append((
+                            "UPDATE corridors SET is_active = 0, last_shift = datetime('now') WHERE corridor_id = ?",
+                            (corridor_id,)
+                        ))
+                        cleanup_count += 1
+                
+                # Execute deactivations in small batches with yielding
+                if deactivation_operations:
+                    batch_size = 10
+                    for i in range(0, len(deactivation_operations), batch_size):
+                        batch = deactivation_operations[i:i + batch_size]
+                        for query, params in batch:
+                            self.db.execute_query(query, params)
+                        
+                        # Yield control to prevent blocking
+                        await asyncio.sleep(0.01)
+        
+        return {
+            "cleaned": cleanup_count,
+            "message": f"Cleaned up {cleanup_count} excess corridors",
+            "new_density": await self._check_corridor_density()
+        }
+
+    def _determine_corridor_type(self, origin_id: int, dest_id: int, corridor_name: str) -> str:
+        """Determine if a corridor should be gated or ungated based on ROUTE-LOCATION-RULES.md"""
+        
+        # Get location types and system info for both endpoints
+        origin_data = self.db.execute_query(
+            "SELECT location_type, system_name FROM locations WHERE location_id = ?", 
+            (origin_id,), fetch='one'
+        )
+        dest_data = self.db.execute_query(
+            "SELECT location_type, system_name FROM locations WHERE location_id = ?", 
+            (dest_id,), fetch='one'
+        )
+        
+        if not origin_data or not dest_data:
+            return 'ungated'  # Default to ungated if location data missing
+            
+        origin_type, origin_system = origin_data
+        dest_type, dest_system = dest_data
+        same_system = origin_system == dest_system
+        
+        # Local space routes (name-based detection or same system connections)
+        if any(keyword in corridor_name.lower() for keyword in ['local space', 'approach', 'arrival', 'departure']):
+            return 'local_space'
+        
+        # Rules from ROUTE-LOCATION-RULES.md:
+        # - Gated corridors should ONLY connect gates to other gates
+        # - Major locations should ONLY connect to LOCAL gates via local space
+        # - Corridors (gated/ungated) should NEVER directly connect major locations to gates
+        
+        # CRITICAL FIX: Major location ↔ Gate connections must ALWAYS be local_space if in same system
+        if (origin_type in ['colony', 'space_station', 'outpost'] and dest_type == 'gate') or \
+           (origin_type == 'gate' and dest_type in ['colony', 'space_station', 'outpost']):
+            if same_system:
+                return 'local_space'  # Major location to local gate = local space ONLY
+            else:
+                # Major location to distant gate should be ungated (rare but allowed)
+                return 'ungated'
+        
+        # Gate to gate connections
+        if origin_type == 'gate' and dest_type == 'gate':
+            if same_system:
+                return 'local_space'  # Gates in same system = local space
+            else:
+                return 'gated'  # Gates in different systems = gated corridor
+        
+        # Major location to major location connections
+        else:
+            # Major location to major location = ungated (risky direct routes)
+            return 'ungated'
+
+    async def _update_corridor_types_during_activation(self, corridors_to_activate: list):
+        """Update corridor types when activating dormant corridors - now simplified with corridor_type column"""
+        
+        # Since we now have corridor_type column, we just need to ensure
+        # corridor types are correctly set when they activate (they should already be correct from creation)
+        # This function is now mainly a placeholder for future corridor type adjustments during activation
+        
+        for corridor_data in corridors_to_activate:
+            corridor_id = corridor_data[0]
+            corridor_name = corridor_data[1] 
+            origin_id = corridor_data[2]
+            dest_id = corridor_data[3]
+            
+            # Verify and update corridor type if needed
+            correct_type = self._determine_corridor_type(origin_id, dest_id, corridor_name)
+            
+            # Update the corridor_type in the database if it's incorrect
+            self.db.execute_query(
+                "UPDATE corridors SET corridor_type = ? WHERE corridor_id = ?",
+                (correct_type, corridor_id)
+            )
     async def _generate_sub_locations_for_all_locations(self, conn, all_locations: List[Dict]) -> int:
         """Generates persistent sub-locations for all locations in bulk."""
         from utils.sub_locations import SubLocationManager
@@ -3826,7 +7900,7 @@ class GalaxyGeneratorCog(commands.Cog):
         
         for location in all_locations:
             # The manager returns a list of sub-locations to be created
-            generated_subs = sub_manager.get_persistent_sub_locations_data(
+            generated_subs = await sub_manager.get_persistent_sub_locations_data(
                 location['id'], 
                 location['type'], 
                 location['wealth_level'],
@@ -4083,11 +8157,22 @@ class GalaxyGeneratorCog(commands.Cog):
         
         print(f"🌉 Creating corridor network for {len(routes)} routes...")
         
+        # Safety check: prevent excessive corridor creation
+        current_corridor_count = self.db.execute_query("SELECT COUNT(*) FROM corridors", fetch='one')[0]
+        if current_corridor_count > 1000:
+            print(f"⚠️ WARNING: {current_corridor_count} corridors already exist. Skipping creation to prevent database overload.")
+            return 0
+        
         corridors_to_insert = []
         batch_size = 50  # Smaller batches
         corridors_created = 0
         
         for i, route in enumerate(routes):
+            # Safety check: stop if we've created too many corridors
+            if current_corridor_count + corridors_created > 800:
+                print(f"⚠️ Stopping corridor creation at {corridors_created} new corridors to prevent overload.")
+                break
+                
             name = self._generate_corridor_name(route['from'], route['to'])
             loc1_id, loc2_id = route['from']['id'], route['to']['id']
             dist = route['distance']
@@ -4101,15 +8186,13 @@ class GalaxyGeneratorCog(commands.Cog):
                 approach_time, main_time = self._calculate_gated_route_times(dist)
                 gate_danger = max(1, danger - 1)
                 
+                # Reduced corridor creation: Only essential approach, main route, and arrival
                 corridors_to_insert.extend([
-                    (f"{name} Approach", loc1_id, og_id, approach_time, int(fuel*0.2), gate_danger, 1, 1),
-                    (name, og_id, dg_id, main_time, int(fuel*0.6), danger, 1, 1),
-                    (f"{name} Arrival", dg_id, loc2_id, approach_time, int(fuel*0.2), gate_danger, 1, 1),
-                    (f"{name} Return Departure", loc2_id, dg_id, approach_time, int(fuel*0.2), gate_danger, 1, 1),
-                    (f"{name} Return", dg_id, og_id, main_time, int(fuel*0.6), danger, 1, 1),
-                    (f"{name} Return Arrival", og_id, loc1_id, approach_time, int(fuel*0.2), gate_danger, 1, 1),
+                    (f"{name} Approach", loc1_id, og_id, approach_time, int(fuel*0.3), 1, 1, 1),
+                    (name, og_id, dg_id, main_time, int(fuel*0.4), danger, 1, 1),
+                    (f"{name} Arrival", dg_id, loc2_id, approach_time, int(fuel*0.3), 1, 1, 1),
                 ])
-                corridors_created += 6
+                corridors_created += 3
             else:
                 # Ungated route with 2 segments
                 ungated_time = self._calculate_ungated_route_time(dist)
@@ -4176,21 +8259,22 @@ class GalaxyGeneratorCog(commands.Cog):
             micro_conn = None
 
     def _calculate_gated_route_times(self, distance: float) -> Tuple[int, int]:
-        """Calculate travel times for gated routes (approach + main corridor) - 4-20 minute total limit"""
+        """Calculate travel times for gated routes (approach + main corridor) - Target ~8min average, max 15min"""
         
-        # Total time budget: 4-20 minutes (240-1200 seconds)
-        min_total_time = 7 * 60  # 5 minutes
-        max_total_time = 20 * 60  # 20 minutes
+        # Total time budget: 5-15 minutes (300-900 seconds) with ~8min average
+        min_total_time = 5 * 60   # 5 minutes
+        max_total_time = 15 * 60  # 15 minutes
+        target_average = 8 * 60   # 8 minutes
         
-        # Scale base time with distance but within constraints
-        distance_factor = min(distance / 50.0, 2.0)  # Cap at 2x multiplier
-        base_total_time = min_total_time + (max_total_time - min_total_time) * (distance_factor / 2.0)
+        # Scale base time with distance but bias toward target average
+        distance_factor = min(distance / 80.0, 1.0)  # Normalize to 80 units max
+        base_total_time = target_average + (max_total_time - target_average) * (distance_factor * 0.6)
         
-        # Add randomization (±25%)
-        variance = base_total_time * 0.15
+        # Add randomization (±20%) for variety
+        variance = base_total_time * 0.2
         total_time = base_total_time + random.uniform(-variance, variance)
         
-        # Clamp to 4-20 minute range
+        # Clamp to 5-15 minute range
         total_time = max(min_total_time, min(max_total_time, int(total_time)))
         
         # Split into approach (30%) and main corridor (70%)
@@ -4204,34 +8288,38 @@ class GalaxyGeneratorCog(commands.Cog):
         return approach_time, main_time
 
     def _calculate_ungated_route_time(self, distance: float) -> int:
-        """Calculate travel time for ungated routes - 4-20 minute limit"""
+        """Calculate travel time for ungated routes - Target ~6min average, max 15min (faster but riskier than gated)"""
         
-        min_time = 6 * 60  # 4 minutes
-        max_time = 18 * 60  # 18 minutes
+        min_time = 3 * 60   # 3 minutes
+        max_time = 15 * 60  # 15 minutes (global max)
+        target_average = 6 * 60  # 6 minutes
         
-        # Scale with distance
-        distance_factor = min(distance / 50.0, 2.0)  # Cap at 2x multiplier
-        base_time = min_time + (max_time - min_time) * (distance_factor / 2.0)
+        # Scale with distance but bias toward target average
+        distance_factor = min(distance / 80.0, 1.0)  # Normalize to 80 units max
+        base_time = target_average + (max_time - target_average) * (distance_factor * 0.5)
         
-        # Add randomization (±30% for ungated danger)
-        variance = base_time * 0.3
+        # Add randomization (±25% for ungated unpredictability)
+        variance = base_time * 0.25
         ungated_time = base_time + random.uniform(-variance, variance)
         
-        # Clamp to 4-20 minute range
+        # Clamp to 3-15 minute range
         ungated_time = max(min_time, min(max_time, int(ungated_time)))
         
         return int(ungated_time)
     
     def _create_corridor_segment(self, name: str, origin_id: int, dest_id: int, 
                                travel_time: int, fuel_cost: int, danger_level: int, has_gate: bool = True) -> Dict:
-        """Create a single corridor segment with gate status"""
+        """Create a single corridor segment with proper corridor type classification"""
         
-        # Save to database
+        # Determine corridor type based on name and connected locations
+        corridor_type = self._determine_corridor_type(origin_id, dest_id, name)
+        
+        # Save to database with corridor_type
         self.db.execute_query(
             '''INSERT INTO corridors 
-               (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_generated)
-               VALUES (?, ?, ?, ?, ?, ?, 1)''',
-            (name, origin_id, dest_id, travel_time, fuel_cost, danger_level)
+               (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, corridor_type, is_generated)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1)''',
+            (name, origin_id, dest_id, travel_time, fuel_cost, danger_level, corridor_type)
         )
         
         return {
@@ -4273,6 +8361,7 @@ class GalaxyGeneratorCog(commands.Cog):
     
     def _save_location_to_db(self, conn, location: Dict[str, Any]) -> int:
         """Saves a single location within a transaction and returns its new ID."""
+        print(f"🔧 DEBUG: _save_location_to_db called for {location.get('name', 'Unknown')}")
         query = '''INSERT INTO locations 
                    (name, location_type, description, wealth_level, population,
                     x_coord, y_coord, system_name, established_date, has_jobs, has_shops, has_medical, 
@@ -4287,7 +8376,11 @@ class GalaxyGeneratorCog(commands.Cog):
             location.get('has_black_market', False), location['is_generated'], 
             location.get('is_derelict', False), location.get('has_shipyard', False)
         )
-        return self.db.execute_in_transaction(conn, query, params, fetch='lastrowid')
+        print(f"🔧 DEBUG: Params prepared for {location.get('name')}: type={location['type']}")
+        print(f"🔧 DEBUG: About to execute INSERT for {location.get('name')}")
+        result = self.db.execute_in_transaction(conn, query, params, fetch='lastrowid')
+        print(f"🔧 DEBUG: INSERT completed for {location.get('name')}, got ID: {result}")
+        return result
     
     def _generate_unique_name(self, loc_type: str, used_names: set) -> str:
         """Generate a unique location name"""
@@ -5235,17 +9328,20 @@ class GalaxyGeneratorCog(commands.Cog):
             origin_id, dest_id, danger, ox, oy, dx, dy, origin_type = corridor
             
             # Determine corridor type
-            corridor_name = self.db.execute_query(
-                "SELECT name FROM corridors WHERE origin_location = ? AND destination_location = ?",
+            corridor_data = self.db.execute_query(
+                "SELECT name, corridor_type FROM corridors WHERE origin_location = ? AND destination_location = ?",
                 (origin_id, dest_id), fetch='one'
             )
-            corridor_name = corridor_name[0] if corridor_name else ""
-            
-            if "Approach" in corridor_name:
-                corridor_groups['approach'].append(corridor)
-            elif "Ungated" in corridor_name:
-                corridor_groups['ungated'].append(corridor)
+            if corridor_data:
+                corridor_name, corridor_type = corridor_data
+                if corridor_type == 'local_space' or "Approach" in corridor_name:
+                    corridor_groups['approach'].append(corridor)
+                elif corridor_type == 'ungated':
+                    corridor_groups['ungated'].append(corridor)
+                else:
+                    corridor_groups['gated'].append(corridor)
             else:
+                # Fallback for missing corridor data
                 corridor_groups['gated'].append(corridor)
         
         # Draw corridors in order: approach -> gated -> ungated (most dangerous on top)
@@ -5920,10 +10016,14 @@ class GalaxyGeneratorCog(commands.Cog):
     
     # ... (keep existing map and info commands)
     async def _generate_built_in_repeaters(self, conn, all_locations: List[Dict]) -> int:
-        """Generates built-in radio repeaters at major locations in bulk."""
+        """Generates built-in radio repeaters at major locations using batch processing."""
         repeaters_to_insert = []
+        total_created = 0
+        batch_size = 100  # Process locations in batches to avoid hanging
         
-        for location in all_locations:
+        print(f"📡 Processing {len(all_locations)} locations for repeater installation...")
+        
+        for i, location in enumerate(all_locations):
             repeater_chance = 0.0
             loc_type = location['type']
             wealth = location['wealth_level']
@@ -5941,15 +10041,23 @@ class GalaxyGeneratorCog(commands.Cog):
                     rec_range, trans_range = 8, 5
                 
                 repeaters_to_insert.append((location['id'], rec_range, trans_range))
-
-        if repeaters_to_insert:
-            query = '''INSERT INTO repeaters 
-                       (location_id, repeater_type, receive_range, transmit_range, is_active)
-                       VALUES (?, 'built_in', ?, ?, 1)'''
-            self.db.executemany_in_transaction(conn, query, repeaters_to_insert)
-            print(f"📡 Created {len(repeaters_to_insert)} built-in repeaters.")
             
-        return len(repeaters_to_insert)
+            # Process in batches to avoid hanging and provide progress updates
+            if len(repeaters_to_insert) >= batch_size or i == len(all_locations) - 1:
+                if repeaters_to_insert:
+                    query = '''INSERT INTO repeaters 
+                               (location_id, repeater_type, receive_range, transmit_range, is_active)
+                               VALUES (?, 'built_in', ?, ?, 1)'''
+                    self.db.executemany_in_transaction(conn, query, repeaters_to_insert)
+                    total_created += len(repeaters_to_insert)
+                    print(f"📡 Installed {len(repeaters_to_insert)} repeaters (batch {i//batch_size + 1}), total: {total_created}")
+                    repeaters_to_insert = []
+                
+                # Yield control back to the event loop
+                await asyncio.sleep(0)
+        
+        print(f"📡 Created {total_created} built-in repeaters total.")
+        return total_created
     async def _ensure_galactic_news_setup(self, guild: discord.Guild, galaxy_name: str):
         """Ensure galactic news channel is configured and send connection announcement"""
         
@@ -6006,14 +10114,18 @@ class GalaxyGeneratorCog(commands.Cog):
     async def _clear_existing_galaxy_data(self, conn):
         """Clear existing galaxy data in proper order to avoid foreign key constraints"""
         # Clear in reverse dependency order to avoid foreign key issues
+        print("🔧 DEBUG: Starting galaxy data clearing process...")
         
         # First, clear tables that depend on locations
+        print("🔧 DEBUG: Clearing home-related tables...")
         self.db.execute_in_transaction(conn, "DELETE FROM home_activities")
         self.db.execute_in_transaction(conn, "DELETE FROM home_interiors")
         self.db.execute_in_transaction(conn, "DELETE FROM home_market_listings")
         self.db.execute_in_transaction(conn, "DELETE FROM home_invitations")
         self.db.execute_in_transaction(conn, "DELETE FROM location_homes")
+        print("🔧 DEBUG: Home tables cleared")
         
+        print("🔧 DEBUG: Clearing location-dependent tables...")
         self.db.execute_in_transaction(conn, "DELETE FROM character_reputation")
         self.db.execute_in_transaction(conn, "DELETE FROM location_items")
         self.db.execute_in_transaction(conn, "DELETE FROM location_logs")
@@ -6027,8 +10139,10 @@ class GalaxyGeneratorCog(commands.Cog):
         self.db.execute_in_transaction(conn, "DELETE FROM location_ownership")
         self.db.execute_in_transaction(conn, "DELETE FROM location_economy")
         self.db.execute_in_transaction(conn, "DELETE FROM economic_events")
+        print("🔧 DEBUG: Location-dependent tables cleared")
         
         # Clear NPC related tables
+        print("🔧 DEBUG: Clearing NPC tables...")
         self.db.execute_in_transaction(conn, "DELETE FROM npc_respawn_queue")
         self.db.execute_in_transaction(conn, "DELETE FROM npc_inventory")
         self.db.execute_in_transaction(conn, "DELETE FROM npc_trade_inventory")
@@ -6036,30 +10150,43 @@ class GalaxyGeneratorCog(commands.Cog):
         self.db.execute_in_transaction(conn, "DELETE FROM npc_job_completions")
         self.db.execute_in_transaction(conn, "DELETE FROM static_npcs")
         self.db.execute_in_transaction(conn, "DELETE FROM dynamic_npcs")
+        print("🔧 DEBUG: NPC tables cleared")
         
         # Clear black market tables
+        print("🔧 DEBUG: Clearing black market tables...")
         self.db.execute_in_transaction(conn, "DELETE FROM black_market_items")
         self.db.execute_in_transaction(conn, "DELETE FROM black_markets")
+        print("🔧 DEBUG: Black market tables cleared")
         
         # Clear sub-locations and repeaters
+        print("🔧 DEBUG: Clearing sub-locations and repeaters...")
         self.db.execute_in_transaction(conn, "DELETE FROM sub_locations")
         self.db.execute_in_transaction(conn, "DELETE FROM repeaters")
+        print("🔧 DEBUG: Sub-locations and repeaters cleared")
         
         # Clear travel sessions that reference corridors/locations
+        print("🔧 DEBUG: Clearing travel and corridor data...")
         self.db.execute_in_transaction(conn, "DELETE FROM travel_sessions")
         self.db.execute_in_transaction(conn, "DELETE FROM corridor_events")
+        print("🔧 DEBUG: Travel and corridor events cleared")
         
         # Finally clear corridors and locations
+        print("🔧 DEBUG: Clearing main corridors and locations...")
         self.db.execute_in_transaction(conn, "DELETE FROM corridors")
         self.db.execute_in_transaction(conn, "DELETE FROM locations")
+        print("🔧 DEBUG: Main corridors and locations cleared")
         
         # Clear history and news
+        print("🔧 DEBUG: Clearing history and news...")
         self.db.execute_in_transaction(conn, "DELETE FROM galactic_history")
         self.db.execute_in_transaction(conn, "DELETE FROM news_queue")
+        print("🔧 DEBUG: History and news cleared")
         
         # Clear endgame config if exists
+        print("🔧 DEBUG: Clearing endgame config...")
         self.db.execute_in_transaction(conn, "DELETE FROM endgame_config")
         self.db.execute_in_transaction(conn, "DELETE FROM endgame_evacuations")
+        print("🔧 DEBUG: Endgame config cleared")
         
         print("🗑️ Cleared existing galaxy data in proper order")
         
@@ -6367,5 +10494,33 @@ class GalaxyGeneratorCog(commands.Cog):
         # Select random category, then random message from that category
         category = random.choice(categories)
         return random.choice(category)
+
+    async def _ensure_database_ready_for_history(self):
+        """Ensure database is ready for history generation after potential resets"""
+        try:
+            # Force WAL checkpoint to ensure any previous operations are committed
+            self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+            print("✅ WAL checkpoint completed before history generation")
+            
+            # Brief pause to allow checkpoint to complete
+            await asyncio.sleep(1.0)
+            
+            # Test database connectivity with a simple query
+            self.db.execute_query("SELECT COUNT(*) FROM locations WHERE is_generated = 1", fetch='one')
+            print("✅ Database connectivity verified for history generation")
+            
+            # Verify foreign keys are enabled
+            fk_check = self.db.execute_query("PRAGMA foreign_keys", fetch='one')
+            if fk_check and fk_check[0] == 1:
+                print("✅ Foreign key constraints verified as enabled")
+            else:
+                print("⚠️ Foreign key constraints not enabled - enabling now")
+                self.db.execute_query("PRAGMA foreign_keys=ON")
+            
+        except Exception as e:
+            print(f"⚠️ Database readiness check failed: {e}")
+            # Don't raise - let history generation attempt to proceed
+            # The history generator has its own error handling
+
 async def setup(bot):
     await bot.add_cog(GalaxyGeneratorCog(bot))

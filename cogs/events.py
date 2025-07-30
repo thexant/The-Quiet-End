@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import random
 import asyncio
 from datetime import datetime, timedelta
@@ -36,7 +37,7 @@ class EventsCog(commands.Cog):
                 self.enhanced_random_events.start()
                 
                 print("🎲 Scheduling corridor check...")
-                self.bot.loop.create_task(self._start_corridor_management_loop())
+                self._corridor_management_task = self.bot.loop.create_task(self._start_corridor_management_loop())
                 
                 print("✅ All event tasks started successfully")
                 
@@ -56,25 +57,51 @@ class EventsCog(commands.Cog):
             self.micro_events.cancel()
             self.economic_fluctuation.cancel()
             self.enhanced_random_events.cancel()
+            self.shift_change_monitor.cancel()
+            
+            # Cancel corridor management task if it exists
+            if hasattr(self, '_corridor_management_task') and self._corridor_management_task:
+                self._corridor_management_task.cancel()
         except:
             pass
     async def _start_corridor_management_loop(self):
-        """Start variable interval corridor management"""
+        """Start variable interval corridor management with persistent scheduling"""
         await self.bot.wait_until_ready()
         
         while not self.bot.is_closed(): # Use is_closed() for better shutdown handling
             try:
-                # Random interval between 3-9 hours
-                delay_hours = random.uniform(3.0, 9.0)
-                delay_seconds = delay_hours * 3600
+                # Get the next scheduled shift time from database
+                next_shift_time = self._get_next_corridor_shift_time()
+                current_time = datetime.now()
                 
-                print(f"🕐 Next corridor check scheduled in {delay_hours:.1f} hours")
+                if next_shift_time and next_shift_time > current_time:
+                    # We have a valid future scheduled time
+                    delay_seconds = (next_shift_time - current_time).total_seconds()
+                    delay_hours = delay_seconds / 3600
+                    print(f"🕐 Next corridor check scheduled for {next_shift_time.strftime('%Y-%m-%d %H:%M:%S')} ({delay_hours:.1f} hours from now)")
+                else:
+                    # No scheduled time or time has passed, calculate new random delay
+                    next_shift_time = self._calculate_next_corridor_shift_time()
+                    delay_seconds = (next_shift_time - current_time).total_seconds()
+                    delay_hours = delay_seconds / 3600
+                    print(f"🕐 New corridor check scheduled for {next_shift_time.strftime('%Y-%m-%d %H:%M:%S')} ({delay_hours:.1f} hours from now)")
                 
-                # Wait for the delay
+                # Wait for the scheduled time
                 await asyncio.sleep(delay_seconds)
                 
-                # Run corridor management
-                await self.corridor_management()
+                # Check if automatic corridor shifts are enabled (default: disabled)
+                setting_value = self.db.get_galaxy_setting("auto_corridor_shifts", "disabled")
+                auto_shifts_enabled = setting_value == "enabled"
+                
+                if auto_shifts_enabled:
+                    # Run corridor management
+                    await self.corridor_management()
+                    # Schedule the next shift after completion
+                    self._schedule_next_corridor_shift()
+                else:
+                    print("⏸️ Automatic corridor shifts are disabled - skipping scheduled management")
+                    # Still schedule next check for when shifts might be re-enabled
+                    self._schedule_next_corridor_shift()
                 
             except asyncio.CancelledError:
                 # This is expected on shutdown, so we can just break the loop
@@ -84,97 +111,166 @@ class EventsCog(commands.Cog):
                 # Wait 1 hour before retrying if there's an error
                 await asyncio.sleep(3600)
 
-    def cog_unload(self):
-        """Clean up tasks when cog is unloaded"""
-        # Cancel all background tasks correctly
-        self.corridor_management.cancel()
-        self.cleanup_tasks.cancel()
-        self.random_events.cancel()
-        self.job_generation.cancel()
-        self.micro_events.cancel()
-        self.enhanced_random_events.cancel()
-        self.shift_change_monitor.cancel()
+    def _get_next_corridor_shift_time(self) -> datetime:
+        """Get the next scheduled corridor shift time from database"""
+        try:
+            next_shift_str = self.db.get_galaxy_setting("next_corridor_shift_time", None)
+            if next_shift_str:
+                return datetime.fromisoformat(next_shift_str)
+            return None
+        except Exception as e:
+            print(f"❌ Error getting next corridor shift time: {e}")
+            return None
+    
+    def _calculate_next_corridor_shift_time(self) -> datetime:
+        """Calculate a new random corridor shift time and save it to database"""
+        try:
+            # Random interval between 3-9 hours from now
+            base_delay_hours = random.uniform(3.0, 9.0)
+            
+            # Add additional randomness to prevent patterns
+            # Add up to ±2 hours of extra randomness
+            extra_randomness = random.uniform(-2.0, 2.0)
+            
+            # Ensure we stay within reasonable bounds (1-12 hours)
+            total_delay_hours = max(1.0, min(12.0, base_delay_hours + extra_randomness))
+            
+            # Add minute-level randomness for more unpredictability
+            minute_randomness = random.randint(0, 59)
+            
+            next_shift_time = datetime.now() + timedelta(hours=total_delay_hours, minutes=minute_randomness)
+            
+            # Save to database
+            self.db.set_galaxy_setting("next_corridor_shift_time", next_shift_time.isoformat())
+            
+            return next_shift_time
+        except Exception as e:
+            print(f"❌ Error calculating next corridor shift time: {e}")
+            # Fallback to 6 hours from now
+            fallback_time = datetime.now() + timedelta(hours=6)
+            self.db.set_galaxy_setting("next_corridor_shift_time", fallback_time.isoformat())
+            return fallback_time
+    
+    def _schedule_next_corridor_shift(self):
+        """Schedule the next corridor shift"""
+        try:
+            next_shift_time = self._calculate_next_corridor_shift_time()
+            delay_hours = (next_shift_time - datetime.now()).total_seconds() / 3600
+            print(f"🔄 Next corridor shift scheduled for {next_shift_time.strftime('%Y-%m-%d %H:%M:%S')} ({delay_hours:.1f} hours from now)")
+        except Exception as e:
+            print(f"❌ Error scheduling next corridor shift: {e}")
+
     async def corridor_management(self):
-        """Periodically shift corridors and manage gate movements - now called randomly"""
+        """Periodically shift corridors and manage gate movements using proper galaxy generator logic"""
         try:
             print("🌀 Running corridor management...")
             
-            # Get all active corridors with gate status
-            corridors = self.db.execute_query(
-                '''SELECT c.corridor_id, c.name, c.last_shift, 
-                          CASE WHEN c.name LIKE '%Ungated%' THEN 0 ELSE 1 END as has_gate
-                   FROM corridors c WHERE c.is_active = 1''',
-                fetch='all'
-            )
+            # Use the galaxy generator's proper corridor shift logic
+            galaxy_cog = self.bot.get_cog('GalaxyGeneratorCog')
+            if not galaxy_cog:
+                print("❌ Galaxy generator cog not found - cannot perform corridor management")
+                return
             
-            shifts_occurred = 0
-            collapses_occurred = 0
+            # Determine shift intensity based on time since last shift and random factors
+            recent_shifts = self.db.execute_query(
+                "SELECT COUNT(*) FROM corridors WHERE last_shift > datetime('now', '-24 hours')",
+                fetch='one'
+            )[0]
             
-            for corridor_id, name, last_shift, has_gate in corridors:
-                # Calculate time since last shift
-                if last_shift:
-                    last_shift_time = datetime.fromisoformat(last_shift)
-                    hours_since_shift = (datetime.now() - last_shift_time).total_seconds() / 3600
-                else:
-                    hours_since_shift = random.uniform(12, 48)  # Random starting point
-                
-                # Base chances vary by gate status and add randomness
-                if has_gate:
-                    # Gated corridors (stable)
-                    base_shift_chance = random.uniform(3, 8)  # 3-8% base chance
-                    base_collapse_chance = random.uniform(0.2, 1.0)  # 0.2-1% base chance
-                else:
-                    # Ungated corridors (very unstable)
-                    base_shift_chance = random.uniform(12, 20)  # 12-20% base chance
-                    base_collapse_chance = random.uniform(2, 5)   # 2-5% base chance
-                
-                # Add time-based multiplier with randomness
-                time_multiplier = min(hours_since_shift / 24, random.uniform(2.5, 4.0))
-                shift_chance = base_shift_chance * time_multiplier
-                collapse_chance = base_collapse_chance * time_multiplier
-                
-                # Add random events (very small chance of sudden instability)
-                if random.random() < 0.02:  # 2% chance of random instability
-                    shift_chance *= random.uniform(2, 4)
-                    collapse_chance *= random.uniform(1.5, 3)
-                    print(f"🌀 Random instability affects {name}!")
-                
-                roll = random.uniform(0, 100)
-                
-                if roll < collapse_chance:
-                    # Corridor collapse!
-                    await self._handle_corridor_collapse(corridor_id, name)
-                    collapses_occurred += 1
-                elif roll < collapse_chance + shift_chance:
-                    # Corridor shift
-                    await self._handle_corridor_shift(corridor_id, name)
-                    shifts_occurred += 1
+            # Scale intensity based on recent activity (less recent activity = higher intensity)
+            base_intensity = max(1, min(3, 4 - (recent_shifts // 5)))
+            
+            # Add some randomness (intensity 1-3 for automatic shifts)
+            intensity = random.randint(max(1, base_intensity - 1), min(3, base_intensity + 1))
+            
+            # Randomly choose shift type with weighted preferences
+            shift_types = ["mixed", "shuffle", "routes", "new"]
+            weights = [0.4, 0.3, 0.2, 0.1]  # Mixed shifts most common
+            shift_type = random.choices(shift_types, weights=weights)[0]
+            
+            print(f"🌀 Executing automatic corridor shift - Intensity: {intensity}, Type: {shift_type}")
+            
+            # Execute the corridor shift using the galaxy generator's logic
+            results = await galaxy_cog._execute_corridor_shifts(intensity, None, shift_type)
+            
+            # Handle individual corridor collapses for very unstable corridors
+            await self._handle_random_collapses()
             
             # Random bonus events
             if random.random() < 0.1:  # 10% chance of additional random events
                 await self._random_corridor_event()
             
-            if shifts_occurred > 0 or collapses_occurred > 0:
-                print(f"Corridor events: {shifts_occurred} shifts, {collapses_occurred} collapses")
-            # After deactivating corridors, add this to handle NPC deaths
+            # Log results
+            if results:
+                total_changes = results.get('activated', 0) + results.get('deactivated', 0) + results.get('destinations_changed', 0)
+                if total_changes > 0:
+                    print(f"🌀 Automatic corridor shift complete: +{results.get('activated', 0)} -{results.get('deactivated', 0)} ~{results.get('destinations_changed', 0)} new:{results.get('new_dormant', 0)}")
+            
+            # Clear the scheduled time since we just executed a shift
+            # The main loop will schedule the next one
+            self.db.set_galaxy_setting("next_corridor_shift_time", "")
+                
+        except Exception as e:
+            print(f"Error in corridor management: {e}")
+
+    async def _handle_random_collapses(self):
+        """Handle individual corridor collapses for very unstable corridors"""
+        try:
+            # Get very unstable ungated corridors that might collapse
+            unstable_corridors = self.db.execute_query(
+                '''SELECT c.corridor_id, c.name, c.last_shift
+                   FROM corridors c 
+                   WHERE c.is_active = 1 AND c.corridor_type = 'ungated'
+                   AND c.last_shift > datetime('now', '-6 hours')''',
+                fetch='all'
+            )
+            
+            collapses_occurred = 0
+            
+            for corridor_id, name, last_shift in unstable_corridors:
+                # Calculate time since last shift
+                if last_shift:
+                    last_shift_time = datetime.fromisoformat(last_shift)
+                    hours_since_shift = (datetime.now() - last_shift_time).total_seconds() / 3600
+                else:
+                    continue
+                
+                # Higher collapse chance for recently shifted ungated corridors
+                collapse_chance = random.uniform(2, 5) * (hours_since_shift / 6)
+                
+                # Add random instability
+                if random.random() < 0.02:  # 2% chance of random instability
+                    collapse_chance *= random.uniform(1.5, 3)
+                    print(f"🌀 Random instability affects {name}!")
+                
+                if random.uniform(0, 100) < collapse_chance:
+                    await self._handle_corridor_collapse(corridor_id, name)
+                    collapses_occurred += 1
+            
+            # Handle NPC deaths from collapses
             if collapses_occurred > 0:
+                current_time = datetime.now()
                 npc_cog = self.bot.get_cog('NPCCog')
                 if npc_cog:
                     # Handle NPC deaths for each collapsed corridor
                     collapsed_corridors = self.db.execute_query(
-                        "SELECT corridor_id FROM corridors WHERE is_active = 0 AND last_shift = ?",
-                        (current_time.isoformat(),),
+                        "SELECT corridor_id FROM corridors WHERE is_active = 0 AND last_shift >= ?",
+                        (current_time.isoformat()[:19],),  # Remove microseconds for comparison
                         fetch='all'
                     )
                     
                     for corridor_tuple in collapsed_corridors:
-                        await npc_cog.handle_corridor_collapse(corridor_tuple[0])    
-                # Notify admins if there were significant changes
-                if collapses_occurred > 0:
+                        await npc_cog.handle_corridor_collapse(corridor_tuple[0])
+                
+                # Notify admins if there were significant collapses
+                if collapses_occurred > 2:
                     await self._notify_admins_of_collapses(collapses_occurred)
+                
+                print(f"💥 {collapses_occurred} corridor collapses occurred")
         
         except Exception as e:
-            print(f"Error in corridor management: {e}")
+            print(f"Error in random collapse handling: {e}")
+
     @tasks.loop(hours=6)  # Economic changes every 6 hours
     async def economic_fluctuation(self):
         """Generate economic supply and demand changes"""
@@ -190,7 +286,7 @@ class EventsCog(commands.Cog):
             
             for location_id, location_name, wealth_level, location_type in locations:
                 # 5% chance for economic change per location
-                if random.random() < 0.01:
+                if random.random() < 0.0015:
                     change_type = await self._generate_economic_change(location_id, location_name, wealth_level, location_type)
                     if change_type:
                         changes_made += 1
@@ -261,8 +357,8 @@ class EventsCog(commands.Cog):
             status = 'surplus'
             event_title = f"Market Surplus of {event_description}"
         
-        # Duration: 12-48 hours
-        duration_hours = random.randint(12, 48)
+        # Duration: 30-90 minutes for reasonable gameplay
+        duration_hours = random.uniform(0.5, 1.5)
         expire_time = datetime.now() + timedelta(hours=duration_hours)
         
         # Insert economic event
@@ -324,7 +420,7 @@ class EventsCog(commands.Cog):
             title = "Multiple Market Opportunities Detected"
             description = f"High demand situations have been identified at {len(demand_events)} locations: {', '.join(locations[:3])}{' and others' if len(locations) > 3 else ''}. Various commodities are experiencing supply shortages."
         
-        description += " Market conditions are expected to remain active for 12-48 hours."
+        description += " Market conditions are expected to remain active for 30-90 minutes."
         
         # Get all guilds with galactic updates
         guilds_with_updates = news_cog.db.execute_query(
@@ -671,13 +767,6 @@ class EventsCog(commands.Cog):
         """Wait until the bot is ready before starting the task."""
         await self.bot.wait_until_ready()
 
-    @commands.group(name="events", description="Event system management")
-    async def events_group(self, ctx):
-        if not ctx.author.guild_permissions.administrator:
-            await ctx.send("Administrator permissions required.")
-            return
-
-    
     @tasks.loop(hours=1)
     async def shift_change_monitor(self):
         """Monitors for in-game shift changes and sends announcements."""
@@ -735,29 +824,25 @@ class EventsCog(commands.Cog):
     @shift_change_monitor.before_loop
     async def before_shift_change_monitor(self):
         await self.bot.wait_until_ready()
-        
-    @commands.group(name="events", description="Event system management")
-    async def events_group(self, ctx):
-        if not ctx.author.guild_permissions.administrator:
-            await ctx.send("Administrator permissions required.")
-            return
 
+    events_group = app_commands.Group(name="events", description="Event related commands")
+    
     @events_group.command(name="trigger_corridor")
-    async def trigger_corridor_check(self, ctx):
+    async def trigger_corridor_check(self, interaction: discord.Interaction):
         """Manually trigger corridor management"""
-        if not ctx.author.guild_permissions.administrator:
-            await ctx.send("Administrator permissions required.")
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
-        await ctx.send("🌀 Triggering corridor management check...")
+        await interaction.response.send_message("🌀 Triggering corridor management check...")
         await self.corridor_management()
-        await ctx.send("✅ Corridor management completed.")
+        await interaction.followup.send("✅ Corridor management completed.")
 
     @events_group.command(name="generate_jobs")
-    async def trigger_job_generation(self, ctx, location_name: str = None):
+    async def trigger_job_generation(self, interaction: discord.Interaction, location_name: str = None):
         """Manually trigger job generation"""
-        if not ctx.author.guild_permissions.administrator:
-            await ctx.send("Administrator permissions required.")
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
         if location_name:
@@ -768,30 +853,30 @@ class EventsCog(commands.Cog):
                 fetch='one'
             )
             if not location:
-                await ctx.send(f"Location '{location_name}' not found.")
+                await interaction.response.send_message(f"Location '{location_name}' not found.", ephemeral=True)
                 return
             
-            await ctx.send(f"🎯 Generating jobs for {location_name}...")
+            await interaction.response.send_message(f"🎯 Generating jobs for {location_name}...")
             for _ in range(3):  # Generate 3 jobs
                 await self._generate_location_job(location[0], location[1], location[2])
-            await ctx.send(f"✅ Generated 3 jobs for {location_name}.")
+            await interaction.followup.send(f"✅ Generated 3 jobs for {location_name}.")
         else:
             # Generate jobs for all locations
-            await ctx.send("🔄 Triggering job generation for all locations...")
+            await interaction.response.send_message("🔄 Triggering job generation for all locations...")
             await self.job_generation()
-            await ctx.send("✅ Job generation completed.")
+            await interaction.followup.send("✅ Job generation completed.")
 
     @events_group.command(name="status")
-    async def event_status(self, ctx):
+    async def event_status(self, interaction: discord.Interaction):
         """Show event system status"""
-        if not ctx.author.guild_permissions.administrator:
-            await ctx.send("Administrator permissions required.")
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
         # Get various statistics
         total_jobs = self.db.execute_query("SELECT COUNT(*) FROM jobs WHERE is_taken = 0", fetch='one')[0]
         total_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1", fetch='one')[0]
-        gated_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1 AND name NOT LIKE '%Ungated%'", fetch='one')[0]
+        gated_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1 AND corridor_type = 'gated'", fetch='one')[0]
         ungated_corridors = total_corridors - gated_corridors
         
         recent_shifts = self.db.execute_query(
@@ -834,19 +919,80 @@ class EventsCog(commands.Cog):
         
         embed.add_field(name="🔧 Task Status", value="\n".join(task_status), inline=False)
         
+        # Check corridor shift status (default: disabled)
+        setting_value = self.db.get_galaxy_setting("auto_corridor_shifts", "disabled")
+        auto_shifts_enabled = setting_value == "enabled"
+        corridor_status = "✅ Enabled" if auto_shifts_enabled else "❌ Disabled"
+        
+        embed.add_field(name="🌀 Auto Corridor Shifts", value=corridor_status, inline=True)
+        
+        # Get next scheduled corridor shift info
+        if auto_shifts_enabled:
+            next_shift_time = self._get_next_corridor_shift_time()
+            if next_shift_time:
+                current_time = datetime.now()
+                if next_shift_time > current_time:
+                    time_until = next_shift_time - current_time
+                    hours_until = time_until.total_seconds() / 3600
+                    corridor_schedule = f"In {hours_until:.1f} hours ({next_shift_time.strftime('%H:%M:%S')})"
+                else:
+                    corridor_schedule = "Overdue - will trigger soon"
+            else:
+                corridor_schedule = "Not scheduled - will calculate on next cycle"
+        else:
+            corridor_schedule = "Disabled"
+            
         embed.add_field(
             name="⏰ Next Scheduled Events",
-            value="• Corridor Check: Random (3-9 hours)\n• Job Generation: Every 2 hours\n• Random Events: Every 2 hours\n• Micro Events: Every 45 minutes",
+            value=f"• Corridor Check: {corridor_schedule}\n• Job Generation: Every 30 minutes\n• Random Events: Every 2 hours\n• Micro Events: Every 45 minutes",
             inline=False
         )
         
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
+
+    @events_group.command(name="next_corridor")
+    async def show_next_corridor_shift(self, interaction: discord.Interaction):
+        """Show when the next corridor shift is scheduled"""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        next_shift_time = self._get_next_corridor_shift_time()
+        current_time = datetime.now()
+        
+        if next_shift_time:
+            if next_shift_time > current_time:
+                time_until = next_shift_time - current_time
+                hours_until = time_until.total_seconds() / 3600
+                status = f"⏰ Next corridor shift scheduled for **{next_shift_time.strftime('%Y-%m-%d %H:%M:%S')}**\n({hours_until:.2f} hours from now)"
+            else:
+                status = f"⚠️ Corridor shift was scheduled for **{next_shift_time.strftime('%Y-%m-%d %H:%M:%S')}** but is overdue.\nIt will trigger on the next cycle."
+        else:
+            status = "❓ No corridor shift currently scheduled.\nOne will be calculated when the management loop runs."
+        
+        # Check if auto shifts are enabled
+        auto_enabled = self.db.get_galaxy_setting("auto_corridor_shifts", "disabled") == "enabled"
+        
+        embed = discord.Embed(
+            title="🌀 Corridor Shift Schedule",
+            description=status,
+            color=0x4169E1 if auto_enabled else 0x808080
+        )
+        
+        if not auto_enabled:
+            embed.add_field(
+                name="⚠️ Auto Shifts Disabled",
+                value="Automatic corridor shifts are currently disabled. Use `/events toggle_corridor_shifts` to enable them.",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed)
 
     @events_group.command(name="force_collapse")
-    async def force_corridor_collapse(self, ctx, *, corridor_name: str):
+    async def force_corridor_collapse(self, interaction: discord.Interaction, corridor_name: str):
         """Force a specific corridor to collapse (testing/emergency)"""
-        if not ctx.author.guild_permissions.administrator:
-            await ctx.send("Administrator permissions required.")
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
         corridor = self.db.execute_query(
@@ -856,23 +1002,23 @@ class EventsCog(commands.Cog):
         )
         
         if not corridor:
-            await ctx.send(f"Active corridor '{corridor_name}' not found.")
+            await interaction.response.send_message(f"Active corridor '{corridor_name}' not found.", ephemeral=True)
             return
         
         corridor_id, full_name = corridor
-        await ctx.send(f"💥 Forcing collapse of {full_name}...")
+        await interaction.response.send_message(f"💥 Forcing collapse of {full_name}...")
         await self._handle_corridor_collapse(corridor_id, full_name)
-        await ctx.send(f"✅ {full_name} has been collapsed.")
+        await interaction.followup.send(f"✅ {full_name} has been collapsed.")
 
     @events_group.command(name="emergency_jobs")
-    async def emergency_job_burst(self, ctx, count: int = 5):
+    async def emergency_job_burst(self, interaction: discord.Interaction, count: int = 5):
         """Generate emergency jobs across the galaxy"""
-        if not ctx.author.guild_permissions.administrator:
-            await ctx.send("Administrator permissions required.")
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
             return
         
         if count < 1 or count > 20:
-            await ctx.send("Count must be between 1 and 20.")
+            await interaction.response.send_message("Count must be between 1 and 20.", ephemeral=True)
             return
         
         locations = self.db.execute_query(
@@ -881,10 +1027,10 @@ class EventsCog(commands.Cog):
         )
         
         if not locations:
-            await ctx.send("No locations available for job generation.")
+            await interaction.response.send_message("No locations available for job generation.", ephemeral=True)
             return
         
-        await ctx.send(f"🚨 Generating {count} emergency jobs across the galaxy...")
+        await interaction.response.send_message(f"🚨 Generating {count} emergency jobs across the galaxy...")
         
         jobs_generated = 0
         for _ in range(count):
@@ -897,7 +1043,51 @@ class EventsCog(commands.Cog):
                 await self._generate_stationary_job(location[0], location[1], location[2])
                 jobs_generated += 1
         
-        await ctx.send(f"✅ Generated {jobs_generated} emergency jobs!")
+        await interaction.followup.send(f"✅ Generated {jobs_generated} emergency jobs!")
+
+    @events_group.command(name="toggle_corridor_shifts")
+    async def toggle_corridor_shifts(self, interaction: discord.Interaction):
+        """Toggle automatic corridor shifts on/off"""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        # Get current state (default: disabled)
+        current_state = self.db.get_galaxy_setting("auto_corridor_shifts", "disabled")
+        
+        # Toggle the state
+        if current_state == "enabled":
+            new_state = "disabled"
+            status_emoji = "❌"
+            status_message = "**DISABLED**"
+            description = "Automatic corridor shifts have been disabled. Only admin-triggered shifts will occur."
+        else:
+            new_state = "enabled"
+            status_emoji = "✅"
+            status_message = "**ENABLED**"
+            description = "Automatic corridor shifts have been re-enabled and will resume their random schedule."
+        
+        # Save the new state
+        self.db.set_galaxy_setting("auto_corridor_shifts", new_state)
+        
+        # Send response
+        embed = discord.Embed(
+            title=f"🌀 Corridor Shifts Toggle",
+            description=f"Automatic corridor shifts are now {status_message}",
+            color=0x00ff00 if new_state == "enabled" else 0xff0000
+        )
+        embed.add_field(
+            name="Status",
+            value=f"{status_emoji} {description}",
+            inline=False
+        )
+        embed.add_field(
+            name="Note",
+            value="This setting persists across bot restarts. Manual corridor management via `/events trigger_corridor` is always available.",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed)
     async def _handle_corridor_collapse(self, corridor_id: int, corridor_name: str):
         """Handle a corridor collapse event"""
         # Get corridor info
@@ -952,11 +1142,17 @@ class EventsCog(commands.Cog):
             (corridor_id,)
         )
         
-        # For now, just log it. In a full implementation, this would:
-        # 1. Move the corridor endpoints
-        # 2. Update gate positions
-        # 3. Potentially create new route connections
         print(f"🔄 CORRIDOR SHIFT: {corridor_name}")
+        
+        # Validate and fix architecture after corridor shift
+        from utils.architecture_validator import ArchitectureValidator
+        validator = ArchitectureValidator(self.db)
+        fixes = await validator.validate_and_fix_architecture(silent=True)
+        
+        # Log any architecture fixes that were applied
+        total_fixes = sum(fixes.values())
+        if total_fixes > 0:
+            print(f"🔧 Architecture validation applied {total_fixes} fixes after corridor shift")
     async def _trigger_corridor_event(self, channel: discord.TextChannel, travelers: list, danger_level: int):
         """Trigger a random corridor event with potential death checking"""
         events = [
@@ -1010,10 +1206,8 @@ class EventsCog(commands.Cog):
                 # Apply ship damage for certain events
                 if "System" in event_name or "Malfunction" in event_name:
                     ship_damage = random.randint(1, 8)
-                    self.db.execute_query(
-                        "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                        (ship_damage, traveler_id)
-                    )
+                    if char_cog:
+                        await char_cog.update_ship_hull(traveler_id, -ship_damage, channel.guild)
         
         if affected_players:
             embed.add_field(
@@ -1113,11 +1307,12 @@ class EventsCog(commands.Cog):
             
             # If survived, apply other damage
             self.db.execute_query(
-                '''UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?),
-                   current_fuel = MAX(0, current_fuel - ?)
+                '''UPDATE ships SET current_fuel = MAX(0, current_fuel - ?)
                    WHERE owner_id = ?''',
-                (hull_loss, fuel_loss, user_id)
+                (fuel_loss, user_id)
             )
+            if guild and char_cog:
+                await char_cog.update_ship_hull(user_id, -hull_loss, guild)
             
             # Return to random nearby location (or origin)
             # For now, just clear current location (stranded)

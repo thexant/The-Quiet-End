@@ -132,9 +132,9 @@ class HelpCog(commands.Cog):
         embed.add_field(
             name="🚀 Ship Management",
             value=(
-                "`/ship interior enter` - Enter your ship's interior\n"
-                "`/ship interior leave` - Exit your ship\n"
-                "`/ship interior board <player>` - Request to board another ship\n"
+                "`/shipinterior interior enter` - Enter your ship's interior\n"
+                "`/shipinterior interior leave` - Exit your ship\n"
+                "`/shipinterior interior invite <player>` - Invite someone to board your ship\n"
                 "`/ship customize` - Customize ship appearance and upgrades\n"
                 "`/ship upgrade` - Purchase ship component upgrades\n"
                 "`/ship shipyard` - Access shipyard services\n"
@@ -176,12 +176,12 @@ class HelpCog(commands.Cog):
         embed.add_field(
             name="🎯 Quick Start Guide",
             value=(
-                "1️⃣ Create character with `/character create`\n"
-                "2️⃣ Login with `/character login`\n"
-                "3️⃣ Use `/here` for local services\n"
-                "4️⃣ Travel with `/travel go` to explore\n"
+                "1️⃣ Create character with the game panel\n"
+                "2️⃣ Login if you already have a character with the same panel\n"
+                "3️⃣ Use `/tqe` for to access the main game menu\n"
+                "4️⃣ Travel with `/tqe` > 'Location' > 'Travel' to explore\n"
                 "5️⃣ Use `/help` in location channels for specific options\n"
-                "5️⃣ Use `/logout` when you're done to ensure your character is safe!"
+                "5️⃣ Use the game panel to logout when you're done to ensure your character is safe!"
             ),
             inline=False
         )
@@ -260,9 +260,9 @@ class HelpCog(commands.Cog):
         embed.add_field(
             name="🚀 Ship Commands",
             value=(
-                "`/ship interior enter` - Enter your ship\n"
-                "`/ship interior leave` - Exit ship interior\n"
-                "`/ship interior board <player>` - Board another ship\n"
+                "`/shipinterior interior enter` - Enter your ship\n"
+                "`/shipinterior interior leave` - Exit ship interior\n"
+                "`/shipinterior interior invite <player>` - Invite someone to board your ship\n"
                 "`/ship customize` - Customize ship appearance\n"
                 "`/ship upgrade` - Purchase ship upgrades\n"
                 "`/ship shipyard` - Access shipyard services\n"
@@ -416,7 +416,7 @@ class HelpCog(commands.Cog):
         # Add ownership-specific tips
         if owner_id == interaction.user.id:
             tips.extend([
-                "🏢 You own this location! Use `/upgrade_location` to improve it",
+                "🏢 You own this location! Use `/tqe` to improve it",
                 "💰 Collect income regularly from your location",
                 "📊 Monitor your location's performance and upgrade strategically"
             ])
@@ -429,8 +429,8 @@ class HelpCog(commands.Cog):
 
         # Add log-specific tips for all locations
         tips.extend([
-            "📜 Use `/logs view` to read about this location's history",
-            "✍️ Add your own entry with `/logs add` to leave your mark"
+            "📜 Use `/tqe` and access the logbook in the location 'Services' to read about this location's history",
+            "✍️ Add your own entry to leave your mark"
         ])
         if tips:
             embed.add_field(
@@ -569,9 +569,9 @@ class HelpCog(commands.Cog):
         embed.add_field(
             name="🚀 Ship Commands",
             value=(
-                "`/ship interior enter` - Enter your ship\n"
-                "`/ship interior leave` - Exit ship interior\n"
-                "`/ship interior board <player>` - Board another ship\n"
+                "`/shipinterior interior enter` - Enter your ship\n"
+                "`/shipinterior interior leave` - Exit ship interior\n"
+                "`/shipinterior interior invite <player>` - Invite someone to board your ship\n"
                 "`/ship customize` - Customize ship appearance\n"
                 "`/ship upgrade` - Purchase ship upgrades\n"
                 "`/ship shipyard` - Access shipyard services\n"

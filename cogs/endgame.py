@@ -541,7 +541,7 @@ class EndgameCog(commands.Cog):
                 )
                 embed.add_field(name="⏰ Time to Evacuation", value="**5 MINUTES**", inline=True)
                 embed.add_field(name="☠️ Threat Level", value="**FATAL**", inline=True)
-                embed.add_field(name="🚀 Action Required", value="Use `/travel go` NOW", inline=False)
+                embed.add_field(name="🚀 Action Required", value="Use `/tqe` and travel NOW", inline=False)
                 embed.set_footer(text="Failure to evacuate will result in character death")
                 
                 try:

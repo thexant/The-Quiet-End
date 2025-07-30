@@ -1,19 +1,21 @@
 # cogs/economy.py
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import random
 from datetime import datetime, timedelta
 import math
 import asyncio
 from utils.item_effects import ItemEffectChecker
+from utils.location_effects import LocationEffectsManager
 
 class EconomyCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
         self.job_tracking_task = None
+        self.notified_jobs = set()  # Track jobs that have been notified
         # DON'T start background tasks in __init__
         
     shop_group = app_commands.Group(name="shop", description="Buy and sell items")
@@ -29,6 +31,8 @@ class EconomyCog(commands.Cog):
             try:
                 # Start background task after cog is fully loaded
                 self.job_tracking_task = self.bot.loop.create_task(self.start_job_tracking())
+                # Start batched shop refresh task (no startup delay)
+                self.batched_shop_refresh_task.start()
                 print("✅ Economy background tasks started")
             except Exception as e:
                 print(f"❌ Error starting economy tasks: {e}")
@@ -42,6 +46,10 @@ class EconomyCog(commands.Cog):
             except asyncio.CancelledError:
                 pass
             print("🔄 Job tracking task stopped")
+        
+        # Stop batched shop refresh task
+        self.batched_shop_refresh_task.cancel()
+        print("🛒 Batched shop refresh task stopped")
 
     async def start_job_tracking(self):
         """Start the job tracking background task"""
@@ -74,7 +82,10 @@ class EconomyCog(commands.Cog):
                       jt.required_duration,
                       jt.time_at_location,
                       jt.last_location_check,
-                      j.title
+                      j.title,
+                      j.location_id,
+                      j.destination_location_id,
+                      j.description
                     FROM job_tracking jt
                     JOIN jobs j ON jt.job_id = j.job_id
                     WHERE j.is_taken = 1
@@ -92,7 +103,7 @@ class EconomyCog(commands.Cog):
                 
                 for record in active_tracking:
                     try:
-                        tracking_id, job_id, user_id, start_location, required_duration, time_at_location, last_check, job_title = record
+                        tracking_id, job_id, user_id, start_location, required_duration, time_at_location, last_check, job_title, job_location_id, destination_location_id, job_description = record
                         
                         # Check if user is still at the required location
                         current_location_result = self.db.execute_query(
@@ -123,6 +134,27 @@ class EconomyCog(commands.Cog):
                             
                             print(f"✅ Updated job tracking for user {user_id} (job: {job_title[:30]}): +1.0min (total: {new_time_at_location:.1f}/{required_duration})")
                             updated_count += 1
+                            
+                            # Determine if this is a transport job
+                            title_lower = job_title.lower()
+                            desc_lower = job_description.lower() if job_description else ""
+                            
+                            if destination_location_id and destination_location_id != job_location_id:
+                                # Has a different destination location = definitely a transport job
+                                is_transport_job = True
+                            elif destination_location_id is None:
+                                # No destination set - check keywords to determine if it's a transport job (NPC-style)
+                                is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
+                                                  any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
+                            else:
+                                # destination_location_id == job_location_id = stationary job
+                                is_transport_job = False
+                            
+                            # Check if job is ready for completion and send notification
+                            # ONLY send notifications for stationary jobs - transport jobs handle notifications differently
+                            if not is_transport_job and new_time_at_location >= required_duration and job_id not in self.notified_jobs:
+                                await self._send_job_ready_notification(user_id, job_id, job_title, start_location)
+                                self.notified_jobs.add(job_id)
                         else:
                             # User not at location, just update timestamp
                             self.db.execute_query(
@@ -145,6 +177,75 @@ class EconomyCog(commands.Cog):
                 import traceback
                 traceback.print_exc()
                 await asyncio.sleep(60)  # Wait before retrying
+
+    @tasks.loop(seconds=45)  # Check every 45 seconds for batch processing
+    async def batched_shop_refresh_task(self):
+        """Continuously refresh shops in small batches to avoid database locks"""
+        try:
+            # Get shops that need refreshing (older than 2 hours or never refreshed)
+            cutoff_time = datetime.now() - timedelta(hours=2)
+            
+            shops_to_refresh = self.db.execute_query(
+                '''
+                SELECT l.location_id, l.name, l.wealth_level, l.location_type,
+                       sr.last_refreshed
+                FROM locations l
+                LEFT JOIN shop_refresh sr ON l.location_id = sr.location_id
+                WHERE sr.last_refreshed IS NULL 
+                   OR sr.last_refreshed < ?
+                ORDER BY 
+                    CASE WHEN sr.last_refreshed IS NULL THEN 0 ELSE 1 END,
+                    sr.last_refreshed ASC
+                LIMIT 5
+                ''',
+                (cutoff_time,),
+                fetch='all'
+            )
+            
+            if not shops_to_refresh:
+                return  # Nothing needs refreshing right now
+                
+            refreshed_count = 0
+            for location_id, name, wealth_level, location_type, last_refreshed in shops_to_refresh:
+                try:
+                    # Clear existing auto-generated shop items for this location (preserve player-sold items)
+                    self.db.execute_query(
+                        'DELETE FROM shop_items WHERE location_id = ? AND sold_by_player = FALSE',
+                        (location_id,)
+                    )
+                    
+                    # Generate new shop items with wealth-based quantity
+                    await self._generate_shop_items(location_id, wealth_level, location_type)
+                    
+                    # Update refresh tracking
+                    self.db.execute_query(
+                        '''INSERT OR REPLACE INTO shop_refresh (location_id, last_refreshed) 
+                           VALUES (?, CURRENT_TIMESTAMP)''',
+                        (location_id,)
+                    )
+                    
+                    refreshed_count += 1
+                    
+                    # Small delay between shops to reduce database pressure
+                    await asyncio.sleep(0.2)
+                    
+                except Exception as e:
+                    print(f"❌ Error refreshing shop for {name}: {e}")
+                    # Continue with other shops even if one fails
+            
+            if refreshed_count > 0:
+                print(f"🛒 Refreshed {refreshed_count} shop inventories (batch)")
+            
+        except Exception as e:
+            print(f"❌ Error in batched shop refresh: {e}")
+
+    @batched_shop_refresh_task.before_loop
+    async def before_batched_shop_refresh(self):
+        await self.bot.wait_until_ready()
+        # Add initial delay to avoid startup contention
+        print("🛒 Starting batched shop refresh system...")
+        await asyncio.sleep(30)  # Wait 30 seconds after bot is ready
+
     async def check_location_access_fee(self, user_id: int, location_id: int) -> tuple:
         """Check if user needs to pay a fee to access this location"""
         # Check if location is owned and has access controls
@@ -214,22 +315,37 @@ class EconomyCog(commands.Cog):
                 items_to_add.append(item_name)
         
         # Add random items based on location type and wealth
+        # Wealth affects both spawn chances and total item variety
+        wealth_multiplier = wealth_level / 5.0  # Normalize to 0.2-2.0 range for wealth 1-10
+        
         for rarity in ["common", "uncommon", "rare", "legendary"]:
             rarity_items = ItemConfig.get_items_by_rarity(rarity, exclude_exclusive=True)
             
-            # Adjust spawn chance by rarity and wealth
+            # Adjust spawn chance by rarity and wealth - more significant wealth impact
             spawn_chances = {
-                "common": 0.6 + (wealth_level * 0.02),
-                "uncommon": 0.3 + (wealth_level * 0.03), 
-                "rare": 0.1 + (wealth_level * 0.02),
-                "legendary": 0.02 + (wealth_level * 0.01)
+                "common": 0.4 + (wealth_level * 0.04),
+                "uncommon": 0.2 + (wealth_level * 0.05), 
+                "rare": 0.05 + (wealth_level * 0.03),
+                "legendary": 0.01 + (wealth_level * 0.015)
             }
             
             spawn_chance = spawn_chances.get(rarity, 0.1)
             
+            # Limit items per rarity based on wealth to prevent over-stocking
+            items_added_this_rarity = 0
+            max_items_per_rarity = {
+                "common": max(2, int(4 * wealth_multiplier)),
+                "uncommon": max(1, int(3 * wealth_multiplier)),
+                "rare": max(1, int(2 * wealth_multiplier)),
+                "legendary": max(0, int(1 * wealth_multiplier))
+            }
+            
             for item_name in rarity_items:
                 if item_name in items_to_add:
                     continue  # Already added
+                
+                if items_added_this_rarity >= max_items_per_rarity[rarity]:
+                    break  # Hit limit for this rarity
                 
                 item_def = ItemConfig.get_item_definition(item_name)
                 item_type = item_def.get("type")
@@ -240,6 +356,7 @@ class EconomyCog(commands.Cog):
                 
                 if random.random() < final_chance:
                     items_to_add.append(item_name)
+                    items_added_this_rarity += 1
         
         # Add items to shop with economic modifiers
         for item_name in items_to_add:
@@ -268,10 +385,10 @@ class EconomyCog(commands.Cog):
             metadata = ItemConfig.create_item_metadata(item_name)
             
             self.db.execute_query(
-                '''INSERT INTO shop_items (location_id, item_name, item_type, price, stock, description, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                '''INSERT INTO shop_items (location_id, item_name, item_type, price, stock, description, metadata, sold_by_player)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                 (location_id, item_name, item_def["type"], final_price, final_stock, 
-                 item_def["description"], metadata)
+                 item_def["description"], metadata, False)
             )
 
     @shop_group.command(name="list", description="View items available for purchase")
@@ -327,6 +444,34 @@ class EconomyCog(commands.Cog):
             description="Interactive shopping interface",
             color=0xffd700
         )
+        
+        # Add active location effects
+        effects_manager = LocationEffectsManager(self.db)
+        active_effects = effects_manager.get_active_effect_descriptions(char_location[0])
+        economic_modifiers = effects_manager.get_economic_modifiers(char_location[0])
+        
+        if active_effects:
+            embed.add_field(
+                name="⚡ Active Location Effects",
+                value="\n".join(active_effects),
+                inline=False
+            )
+        
+        # Show economic impact
+        price_modifier = economic_modifiers.get('price_modifier', 1.0)
+        if price_modifier != 1.0:
+            if price_modifier > 1.0:
+                embed.add_field(
+                    name="💸 Economic Impact",
+                    value=f"Prices increased by {((price_modifier - 1) * 100):.0f}% due to local conditions",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="💰 Economic Impact",
+                    value=f"Prices reduced by {((1 - price_modifier) * 100):.0f}% due to local conditions",
+                    inline=False
+                )
         
         if items:
             # Show summary of available items by category
@@ -599,7 +744,20 @@ class EconomyCog(commands.Cog):
             return
         
         item_id, actual_name, price, stock, description, item_type, metadata = item
-        total_cost = price * quantity
+        
+        # Apply location effects to pricing
+        effects_manager = LocationEffectsManager(self.db)
+        economic_modifiers = effects_manager.get_economic_modifiers(current_location)
+        
+        # Apply price modifier from location effects
+        price_modifier = economic_modifiers.get('price_modifier', 1.0)
+        modified_price = max(1, int(price * price_modifier))
+        
+        total_cost = modified_price * quantity
+        
+        # Ensure metadata exists using helper function
+        from utils.item_config import ItemConfig
+        metadata = ItemConfig.ensure_item_metadata(actual_name, metadata)
         tax_data = self.db.execute_query(
             '''SELECT fst.tax_percentage, f.faction_id, f.name
                FROM faction_sales_tax fst
@@ -609,11 +767,11 @@ class EconomyCog(commands.Cog):
             fetch='one'
         )
 
-        final_price = base_price
+        final_price = total_cost
         tax_amount = 0
         if tax_data and tax_data[0] > 0:
-            tax_amount = int(base_price * tax_data[0] / 100)
-            final_price = base_price + tax_amount
+            tax_amount = int(total_cost * tax_data[0] / 100)
+            final_price = total_cost + tax_amount
 
         # When processing purchase (after deducting money), ADD:
         if tax_amount > 0:
@@ -666,6 +824,24 @@ class EconomyCog(commands.Cog):
             description=f"Bought {quantity}x **{actual_name}** for {total_cost:,} credits",
             color=0x00ff00
         )
+        
+        # Show price effects if any
+        if price_modifier != 1.0:
+            base_cost = price * quantity
+            savings_or_extra = total_cost - base_cost
+            if savings_or_extra > 0:
+                embed.add_field(
+                    name="💸 Location Effect",
+                    value=f"Prices increased by {((price_modifier - 1) * 100):.0f}% (+{savings_or_extra:,} credits)",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="💰 Location Effect", 
+                    value=f"Prices reduced by {((1 - price_modifier) * 100):.0f}% ({savings_or_extra:,} credits)",
+                    inline=False
+                )
+        
         # In the purchase confirmation embed, ADD:
         if tax_amount > 0:
             embed.add_field(
@@ -736,8 +912,16 @@ class EconomyCog(commands.Cog):
         final_sell_price, _ = self.apply_economic_modifiers(
             base_sell_price, 1, status, price_mod, stock_mod, is_buying=False
         )
+        
+        # Apply location effects to selling price
+        effects_manager = LocationEffectsManager(self.db)
+        economic_modifiers = effects_manager.get_economic_modifiers(current_location)
+        
+        # For selling, we use the inverse of price_modifier (if buying is more expensive, selling should be too)
+        price_modifier = economic_modifiers.get('price_modifier', 1.0)
+        location_adjusted_sell_price = max(1, int(final_sell_price * price_modifier))
 
-        total_earnings = final_sell_price * quantity
+        total_earnings = location_adjusted_sell_price * quantity
         seller_faction = self.db.execute_query(
             '''SELECT fm.faction_id, f.name, f.emoji,
                       CASE WHEN lo.faction_id = fm.faction_id THEN 1 ELSE 0 END as is_faction_location
@@ -810,11 +994,13 @@ class EconomyCog(commands.Cog):
             )
         else:
             # fresh entry in the shop
+            from utils.item_config import ItemConfig
+            metadata = ItemConfig.create_item_metadata(actual_name)
             self.db.execute_query(
                 '''INSERT INTO shop_items
-                   (location_id, item_name, item_type, price, stock, description)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (current_location, actual_name, item_type, markup_price, quantity, description)
+                   (location_id, item_name, item_type, price, stock, description, metadata, sold_by_player)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (current_location, actual_name, item_type, markup_price, quantity, description, metadata, True)
             )
         embed = discord.Embed(
             title="💰 Item Sold",
@@ -822,10 +1008,149 @@ class EconomyCog(commands.Cog):
             color=0x00ff00
         )
 
-        embed.add_field(name="Price per Item", value=f"{final_sell_price:,} credits", inline=True)
+        embed.add_field(name="Price per Item", value=f"{location_adjusted_sell_price:,} credits", inline=True)
+        
+        # Show location effects if any
+        if price_modifier != 1.0:
+            base_earnings = final_sell_price * quantity
+            earnings_difference = total_earnings - base_earnings
+            if earnings_difference > 0:
+                embed.add_field(
+                    name="💰 Location Effect",
+                    value=f"Sell prices increased by {((price_modifier - 1) * 100):.0f}% (+{earnings_difference:,} credits)",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="💸 Location Effect",
+                    value=f"Sell prices reduced by {((1 - price_modifier) * 100):.0f}% ({earnings_difference:,} credits)",
+                    inline=False
+                )
         embed.add_field(name="New Balance", value=f"{current_money + total_earnings:,} credits", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @shop_group.command(name="refresh_stock", description="Admin: Refresh shop stock at current location")
+    async def refresh_shop_stock(self, interaction: discord.Interaction):
+        # Check admin permissions
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Administrator permissions required.", ephemeral=True)
+            return
+        
+        # Get admin's current location
+        char_info = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info or not char_info[0]:
+            await interaction.response.send_message("❌ You must be at a location to refresh shop stock.", ephemeral=True)
+            return
+        
+        location_id = char_info[0]
+        
+        # Get location info
+        location_data = self.db.execute_query(
+            "SELECT name, wealth_level, location_type FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_data:
+            await interaction.response.send_message("❌ Invalid location.", ephemeral=True)
+            return
+        
+        location_name, wealth_level, location_type = location_data
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        # Clear existing auto-generated shop items (preserve player-sold and admin-created items)
+        # We preserve items that are either sold by players OR created by admins
+        # Admin-created items will have metadata containing "admin_created": true
+        admin_created_items = self.db.execute_query(
+            '''SELECT item_id FROM shop_items 
+               WHERE location_id = ? AND metadata LIKE '%"admin_created": true%' ''',
+            (location_id,),
+            fetch='all'
+        )
+        
+        admin_item_ids = [str(item[0]) for item in admin_created_items] if admin_created_items else []
+        
+        if admin_item_ids:
+            placeholders = ', '.join(['?' for _ in admin_item_ids])
+            self.db.execute_query(
+                f'''DELETE FROM shop_items 
+                   WHERE location_id = ? 
+                   AND sold_by_player = FALSE 
+                   AND item_id NOT IN ({placeholders})''',
+                [location_id] + admin_item_ids
+            )
+        else:
+            self.db.execute_query(
+                '''DELETE FROM shop_items 
+                   WHERE location_id = ? 
+                   AND sold_by_player = FALSE''',
+                (location_id,)
+            )
+        
+        # Generate new shop items
+        await self._generate_shop_items(location_id, wealth_level, location_type)
+        
+        # Update refresh tracking
+        self.db.execute_query(
+            '''INSERT OR REPLACE INTO shop_refresh (location_id, last_refreshed) 
+               VALUES (?, CURRENT_TIMESTAMP)''',
+            (location_id,)
+        )
+        
+        # Get sample of generated items
+        new_items = self.db.execute_query(
+            '''SELECT item_name, item_type, price, stock FROM shop_items 
+               WHERE location_id = ? AND sold_by_player = FALSE 
+               ORDER BY price DESC LIMIT 5''',
+            (location_id,),
+            fetch='all'
+        )
+        
+        embed = discord.Embed(
+            title="🔄 Shop Stock Refreshed",
+            description=f"Successfully refreshed shop stock at **{location_name}**",
+            color=0x00ff00
+        )
+        
+        if new_items:
+            item_list = []
+            for item_name, item_type, price, stock in new_items:
+                stock_text = f"{stock}" if stock != -1 else "∞"
+                item_list.append(f"• {item_name} ({item_type}) - {price:,}c (Stock: {stock_text})")
+            
+            embed.add_field(
+                name="📦 Sample Items Generated",
+                value="\n".join(item_list),
+                inline=False
+            )
+        
+        embed.add_field(
+            name="📍 Location Info",
+            value=f"Type: {location_type.replace('_', ' ').title()}\nWealth Level: {wealth_level}/10",
+            inline=True
+        )
+        
+        total_items = self.db.execute_query(
+            "SELECT COUNT(*) FROM shop_items WHERE location_id = ? AND sold_by_player = FALSE",
+            (location_id,),
+            fetch='one'
+        )[0]
+        
+        embed.add_field(
+            name="📊 Results",
+            value=f"Generated: {total_items} items\nPlayer-sold items preserved",
+            inline=True
+        )
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     def get_shift_job_multiplier(self) -> float:
         """Get job generation multiplier based on current shift"""
         from utils.time_system import TimeSystem
@@ -878,6 +1203,28 @@ class EconomyCog(commands.Cog):
             (char_location[0],),
             fetch='all'
         )
+        
+        # Get available quests from the quest system
+        quest_cog = self.bot.get_cog('QuestsCog')
+        quests = []
+        if quest_cog:
+            quest_data = quest_cog.get_available_quests(char_location[0])
+            # Convert quest data to job format for display compatibility
+            for quest in quest_data:
+                quest_as_job = (
+                    quest['quest_id'],
+                    quest['title'],  # Already has "QUEST: " prefix
+                    quest['description'],
+                    quest['reward_money'],
+                    None,  # required_skill
+                    quest['required_level'],  # min_skill_level
+                    quest['danger_level'],
+                    quest.get('estimated_duration', 'Unknown')  # duration
+                )
+                quests.append(quest_as_job)
+        
+        # Combine jobs and quests
+        all_jobs = list(jobs) + quests
 
         # Build the embed
         embed = discord.Embed(
@@ -886,7 +1233,7 @@ class EconomyCog(commands.Cog):
             color=0x4169E1
         )
 
-        if not jobs:
+        if not all_jobs:
             embed.add_field(
                 name="No Jobs Currently Available",
                 value="Check back later or try other locations.",
@@ -896,14 +1243,15 @@ class EconomyCog(commands.Cog):
             return
         
         # Create interactive job view
-        view = InteractiveJobListView(self.bot, interaction.user.id, jobs, location_info[1])
+        view = InteractiveJobListView(self.bot, interaction.user.id, all_jobs, location_info[1])
         
         # Show summary of available jobs
         job_summary = []
         total_reward = 0
         danger_counts = {'safe': 0, 'low': 0, 'medium': 0, 'high': 0}
+        quest_count = len(quests)
         
-        for job in jobs:
+        for job in all_jobs:
             job_id, title, desc, reward, skill, min_level, danger, duration = job
             total_reward += reward
             
@@ -916,9 +1264,16 @@ class EconomyCog(commands.Cog):
             else:
                 danger_counts['high'] += 1
         
+        summary_text = f"**{len(jobs)}** regular jobs available"
+        if quest_count > 0:
+            summary_text += f"\n**{quest_count}** quests available"
+        summary_text += f"\n**Total Rewards**: {total_reward:,} credits"
+        if len(all_jobs) > 0:
+            summary_text += f"\n**Average**: {total_reward//len(all_jobs):,} credits per job"
+        
         embed.add_field(
             name="📊 Job Summary",
-            value=f"**{len(jobs)}** jobs available\n**Total Rewards**: {total_reward:,} credits\n**Average**: {total_reward//len(jobs):,} credits per job",
+            value=summary_text,
             inline=True
         )
         
@@ -995,21 +1350,29 @@ class EconomyCog(commands.Cog):
             # destination_location_id == job_location_id = stationary job, regardless of keywords
             is_transport_job = False
 
-        # Get player's current location
-        player_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+        # Get player's current location and docking status
+        player_info = self.db.execute_query(
+            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
             (interaction.user.id,),
             fetch='one'
         )
         
-        if not player_location or not player_location[0]:
+        if not player_info or not player_info[0]:
             await interaction.response.send_message(
                 "You cannot complete jobs while in transit!",
                 ephemeral=True
             )
             return
         
-        current_location = player_location[0]
+        current_location, location_status = player_info
+
+        # Check if player is docked
+        if location_status != 'docked':
+            await interaction.response.send_message(
+                "You must be docked at a location to complete jobs. Use `/tqe` to dock first.",
+                ephemeral=True
+            )
+            return
 
         if is_transport_job:
             # TRANSPORT JOB LOGIC - Check if at correct destination, then do unloading phase
@@ -1272,6 +1635,7 @@ class EconomyCog(commands.Cog):
             # Clean up job
             self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
             self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, user_id))
+            self.notified_jobs.discard(job_id)  # Clean up notification tracking
             
             # Try to notify user
             user = self.bot.get_user(user_id)
@@ -1328,6 +1692,7 @@ class EconomyCog(commands.Cog):
         # Clean up
         self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
         self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, interaction.user.id))
+        self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         embed = discord.Embed(
             title="✅ Transport Job Completed!",
@@ -1379,12 +1744,12 @@ class EconomyCog(commands.Cog):
         
         embed.add_field(
             name="📋 Options",
-            value="• Wait for automatic completion in 2 minutes\n• Check progress with `/job status`\n• Use `/job complete` to skip waiting (costs 10% of reward)",
+            value="• Wait for automatic completion in 2 minutes\n• Check progress with the 'Job Status' button\n• Use `the 'Complete Job' button to skip waiting (costs 10% of reward)",
             inline=False
         )
         
         # Send initial message and store it for updates
-        message = await interaction.response.send_message(embed=embed, ephemeral=False)
+        message = await interaction.response.send_message(embed=embed, ephemeral=False, delete_after=60)
         
         # Schedule automatic completion
         import asyncio
@@ -1395,6 +1760,10 @@ class EconomyCog(commands.Cog):
     async def _auto_complete_transport_job_with_updates(self, user_id: int, job_id: int, title: str, reward: int, channel_id: int):
         """Auto-complete transport job after 2 minutes with progress updates"""
         await asyncio.sleep(10)  # Wait 10 seconds before first update
+        
+        channel = self.bot.get_channel(channel_id)
+        user = self.bot.get_user(user_id)
+        progress_message = None
         
         # Progress update loop (every 30 seconds)
         for i in range(3):  # Updates at 10s, 40s, 70s
@@ -1413,23 +1782,31 @@ class EconomyCog(commands.Cog):
             elapsed = (datetime.now() - unloading_start).total_seconds()
             progress_pct = min(100, (elapsed / 120) * 100)
             
-            # Send progress update in channel
-            channel = self.bot.get_channel(channel_id)
+            # Send or edit progress update in channel
             if channel:
                 bars = int(progress_pct // 10)
                 progress_bar = "🟩" * bars + "⬜" * (10 - bars)
                 
-                user = self.bot.get_user(user_id)
-                await channel.send(
-                    f"{user.mention} - Unloading progress: {progress_bar} {progress_pct:.0f}%",
-                    delete_after=30  # Delete after 30 seconds to reduce spam
-                )
+                progress_text = f"{user.mention} - Unloading progress: {progress_bar} {progress_pct:.0f}%"
+                
+                if progress_message is None:
+                    # Send initial message
+                    progress_message = await channel.send(progress_text)
+                else:
+                    # Edit existing message
+                    await progress_message.edit(content=progress_text)
             
             if i < 2:  # Don't sleep after last update
                 await asyncio.sleep(30)
         
         # Wait for remaining time (total 2 minutes)
         await asyncio.sleep(50)  # 120 - 70 = 50 seconds
+        
+        # Edit final 100% progress message
+        if channel and progress_message:
+            progress_bar = "🟩" * 10  # Full green bar
+            final_text = f"{user.mention} - Unloading progress: {progress_bar} 100% - **COMPLETED!**"
+            await progress_message.edit(content=final_text, delete_after=150)
         
         # Final completion (same as before)
         job_check = self.db.execute_query(
@@ -1454,6 +1831,7 @@ class EconomyCog(commands.Cog):
             # Clean up job
             self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
             self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, user_id))
+            self.notified_jobs.discard(job_id)  # Clean up notification tracking
             
             # Send completion notification
             user = self.bot.get_user(user_id)
@@ -1504,6 +1882,7 @@ class EconomyCog(commands.Cog):
         # Clean up
         self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
         self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, interaction.user.id))
+        self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         embed = discord.Embed(
             title="✅ Transport Job Completed!",
@@ -1518,6 +1897,52 @@ class EconomyCog(commands.Cog):
         embed.add_field(name="📦 Finalization", value="Cargo unloading completed", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)            
+
+    async def _send_job_ready_notification(self, user_id: int, job_id: int, job_title: str, location_id: int):
+        """Send notification when a stationary job is ready for completion"""
+        try:
+            # Get location channel info
+            location_info = self.db.execute_query(
+                "SELECT name, channel_id FROM locations WHERE location_id = ?",
+                (location_id,),
+                fetch='one'
+            )
+            
+            if not location_info:
+                print(f"❌ Could not find location info for location_id {location_id}")
+                return
+                
+            location_name, channel_id = location_info
+            
+            if not channel_id:
+                print(f"❌ No channel_id set for location {location_name}")
+                return
+                
+            # Get the channel and user
+            channel = self.bot.get_channel(channel_id)
+            user = self.bot.get_user(user_id)
+            
+            if not channel:
+                print(f"❌ Could not find channel {channel_id} for location {location_name}")
+                return
+                
+            if not user:
+                print(f"❌ Could not find user {user_id}")
+                return
+            
+            # Send notification message
+            embed = discord.Embed(
+                title="✅ Job Ready for Completion!",
+                description=f"**{job_title}** is now ready to complete!",
+                color=0x00ff00
+            )
+            embed.add_field(name="📍 Location", value=location_name, inline=True)
+            
+            await channel.send(f"{user.mention}, your job is ready for completion!", embed=embed, delete_after=60)
+            print(f"✅ Sent job completion notification for job {job_id} to {user.name} in {location_name}")
+            
+        except Exception as e:
+            print(f"❌ Error sending job ready notification: {e}")
                 
     async def _complete_job_immediately(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int, job_type: str):
         """Complete a job immediately with full reward, experience, skill, and karma effects."""
@@ -1631,6 +2056,7 @@ class EconomyCog(commands.Cog):
         # Clean up
         self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
         self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, interaction.user.id))
+        self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         embed = discord.Embed(
             title="❌ Job Failed",
@@ -1735,6 +2161,7 @@ class EconomyCog(commands.Cog):
         # Clean up job - ONLY ONCE (this was already correct)
         self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
         self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ?", (job_id,))
+        self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         if success:
             embed = discord.Embed(
@@ -1849,6 +2276,41 @@ class EconomyCog(commands.Cog):
             embed.add_field(name="Access Denied or No Stock", value="No items are available to you at this time. Improve your reputation with this faction or check back later.", inline=False)
             
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _find_multi_jump_destinations(self, origin_id: int, max_jumps: int = 3):
+        """Find reachable destinations within max_jumps from origin"""
+        visited = set()
+        routes = []  # (destination_id, destination_name, jump_count, dest_wealth, dest_type)
+        queue = [(origin_id, 0)]
+        
+        while queue:
+            current_loc, jumps = queue.pop(0)
+            
+            if current_loc in visited or jumps >= max_jumps:
+                continue
+                
+            visited.add(current_loc)
+            
+            # Get all connections from current location
+            connections = self.db.execute_query(
+                '''SELECT c.destination_location, l.name, l.location_type, l.wealth_level, l.x_coord, l.y_coord
+                   FROM corridors c
+                   JOIN locations l ON c.destination_location = l.location_id
+                   WHERE c.origin_location = ? AND c.is_active = 1''',
+                (current_loc,),
+                fetch='all'
+            )
+            
+            for dest_id, dest_name, dest_type, dest_wealth, x1, y1 in connections:
+                if dest_id not in visited:
+                    if jumps + 1 > 0:  # Don't include origin
+                        routes.append((dest_id, dest_name, jumps + 1, dest_wealth, dest_type, x1, y1))
+                    
+                    if jumps + 1 < max_jumps:
+                        queue.append((dest_id, jumps + 1))
+        
+        return routes
+
     async def _generate_jobs_for_location(self, location_id: int):
         """Create jobs with heavy emphasis on travel between locations and shift-aware generation."""
         # 1) Remove all untaken jobs here
@@ -1867,8 +2329,8 @@ class EconomyCog(commands.Cog):
             return
         loc_name, x0, y0, wealth, loc_type = row
 
-        # 3) Find all connected destinations
-        connected_destinations = self.db.execute_query(
+        # 3) Find all available destinations (direct and multi-jump)
+        direct_destinations = self.db.execute_query(
             """SELECT DISTINCT l.location_id, l.name, l.x_coord, l.y_coord, l.location_type, l.wealth_level
                FROM corridors c 
                JOIN locations l ON c.destination_location = l.location_id
@@ -1877,7 +2339,10 @@ class EconomyCog(commands.Cog):
             fetch='all'
         )
         
-        if not connected_destinations:
+        # Get multi-jump destinations
+        multi_jump_destinations = await self._find_multi_jump_destinations(location_id, max_jumps=4)
+        
+        if not direct_destinations and not multi_jump_destinations:
             return
 
         # Get shift multiplier for job generation
@@ -1893,19 +2358,47 @@ class EconomyCog(commands.Cog):
         print(f"🕐 Generating {num_travel_jobs} travel jobs (shift multiplier: {shift_multiplier:.1f})")
         
         for _ in range(num_travel_jobs):
-            dest_id, dest_name, x1, y1, dest_type, dest_wealth = random.choice(connected_destinations)
+            # Select destination based on jump probability: 60% single, 30% double, 10% triple+
+            jump_type = random.random()
+            jumps = 1
+            
+            if jump_type < 0.6 and direct_destinations:
+                # 60% chance for single jump (direct)
+                dest_id, dest_name, x1, y1, dest_type, dest_wealth = random.choice(direct_destinations)
+                jumps = 1
+            elif jump_type < 0.9 and multi_jump_destinations:
+                # 30% chance for double jump
+                multi_jump_2 = [d for d in multi_jump_destinations if d[2] == 2]
+                if multi_jump_2:
+                    dest_id, dest_name, jumps, dest_wealth, dest_type, x1, y1 = random.choice(multi_jump_2)
+                else:
+                    # Fallback to direct if no 2-jump destinations
+                    dest_id, dest_name, x1, y1, dest_type, dest_wealth = random.choice(direct_destinations)
+                    jumps = 1
+            else:
+                # 10% chance for triple+ jump
+                multi_jump_3plus = [d for d in multi_jump_destinations if d[2] >= 3]
+                if multi_jump_3plus:
+                    dest_id, dest_name, jumps, dest_wealth, dest_type, x1, y1 = random.choice(multi_jump_3plus)
+                else:
+                    # Fallback to direct if no 3+ jump destinations
+                    dest_id, dest_name, x1, y1, dest_type, dest_wealth = random.choice(direct_destinations)
+                    jumps = 1
             
             # Calculate distance-based rewards (travel jobs pay well!)
             dist = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
             base_reward = max(100, int(dist * random.uniform(8, 15)))  # Much better pay
             
+            # Jump bonus - additional reward for multi-jump jobs
+            jump_bonus = (jumps - 1) * 100  # +100 credits per additional jump
+            
             # Wealth bonus for wealthy destinations
             wealth_bonus = (dest_wealth + wealth) * 5
-            final_reward = base_reward + wealth_bonus + random.randint(-20, 50)
+            final_reward = base_reward + jump_bonus + wealth_bonus + random.randint(-20, 50)
             
-            # Duration based on distance
-            duration = max(10, int(dist * random.uniform(1.0, 2.0)))
-            danger = min(5, max(1, int(dist / 25) + random.randint(0, 2)))
+            # Duration based on distance and jumps
+            duration = max(10, int(dist * random.uniform(1.0, 2.0)) + (jumps - 1) * 5)
+            danger = min(5, max(1, int(dist / 25) + jumps + random.randint(0, 2)))
             
             # Variety of travel job types
             travel_job_types = [
@@ -1921,6 +2414,15 @@ class EconomyCog(commands.Cog):
             
             title, desc = random.choice(travel_job_types)
             
+            # Level restrictions: Only 33% of jobs get level restrictions
+            min_skill_level = 0
+            if random.random() < 0.33:
+                # Level restrictions range from 5 to 25
+                min_skill_level = random.randint(5, 25)
+                # Higher level jobs get better rewards
+                level_multiplier = 1.0 + (min_skill_level * 0.03)
+                final_reward = int(final_reward * level_multiplier)
+            
             # Higher rewards for dangerous/long routes
             if danger >= 4:
                 final_reward = int(final_reward * 1.5)
@@ -1930,8 +2432,8 @@ class EconomyCog(commands.Cog):
                 '''INSERT INTO jobs
                    (location_id, title, description, reward_money, required_skill, min_skill_level,
                     danger_level, duration_minutes, expires_at, is_taken, destination_location_id)
-                   VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0, ?)''',
-                (location_id, title, desc, final_reward, danger, duration, expire_str, dest_id)
+                   VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, ?)''',
+                (location_id, title, desc, final_reward, min_skill_level, danger, duration, expire_str, dest_id)
             )
 
         # 5) Add fewer stationary jobs with shift multiplier
@@ -1952,12 +2454,21 @@ class EconomyCog(commands.Cog):
                 duration = random.randint(2, 8)  
                 danger = random.randint(0, 2)
                 
+                # Level restrictions: Only 33% of stationary jobs get level restrictions
+                min_skill_level = 0
+                if random.random() < 0.33:
+                    # Level restrictions range from 5 to 25
+                    min_skill_level = random.randint(5, 25)
+                    # Higher level jobs get better rewards
+                    level_multiplier = 1.0 + (min_skill_level * 0.03)
+                    reward = int(reward * level_multiplier)
+                
                 self.db.execute_query(
                     '''INSERT INTO jobs
                        (location_id, title, description, reward_money, required_skill, min_skill_level,
                         danger_level, duration_minutes, expires_at, is_taken)
-                       VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0)''',
-                    (location_id, title, desc, reward, danger, duration, expire_str)
+                       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, 0)''',
+                    (location_id, title, desc, reward, min_skill_level, danger, duration, expire_str)
                 )
 
     @job_group.command(name="accept", description="Accept a job by title or ID number")
@@ -2194,8 +2705,8 @@ class EconomyCog(commands.Cog):
             (job_id, interaction.user.id, current_location, tracking_duration)
         )
         embed = discord.Embed(
-            title="✅ Job Accepted",
-            description=f"You have taken: **{title}** (ID: {job_id})",
+            title="✅ Job Accepted & Started",
+            description=f"You have taken: **{title}** (ID: {job_id})\n🔄 **Job is now active** - work in progress!",
             color=0x00ff00
         )
         embed.add_field(name="Details", value=desc, inline=False)
@@ -2314,7 +2825,7 @@ class EconomyCog(commands.Cog):
                 progress_text = "🟩" * bars + "⬜" * (10 - bars) + f" {progress_pct:.0f}%"
                 
                 if unloading_remaining > 0:
-                    status_text += "\n💡 Use `/job complete` to rush (10% penalty)"
+                    status_text += "\n💡 Use the 'Complete Job' button to rush (10% penalty)"
             else:
                 status_text = "🚛 **Unloading cargo** - Starting..."
                 progress_text = "⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0%"
@@ -2340,7 +2851,7 @@ class EconomyCog(commands.Cog):
                 )[0]
                 
                 if player_location == destination_location_id:
-                    status_text = f"📍 **At Destination** - {dest_name}\n✅ Use `/job complete` to start unloading"
+                    status_text = f"📍 **At Destination** - {dest_name}\n✅ Use the 'Complete Job' button to start unloading"
                     progress_text = "Ready to unload cargo"
                 else:
                     status_text = f"📦 **In Transit** to {dest_name}"
@@ -2353,7 +2864,7 @@ class EconomyCog(commands.Cog):
             else:
                 # NPC transport job without specific destination
                 if elapsed_minutes >= duration:
-                    status_text = "✅ **Ready for delivery** - Use `/job complete` at any location"
+                    status_text = "✅ **Ready for delivery** - Use the 'Complete Job' button at any location"
                     progress_text = "Minimum travel time completed"
                 else:
                     remaining_minutes = duration - elapsed_minutes
@@ -2367,7 +2878,7 @@ class EconomyCog(commands.Cog):
             if destination_location_id:
                 embed.add_field(name="🎯 Destination", value=dest_name[:1020], inline=True)
             else:
-                embed.add_field(name="📍 Origin", value=location_name[:1020], inline=True)
+                embed.add_field(name="🎯 Destination", value=location_name[:1020], inline=True)
                 
             embed.add_field(name="Status", value=status_text[:1020], inline=False)
             embed.add_field(name="Progress", value=progress_text[:1020], inline=False)
@@ -2391,7 +2902,7 @@ class EconomyCog(commands.Cog):
                 required_duration = float(required_duration) if required_duration else 1.0
                 
                 if time_at_location >= required_duration:
-                    status_text = "✅ **Ready for completion** - Use `/job complete`"
+                    status_text = "✅ **Ready for completion** - Use the 'Complete Job' button"
                     progress_text = "Required time at location completed"
                 else:
                     remaining = max(0, required_duration - time_at_location)  # Prevent negative values
@@ -2400,7 +2911,7 @@ class EconomyCog(commands.Cog):
                     bars = int(progress_pct // 10)
                     progress_text = "🟩" * bars + "⬜" * (10 - bars) + f" {progress_pct:.0f}%"
             else:
-                status_text = "📍 **Needs location tracking** - Use `/job complete` to start"
+                status_text = "📍 **Needs location tracking** - Use the 'Complete Job' button to start"
                 progress_text = "Location-based work not yet started"
 
         # Default field layout for non-transport jobs
@@ -2595,6 +3106,9 @@ class ShopBuySelectView(discord.ui.View):
             for item_name, item_type, price, stock, description in items[:25]:  # Discord limit
                 stock_text = f"({stock} in stock)" if stock != -1 else "(Unlimited)"
                 
+                # Format category name
+                category_name = self._format_category_name(item_type)
+                
                 # Check economic status
                 econ_cog = bot.get_cog('EconomyCog')
                 if econ_cog:
@@ -2610,7 +3124,7 @@ class ShopBuySelectView(discord.ui.View):
                 options.append(
                     discord.SelectOption(
                         label=f"{item_name} - {price:,} credits",
-                        description=f"{description[:80]}{'...' if len(description) > 80 else ''} {stock_text}{status_emoji}"[:100],
+                        description=f"[{category_name}] {description[:65]}{'...' if len(description) > 65 else ''} {stock_text}{status_emoji}"[:100],
                         value=item_name
                     )
                 )
@@ -2619,6 +3133,12 @@ class ShopBuySelectView(discord.ui.View):
                 select = discord.ui.Select(placeholder="Choose an item to buy...", options=options)
                 select.callback = self.item_selected
                 self.add_item(select)
+    
+    def _format_category_name(self, item_type: str) -> str:
+        """Convert item_type to user-friendly category name."""
+        if not item_type:
+            return "General"
+        return item_type.replace('_', ' ').title()
     
     async def item_selected(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
@@ -2756,6 +3276,10 @@ class ShopBuyQuantityView(discord.ui.View):
         
         item_id, actual_name, price, stock, description, item_type, metadata = item
 
+        # Ensure metadata exists using helper function
+        from utils.item_config import ItemConfig
+        metadata = ItemConfig.ensure_item_metadata(actual_name, metadata)
+
         total_cost = price * self.quantity
         
         if current_money < total_cost:
@@ -2792,9 +3316,9 @@ class ShopBuyQuantityView(discord.ui.View):
             )
         else:
             econ_cog.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (interaction.user.id, actual_name, item_type, self.quantity, description, price)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, actual_name, item_type, self.quantity, description, price, metadata)
             )
         
         embed = discord.Embed(
@@ -3071,11 +3595,13 @@ class ShopSellQuantityView(discord.ui.View):
                 (new_stock, new_price, shop_id)
             )
         else:
+            from utils.item_config import ItemConfig
+            metadata = ItemConfig.create_item_metadata(actual_name)
             econ_cog.db.execute_query(
                 '''INSERT INTO shop_items
-                   (location_id, item_name, item_type, price, stock, description)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (current_location, actual_name, item_type, markup_price, self.quantity, description)
+                   (location_id, item_name, item_type, price, stock, description, metadata, sold_by_player)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (current_location, actual_name, item_type, markup_price, self.quantity, description, metadata, True)
             )
         
         embed = discord.Embed(
@@ -3131,7 +3657,25 @@ class InteractiveJobListView(discord.ui.View):
         
         job_id = int(interaction.data['values'][0])
         
-        # Get job details
+        # Check if this is a quest first
+        quest_cog = self.bot.get_cog('QuestsCog')
+        if quest_cog:
+            quest_info = self.bot.db.execute_query(
+                '''SELECT quest_id, title, description, reward_money, danger_level, 
+                          estimated_duration, required_level
+                   FROM quests WHERE quest_id = ?''',
+                (job_id,),
+                fetch='one'
+            )
+            
+            if quest_info:
+                # This is a quest, handle it differently
+                view = QuestDetailView(self.bot, self.user_id, quest_info)
+                embed = await view.create_embed()
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+                return
+        
+        # Get job details (regular job)
         job_info = self.bot.db.execute_query(
             '''SELECT job_id, title, description, reward_money, required_skill, min_skill_level, 
                       danger_level, duration_minutes, destination_location_id
@@ -3328,8 +3872,8 @@ class JobDetailView(discord.ui.View):
         
         # Build success embed
         embed = discord.Embed(
-            title="✅ Job Accepted",
-            description=f"You have taken: **{title}** (ID: {job_id})",
+            title="✅ Job Accepted & Started",
+            description=f"You have taken: **{title}** (ID: {job_id})\n🔄 **Job is now active** - work in progress!",
             color=0x00ff00
         )
         embed.add_field(name="Details", value=desc, inline=False)
@@ -3355,9 +3899,123 @@ class JobDetailView(discord.ui.View):
             return
         
         await interaction.response.send_message("Job viewing cancelled.", ephemeral=True)
+
+class QuestDetailView(discord.ui.View):
+    def __init__(self, bot, user_id: int, quest_info: tuple):
+        super().__init__(timeout=180)
+        self.bot = bot
+        self.user_id = user_id
+        self.quest_info = quest_info
+    
+    async def create_embed(self):
+        """Create the quest detail embed"""
+        quest_id, title, description, reward_money, danger_level, estimated_duration, required_level = self.quest_info
         
+        # Get quest objectives
+        objectives = self.bot.db.execute_query(
+            '''SELECT objective_order, objective_type, description, target_location_id, 
+                      target_item, target_quantity
+               FROM quest_objectives
+               WHERE quest_id = ?
+               ORDER BY objective_order''',
+            (quest_id,),
+            fetch='all'
+        )
         
+        embed = discord.Embed(
+            title=f"🏆 {title}",
+            description=description,
+            color=0x9b59b6
+        )
         
+        embed.add_field(name="💰 Reward", value=f"{reward_money:,} credits", inline=True)
+        embed.add_field(name="⚠️ Danger Level", value="⚠️" * danger_level, inline=True)
+        embed.add_field(name="🎯 Required Level", value=str(required_level), inline=True)
+        
+        if estimated_duration:
+            embed.add_field(name="⏱️ Estimated Duration", value=estimated_duration, inline=True)
+        
+        # Add objectives
+        if objectives:
+            obj_text = []
+            for order, obj_type, desc, location_id, item, quantity in objectives:
+                if obj_type == 'travel':
+                    location_name = self.bot.db.execute_query(
+                        "SELECT name FROM locations WHERE location_id = ?",
+                        (location_id,), fetch='one'
+                    )
+                    location_name = location_name[0] if location_name else f"Location {location_id}"
+                    obj_text.append(f"{order}. Travel to {location_name}")
+                elif obj_type == 'obtain_item':
+                    obj_text.append(f"{order}. Obtain {quantity}x {item}")
+                elif obj_type == 'deliver_item':
+                    location_name = self.bot.db.execute_query(
+                        "SELECT name FROM locations WHERE location_id = ?",
+                        (location_id,), fetch='one'
+                    )
+                    location_name = location_name[0] if location_name else f"Location {location_id}"
+                    obj_text.append(f"{order}. Deliver {quantity}x {item} to {location_name}")
+                else:
+                    obj_text.append(f"{order}. {desc}")
+            
+            embed.add_field(
+                name="📋 Objectives",
+                value="\n".join(obj_text[:10]),  # Limit to prevent embed overflow
+                inline=False
+            )
+        
+        embed.set_footer(text=f"Quest ID: {quest_id} | This is a multi-step quest")
+        return embed
+    
+    @discord.ui.button(label="Accept Quest", style=discord.ButtonStyle.success, emoji="🏆")
+    async def accept_quest(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your quest interface!", ephemeral=True)
+            return
+        
+        quest_id = self.quest_info[0]
+        
+        # Get quest cog for acceptance logic
+        quest_cog = self.bot.get_cog('QuestsCog')
+        if not quest_cog:
+            await interaction.response.send_message("Quest system unavailable.", ephemeral=True)
+            return
+        
+        # Check if user can accept the quest
+        can_accept, reason = quest_cog.can_accept_quest(self.user_id, quest_id)
+        if not can_accept:
+            await interaction.response.send_message(reason, ephemeral=True)
+            return
+        
+        # Accept the quest
+        success = quest_cog.accept_quest(self.user_id, quest_id)
+        if not success:
+            await interaction.response.send_message("Failed to accept quest. Please try again.", ephemeral=True)
+            return
+        
+        quest_title = self.quest_info[1]
+        embed = discord.Embed(
+            title="✅ Quest Accepted!",
+            description=f"You have accepted: **{quest_title}**\n🏆 **Quest is now active** - begin your journey!",
+            color=0x00ff00
+        )
+        
+        embed.add_field(
+            name="📊 Next Steps",
+            value="Use `/tqe` to check your progress and objectives.",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_quest(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your quest interface!", ephemeral=True)
+            return
+        
+        await interaction.response.send_message("Quest viewing cancelled.", ephemeral=True)
+
 class InteractiveFederalDepotView(discord.ui.View):
     def __init__(self, bot, user_id: int, location_id: int, location_name: str):
         super().__init__(timeout=300)
@@ -3456,10 +4114,13 @@ class FederalDepotBuySelectView(discord.ui.View):
                 stock_text = f"({stock} in stock)" if stock != -1 else "(Unlimited)"
                 rep_text = f" [Rep {req_rep}+]" if req_rep > 0 else ""
                 
+                # Format category name
+                category_name = self._format_category_name(item_type)
+                
                 options.append(
                     discord.SelectOption(
                         label=f"{item_name} - {price:,} credits",
-                        description=f"{description[:70]}{'...' if len(description) > 70 else ''} {stock_text}{rep_text}"[:100],
+                        description=f"[{category_name}] {description[:55]}{'...' if len(description) > 55 else ''} {stock_text}{rep_text}"[:100],
                         value=item_name,
                         emoji="🏛️"
                     )
@@ -3469,6 +4130,12 @@ class FederalDepotBuySelectView(discord.ui.View):
                 select = discord.ui.Select(placeholder="Choose federal equipment to purchase...", options=options)
                 select.callback = self.item_selected
                 self.add_item(select)
+    
+    def _format_category_name(self, item_type: str) -> str:
+        """Convert item_type to user-friendly category name."""
+        if not item_type:
+            return "General"
+        return item_type.replace('_', ' ').title()
     
     async def item_selected(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
@@ -3518,10 +4185,13 @@ class BlackMarketBuySelectView(discord.ui.View):
             for item_name, item_type, price, stock, description in items[:25]:
                 stock_text = f"({stock} available)" if stock != -1 else "(Unlimited)"
                 
+                # Format category name
+                category_name = self._format_category_name(item_type)
+                
                 options.append(
                     discord.SelectOption(
                         label=f"{item_name} - {price:,} credits",
-                        description=f"{description[:80]}{'...' if len(description) > 80 else ''} {stock_text}"[:100],
+                        description=f"[{category_name}] {description[:65]}{'...' if len(description) > 65 else ''} {stock_text}"[:100],
                         value=item_name,
                         emoji="💀"
                     )
@@ -3531,6 +4201,12 @@ class BlackMarketBuySelectView(discord.ui.View):
                 select = discord.ui.Select(placeholder="Choose contraband to purchase...", options=options)
                 select.callback = self.item_selected
                 self.add_item(select)
+    
+    def _format_category_name(self, item_type: str) -> str:
+        """Convert item_type to user-friendly category name."""
+        if not item_type:
+            return "General"
+        return item_type.replace('_', ' ').title()
     
     async def item_selected(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:

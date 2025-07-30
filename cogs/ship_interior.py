@@ -49,7 +49,7 @@ class ShipInteriorCog(commands.Cog):
                 print(f"Error cleaning up ship invitations: {e}")
                 await asyncio.sleep(60)  # Wait 1 minute on error
     
-    ship_group = app_commands.Group(name="ship", description="Ship management commands")
+    ship_group = app_commands.Group(name="shipinterior", description="Ship interior management commands")
     ship_interior_group = app_commands.Group(name="interior", description="Ship interior management", parent=ship_group)
     
     @ship_interior_group.command(name="enter", description="Enter your ship interior")
@@ -64,7 +64,7 @@ class ShipInteriorCog(commands.Cog):
         )
         
         if current_ship and current_ship[0]:
-            await interaction.followup.send("You are already inside a ship! Use `/ship interior leave` first.", ephemeral=True)
+            await interaction.followup.send("You are already inside a ship! Use `/tqe` to leave your ship first.", ephemeral=True)
             return
         
         # Get character location and status
@@ -107,14 +107,43 @@ class ShipInteriorCog(commands.Cog):
         )
         
         if ship_channel:
+            # Send area movement embed to location channel BEFORE removing access
+            char_name = self.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )[0]
+            
+            # Ensure location channel exists and get it
+            location_channel = await channel_manager.get_or_create_location_channel(
+                interaction.guild, location_id
+            )
+            
+            if location_channel:
+                embed = discord.Embed(
+                    title="🚪 Area Movement",
+                    description=f"**{char_name}** enters the **{ship_info[1]}**.",
+                    color=0x7289DA
+                )
+                try:
+                    await location_channel.send(embed=embed)
+                except Exception as e:
+                    print(f"❌ Failed to send ship entry embed: {e}")
+            
             # Update character to be inside ship
             self.db.execute_query(
                 "UPDATE characters SET current_ship_id = ? WHERE user_id = ?",
                 (active_ship_id, interaction.user.id)
             )
             
-            # Remove from location channel
-            await channel_manager.remove_user_location_access(interaction.user, location_id)
+            # Keep location channel access - users should retain access to both ship and location channels
+            
+            # Trigger cleanup check after successful operations - add small delay to ensure database consistency
+            async def delayed_cleanup():
+                await asyncio.sleep(2)  # Allow database updates to complete
+                await channel_manager._immediate_cleanup_check(interaction.guild, location_id)
+            
+            asyncio.create_task(delayed_cleanup())
             
             await interaction.followup.send(
                 f"You've entered your ship. Head to {ship_channel.mention}",
@@ -159,11 +188,33 @@ class ShipInteriorCog(commands.Cog):
         from utils.channel_manager import ChannelManager
         channel_manager = ChannelManager(self.bot)
         
-        # Give user access back to location
-        await channel_manager.give_user_location_access(interaction.user, location_id)
+        # Location access is already preserved - no need to restore it
         
         # Remove from ship channel
         await channel_manager.remove_user_ship_access(interaction.user, ship_id)
+        
+        # Send area movement embed to location channel
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        # Ensure location channel exists and send exit embed
+        location_channel = await channel_manager.get_or_create_location_channel(
+            interaction.guild, location_id
+        )
+        
+        if location_channel:
+            embed = discord.Embed(
+                title="🚪 Area Movement",
+                description=f"**{char_name}** has exited the **{ship_name}**.",
+                color=0xFF6600
+            )
+            try:
+                await location_channel.send(embed=embed)
+            except Exception as e:
+                print(f"❌ Failed to send ship exit embed: {e}")
         
         # Check if this was the owner and others are inside
         owner_id = self.db.execute_query(
@@ -214,11 +265,34 @@ class ShipInteriorCog(commands.Cog):
                         (other_user_id,)
                     )
                     
-                    # Give them location access
-                    await channel_manager.give_user_location_access(member, location_id)
+                    # Give them location access (suppress arrival notification to avoid duplicate)
+                    await channel_manager.give_user_location_access(member, location_id, send_arrival_notification=False)
                     
                     # Remove from ship channel
                     await channel_manager.remove_user_ship_access(member, ship_id)
+                    
+                    # Send area movement embed for forced exit
+                    other_char_name = self.db.execute_query(
+                        "SELECT name FROM characters WHERE user_id = ?",
+                        (other_user_id,),
+                        fetch='one'
+                    )[0]
+                    
+                    # Ensure location channel exists for forced exit embed
+                    location_channel = await channel_manager.get_or_create_location_channel(
+                        interaction.guild, location_id
+                    )
+                    
+                    if location_channel:
+                        embed = discord.Embed(
+                            title="🚪 Area Movement",
+                            description=f"**{other_char_name}** has exited the **{ship_name}**.",
+                            color=0xFF6600
+                        )
+                        try:
+                            await location_channel.send(embed=embed)
+                        except Exception as e:
+                            print(f"❌ Failed to send forced exit embed: {e}")
         
         # Clean up ship channel if empty
         remaining_users = self.db.execute_query(
@@ -293,13 +367,13 @@ class ShipInteriorCog(commands.Cog):
         )
         
         await interaction.response.send_message(
-            f"Invited {player.mention} to your ship. They have 5 minutes to accept with `/ship interior accept`.",
+            f"Invited {player.mention} to your ship. They have 5 minutes to accept with `/shipinterior interior accept`.",
             ephemeral=False
         )
         
         # Notify the invitee
         try:
-            await player.send(f"{interaction.user.mention} has invited you aboard their ship '{ship_name}'. Use `/ship interior accept` to enter.")
+            await player.send(f"{interaction.user.mention} has invited you aboard their ship '{ship_name}'. Use `/shipinterior interior accept` to enter.")
         except:
             pass  # DM failed
     
@@ -356,21 +430,44 @@ class ShipInteriorCog(commands.Cog):
         from utils.channel_manager import ChannelManager
         channel_manager = ChannelManager(self.bot)
         
-        # Update character location
-        self.db.execute_query(
-            "UPDATE characters SET current_ship_id = ? WHERE user_id = ?",
-            (ship_id, interaction.user.id)
-        )
+        # Send area movement embed to location channel BEFORE updating character location
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
         
-        # Get current location to remove access
+        # Get current location to send embed
         current_location = self.db.execute_query(
             "SELECT current_location FROM characters WHERE user_id = ?",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
-        # Remove from location channel
-        await channel_manager.remove_user_location_access(interaction.user, current_location)
+        if current_location:
+            # Ensure location channel exists and get it
+            location_channel = await channel_manager.get_or_create_location_channel(
+                interaction.guild, current_location
+            )
+            
+            if location_channel:
+                embed = discord.Embed(
+                    title="🚪 Area Movement",
+                    description=f"**{char_name}** boards the **{ship_name}**.",
+                    color=0x7289DA
+                )
+                try:
+                    await location_channel.send(embed=embed)
+                except Exception as e:
+                    print(f"❌ Failed to send ship boarding embed: {e}")
+        
+        # Update character location
+        self.db.execute_query(
+            "UPDATE characters SET current_ship_id = ? WHERE user_id = ?",
+            (ship_id, interaction.user.id)
+        )
+        
+        # Keep location channel access - users should retain access to both ship and location channels
         
         # Give access to ship channel
         success = await channel_manager.give_user_ship_access(interaction.user, ship_id)
@@ -386,6 +483,29 @@ class ShipInteriorCog(commands.Cog):
                 f"You've boarded {ship_name}. Head to {ship_channel.mention}",
                 ephemeral=True
             )
+            
+            # Send area movement embed to location channel
+            char_name = self.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )[0]
+            
+            # Ensure location channel exists for invitation acceptance embed
+            location_channel = await channel_manager.get_or_create_location_channel(
+                interaction.guild, current_location
+            )
+            
+            if location_channel:
+                embed = discord.Embed(
+                    title="🚪 Area Movement",
+                    description=f"**{char_name}** enters the **{ship_name}**.",
+                    color=0x7289DA
+                )
+                try:
+                    await location_channel.send(embed=embed)
+                except Exception as e:
+                    print(f"❌ Failed to send invitation acceptance embed: {e}")
             
             # Notify the inviter
             try:

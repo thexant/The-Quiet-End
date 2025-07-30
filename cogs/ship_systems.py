@@ -54,7 +54,7 @@ class ShipSystemsCog(commands.Cog):
         )
         
         # Create ship browser view
-        view = ShipBrowserView(self.bot, interaction.user.id, money, wealth_level, location_name, active_ship, ship_count)
+        view = ShipBrowserView(self.bot, interaction.user.id, money, wealth_level, location_name, active_ship, ship_count, current_location)
         
         embed = discord.Embed(
             title=f"🚢 {location_name} Shipyard",
@@ -74,6 +74,52 @@ class ShipSystemsCog(commands.Cog):
             )
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @ship_group.command(name="refresh_inventory", description="[Admin] Manually refresh shipyard inventory")
+    async def refresh_shipyard_inventory(self, interaction: discord.Interaction, location_id: int = None):
+        """Admin command to manually refresh shipyard inventory"""
+        # Basic admin check - you might want to implement proper admin checking
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("This command requires administrator permissions.", ephemeral=True)
+            return
+        
+        if location_id is None:
+            # Get current location if not specified
+            char_info = self.bot.db.execute_query(
+                "SELECT current_location FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            if not char_info:
+                await interaction.response.send_message("Character not found or location_id not specified!", ephemeral=True)
+                return
+            location_id = char_info[0]
+        
+        # Check if location has shipyard
+        location_info = self.bot.db.execute_query(
+            "SELECT name, has_shipyard, wealth_level FROM locations WHERE location_id = ?",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_info:
+            await interaction.response.send_message(f"Location {location_id} not found!", ephemeral=True)
+            return
+            
+        location_name, has_shipyard, wealth_level = location_info
+        
+        if not has_shipyard:
+            await interaction.response.send_message(f"{location_name} doesn't have a shipyard!", ephemeral=True)
+            return
+        
+        # Create a temporary browser view to access the refresh method
+        temp_view = ShipBrowserView(self.bot, interaction.user.id, 0, wealth_level, location_name, None, 0, location_id)
+        temp_view._refresh_shipyard_inventory()
+        
+        await interaction.response.send_message(
+            f"✅ Shipyard inventory refreshed for {location_name}!",
+            ephemeral=True
+        )
     
     @ship_group.command(name="upgrade", description="Access comprehensive ship upgrade systems")
     async def ship_upgrade(self, interaction: discord.Interaction):
@@ -149,7 +195,7 @@ class ShipSystemsCog(commands.Cog):
         """Main shipyard hub for all ship-related activities"""
         # Get location and character info
         location_info = self.db.execute_query(
-            '''SELECT l.location_id, l.name, l.has_shipyard, l.wealth_level, c.money
+            '''SELECT l.location_id, l.name, l.has_shipyard, l.has_upgrades, l.wealth_level, c.money
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
                WHERE c.user_id = ?''',
@@ -161,7 +207,7 @@ class ShipSystemsCog(commands.Cog):
             await interaction.response.send_message("Location not found!", ephemeral=True)
             return
         
-        location_id, location_name, has_shipyard, wealth_level, money = location_info
+        location_id, location_name, has_shipyard, has_upgrades, wealth_level, money = location_info
         
         if not has_shipyard:
             await interaction.response.send_message(f"{location_name} doesn't have a shipyard.", ephemeral=True)
@@ -179,7 +225,7 @@ class ShipSystemsCog(commands.Cog):
             fetch='all'
         )
         
-        view = ShipyardHubView(self.bot, interaction.user.id, wealth_level, money, fleet)
+        view = ShipyardHubView(self.bot, interaction.user.id, wealth_level, money, fleet, has_upgrades)
         
         embed = discord.Embed(
             title=f"🏗️ {location_name} Shipyard Hub",
@@ -223,7 +269,7 @@ class ShipSystemsCog(commands.Cog):
 
 class ShipBrowserView(discord.ui.View):
     """Enhanced ship browsing with categories and filters"""
-    def __init__(self, bot, user_id: int, money: int, wealth_level: int, location_name: str, active_ship, ship_count: int):
+    def __init__(self, bot, user_id: int, money: int, wealth_level: int, location_name: str, active_ship, ship_count: int, location_id: int):
         super().__init__(timeout=600)
         self.bot = bot
         self.user_id = user_id
@@ -232,6 +278,7 @@ class ShipBrowserView(discord.ui.View):
         self.location_name = location_name
         self.active_ship = active_ship
         self.ship_count = ship_count
+        self.location_id = location_id
         self.current_category = "all"
         self.show_affordable_only = False
         
@@ -349,25 +396,65 @@ class ShipBrowserView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
     
     def _generate_filtered_ships(self):
-        """Generate ships based on category and shipyard tier"""
-        from utils.ship_data import generate_random_ship_name, SHIP_TYPES
+        """Get ships from persistent inventory, refreshing if needed"""
+        import random
+        from utils.ship_data import generate_random_ship_name
         
+        # Check if inventory needs refreshing (random between 12-24 hours)
+        refresh_hours = random.randint(12, 24)
+        if self.bot.db.check_inventory_refresh_needed(self.location_id, refresh_hours):
+            self._refresh_shipyard_inventory()
+        
+        # Get ships from inventory
+        inventory_ships = self.bot.db.get_shipyard_inventory(self.location_id)
+        
+        # Convert to expected format and filter by category
         ships = []
+        for inv_ship in inventory_ships:
+            # Filter by category
+            if self.current_category != "all":
+                # Check if ship matches category
+                categories = self._get_ship_categories(inv_ship['type'], inv_ship)
+                if self.current_category not in categories:
+                    continue
+            
+            # Convert to display format
+            ship = {
+                'inventory_id': inv_ship['inventory_id'],
+                'name': inv_ship['name'],
+                'type': inv_ship['type'],
+                'class': inv_ship['class'],
+                'tier': inv_ship['tier'],
+                'price': inv_ship['price'],
+                'cargo_capacity': inv_ship['cargo_capacity'],
+                'speed_rating': inv_ship['speed_rating'],
+                'combat_rating': inv_ship['combat_rating'],
+                'fuel_efficiency': inv_ship['fuel_efficiency'],
+                'special_features': inv_ship['special_features'],
+                'is_player_sold': inv_ship['is_player_sold'],
+                'condition_rating': inv_ship['condition_rating']
+            }
+            ships.append(ship)
+        
+        # Sort by player-sold first, then tier, then price
+        ships.sort(key=lambda x: (not x['is_player_sold'], x['tier'], x['price']))
+        
+        return ships
+    
+    def _refresh_shipyard_inventory(self):
+        """Refresh the shipyard inventory with new ships"""
+        from utils.ship_data import generate_random_ship_name
+        import random
         
         # Define ship templates by category
         templates = self._get_ship_templates()
         
-        # Filter by category
-        if self.current_category == "all":
-            available_templates = templates
-        else:
-            available_templates = [t for t in templates if self.current_category in t['categories']]
-        
         # Filter by shipyard tier
         tier_limit = min(self.wealth_level // 2 + 1, 5)
-        available_templates = [t for t in available_templates if t['tier'] <= tier_limit]
+        available_templates = [t for t in templates if t['tier'] <= tier_limit]
         
-        # Generate ships from templates
+        # Generate new ships from templates
+        new_ships = []
         for template in available_templates:
             # Add some variation
             price_variance = random.randint(-15, 15) / 100
@@ -383,16 +470,40 @@ class ShipBrowserView(discord.ui.View):
                 'fuel_efficiency': template['fuel_efficiency'],
                 'special_features': template.get('special_features')
             }
-            ships.append(ship)
-        
-        # Sort by price
-        ships.sort(key=lambda x: x['price'])
+            new_ships.append(ship)
         
         # Add special offers for high-tier shipyards
-        if self.current_category == "special" and self.wealth_level >= 6:
-            ships.extend(self._generate_special_offers())
+        if self.wealth_level >= 6:
+            new_ships.extend(self._generate_special_offers())
         
-        return ships
+        # Refresh inventory in database
+        self.bot.db.refresh_shipyard_inventory(self.location_id, new_ships)
+    
+    def _get_ship_categories(self, ship_type: str, ship_data: dict) -> list:
+        """Get categories that a ship belongs to"""
+        categories = ['all']
+        
+        # Categorize by type
+        cargo_types = ['Hauler', 'Heavy Hauler', 'Bulk Carrier', 'Mining Barge']
+        speed_types = ['Scout', 'Fast Courier', 'Interceptor', 'Racing Ship']
+        combat_types = ['Armed Trader', 'Frigate', 'Destroyer', 'Battleship']
+        explore_types = ['Explorer', 'Research Vessel', 'Deep Space Scout']
+        luxury_types = ['Luxury Yacht', 'Executive Transport', 'Ambassador']
+        
+        if ship_type in cargo_types or ship_data.get('cargo_capacity', 0) > 200:
+            categories.append('cargo')
+        if ship_type in speed_types or ship_data.get('speed_rating', 0) > 7:
+            categories.append('speed')
+        if ship_type in combat_types or ship_data.get('combat_rating', 0) > 15:
+            categories.append('combat')
+        if ship_type in explore_types:
+            categories.append('explore')
+        if ship_type in luxury_types or ship_data.get('tier', 1) >= 4:
+            categories.append('luxury')
+        if ship_data.get('is_player_sold', False):
+            categories.append('special')
+            
+        return categories
     
     def _get_ship_templates(self):
         """Define ship templates with categories"""
@@ -656,9 +767,22 @@ class PurchaseConfirmView(discord.ui.View):
         import json
         
         # Start transaction
+        conn = None
         try:
+            # Begin database transaction
+            conn = self.bot.db.begin_transaction()
+            
+            # Remove ship from shipyard inventory if it has inventory_id
+            if 'inventory_id' in self.ship_data:
+                self.bot.db.execute_in_transaction(
+                    conn,
+                    "DELETE FROM shipyard_inventory WHERE inventory_id = ?",
+                    (self.ship_data['inventory_id'],)
+                )
+            
             # Deduct credits
-            self.bot.db.execute_query(
+            self.bot.db.execute_in_transaction(
+                conn,
                 "UPDATE characters SET money = money - ? WHERE user_id = ?",
                 (self.final_price, self.user_id)
             )
@@ -676,7 +800,8 @@ class PurchaseConfirmView(discord.ui.View):
             fuel_capacity = 100 + (self.ship_data['tier'] * 20)
             
             # Create the ship with current_fuel initialized to fuel_capacity (full tank)
-            self.bot.db.execute_query(
+            self.bot.db.execute_in_transaction(
+                conn,
                 '''INSERT INTO ships 
                    (owner_id, name, ship_type, tier, condition_rating,
                     fuel_capacity, cargo_capacity, combat_rating, fuel_efficiency,
@@ -691,53 +816,64 @@ class PurchaseConfirmView(discord.ui.View):
                  self.ship_data['price'], json.dumps([]), fuel_capacity)  # Initialize current_fuel to fuel_capacity
             )
             
-            # Get new ship ID
-            new_ship_id = self.bot.db.execute_query(
+            # Get the new ship ID
+            new_ship_id = self.bot.db.execute_in_transaction(
+                conn,
                 "SELECT last_insert_rowid()",
                 fetch='one'
             )[0]
             
-            # Generate ship activities
-            activity_manager = ShipActivityManager(self.bot)
-            activity_manager.generate_ship_activities(new_ship_id, ship_type)
-            
             # Add to player_ships
-            self.bot.db.execute_query(
+            self.bot.db.execute_in_transaction(
+                conn,
                 '''INSERT INTO player_ships (owner_id, ship_id, is_active)
                    VALUES (?, ?, ?)''',
                 (self.user_id, new_ship_id, 1 if not self.has_trade else 1)
             )
             
             # Update BOTH ship_id and active_ship_id to the new ship
-            self.bot.db.execute_query(
+            self.bot.db.execute_in_transaction(
+                conn,
                 "UPDATE characters SET ship_id = ?, active_ship_id = ? WHERE user_id = ?",
                 (new_ship_id, new_ship_id, self.user_id)
             )
             
             # Handle trade-in if applicable
             if self.has_trade:
+                # Get the old active ship ID BEFORE deactivating it
+                old_active_ship = self.bot.db.execute_in_transaction(
+                    conn,
+                    "SELECT ship_id FROM player_ships WHERE owner_id = ? AND is_active = 1 AND ship_id != ?",
+                    (self.user_id, new_ship_id),
+                    fetch='one'
+                )
+                
                 # Deactivate old ship
-                self.bot.db.execute_query(
+                self.bot.db.execute_in_transaction(
+                    conn,
                     "UPDATE player_ships SET is_active = 0 WHERE owner_id = ? AND is_active = 1 AND ship_id != ?",
                     (self.user_id, new_ship_id)
                 )
                 
-                # Remove old ship from player_ships (sold)
-                active_ship = self.bot.db.execute_query(
-                    "SELECT ship_id FROM player_ships WHERE owner_id = ? AND is_active = 0 ORDER BY ship_storage_id DESC LIMIT 1",
-                    (self.user_id,),
-                    fetch='one'
-                )
-                
-                if active_ship:
-                    self.bot.db.execute_query(
+                # Remove old ship from player_ships and ships table (sold in trade)
+                if old_active_ship:
+                    self.bot.db.execute_in_transaction(
+                        conn,
                         "DELETE FROM player_ships WHERE ship_id = ?",
-                        (active_ship[0],)
+                        (old_active_ship[0],)
                     )
-                    self.bot.db.execute_query(
+                    self.bot.db.execute_in_transaction(
+                        conn,
                         "DELETE FROM ships WHERE ship_id = ?",
-                        (active_ship[0],)
+                        (old_active_ship[0],)
                     )
+            
+            # Commit all changes
+            self.bot.db.commit_transaction(conn)
+            
+            # Generate ship activities AFTER committing the transaction
+            activity_manager = ShipActivityManager(self.bot)
+            activity_manager.generate_ship_activities(new_ship_id, ship_type)
             
             # Success message
             embed = discord.Embed(
@@ -752,13 +888,20 @@ class PurchaseConfirmView(discord.ui.View):
             
             embed.add_field(
                 name="🎉 Next Steps",
-                value="• Use `/ship info` to view your new ship\n• Visit the upgrade workshop to enhance it\n• Check ship activities in your interior",
+                value="• Use `/tqe` to view your new ship\n• Visit the upgrade workshop to enhance it\n• Check ship activities in your interior",
                 inline=False
             )
             
             await interaction.response.edit_message(embed=embed, view=None)
             
         except Exception as e:
+            # Rollback transaction if something went wrong
+            if conn:
+                try:
+                    self.bot.db.rollback_transaction(conn)
+                except:
+                    pass  # Connection might already be closed
+            
             await interaction.response.send_message(
                 f"Error processing purchase: {str(e)}",
                 ephemeral=True
@@ -1630,13 +1773,25 @@ class ItemApplicationView(discord.ui.View):
 
 class ShipyardHubView(discord.ui.View):
     """Main shipyard hub navigation"""
-    def __init__(self, bot, user_id: int, wealth_level: int, money: int, fleet: list):
+    def __init__(self, bot, user_id: int, wealth_level: int, money: int, fleet: list, has_upgrades: bool = False):
         super().__init__(timeout=600)
         self.bot = bot
         self.user_id = user_id
         self.wealth_level = wealth_level
         self.money = money
         self.fleet = fleet
+        self.has_upgrades = has_upgrades
+        
+        # Conditionally add upgrade workshop button
+        if has_upgrades:
+            upgrade_button = discord.ui.Button(
+                label="Upgrade Workshop", 
+                style=discord.ButtonStyle.primary, 
+                emoji="🔧", 
+                row=0
+            )
+            upgrade_button.callback = self.upgrade_workshop
+            self.add_item(upgrade_button)
         
     @discord.ui.button(label="Browse Ships", style=discord.ButtonStyle.primary, emoji="🛒", row=0)
     async def browse_ships(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1645,8 +1800,7 @@ class ShipyardHubView(discord.ui.View):
             self.bot.get_cog('ShipSystemsCog'), interaction
         )
     
-    @discord.ui.button(label="Upgrade Workshop", style=discord.ButtonStyle.primary, emoji="🔧", row=0)
-    async def upgrade_workshop(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def upgrade_workshop(self, interaction: discord.Interaction):
         if not any(s[5] for s in self.fleet):  # No active ship
             await interaction.response.send_message("You need an active ship first!", ephemeral=True)
             return
@@ -1697,10 +1851,22 @@ class ShipyardHubView(discord.ui.View):
             )
             return
         
-        await interaction.response.send_message(
-            "Ship Exchange feature coming soon! Trade ships with other players.",
-            ephemeral=True
+        # Get user's current location for the exchange
+        char_info = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
         )
+        
+        if not char_info:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        current_location = char_info[0]
+        
+        # Create and show the ship exchange view
+        view = ShipExchangeView(self.bot, interaction.user.id, current_location, self.money)
+        await view.create_exchange_embed(interaction)
     
     @discord.ui.button(label="Sell Ship", style=discord.ButtonStyle.danger, emoji="💰", row=1)
     async def sell_ship(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1859,13 +2025,61 @@ class SaleConfirmView(discord.ui.View):
             return
         
         # Process sale
+        # Get player's current location
+        location_info = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not location_info:
+            await interaction.response.send_message("Error: Character not found!", ephemeral=True)
+            return
+            
+        current_location = location_info[0]
+        
+        # Get ship details for adding to inventory
+        ship_details = self.bot.db.execute_query(
+            """SELECT s.name, s.ship_type, s.ship_class, s.tier, s.condition_rating, 
+                      s.market_value, s.cargo_capacity, s.speed_rating, s.combat_rating, 
+                      s.fuel_efficiency, s.special_mods
+               FROM ships s WHERE s.ship_id = ?""",
+            (self.ship_id,),
+            fetch='one'
+        )
+        
+        if ship_details:
+            # Prepare ship data for inventory
+            ship_data = {
+                'name': ship_details[0],
+                'type': ship_details[1],
+                'class': ship_details[2],
+                'tier': ship_details[3],
+                'cargo_capacity': ship_details[6],
+                'speed_rating': ship_details[7],
+                'combat_rating': ship_details[8],
+                'fuel_efficiency': ship_details[9],
+                'special_features': ship_details[10],
+                'condition_rating': ship_details[4],
+                'market_value': ship_details[5],
+                'price': self.sell_value * 2  # Shipyard sells for roughly 2x what they buy for
+            }
+            
+            # Add ship to shipyard inventory
+            self.bot.db.add_ship_to_inventory(
+                current_location, 
+                ship_data, 
+                is_player_sold=True, 
+                original_owner_id=self.user_id
+            )
+        
         # Remove from player_ships
         self.bot.db.execute_query(
             "DELETE FROM player_ships WHERE ship_id = ? AND owner_id = ?",
             (self.ship_id, self.user_id)
         )
         
-        # Delete ship
+        # Delete ship from ships table
         self.bot.db.execute_query(
             "DELETE FROM ships WHERE ship_id = ?",
             (self.ship_id,)
@@ -2239,6 +2453,751 @@ class ShipRenameModal(discord.ui.Modal, title="Rename Your Ship"):
             return {'valid': False, 'reason': 'Name has excessive whitespace'}
         
         return {'valid': True, 'reason': 'Valid name'}
+
+
+class ShipExchangeView(discord.ui.View):
+    """Main ship exchange interface for browsing listings"""
+    def __init__(self, bot, user_id: int, location_id: int, money: int):
+        super().__init__(timeout=600)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.money = money
+    
+    async def create_exchange_embed(self, interaction: discord.Interaction):
+        """Create and display the ship exchange interface"""
+        # Get location name
+        location_info = self.bot.db.execute_query(
+            "SELECT name FROM locations WHERE location_id = ?",
+            (self.location_id,),
+            fetch='one'
+        )
+        location_name = location_info[0] if location_info else "Unknown Location"
+        
+        # Get active listings at this location
+        listings = self.bot.db.execute_query(
+            '''SELECT sel.listing_id, sel.ship_id, sel.owner_id, sel.asking_price, 
+                      sel.desired_ship_types, sel.listing_description, sel.expires_at,
+                      s.name, s.ship_type, s.tier, s.condition_rating, s.market_value,
+                      c.name as owner_name
+               FROM ship_exchange_listings sel
+               JOIN ships s ON sel.ship_id = s.ship_id
+               JOIN characters c ON sel.owner_id = c.user_id
+               WHERE sel.listed_at_location = ? AND sel.is_active = 1 
+               AND sel.expires_at > datetime('now')
+               ORDER BY sel.created_at DESC''',
+            (self.location_id,),
+            fetch='all'
+        )
+        
+        embed = discord.Embed(
+            title=f"🔄 Ship Exchange - {location_name}",
+            description="Browse ships available for exchange at this location",
+            color=0x00ff00
+        )
+        
+        if not listings:
+            embed.add_field(
+                name="No Ships Available",
+                value="No ships are currently listed for exchange at this location.",
+                inline=False
+            )
+        else:
+            # Show first few listings
+            for i, listing in enumerate(listings[:5]):
+                (listing_id, ship_id, owner_id, asking_price, desired_types, 
+                 description, expires_at, ship_name, ship_type, tier, condition, 
+                 market_value, owner_name) = listing
+                
+                desired_list = json.loads(desired_types) if desired_types else []
+                desired_str = ", ".join(desired_list) if desired_list else "Any ship type"
+                
+                embed.add_field(
+                    name=f"{ship_name} ({ship_type})",
+                    value=f"**Owner:** {owner_name}\n"
+                          f"**Tier:** {tier} | **Condition:** {condition}%\n"
+                          f"**Asking:** {asking_price:,} credits\n"
+                          f"**Wants:** {desired_str}",
+                    inline=True
+                )
+            
+            if len(listings) > 5:
+                embed.add_field(
+                    name="More Available",
+                    value=f"+ {len(listings) - 5} more ships",
+                    inline=False
+                )
+        
+        embed.add_field(
+            name="Your Credits", 
+            value=f"{self.money:,}", 
+            inline=True
+        )
+        
+        await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+    
+    @discord.ui.button(label="List My Ship", style=discord.ButtonStyle.primary, emoji="📝", row=0)
+    async def list_ship(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open interface to list a ship for exchange"""
+        view = ListShipView(self.bot, self.user_id, self.location_id)
+        await view.show_ship_selection(interaction)
+    
+    @discord.ui.button(label="Browse Listings", style=discord.ButtonStyle.secondary, emoji="🔍", row=0)
+    async def browse_listings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Browse detailed ship listings"""
+        view = BrowseListingsView(self.bot, self.user_id, self.location_id, self.money)
+        await view.show_listings(interaction)
+    
+    @discord.ui.button(label="My Listed Ships", style=discord.ButtonStyle.secondary, emoji="📋", row=1)
+    async def my_listings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """View and manage your listed ships"""
+        listings = self.bot.db.execute_query(
+            '''SELECT sel.listing_id, sel.ship_id, sel.asking_price, sel.expires_at,
+                      s.name, s.ship_type, l.name as location_name
+               FROM ship_exchange_listings sel
+               JOIN ships s ON sel.ship_id = s.ship_id
+               JOIN locations l ON sel.listed_at_location = l.location_id
+               WHERE sel.owner_id = ? AND sel.is_active = 1
+               ORDER BY sel.created_at DESC''',
+            (self.user_id,),
+            fetch='all'
+        )
+        
+        embed = discord.Embed(
+            title="📋 Your Listed Ships",
+            color=0x4169e1
+        )
+        
+        if not listings:
+            embed.description = "You don't have any ships listed for exchange."
+        else:
+            for listing in listings[:10]:
+                listing_id, ship_id, asking_price, expires_at, ship_name, ship_type, location_name = listing
+                embed.add_field(
+                    name=f"{ship_name} ({ship_type})",
+                    value=f"**Location:** {location_name}\n"
+                          f"**Asking:** {asking_price:,} credits\n"
+                          f"**Expires:** {expires_at[:16]}",
+                    inline=True
+                )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class ListShipView(discord.ui.View):
+    """Interface for listing a ship for exchange"""
+    def __init__(self, bot, user_id: int, location_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+    
+    async def show_ship_selection(self, interaction: discord.Interaction):
+        """Show ships available to list at current location"""
+        # Get ships owned by user that are at this location and not active
+        ships = self.bot.db.execute_query(
+            '''SELECT s.ship_id, s.name, s.ship_type, s.tier, s.condition_rating, s.market_value
+               FROM player_ships ps
+               JOIN ships s ON ps.ship_id = s.ship_id
+               WHERE ps.owner_id = ? AND ps.is_active = 0 
+               AND s.docked_at_location = ?
+               AND s.ship_id NOT IN (
+                   SELECT ship_id FROM ship_exchange_listings 
+                   WHERE is_active = 1 AND expires_at > datetime('now')
+               )''',
+            (self.user_id, self.location_id),
+            fetch='all'
+        )
+        
+        if not ships:
+            embed = discord.Embed(
+                title="❌ No Ships Available",
+                description="You don't have any ships at this location that can be listed for exchange.\n\n"
+                           "**Requirements:**\n"
+                           "• Ship must be docked at this location\n"
+                           "• Ship cannot be your active ship\n"
+                           "• Ship cannot already be listed",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="📝 Select Ship to List",
+            description="Choose which ship you want to list for exchange:",
+            color=0x00ff00
+        )
+        
+        # Add dropdown for ship selection
+        options = []
+        for ship in ships[:25]:  # Discord limit
+            ship_id, name, ship_type, tier, condition, market_value = ship
+            options.append(discord.SelectOption(
+                label=f"{name} ({ship_type})",
+                description=f"Tier {tier} • {condition}% condition • {market_value:,} credits",
+                value=str(ship_id)
+            ))
+        
+        select = ShipSelectionDropdown(self.bot, self.user_id, self.location_id, options)
+        self.add_item(select)
+        
+        await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+
+
+class ShipSelectionDropdown(discord.ui.Select):
+    """Dropdown for selecting a ship to list"""
+    def __init__(self, bot, user_id: int, location_id: int, options: list):
+        super().__init__(placeholder="Choose a ship to list...", options=options)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+    
+    async def callback(self, interaction: discord.Interaction):
+        ship_id = int(self.values[0])
+        
+        # Get ship details
+        ship_info = self.bot.db.execute_query(
+            '''SELECT s.name, s.ship_type, s.tier, s.condition_rating, s.market_value
+               FROM ships s WHERE s.ship_id = ?''',
+            (ship_id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            await interaction.response.send_message("Ship not found!", ephemeral=True)
+            return
+        
+        name, ship_type, tier, condition, market_value = ship_info
+        
+        # Show listing configuration modal
+        modal = ListingConfigModal(self.bot, self.user_id, self.location_id, ship_id, name, ship_type)
+        await interaction.response.send_modal(modal)
+
+
+class ListingConfigModal(discord.ui.Modal):
+    """Modal for configuring ship listing details"""
+    def __init__(self, bot, user_id: int, location_id: int, ship_id: int, ship_name: str, ship_type: str):
+        super().__init__(title=f"List {ship_name} for Exchange")
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.ship_id = ship_id
+        self.ship_name = ship_name
+        self.ship_type = ship_type
+        
+        self.asking_price = discord.ui.TextInput(
+            label="Asking Price (credits)",
+            placeholder="Enter asking price in credits (or 0 for ship trade only)",
+            required=True,
+            max_length=10
+        )
+        
+        self.desired_types = discord.ui.TextInput(
+            label="Desired Ship Types",
+            placeholder="e.g., Fighter, Hauler, Explorer (or leave blank for any)",
+            required=False,
+            max_length=200
+        )
+        
+        self.description = discord.ui.TextInput(
+            label="Listing Description",
+            placeholder="Optional description of your ship or trade requirements",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=500
+        )
+        
+        self.add_item(self.asking_price)
+        self.add_item(self.desired_types)
+        self.add_item(self.description)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            asking_price = int(self.asking_price.value)
+            if asking_price < 0:
+                raise ValueError("Price cannot be negative")
+        except ValueError:
+            await interaction.response.send_message("Invalid asking price!", ephemeral=True)
+            return
+        
+        # Parse desired ship types
+        desired_list = []
+        if self.desired_types.value:
+            desired_list = [t.strip() for t in self.desired_types.value.split(',') if t.strip()]
+        
+        # Create listing (expires in 7 days)
+        expires_at = datetime.now() + timedelta(days=7)
+        
+        self.bot.db.execute_query(
+            '''INSERT INTO ship_exchange_listings 
+               (ship_id, owner_id, listed_at_location, asking_price, desired_ship_types, 
+                listing_description, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+            (self.ship_id, self.user_id, self.location_id, asking_price, 
+             json.dumps(desired_list), self.description.value, expires_at)
+        )
+        
+        embed = discord.Embed(
+            title="✅ Ship Listed Successfully",
+            description=f"**{self.ship_name}** has been listed for exchange!",
+            color=0x00ff00
+        )
+        
+        embed.add_field(name="Asking Price", value=f"{asking_price:,} credits", inline=True)
+        embed.add_field(name="Desired Types", value=", ".join(desired_list) if desired_list else "Any", inline=True)
+        embed.add_field(name="Expires", value=expires_at.strftime("%Y-%m-%d %H:%M"), inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class BrowseListingsView(discord.ui.View):
+    """Detailed browsing interface for ship listings"""
+    def __init__(self, bot, user_id: int, location_id: int, money: int):
+        super().__init__(timeout=600)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.money = money
+        self.current_page = 0
+    
+    async def show_listings(self, interaction: discord.Interaction):
+        """Show detailed listings with pagination"""
+        listings = self.bot.db.execute_query(
+            '''SELECT sel.listing_id, sel.ship_id, sel.owner_id, sel.asking_price, 
+                      sel.desired_ship_types, sel.listing_description, sel.expires_at,
+                      s.name, s.ship_type, s.tier, s.condition_rating, s.market_value,
+                      c.name as owner_name
+               FROM ship_exchange_listings sel
+               JOIN ships s ON sel.ship_id = s.ship_id
+               JOIN characters c ON sel.owner_id = c.user_id
+               WHERE sel.listed_at_location = ? AND sel.is_active = 1 
+               AND sel.expires_at > datetime('now')
+               AND sel.owner_id != ?
+               ORDER BY sel.created_at DESC''',
+            (self.location_id, self.user_id),
+            fetch='all'
+        )
+        
+        if not listings:
+            embed = discord.Embed(
+                title="❌ No Listings Available",
+                description="No ships are currently available for exchange at this location.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Show current listing
+        listing = listings[self.current_page]
+        (listing_id, ship_id, owner_id, asking_price, desired_types, 
+         description, expires_at, ship_name, ship_type, tier, condition, 
+         market_value, owner_name) = listing
+        
+        desired_list = json.loads(desired_types) if desired_types else []
+        
+        embed = discord.Embed(
+            title=f"🚀 {ship_name}",
+            description=description or "No description provided",
+            color=0x4169e1
+        )
+        
+        embed.add_field(name="Type", value=ship_type, inline=True)
+        embed.add_field(name="Tier", value=str(tier), inline=True)
+        embed.add_field(name="Condition", value=f"{condition}%", inline=True)
+        embed.add_field(name="Market Value", value=f"{market_value:,} credits", inline=True)
+        embed.add_field(name="Owner", value=owner_name, inline=True)
+        embed.add_field(name="Asking Price", value=f"{asking_price:,} credits", inline=True)
+        embed.add_field(name="Wants", value=", ".join(desired_list) if desired_list else "Any ship type", inline=False)
+        embed.add_field(name="Expires", value=expires_at[:16], inline=True)
+        
+        embed.set_footer(text=f"Listing {self.current_page + 1} of {len(listings)}")
+        
+        # Add navigation and action buttons
+        self.clear_items()
+        
+        if len(listings) > 1:
+            prev_button = discord.ui.Button(label="◀ Previous", style=discord.ButtonStyle.secondary, disabled=self.current_page == 0)
+            prev_button.callback = self.previous_listing
+            self.add_item(prev_button)
+            
+            next_button = discord.ui.Button(label="Next ▶", style=discord.ButtonStyle.secondary, disabled=self.current_page >= len(listings) - 1)
+            next_button.callback = self.next_listing
+            self.add_item(next_button)
+        
+        offer_button = discord.ui.Button(label="Make Offer", style=discord.ButtonStyle.primary, emoji="💼")
+        offer_button.callback = lambda i: self.make_offer(i, listing_id, ship_name)
+        self.add_item(offer_button)
+        
+        await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+        
+        # Store listings for navigation
+        self.listings = listings
+    
+    async def previous_listing(self, interaction: discord.Interaction):
+        self.current_page = max(0, self.current_page - 1)
+        await self.show_listings(interaction)
+    
+    async def next_listing(self, interaction: discord.Interaction):
+        self.current_page = min(len(self.listings) - 1, self.current_page + 1)
+        await self.show_listings(interaction)
+    
+    async def make_offer(self, interaction: discord.Interaction, listing_id: int, ship_name: str):
+        """Start the offer making process"""
+        view = MakeOfferView(self.bot, self.user_id, self.location_id, listing_id, ship_name)
+        await view.show_offer_interface(interaction)
+
+
+class MakeOfferView(discord.ui.View):
+    """Interface for making an offer on a listed ship"""
+    def __init__(self, bot, user_id: int, location_id: int, listing_id: int, target_ship_name: str):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.location_id = location_id
+        self.listing_id = listing_id
+        self.target_ship_name = target_ship_name
+    
+    async def show_offer_interface(self, interaction: discord.Interaction):
+        """Show the offer making interface"""
+        # Get user's ships at this location
+        ships = self.bot.db.execute_query(
+            '''SELECT s.ship_id, s.name, s.ship_type, s.tier, s.condition_rating, s.market_value
+               FROM player_ships ps
+               JOIN ships s ON ps.ship_id = s.ship_id
+               WHERE ps.owner_id = ? AND s.docked_at_location = ?
+               AND s.ship_id NOT IN (
+                   SELECT ship_id FROM ship_exchange_listings 
+                   WHERE is_active = 1 AND expires_at > datetime('now')
+               )''',
+            (self.user_id, self.location_id),
+            fetch='all'
+        )
+        
+        if not ships:
+            embed = discord.Embed(
+                title="❌ No Ships Available",
+                description="You don't have any ships at this location that can be offered.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title=f"💼 Make Offer for {self.target_ship_name}",
+            description="Select which ship you want to offer in exchange:",
+            color=0x00ff00
+        )
+        
+        # Add dropdown for ship selection
+        options = []
+        for ship in ships[:25]:  # Discord limit
+            ship_id, name, ship_type, tier, condition, market_value = ship
+            options.append(discord.SelectOption(
+                label=f"{name} ({ship_type})",
+                description=f"Tier {tier} • {condition}% condition • {market_value:,} credits",
+                value=str(ship_id)
+            ))
+        
+        select = OfferShipDropdown(self.bot, self.user_id, self.listing_id, self.target_ship_name, options)
+        self.add_item(select)
+        
+        await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+
+
+class OfferShipDropdown(discord.ui.Select):
+    """Dropdown for selecting ship to offer"""
+    def __init__(self, bot, user_id: int, listing_id: int, target_ship_name: str, options: list):
+        super().__init__(placeholder="Choose ship to offer...", options=options)
+        self.bot = bot
+        self.user_id = user_id
+        self.listing_id = listing_id
+        self.target_ship_name = target_ship_name
+    
+    async def callback(self, interaction: discord.Interaction):
+        offered_ship_id = int(self.values[0])
+        
+        # Show offer details modal
+        modal = OfferDetailsModal(self.bot, self.user_id, self.listing_id, offered_ship_id, self.target_ship_name)
+        await interaction.response.send_modal(modal)
+
+
+class OfferDetailsModal(discord.ui.Modal):
+    """Modal for configuring offer details"""
+    def __init__(self, bot, user_id: int, listing_id: int, offered_ship_id: int, target_ship_name: str):
+        super().__init__(title=f"Offer Details for {target_ship_name}")
+        self.bot = bot
+        self.user_id = user_id
+        self.listing_id = listing_id
+        self.offered_ship_id = offered_ship_id
+        
+        self.credits_adjustment = discord.ui.TextInput(
+            label="Credits Adjustment",
+            placeholder="Enter + or - credits (e.g., +5000 or -2000, or 0 for even trade)",
+            required=True,
+            max_length=10
+        )
+        
+        self.offer_message = discord.ui.TextInput(
+            label="Message to Owner",
+            placeholder="Optional message to include with your offer",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=500
+        )
+        
+        self.add_item(self.credits_adjustment)
+        self.add_item(self.offer_message)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            credits_adj = int(self.credits_adjustment.value.replace('+', '').replace(' ', ''))
+        except ValueError:
+            await interaction.response.send_message("Invalid credits adjustment!", ephemeral=True)
+            return
+        
+        # Get listing owner for DM
+        listing_info = self.bot.db.execute_query(
+            '''SELECT sel.owner_id, s.name as ship_name
+               FROM ship_exchange_listings sel
+               JOIN ships s ON sel.ship_id = s.ship_id
+               WHERE sel.listing_id = ?''',
+            (self.listing_id,),
+            fetch='one'
+        )
+        
+        if not listing_info:
+            await interaction.response.send_message("Listing not found!", ephemeral=True)
+            return
+        
+        owner_id, target_ship_name = listing_info
+        
+        # Create offer (expires in 48 hours)
+        offer_expires_at = datetime.now() + timedelta(hours=48)
+        
+        offer_id = self.bot.db.execute_query(
+            '''INSERT INTO ship_exchange_offers 
+               (listing_id, offerer_id, offered_ship_id, credits_adjustment, 
+                offer_message, offer_expires_at)
+               VALUES (?, ?, ?, ?, ?, ?)''',
+            (self.listing_id, self.user_id, self.offered_ship_id, credits_adj, 
+             self.offer_message.value, offer_expires_at),
+            fetch='lastrowid'
+        )
+        
+        # Send DM to listing owner
+        try:
+            owner = self.bot.get_user(owner_id)
+            if owner:
+                await self.send_offer_dm(owner, offer_id, target_ship_name)
+        except:
+            pass  # DM failed, but offer is still recorded
+        
+        embed = discord.Embed(
+            title="✅ Offer Submitted",
+            description=f"Your offer for **{target_ship_name}** has been submitted!",
+            color=0x00ff00
+        )
+        
+        embed.add_field(name="Credits Adjustment", value=f"{credits_adj:+,}" if credits_adj != 0 else "Even trade", inline=True)
+        embed.add_field(name="Expires", value=offer_expires_at.strftime("%Y-%m-%d %H:%M"), inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    async def send_offer_dm(self, owner, offer_id: int, target_ship_name: str):
+        """Send DM notification to listing owner"""
+        # Get offer details
+        offer_info = self.bot.db.execute_query(
+            '''SELECT seo.credits_adjustment, seo.offer_message, seo.offer_expires_at,
+                      s.name as offered_ship_name, s.ship_type, s.tier, s.condition_rating,
+                      c.name as offerer_name
+               FROM ship_exchange_offers seo
+               JOIN ships s ON seo.offered_ship_id = s.ship_id
+               JOIN characters c ON seo.offerer_id = c.user_id
+               WHERE seo.offer_id = ?''',
+            (offer_id,),
+            fetch='one'
+        )
+        
+        if not offer_info:
+            return
+        
+        (credits_adj, message, expires_at, offered_ship_name, 
+         ship_type, tier, condition, offerer_name) = offer_info
+        
+        embed = discord.Embed(
+            title=f"💼 New Ship Exchange Offer",
+            description=f"You've received an offer for your **{target_ship_name}**!",
+            color=0x00ff00
+        )
+        
+        embed.add_field(name="Offerer", value=offerer_name, inline=True)
+        embed.add_field(name="Offered Ship", value=f"{offered_ship_name} ({ship_type})", inline=True)
+        embed.add_field(name="Ship Details", value=f"Tier {tier} • {condition}% condition", inline=True)
+        embed.add_field(name="Credits", value=f"{credits_adj:+,}" if credits_adj != 0 else "Even trade", inline=True)
+        embed.add_field(name="Expires", value=expires_at[:16], inline=True)
+        
+        if message:
+            embed.add_field(name="Message", value=message, inline=False)
+        
+        # Create response view
+        view = OfferResponseView(self.bot, offer_id)
+        
+        try:
+            await owner.send(embed=embed, view=view)
+        except discord.Forbidden:
+            pass  # User has DMs disabled
+
+
+class OfferResponseView(discord.ui.View):
+    """View for responding to ship exchange offers via DM"""
+    def __init__(self, bot, offer_id: int):
+        super().__init__(timeout=172800)  # 48 hours
+        self.bot = bot
+        self.offer_id = offer_id
+    
+    @discord.ui.button(label="Accept Offer", style=discord.ButtonStyle.success, emoji="✅")
+    async def accept_offer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_offer_response(interaction, 'accepted')
+    
+    @discord.ui.button(label="Decline Offer", style=discord.ButtonStyle.danger, emoji="❌")
+    async def decline_offer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_offer_response(interaction, 'declined')
+    
+    async def process_offer_response(self, interaction: discord.Interaction, response: str):
+        """Process the offer response"""
+        # Get offer details
+        offer_info = self.bot.db.execute_query(
+            '''SELECT seo.listing_id, seo.offerer_id, seo.offered_ship_id, seo.credits_adjustment,
+                      sel.ship_id as listed_ship_id, sel.owner_id, sel.listed_at_location,
+                      s1.name as offered_ship_name, s2.name as listed_ship_name
+               FROM ship_exchange_offers seo
+               JOIN ship_exchange_listings sel ON seo.listing_id = sel.listing_id
+               JOIN ships s1 ON seo.offered_ship_id = s1.ship_id
+               JOIN ships s2 ON sel.ship_id = s2.ship_id
+               WHERE seo.offer_id = ? AND seo.status = 'pending' ''',
+            (self.offer_id,),
+            fetch='one'
+        )
+        
+        if not offer_info:
+            await interaction.response.send_message("Offer not found or already processed!", ephemeral=True)
+            return
+        
+        # Update offer status
+        self.bot.db.execute_query(
+            "UPDATE ship_exchange_offers SET status = ?, responded_at = datetime('now') WHERE offer_id = ?",
+            (response, self.offer_id)
+        )
+        
+        if response == 'accepted':
+            # Execute the trade
+            await self.execute_trade(interaction, offer_info)
+        else:
+            embed = discord.Embed(
+                title="❌ Offer Declined",
+                description="You have declined the ship exchange offer.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    async def execute_trade(self, interaction: discord.Interaction, offer_info):
+        """Execute the ship exchange trade"""
+        (listing_id, offerer_id, offered_ship_id, credits_adj, listed_ship_id, 
+         owner_id, location_id, offered_ship_name, listed_ship_name) = offer_info
+        
+        try:
+            # Begin database transaction
+            conn = self.bot.db.begin_transaction()
+            
+            # Transfer ships
+            self.bot.db.execute_in_transaction(conn,
+                "UPDATE player_ships SET owner_id = ? WHERE ship_id = ?",
+                (owner_id, offered_ship_id)
+            )
+            
+            self.bot.db.execute_in_transaction(conn,
+                "UPDATE player_ships SET owner_id = ? WHERE ship_id = ?",
+                (offerer_id, listed_ship_id)
+            )
+            
+            # Handle credits
+            if credits_adj > 0:
+                # Offerer pays additional credits to owner
+                self.bot.db.execute_in_transaction(conn,
+                    "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                    (abs(credits_adj), offerer_id)
+                )
+                self.bot.db.execute_in_transaction(conn,
+                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    (abs(credits_adj), owner_id)
+                )
+            elif credits_adj < 0:
+                # Owner pays additional credits to offerer
+                self.bot.db.execute_in_transaction(conn,
+                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    (abs(credits_adj), offerer_id)
+                )
+                self.bot.db.execute_in_transaction(conn,
+                    "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                    (abs(credits_adj), owner_id)
+                )
+            
+            # Record exchange history
+            self.bot.db.execute_in_transaction(conn,
+                '''INSERT INTO ship_exchange_history 
+                   (original_listing_id, seller_id, buyer_id, seller_ship_id, buyer_ship_id, 
+                    credits_exchanged, exchange_location)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (listing_id, owner_id, offerer_id, listed_ship_id, offered_ship_id, 
+                 credits_adj, location_id)
+            )
+            
+            # Deactivate listing
+            self.bot.db.execute_in_transaction(conn,
+                "UPDATE ship_exchange_listings SET is_active = 0 WHERE listing_id = ?",
+                (listing_id,)
+            )
+            
+            # Commit transaction
+            self.bot.db.commit_transaction(conn)
+            
+            embed = discord.Embed(
+                title="✅ Exchange Complete!",
+                description=f"Ship exchange completed successfully!",
+                color=0x00ff00
+            )
+            
+            embed.add_field(name="You Received", value=offered_ship_name, inline=True)
+            embed.add_field(name="You Traded", value=listed_ship_name, inline=True)
+            
+            if credits_adj != 0:
+                embed.add_field(
+                    name="Credits", 
+                    value=f"You {'received' if credits_adj < 0 else 'paid'} {abs(credits_adj):,} credits", 
+                    inline=False
+                )
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+            # Notify offerer
+            try:
+                offerer = self.bot.get_user(offerer_id)
+                if offerer:
+                    embed_offerer = discord.Embed(
+                        title="✅ Offer Accepted!",
+                        description=f"Your ship exchange offer has been accepted!",
+                        color=0x00ff00
+                    )
+                    embed_offerer.add_field(name="You Received", value=listed_ship_name, inline=True)
+                    embed_offerer.add_field(name="You Traded", value=offered_ship_name, inline=True)
+                    await offerer.send(embed=embed_offerer)
+            except:
+                pass
+                
+        except Exception as e:
+            # Rollback transaction on error
+            self.bot.db.rollback_transaction(conn)
+            await interaction.response.send_message(f"Trade failed: {str(e)}", ephemeral=True)
 
 
 async def setup(bot):

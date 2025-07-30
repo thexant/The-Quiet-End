@@ -172,7 +172,7 @@ class ViewMapButton(discord.ui.Button):
         bot = interaction.client
         
         # Check if webmap is running
-        webmap_cog = bot.get_cog('WebMap')
+        webmap_cog = bot.get_cog('WebMapCog')
         if not webmap_cog or not webmap_cog.is_running:
             await interaction.response.send_message(
                 "Interactive map is not currently available.",
@@ -257,7 +257,7 @@ class GamePanelCog(commands.Cog):
         await self.bot.wait_until_ready()
         
         # Check if webmap is running for initial setup
-        webmap_cog = self.bot.get_cog('WebMap')
+        webmap_cog = self.bot.get_cog('WebMapCog')
         include_map = webmap_cog and webmap_cog.is_running
         
         # Create and register a persistent view (Discord.py will handle the routing)
@@ -574,7 +574,7 @@ class GamePanelCog(commands.Cog):
         """Refresh all panel views with current webmap status"""
         try:
             # Check current webmap status
-            webmap_cog = self.bot.get_cog('WebMap')
+            webmap_cog = self.bot.get_cog('WebMapCog')
             include_map = webmap_cog and webmap_cog.is_running
             
             print(f"🔄 Webmap cog found: {webmap_cog is not None}")
@@ -595,7 +595,7 @@ class GamePanelCog(commands.Cog):
     async def create_panel_embed(self, guild: discord.Guild) -> discord.Embed:
         """Create the embed for the game panel"""
         # Get galaxy info
-        webmap_cog = self.bot.get_cog('WebMap')
+        webmap_cog = self.bot.get_cog('WebMapCog')
         from utils.time_system import TimeSystem
         time_system = TimeSystem(self.bot)
         galaxy_info = time_system.get_galaxy_info()
@@ -676,7 +676,7 @@ class GamePanelCog(commands.Cog):
     async def create_panel_view(self) -> discord.ui.View:
         """Create the view for the game panel with conditional map button"""
         # Check if webmap is running
-        webmap_cog = self.bot.get_cog('WebMap')
+        webmap_cog = self.bot.get_cog('WebMapCog')
         include_map = webmap_cog and webmap_cog.is_running
         
         return GamePanelView(self.bot, include_map_button=include_map)

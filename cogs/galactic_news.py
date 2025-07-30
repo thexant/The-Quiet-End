@@ -100,7 +100,8 @@ class GalacticNewsCog(commands.Cog):
             'discovery': 0x32CD32,       # Lime green
             'economic': 0xFFD700,        # Gold
             'admin_announcement': 0x14F4FF,  # Earth Blue
-            'bounty': 0xff6600 
+            'bounty': 0xff6600,
+            'location_establishment': 0x228B22  # Forest green
         }
         
         color = colors.get(news_type, 0x2F4F4F)
@@ -122,7 +123,8 @@ class GalacticNewsCog(commands.Cog):
             'corporate_news': '🏢 Corporate',
             'discovery': '🔬 Discovery',
             'economic': '📈 Economic',
-            'admin_announcement': '🌐 Earth Government'  # Add this line
+            'admin_announcement': '🌐 Earth Government',
+            'location_establishment': '🏗️ New Facility'
         }
         
         embed.set_author(name=news_type_names.get(news_type, '📰 News'))
@@ -239,7 +241,9 @@ class GalacticNewsCog(commands.Cog):
         for guild_tuple in guilds_with_updates:
             guild_id = guild_tuple[0]
             
-            # Enhanced thematic news generation
+            # Enhanced thematic news generation with destination shuffling
+            destinations_changed = results.get('destinations_changed', 0)
+            
             if results.get('activated', 0) > 0 and results.get('deactivated', 0) > 0:
                 title = "🌌 GALACTIC INFRASTRUCTURE ALERT"
                 description = (
@@ -247,8 +251,22 @@ class GalacticNewsCog(commands.Cog):
                     f"Hyperspace monitoring stations report major shifts in the corridor network. "
                     f"Navigation computers across the galaxy are updating their databases as {results['activated']} "
                     f"new corridors have stabilized while {results['deactivated']} existing routes "
-                    f"have collapsed into atomic instability.\n\n"
-                    f"All vessels are advised to verify route availability before departure."
+                    f"have collapsed into atomic instability."
+                )
+                if destinations_changed > 0:
+                    description += (
+                        f" Additionally, {destinations_changed} active corridor{'s' if destinations_changed != 1 else ''} "
+                        f"have been redirected to entirely different destinations."
+                    )
+                description += "\n\nAll vessels are advised to verify route availability before departure."
+            elif destinations_changed > 0 and results.get('activated', 0) == 0 and results.get('deactivated', 0) == 0:
+                title = "🔀 CORRIDOR DESTINATION SHUFFLE"
+                description = (
+                    f"**NAVIGATION SYSTEM UPDATE REQUIRED**\n\n"
+                    f"Quantum hyperspace fluctuations have caused {destinations_changed} active corridor{'s' if destinations_changed != 1 else ''} "
+                    f"to redirect to entirely different destinations. While the corridors remain stable and traversable, "
+                    f"they now lead to completely different locations than before.\n\n"
+                    f"All pilots must update their navigation computers immediately before attempting travel."
                 )
             elif results.get('activated', 0) > 0:
                 title = "📡 NEW HYPERSPACE ROUTES DETECTED"
@@ -256,17 +274,29 @@ class GalacticNewsCog(commands.Cog):
                     f"**EXPLORATION OPPORTUNITY ANNOUNCEMENT**\n\n"
                     f"Deep space survey teams confirm the stabilization of {results['activated']} previously "
                     f"unmapped corridor{'s' if results['activated'] != 1 else ''}. These newly accessible "
-                    f"routes are now cleared for civilian traffic following successful probe deployments.\n\n"
-                    f"Adventurous pilots may find new opportunities in previously unreachable sectors."
+                    f"routes are now cleared for civilian traffic following successful probe deployments."
                 )
+                if destinations_changed > 0:
+                    description += (
+                        f" Simultaneously, {destinations_changed} existing corridor{'s' if destinations_changed != 1 else ''} "
+                        f"have been redirected to new endpoints."
+                    )
+                description += "\n\nAdventurous pilots may find new opportunities in previously unreachable sectors."
             elif results.get('deactivated', 0) > 0:
                 title = "⚠️ HYPERSPACE DISRUPTION WARNING"
                 description = (
                     f"**CRITICAL NAVIGATION ADVISORY**\n\n"
                     f"Catastrophic corridor destabilization has rendered {results['deactivated']} "
                     f"corridor{'s' if results['deactivated'] != 1 else ''} impassable. Emergency beacons have been "
-                    f"deployed to warn approaching vessels. Navigation systems galaxy-wide are recalculating "
-                    f"optimal routes.\n\n"
+                    f"deployed to warn approaching vessels."
+                )
+                if destinations_changed > 0:
+                    description += (
+                        f" Additionally, {destinations_changed} surviving corridor{'s' if destinations_changed != 1 else ''} "
+                        f"have been redirected to different destinations."
+                    )
+                description += (
+                    f" Navigation systems galaxy-wide are recalculating optimal routes.\n\n"
                     f"Pilots are urged to check alternate paths before attempting travel."
                 )
             else:
@@ -362,6 +392,7 @@ class GalacticNewsCog(commands.Cog):
     @shift_change_monitor.before_loop
     async def before_shift_change_monitor(self):
         await self.bot.wait_until_ready()
+
     async def post_shift_change_news(self, new_shift: str, shift_name: str, current_time: datetime):
             """Post news about galactic shift changes"""
             
@@ -444,6 +475,7 @@ class GalacticNewsCog(commands.Cog):
                 f"Independent pilot {character_name} was reported missing and presumed lost near {location_name}. Local authorities are investigating the circumstances. Next of kin have been notified.",
                 f"The independent vessel registry confirms the loss of pilot {character_name} in the vicinity of {location_name}. Search and rescue operations have been suspended.",
                 f"Tragic news from {system_name} System: spacer {character_name} has been confirmed lost near {location_name}. The pilot's family requests privacy during this difficult time.",
+                f"We regret to report the recovery of remains belonging to {character_name} near {location_name} in {system_name} system. The remains were identified by genetic analysis, as other means of identification were determined impossible.",
             ]
             
             description = random.choice(obituary_templates)
@@ -452,6 +484,51 @@ class GalacticNewsCog(commands.Cog):
                 description += f" Preliminary reports suggest {cause} may have been a factor."
             
             await self.queue_news(guild_id, 'obituary', title, description, location_id)
+
+    async def post_character_obituary(self, character_name: str, location_id: int, cause: str = "unknown"):
+        """Compatibility method for NPC death calls - redirects to post_obituary_news"""
+        await self.post_obituary_news(character_name, location_id, cause)
+
+    async def post_location_destruction_news(self, location_name: str, casualty_count: int, nearest_location_id: int):
+        """Post news about location destruction events"""
+        
+        # Get all guilds with galactic updates channels
+        guilds_with_updates = self.db.execute_query(
+            "SELECT guild_id FROM server_config WHERE galactic_updates_channel_id IS NOT NULL",
+            fetch='all'
+        )
+        
+        for guild_tuple in guilds_with_updates:
+            guild_id = guild_tuple[0]
+            
+            # Create different news variants for variety
+            import random
+            
+            news_variants = [
+                {
+                    "title": f"BREAKING: {location_name} Completely Destroyed",
+                    "description": f"In a catastrophic event, {location_name} has been completely annihilated. "
+                                  f"All {casualty_count:,} inhabitants are confirmed lost. "
+                                  f"The cause of the destruction remains unknown. Rescue operations are impossible."
+                },
+                {
+                    "title": f"DISASTER: {location_name} Wiped From Galaxy Maps",
+                    "description": f"Tragic news reaches us as {location_name} has been utterly destroyed in what appears to be "
+                                  f"a total structural collapse. Emergency services report {casualty_count:,} casualties. "
+                                  f"The location has been removed from all navigation systems."
+                },
+                {
+                    "title": f"CATASTROPHE: {location_name} Lost With All Hands",
+                    "description": f"We regret to report the complete destruction of {location_name}. "
+                                  f"No survivors have been found among the {casualty_count:,} registered inhabitants. "
+                                  f"Space traffic controllers have marked the coordinates as a no-fly zone."
+                }
+            ]
+            
+            selected_news = random.choice(news_variants)
+            
+            await self.queue_news(guild_id, 'major_event', selected_news['title'], 
+                                selected_news['description'], nearest_location_id)
 
     async def generate_fluff_news(self):
         """Generate random fluff news to make the universe feel alive"""
@@ -528,6 +605,178 @@ class GalacticNewsCog(commands.Cog):
     @fluff_news_generation.before_loop
     async def before_fluff_news_generation(self):
         await self.bot.wait_until_ready()
+
+    # Test/Verification Commands
+    @app_commands.command(name="test_news", description="Test galactic news system (Admin only)")
+    @app_commands.describe(
+        news_type="Type of news to test",
+        test_data="Test data for the news event"
+    )
+    async def test_news_system(self, interaction: discord.Interaction, 
+                              news_type: str, test_data: str = "Test data"):
+        """Test the galactic news system with different event types"""
+        
+        # Check if user is admin
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            if news_type.lower() == "npc_death":
+                # Test NPC death news
+                test_location = self.db.execute_query(
+                    "SELECT location_id FROM locations ORDER BY RANDOM() LIMIT 1",
+                    fetch='one'
+                )
+                if test_location:
+                    await self.post_character_obituary("Test NPC", test_location[0], "system test")
+                    await interaction.followup.send("✅ NPC death news queued successfully", ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ No locations found for testing", ephemeral=True)
+                    
+            elif news_type.lower() == "location_creation":
+                # Test location establishment news
+                test_location = self.db.execute_query(
+                    "SELECT location_id, name FROM locations ORDER BY RANDOM() LIMIT 1",
+                    fetch='one'
+                )
+                if test_location:
+                    location_id, location_name = test_location
+                    await self.queue_news(
+                        interaction.guild.id, 
+                        'location_establishment',
+                        f"New Facility: Test {location_name}",
+                        f"A new test facility has been established near {location_name}. This is a system verification test.",
+                        location_id
+                    )
+                    await interaction.followup.send("✅ Location creation news queued successfully", ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ No locations found for testing", ephemeral=True)
+                    
+            elif news_type.lower() == "location_destruction":
+                # Test location destruction news
+                test_location = self.db.execute_query(
+                    "SELECT location_id FROM locations ORDER BY RANDOM() LIMIT 1",
+                    fetch='one'
+                )
+                if test_location:
+                    await self.post_location_destruction_news(
+                        "Test Location", 1000, test_location[0]
+                    )
+                    await interaction.followup.send("✅ Location destruction news queued successfully", ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ No locations found for testing", ephemeral=True)
+                    
+            else:
+                await interaction.followup.send(
+                    "❌ Invalid news type. Use: npc_death, location_creation, or location_destruction", 
+                    ephemeral=True
+                )
+                
+        except Exception as e:
+            await interaction.followup.send(f"❌ Test failed: {str(e)}", ephemeral=True)
+
+    @app_commands.command(name="news_queue_status", description="Check news queue status (Admin only)")
+    async def check_news_queue(self, interaction: discord.Interaction):
+        """Check the current status of the news queue"""
+        
+        # Check if user is admin
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+            
+        # Get queue statistics
+        pending_count = self.db.execute_query(
+            "SELECT COUNT(*) FROM news_queue WHERE guild_id = ? AND is_delivered = 0",
+            (interaction.guild.id,),
+            fetch='one'
+        )[0]
+        
+        delivered_count = self.db.execute_query(
+            "SELECT COUNT(*) FROM news_queue WHERE guild_id = ? AND is_delivered = 1",  
+            (interaction.guild.id,),
+            fetch='one'
+        )[0]
+        
+        # Get recent news by type
+        recent_by_type = self.db.execute_query(
+            """SELECT news_type, COUNT(*) 
+               FROM news_queue 
+               WHERE guild_id = ? AND created_at > datetime('now', '-24 hours')
+               GROUP BY news_type""",
+            (interaction.guild.id,),
+            fetch='all'
+        )
+        
+        embed = discord.Embed(
+            title="📰 News Queue Status",
+            description="Current status of the galactic news system",
+            color=0x00BFFF
+        )
+        
+        embed.add_field(
+            name="📋 Queue Status",
+            value=f"Pending: {pending_count}\nDelivered: {delivered_count}",
+            inline=True
+        )
+        
+        if recent_by_type:
+            type_summary = "\n".join([f"{news_type}: {count}" for news_type, count in recent_by_type])
+            embed.add_field(
+                name="📊 Last 24 Hours by Type",
+                value=type_summary,
+                inline=True
+            )
+        
+        embed.add_field(
+            name="🔧 System Status",
+            value=f"News Loop: {'✅ Running' if not self.news_delivery_loop.is_being_cancelled() else '❌ Stopped'}",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="clear_news_queue", description="Clear all pending news from the queue (Admin only)")
+    async def clear_news_queue(self, interaction: discord.Interaction):
+        """Clear all pending news from the queue"""
+        
+        # Check if user is admin
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Get count of pending news before clearing
+            pending_count = self.db.execute_query(
+                "SELECT COUNT(*) FROM news_queue WHERE guild_id = ? AND is_delivered = 0",
+                (interaction.guild.id,),
+                fetch='one'
+            )[0]
+            
+            if pending_count == 0:
+                await interaction.followup.send("ℹ️ No pending news in queue to clear.", ephemeral=True)
+                return
+            
+            # Clear all pending news for this guild
+            self.db.execute_query(
+                "DELETE FROM news_queue WHERE guild_id = ? AND is_delivered = 0",
+                (interaction.guild.id,)
+            )
+            
+            await interaction.followup.send(
+                f"✅ Successfully cleared {pending_count} pending news item{'s' if pending_count != 1 else ''} from the queue.",
+                ephemeral=True
+            )
+            
+            print(f"🗑️ Admin {interaction.user.name} cleared {pending_count} pending news items for guild {interaction.guild.name}")
+            
+        except Exception as e:
+            await interaction.followup.send(f"❌ Failed to clear news queue: {str(e)}", ephemeral=True)
+            print(f"❌ Error clearing news queue: {e}")
 
 async def setup(bot):
     await bot.add_cog(GalacticNewsCog(bot))

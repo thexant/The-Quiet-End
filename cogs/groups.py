@@ -1032,8 +1032,8 @@ class GroupsCog(commands.Cog):
                 )
             
             embed = discord.Embed(
-                title="✅ Group Job Accepted",
-                description=f"All **{len(members)}** group members have been assigned to:",
+                title="✅ Group Job Accepted & Started",
+                description=f"All **{len(members)}** group members have been assigned to:\n🔄 **Job is now active** - work in progress!",
                 color=0x00ff00
             )
             embed.add_field(name="Job", value=vote_data['title'], inline=False)

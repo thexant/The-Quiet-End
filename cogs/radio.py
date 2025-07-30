@@ -27,7 +27,7 @@ class RadioCog(commands.Cog):
         )
         
         if not char_data:
-            await interaction.followup.send("You need a character to use the radio! Use `/character create` first.", ephemeral=True)
+            await interaction.followup.send("You need a character to use the radio! Use the game panel to create a character first.", ephemeral=True)
             return
         
         current_location, char_name, callsign = char_data
@@ -134,8 +134,9 @@ class RadioCog(commands.Cog):
         origin_id = location_data['origin_id']
         dest_id = location_data['dest_id']
         
-        # Determine if it's an ungated corridor by checking the name
-        is_ungated = "Ungated" in corridor_name
+        # Determine corridor type using the corridor_type field
+        corridor_type_field = location_data.get('corridor_type', 'ungated')
+        is_ungated = corridor_type_field == 'ungated'
         corridor_display_type = "Ungated Transit" if is_ungated else "Gated Transit"
         corridor_propagation_type = "ungated" if is_ungated else "gated"
 
@@ -150,7 +151,7 @@ class RadioCog(commands.Cog):
         )
         
         if not origin_loc_info or not dest_loc_info:
-            await interaction.response.send_message("Unable to establish relay connection from corridor ends.", ephemeral=True)
+            await interaction.followup.send("Unable to establish relay connection from corridor ends.", ephemeral=True)
             return
         
         origin_x, origin_y, origin_system = origin_loc_info
@@ -255,7 +256,7 @@ class RadioCog(commands.Cog):
         else:
             final_message = f"📡 **Transmission relayed through {corridor_display_type}**"
 
-        await interaction.response.send_message(final_message, ephemeral=True)
+        await interaction.followup.send(final_message, ephemeral=True)
 
     # Modify _calculate_radio_propagation to accept the new corridor_type.
     async def _calculate_radio_propagation(self, sender_x: float, sender_y: float, 
@@ -308,7 +309,7 @@ class RadioCog(commands.Cog):
         # NEW: Get all players currently in transit
         transit_players = self.db.execute_query(
             '''SELECT ts.user_id, c.name, c.callsign, ts.corridor_id,
-                      cor.name as corridor_name, 
+                      cor.name as corridor_name, cor.corridor_type,
                       ol.location_id as origin_id, ol.name as origin_name, 
                       ol.x_coord as origin_x, ol.y_coord as origin_y, ol.system_name as origin_system,
                       dl.location_id as dest_id, dl.name as dest_name,
@@ -324,13 +325,13 @@ class RadioCog(commands.Cog):
         
         # Process players in transit
         for transit_player in transit_players:
-            (user_id, char_name, callsign, corridor_id, corridor_name,
+            (user_id, char_name, callsign, corridor_id, corridor_name, corridor_type,
              origin_id, origin_name, origin_x, origin_y, origin_system,
              dest_id, dest_name, dest_x, dest_y, dest_system) = transit_player
             
-            # Determine corridor type for additional degradation
-            is_ungated = "Ungated" in corridor_name
-            receiver_corridor_type = "ungated" if is_ungated else "gated"
+            # Determine corridor type for additional degradation using corridor_type field
+            is_ungated = corridor_type == 'ungated'
+            receiver_corridor_type = corridor_type if corridor_type in ['ungated', 'gated'] else 'gated'
             
             # Check if signal can reach either end of the corridor
             signal_received = False

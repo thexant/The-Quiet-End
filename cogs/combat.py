@@ -188,7 +188,7 @@ class CombatCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "You need a character to attack! Use `/character create` first.", 
+                "You need a character to attack! Use the game panel to create a character first.", 
                 ephemeral=True
             )
             return
@@ -218,7 +218,7 @@ class CombatCog(commands.Cog):
 
         if existing_combat:
             await interaction.response.send_message(
-                "You're already in combat! Use `/attack fight` to continue or `/attack flee` to escape.", 
+                "You're already in combat! Use `/tqe` to continue or `/attack flee` to escape.", 
                 ephemeral=True
             )
             return
@@ -470,10 +470,9 @@ class CombatCog(commands.Cog):
                 )
             else:
                 # Ground combat - HP damage
-                self.db.execute_query(
-                    "UPDATE characters SET hp = max(0, hp - ?) WHERE user_id = ?",
-                    (damage_dealt, target_id)
-                )
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_character_hp(target_id, -damage_dealt, interaction.guild, "PvP combat damage")
             if user_is_attacker:
                 skill_bonus = effective_attacker_combat // 2
             else:
@@ -641,7 +640,7 @@ class CombatCog(commands.Cog):
                         location_channel = interaction.guild.get_channel(location_channel_data[0])
                         if location_channel:
                             await location_channel.send(
-                                f"{opponent_user.mention} - It's your turn in combat! Use `/attack fight` to continue fighting **{current_name}**!"
+                                f"{opponent_user.mention} - It's your turn in combat! Use `/tqe` to continue fighting **{current_name}**!"
                             )
         except Exception as e:
             print(f"Failed to send combat notification to location channel: {e}")
@@ -789,7 +788,7 @@ class CombatCog(commands.Cog):
             await self._handle_pvp_combat_round(interaction, pvp_combat_data)
         else:
             await interaction.response.send_message(
-                "You're not in combat! Use `/attack npc` or `/attack player` to start a fight.", 
+                "You're not in combat! Use `/tqe` then press 'Location > Crime' to start a fight.", 
                 ephemeral=True
             )
     @attack_group.command(name="player", description="Initiate PvP combat with another player")
@@ -809,7 +808,7 @@ class CombatCog(commands.Cog):
         
         if not attacker_data:
             await interaction.response.send_message(
-                "You need a character to attack! Use `/character create` first.", 
+                "You need a character to attack! Use the game panel to create a character first.", 
                 ephemeral=True
             )
             return
@@ -949,7 +948,7 @@ class CombatCog(commands.Cog):
                 description=f"**{attacker_name}** has initiated PvP combat with you at **{location_name}**!",
                 color=0xff4444
             )
-            target_embed.add_field(name="Actions", value="Use `/attack fight` to fight back or `/attack flee` to escape!", inline=False)
+            target_embed.add_field(name="Actions", value="Use `/tqe` to fight back or `/attack flee` to escape!", inline=False)
             await target.send(embed=target_embed)
         except discord.Forbidden:
             pass
@@ -1209,7 +1208,7 @@ class CombatCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "You need a character first! Use `/character create`.", 
+                "You need a character first! Use the game panel to create a character first.", 
                 ephemeral=True
             )
             return
@@ -1302,7 +1301,7 @@ class CombatCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "You need a character to rob! Use `/character create` first.", 
+                "You need a character to rob! Use the game panel to create a character first. first.", 
                 ephemeral=True
             )
             return
@@ -1831,7 +1830,7 @@ class CombatCog(commands.Cog):
         
         if not robber_data:
             await interaction.response.send_message(
-                "You need a character to rob! Use `/character create` first.", 
+                "You need a character to rob! Use the game panel to create a character first. first.", 
                 ephemeral=True
             )
             return
@@ -2024,7 +2023,7 @@ class PlayerRobberyView(discord.ui.View):
         await self._process_surrender(None, automatic=True)
 
     @discord.ui.button(label="Surrender", style=discord.ButtonStyle.danger, emoji="🏳️")
-    async def surrender_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def surrender_button(self, interaction: discord.Interaction):
         if interaction.user.id != self.victim_id:
             await interaction.response.send_message("You're not the victim of this robbery!", ephemeral=True)
             return
@@ -2037,7 +2036,7 @@ class PlayerRobberyView(discord.ui.View):
         await self._process_surrender(interaction, automatic=False)
 
     @discord.ui.button(label="Fight Back", style=discord.ButtonStyle.secondary, emoji="⚔️")
-    async def fight_back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def fight_back_button(self, interaction: discord.Interaction):
         if interaction.user.id != self.victim_id:
             await interaction.response.send_message("You're not the victim of this robbery!", ephemeral=True)
             return
@@ -2120,10 +2119,9 @@ class PlayerRobberyView(discord.ui.View):
         
         # Apply HP damage if any
         if hp_damage > 0:
-            self.bot.db.execute_query(
-                "UPDATE characters SET hp = max(0, hp - ?) WHERE user_id = ?",
-                (hp_damage, self.victim_id)
-            )
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog:
+                await char_cog.update_character_hp(self.victim_id, -hp_damage, interaction.guild, "Robbery damage")
         
         # Add robbery cooldown
         expire_time = datetime.utcnow() + timedelta(minutes=15)
@@ -2250,15 +2248,11 @@ class PlayerRobberyView(discord.ui.View):
         
         if location_status == "docked":
             # Ground combat - HP damage
-            self.bot.db.execute_query(
-                "UPDATE characters SET hp = max(0, hp - ?) WHERE user_id = ?",
-                (damage_to_robber, self.robber_id)
-            )
-            if damage_to_victim > 0:
-                self.bot.db.execute_query(
-                    "UPDATE characters SET hp = max(0, hp - ?) WHERE user_id = ?",
-                    (damage_to_victim, self.victim_id)
-                )
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog:
+                await char_cog.update_character_hp(self.robber_id, -damage_to_robber, interaction.guild, "Fight back damage")
+                if damage_to_victim > 0:
+                    await char_cog.update_character_hp(self.victim_id, -damage_to_victim, interaction.guild, "Fight back damage")
             damage_type = "HP"
         else:
             # Space combat - Hull damage
@@ -2328,15 +2322,11 @@ class PlayerRobberyView(discord.ui.View):
         )[0]
         
         if location_status == "docked":
-            self.bot.db.execute_query(
-                "UPDATE characters SET hp = max(0, hp - ?) WHERE user_id = ?",
-                (damage_to_victim, self.victim_id)
-            )
-            if damage_to_robber > 0:
-                self.bot.db.execute_query(
-                    "UPDATE characters SET hp = max(0, hp - ?) WHERE user_id = ?",
-                    (damage_to_robber, self.robber_id)
-                )
+            char_cog = self.bot.get_cog('CharacterCog')  
+            if char_cog:
+                await char_cog.update_character_hp(self.victim_id, -damage_to_victim, interaction.guild, "Robbery combat damage")
+                if damage_to_robber > 0:
+                    await char_cog.update_character_hp(self.robber_id, -damage_to_robber, interaction.guild, "Robbery combat damage")
             damage_type = "HP"
         else:
             damage_type = "Hull"
@@ -2547,7 +2537,7 @@ class NPCAttackSelectView(discord.ui.View):
             # Fallback if combat cog not found
             embed = discord.Embed(
                 title="⚔️ Combat Initiated!",
-                description=f"Combat started! Use `/attack fight` to continue fighting.",
+                description=f"Combat started! Use `/tqe` to continue fighting.",
                 color=0xff4444
             )
             if combat_boost > 0:

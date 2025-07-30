@@ -26,7 +26,8 @@ class SubLocationCog(commands.Cog):
         app_commands.Choice(name="🚁 Hangar Bay", value="hangar"),
         app_commands.Choice(name="🛋️ Lounge", value="lounge"),
         app_commands.Choice(name="🛒 Market", value="market"),
-        app_commands.Choice(name="📋 Administration", value="admin")
+        app_commands.Choice(name="📋 Administration", value="admin"),
+        app_commands.Choice(name="🎰 Casino", value="casino")
     ])
     async def enter_area(self, interaction: discord.Interaction, area_type: str):
         """Enter a sub-location area"""
@@ -262,7 +263,7 @@ class SubLocationCog(commands.Cog):
         
         embed.add_field(
             name="🎮 Usage",
-            value="Use `/area enter <area_type>` to access any of these areas.",
+            value="Use `/tqe` to access any of these areas.",
             inline=False
         )
         

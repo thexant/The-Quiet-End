@@ -246,6 +246,11 @@ class RPGBot(commands.Bot):
             print(f"❌ Failed to sync commands: {e}")    
         income_calculator = HomeIncomeCalculator(bot)
         await income_calculator.start()
+        
+        # Start web map if configured for autostart
+        web_map_cog = self.get_cog('WebMapCog')
+        if web_map_cog:
+            asyncio.create_task(web_map_cog.autostart_webmap())
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """This catches ALL slash command interactions globally"""
@@ -412,8 +417,17 @@ class RPGBot(commands.Bot):
         if not message.content.strip() and not message.attachments:
             return True
         
-        # Format the character speech
-        speech_content = f"**{char_name}** says: {message.content}"
+        # Check if message is wrapped in asterisks for action format
+        import re
+        action_match = re.match(r'^\*(.+)\*$', message.content.strip())
+        
+        if action_match:
+            # This is an action message
+            action_text = action_match.group(1).strip()
+            speech_content = f"{char_name} *{action_text}*"
+        else:
+            # Regular speech message
+            speech_content = f"**{char_name}** says: {message.content}"
         
         # Handle attachments
         if message.attachments:

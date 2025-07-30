@@ -240,7 +240,7 @@ class BountyCog(commands.Cog):
         
         if not setter_data:
             await interaction.response.send_message(
-                "❌ You don't have a character! Use `/character create` first.",
+                "❌ You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -371,7 +371,7 @@ class BountyCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "❌ You don't have a character! Use `/character create` first.",
+                "❌ You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -549,7 +549,7 @@ class BountyCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "❌ You don't have a character! Use `/character create` first.",
+                "❌ You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -630,7 +630,7 @@ class BountyCog(commands.Cog):
         
         if not attacker_data:
             await interaction.response.send_message(
-                "❌ You don't have a character! Use `/character create` first.",
+                "❌ You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -828,7 +828,7 @@ class BountyCog(commands.Cog):
         )[0]
         
         hp_reduction = int(target_current_hp * 0.8)
-        new_hp = max(1, target_current_hp - hp_reduction)
+        new_hp = target_current_hp - hp_reduction
         
         self.db.execute_query(
             "UPDATE characters SET hp = ? WHERE user_id = ?",
@@ -978,7 +978,7 @@ class BountyCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "❌ You don't have a character! Use `/character create` first.",
+                "❌ You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -1066,7 +1066,7 @@ class BountyCog(commands.Cog):
                WHERE (ts.origin_location IN ({location_ids_str}) OR ts.destination_location IN ({location_ids_str}))
                AND pb.is_active = 1 AND c.is_logged_in = 1 
                AND ts.status = 'traveling'
-               AND cor.name NOT LIKE '%Ungated%'
+               AND cor.corridor_type != 'ungated'
                GROUP BY pb.target_id, pb.target_name, cor.name
                ORDER BY total_bounty DESC''',
             search_locations + search_locations,  # Double the params for origin and dest
@@ -1119,7 +1119,7 @@ class BountyCog(commands.Cog):
         else:
             embed.add_field(
                 name="💡 How to Collect",
-                value=f"Found **{total_targets}** bountied target{'s' if total_targets != 1 else ''}. Travel to their location and use `/bounty [player]` to attempt capture.",
+                value=f"Found **{total_targets}** bountied target{'s' if total_targets != 1 else ''}. Travel to their location and use `/tqe` and the 'Extras > Bounties' menu to attempt capture.",
                 inline=False
             )
             
@@ -1156,7 +1156,7 @@ class BountyCog(commands.Cog):
                 connected = self.db.execute_query(
                     '''SELECT destination_location FROM corridors 
                        WHERE origin_location = ? AND is_active = 1 
-                       AND name NOT LIKE '%Ungated%' ''',
+                       AND corridor_type != 'ungated' ''',
                     (location_id,),
                     fetch='all'
                 )
@@ -1181,7 +1181,7 @@ class BountyCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "❌ You don't have a character! Use `/character create` first.",
+                "❌ You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -1373,7 +1373,7 @@ class BountyCog(commands.Cog):
         
         if not attacker_data:
             await interaction.response.send_message(
-                "❌ You don't have a character! Use `/character create` first.",
+                "❌ You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -1562,7 +1562,7 @@ class BountyCog(commands.Cog):
         )[0]
         
         hp_reduction = target_current_hp // 2
-        new_hp = max(1, target_current_hp - hp_reduction)  # Don't kill them
+        new_hp = target_current_hp - hp_reduction
         
         self.db.execute_query(
             "UPDATE characters SET hp = ? WHERE user_id = ?",
@@ -1727,7 +1727,7 @@ class BountyCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "❌ You don't have a character! Use `/character create` first.",
+                "❌ You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return

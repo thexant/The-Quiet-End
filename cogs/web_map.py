@@ -15,6 +15,7 @@ from typing import Optional, Dict, Any, List
 import socket
 import traceback
 from utils.time_system import TimeSystem
+from config import WEBMAP_CONFIG
 
 
 class WebMapCog(commands.Cog):
@@ -30,6 +31,7 @@ class WebMapCog(commands.Cog):
         self.port = 8090
         self.external_ip = None
         self.domain = None
+        self.https_proxy = False  # Force HTTPS URLs when behind proxy
         
         # Cache for performance
         self.cache = {
@@ -52,6 +54,30 @@ class WebMapCog(commands.Cog):
         if self.is_running:
             asyncio.create_task(self.stop_webmap())
     
+    async def autostart_webmap(self):
+        """Auto-start the web map if configured to do so"""
+        if not WEBMAP_CONFIG.get('auto_start', False):
+            return
+            
+        # Wait for the configured delay
+        delay = WEBMAP_CONFIG.get('auto_start_time', 30)
+        await asyncio.sleep(delay)
+        
+        # Start the web map with configured settings
+        host = WEBMAP_CONFIG.get('auto_start_host', '0.0.0.0')
+        port = WEBMAP_CONFIG.get('auto_start_port', 8090)
+        domain = WEBMAP_CONFIG.get('auto_start_domain', None)
+        https_proxy = WEBMAP_CONFIG.get('auto_start_https_proxy', False)
+        
+        try:
+            await self._start_webmap_internal(host, port, domain, https_proxy)
+            print(f"✅ Web map auto-started on {host}:{port}")
+            if domain:
+                print(f"🌐 Domain: {domain}")
+        except Exception as e:
+            print(f"❌ Failed to auto-start web map: {e}")
+            print(f"Web map auto-start error: {traceback.format_exc()}")
+    
     @tasks.loop(seconds=5)  # Update cache every 5 seconds
     async def update_cache(self):
         """Update cached data for the web map"""
@@ -66,7 +92,7 @@ class WebMapCog(commands.Cog):
     
     async def _refresh_cache(self):
         """Refresh all cached data"""
-        # Get locations with explicit column names
+        # Get locations with explicit column names, ordered by type priority then by name for consistency
         locations_data = self.db.execute_query(
             """SELECT l.location_id, l.name, l.location_type, l.x_coord, l.y_coord,
                       l.system_name, l.wealth_level, l.population, l.description, l.faction,
@@ -74,7 +100,16 @@ class WebMapCog(commands.Cog):
                FROM locations l
                LEFT JOIN location_ownership lo ON l.location_id = lo.location_id
                LEFT JOIN characters c ON lo.owner_id = c.user_id
-               ORDER BY l.location_id""",
+               ORDER BY 
+                   CASE l.location_type 
+                       WHEN 'corridor' THEN 1
+                       WHEN 'gate' THEN 2
+                       WHEN 'outpost' THEN 3
+                       WHEN 'space_station' THEN 4
+                       WHEN 'colony' THEN 5
+                       ELSE 6
+                   END,
+                   l.name ASC""",
             fetch='all'
         )
         
@@ -106,7 +141,7 @@ class WebMapCog(commands.Cog):
         # Get corridors
         corridors_data = self.db.execute_query(
             """SELECT corridor_id, origin_location, destination_location, 
-                      name, travel_time, danger_level
+                      name, travel_time, danger_level, corridor_type
                FROM corridors
                WHERE is_active = 1""",
             fetch='all'
@@ -120,7 +155,8 @@ class WebMapCog(commands.Cog):
                 'destination': corr[2],
                 'name': corr[3],
                 'travel_time': corr[4],
-                'danger_level': corr[5]
+                'danger_level': corr[5],
+                'corridor_type': corr[6]
             })
         
         # Get active players - Only show currently logged in characters
@@ -216,7 +252,7 @@ class WebMapCog(commands.Cog):
         current_time = None
         
         if galaxy_info_data:
-            galaxy_name, start_date, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame = galaxy_info_data
+            galaxy_name, start_date, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame, is_manually_paused = galaxy_info_data
             current_time_obj = self.time_system.calculate_current_ingame_time()
             
             galaxy_info = {
@@ -352,13 +388,41 @@ class WebMapCog(commands.Cog):
     
     webmap_group = app_commands.Group(name="webmap", description="Web map management commands")
     
+    async def _start_webmap_internal(self, host: str, port: int, domain: str = None, https_proxy: bool = False):
+        """Internal method to start the web map server"""
+        if self.is_running:
+            raise Exception("Web map is already running!")
+        
+        self.port = port
+        self.host = host
+        self.domain = domain
+        self.https_proxy = https_proxy
+        
+        # Create web application
+        self.app = web.Application()
+        self.setup_routes()
+        
+        # Start the server
+        self.runner = web.AppRunner(self.app)
+        await self.runner.setup()
+        self.site = web.TCPSite(self.runner, self.host, self.port)
+        await self.site.start()
+        
+        self.is_running = True
+        
+        # Update game panel
+        panel_cog = self.bot.get_cog('GamePanelCog')
+        if panel_cog:
+            await panel_cog.refresh_all_panel_views()
+
     @webmap_group.command(name="start", description="Start the web map server")
     @app_commands.describe(
         port="Port to run the server on (default: 8090)",
         host="Host to bind to (default: 0.0.0.0)",
-        domain="Domain name for the server (optional)"
+        domain="Domain name for the server (optional)",
+        https_proxy="Force HTTPS URLs when behind proxy (default: False)"
     )
-    async def start_webmap(self, interaction: discord.Interaction, port: int = 8090, host: str = '0.0.0.0', domain: str = None):
+    async def start_webmap(self, interaction: discord.Interaction, port: int = 8090, host: str = '0.0.0.0', domain: str = None, https_proxy: bool = False):
         """Start the web map server"""
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
@@ -368,30 +432,10 @@ class WebMapCog(commands.Cog):
             await interaction.response.send_message("Web map is already running!", ephemeral=True)
             return
         
-        
         await interaction.response.defer()
         
         try:
-            self.port = port
-            self.host = host
-            self.domain = domain
-            
-            # Create web application
-            self.app = web.Application()
-            self.setup_routes()
-            
-            # Start the server
-            self.runner = web.AppRunner(self.app)
-            await self.runner.setup()
-            self.site = web.TCPSite(self.runner, self.host, self.port)
-            await self.site.start()
-            
-            self.is_running = True
-            
-            # Update game panel
-            panel_cog = self.bot.get_cog('GamePanelCog')
-            if panel_cog:
-                await panel_cog.refresh_all_panel_views()
+            await self._start_webmap_internal(host, port, domain, https_proxy)
             
             # Get access URL
             final_url, _ = await self.get_final_map_url()
@@ -484,7 +528,7 @@ class WebMapCog(commands.Cog):
     async def get_final_map_url(self):
         """Get the final URL for the map"""
         if self.domain:
-            protocol = "https" if self.port == 443 else "http"
+            protocol = "https" if (self.port == 443 or self.https_proxy) else "http"
             port_str = "" if self.port in [80, 443] else f":{self.port}"
             return f"{protocol}://{self.domain}{port_str}/map", self.domain
         elif self.external_ip:
@@ -507,7 +551,9 @@ class WebMapCog(commands.Cog):
         self.app.router.add_get('/wiki', self.handle_wiki)
         self.app.router.add_get('/api/map-data', self.handle_api_map_data)
         self.app.router.add_get('/api/wiki-data', self.handle_api_wiki_data)
+        self.app.router.add_get('/api/rich-presence/{user_id}', self.handle_api_rich_presence)
         self.app.router.add_static('/', path=os.path.dirname(__file__))
+        self.app.router.add_static('/landing', path=os.path.join(os.path.dirname(os.path.dirname(__file__)), 'landing'))
     
     async def handle_index(self, request):
         """Serve the landing page"""
@@ -533,6 +579,162 @@ class WebMapCog(commands.Cog):
         wiki_data = await self._compile_wiki_data()
         return web.json_response(wiki_data)
     
+    async def handle_api_rich_presence(self, request):
+        """API endpoint for Rich Presence character data"""
+        try:
+            user_id = int(request.match_info['user_id'])
+        except (ValueError, KeyError):
+            return web.json_response({'error': 'Invalid user ID'}, status=400)
+        
+        # Get character data for Rich Presence
+        char_data = self.db.execute_query(
+            """SELECT c.name, c.current_location, c.is_logged_in, c.level, c.money,
+                      c.location_status, c.login_time, l.name as location_name,
+                      l.location_type, t.corridor_id, t.start_time, t.end_time,
+                      dest_l.name as destination_name, dest_l.location_type as destination_type,
+                      cor.travel_time, cor.fuel_cost, cor.danger_level,
+                      j.title as current_job_title, j.description as current_job_description
+               FROM characters c
+               LEFT JOIN locations l ON c.current_location = l.location_id
+               LEFT JOIN travel_sessions t ON c.user_id = t.user_id AND t.status = 'traveling'
+               LEFT JOIN corridors cor ON t.corridor_id = cor.corridor_id
+               LEFT JOIN locations dest_l ON cor.destination_location = dest_l.location_id
+               LEFT JOIN job_tracking jt ON c.user_id = jt.user_id AND c.current_location = jt.start_location
+               LEFT JOIN jobs j ON jt.job_id = j.job_id
+               WHERE c.user_id = ?""",
+            (user_id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            return web.json_response({'error': 'Character not found'}, status=404)
+        
+        # Parse character data
+        name, current_location, is_logged_in, level, money, location_status, login_time, location_name, location_type, corridor_id, travel_start, travel_end, destination_name, destination_type, travel_time_seconds, fuel_cost, danger_level, current_job_title, current_job_description = char_data
+                
+        # Define location type emojis and prefixes
+        location_emojis = {
+            'colony': '🏭',
+            'space_station': '🛰️',
+            'outpost': '🛤️',
+            'gate': '🚪'
+        }
+        
+        location_prefixes = {
+            'colony': 'Colony',
+            'space_station': 'Station',
+            'outpost': 'Outpost',
+            'gate': 'Gate'
+        }
+        
+        # Determine current status for Rich Presence
+        if not is_logged_in:
+            status = "Offline"
+            details = "Not currently playing"
+            state = ""
+        elif corridor_id:  # Currently traveling
+            status = "Traveling"
+            details = f"{name} - Level {level or 1}"
+            
+            # Enhanced travel state with destination emoji and route info
+            if destination_name and destination_type:
+                dest_emoji = location_emojis.get(destination_type, '🌌')
+                state = f"🚀 Traveling to {dest_emoji} {destination_name}"
+            elif destination_name:
+                state = f"🚀 Traveling to {destination_name}"
+            else:
+                state = "🚀 In transit"
+        else:  # At a location
+            status = "Online"
+            details = f"{name} - Level {level or 1}"
+            
+            # Enhanced location state with emoji and job info
+            if location_name and location_type:
+                emoji = location_emojis.get(location_type, '🌌')
+                prefix = location_prefixes.get(location_type, '')
+                
+                if current_job_title:
+                    state = f"💼 {current_job_title} at {emoji} {location_name}"
+                else:
+                    state = f"At {emoji} {location_name}"
+            elif location_name:
+                if current_job_title:
+                    state = f"💼 {current_job_title} at {location_name}"
+                else:
+                    state = f"At {location_name}"
+            else:
+                state = "In space"
+        
+        # Calculate timestamp for Discord presence
+        timestamp = None
+        if login_time and is_logged_in:
+            try:
+                from datetime import datetime
+                if isinstance(login_time, str):
+                    timestamp = int(datetime.fromisoformat(login_time).timestamp())
+                else:
+                    timestamp = int(login_time.timestamp())
+            except:
+                pass
+        elif travel_start and corridor_id:
+            try:
+                from datetime import datetime
+                if isinstance(travel_start, str):
+                    timestamp = int(datetime.fromisoformat(travel_start).timestamp())
+                else:
+                    timestamp = int(travel_start.timestamp())
+            except:
+                pass
+        
+        # Calculate travel progress if traveling
+        travel_progress = None
+        travel_time_remaining = None
+        if corridor_id and travel_start and travel_time_seconds:
+            from datetime import datetime, timedelta
+            try:
+                if isinstance(travel_start, str):
+                    start_time = datetime.fromisoformat(travel_start)
+                else:
+                    start_time = travel_start
+                
+                current_time = datetime.utcnow()
+                elapsed_minutes = (current_time - start_time).total_seconds() / 60
+                travel_time_minutes = travel_time_seconds / 60  # Convert seconds to minutes
+                travel_time_remaining = max(0, travel_time_minutes - elapsed_minutes)
+                travel_progress = min(100, (elapsed_minutes / travel_time_minutes) * 100)
+            except:
+                pass
+        
+        presence_data = {
+            'status': status,
+            'details': details,
+            'state': state,
+            'timestamp': timestamp,
+            'is_online': bool(is_logged_in),
+            'is_traveling': bool(corridor_id),
+            'character_name': name,
+            'level': level or 1,
+            'credits': money or 0,
+            'location': location_name,
+            # Enhanced location information
+            'location_type': location_type,
+            'location_emoji': location_emojis.get(location_type, '🌌') if location_type else None,
+            # Travel information
+            'destination_name': destination_name,
+            'destination_type': destination_type,
+            'destination_emoji': location_emojis.get(destination_type, '🌌') if destination_type else None,
+            'travel_time_minutes': travel_time_seconds / 60 if travel_time_seconds else None,
+            'travel_time_remaining': travel_time_remaining,
+            'travel_progress': travel_progress,
+            'fuel_cost': fuel_cost,
+            'danger_level': danger_level,
+            # Job information
+            'current_job_title': current_job_title,
+            'current_job_description': current_job_description
+        }
+        
+        return web.json_response(presence_data)
+    
     async def _compile_wiki_data(self):
         """Compile comprehensive wiki data"""
         # Get galaxy info and current time
@@ -541,7 +743,7 @@ class WebMapCog(commands.Cog):
         current_time = None
         
         if galaxy_info_data:
-            galaxy_name, start_date, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame = galaxy_info_data
+            galaxy_name, start_date, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame, is_manually_paused = galaxy_info_data
             current_time_obj = self.time_system.calculate_current_ingame_time()
             
             galaxy_info = {
@@ -728,7 +930,12 @@ class WebMapCog(commands.Cog):
     
     def get_landing_html(self):
         """Get landing page HTML"""
-        return '''<!DOCTYPE html>
+        try:
+            landing_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'landing', 'index.html')
+            with open(landing_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except FileNotFoundError:
+            return '''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -792,7 +999,7 @@ class WebMapCog(commands.Cog):
     <div class="scanlines"></div>
     
     <div class="map-container">
-        <div class="map-header">
+        <div class="map-header" id="map-header">
             <div class="header-section">
                 <h1 class="map-title">
                     <span id="galaxy-name">Galaxy Map</span>
@@ -804,51 +1011,91 @@ class WebMapCog(commands.Cog):
                 </div>
             </div>
             <div class="header-controls">
-                <a href="/wiki" class="nav-button">Wiki</a>
-                <a href="/" class="nav-button">Home</a>
+                <button class="header-toggle-btn" id="header-toggle" onclick="toggleHeader()" title="Hide/Show Header">
+                    <span class="toggle-icon">▲</span>
+                </button>
+                <div class="map-action-buttons">
+                    <a href="/wiki" class="action-button">
+                        <div class="button-icon">📚</div>
+                        <div class="button-text">
+                            <div class="button-title">WIKI</div>
+                        </div>
+                        <div class="button-glow"></div>
+                    </a>
+                    <a href="/" class="action-button">
+                        <div class="button-icon">🏠</div>
+                        <div class="button-text">
+                            <div class="button-title">HOME</div>
+                        </div>
+                        <div class="button-glow"></div>
+                    </a>
+                </div>
             </div>
         </div>
         
+        <!-- Collapsed header toggle when header is hidden -->
+        <div class="header-toggle-collapsed" id="header-toggle-collapsed" style="display: none;">
+            <button class="header-toggle-btn collapsed" onclick="toggleHeader()" title="Show Header">
+                <span class="toggle-icon">▼</span>
+            </button>
+        </div>
+        
         <div class="map-controls">
-            <div class="control-group">
-                <label class="toggle-control">
-                    <input type="checkbox" id="toggle-labels">
-                    <span>Show Labels</span>
-                </label>
-                <label class="toggle-control">
-                    <input type="checkbox" id="toggle-routes" checked>
-                    <span>Show Routes</span>
-                </label>
-                <label class="toggle-control">
-                    <input type="checkbox" id="toggle-players">
-                    <span>Show Players</span>
-                </label>
-                <label class="toggle-control">
-                    <input type="checkbox" id="toggle-npcs">
-                    <span>Show NPCs</span>
-                </label>
-            </div>
-            <div class="control-group">
-                <div class="search-container">
-                    <input type="text" id="search-input" placeholder="Search locations..." class="search-input" autocomplete="off">
-                    <div id="search-dropdown" class="search-dropdown"></div>
+            <div class="control-row">
+                <div class="control-group control-group-compact">
+                    <label class="toggle-control">
+                        <input type="checkbox" id="toggle-labels">
+                        <span>Labels</span>
+                    </label>
+                    <label class="toggle-control">
+                        <input type="checkbox" id="toggle-routes" checked>
+                        <span>Routes</span>
+                    </label>
+                    <label class="toggle-control">
+                        <input type="checkbox" id="toggle-active-routes-only">
+                        <span>Active Routes Only</span>
+                    </label>
+                    <label class="toggle-control">
+                        <input type="checkbox" id="toggle-players">
+                        <span>Players</span>
+                    </label>
+                    <label class="toggle-control">
+                        <input type="checkbox" id="toggle-npcs">
+                        <span>NPCs</span>
+                    </label>
                 </div>
-                <button class="control-button" onclick="galaxyMap.searchLocation()">Search</button>
-                <button class="control-button" onclick="galaxyMap.resetView()">Reset View</button>
+                <div class="control-group">
+                    <div class="search-container">
+                        <input type="text" id="search-input" placeholder="Search..." class="search-input" autocomplete="off">
+                        <div id="search-dropdown" class="search-dropdown"></div>
+                    </div>
+                    <button class="control-button control-button-compact" onclick="galaxyMap.searchLocation()">Go</button>
+                    <button class="control-button control-button-compact" onclick="galaxyMap.clearSearch()">Clear</button>
+                    <button class="control-button control-button-compact" onclick="galaxyMap.resetView()">Reset</button>
+                </div>
             </div>
-            <div class="control-group">
-                <span style="color: var(--primary-color); margin-right: 10px;">📍 Route Planning:</span>
-                <select id="route-start" class="search-input" style="max-width: 150px;">
-                    <option value="">Select Start</option>
-                </select>
-                <select id="route-end" class="search-input" style="max-width: 150px; margin-left: 10px;">
-                    <option value="">Select End</option>
-                </select>
-                <select id="route-midpoint" class="search-input" style="max-width: 150px; margin-left: 10px;">
-                    <option value="">Midpoint (Optional)</option>
-                </select>
-                <button class="control-button" onclick="galaxyMap.plotRouteFromControls()" style="margin-left: 10px;">Plot Route</button>
-                <button class="control-button" onclick="galaxyMap.clearPlottedRoute()" style="margin-left: 5px;">Clear</button>
+            <div class="control-row">
+                <div class="control-group">
+                    <span class="control-label">🔍</span>
+                    <button class="control-button control-button-compact" onclick="galaxyMap.zoom(1.25)">+</button>
+                    <button class="control-button control-button-compact" onclick="galaxyMap.zoom(0.8)">-</button>
+                    <button class="control-button control-button-compact" onclick="galaxyMap.zoomToFit()">Fit</button>
+                    <span id="zoom-level" class="zoom-display">100%</span>
+                </div>
+                <div class="control-group route-planning-group">
+                    <span class="control-label">📍</span>
+                    <select id="route-start" class="route-select">
+                        <option value="">Start</option>
+                    </select>
+                    <select id="route-end" class="route-select">
+                        <option value="">End</option>
+                    </select>
+                    <select id="route-midpoint" class="route-select">
+                        <option value="">Via</option>
+                    </select>
+                    <button class="control-button" onclick="galaxyMap.plotRouteFromControls()">Plot Route</button>
+                    <button class="control-button control-button-compact" onclick="galaxyMap.clearPlottedRoute()">Clear</button>
+                </div>
             </div>
         </div>
         
@@ -856,12 +1103,13 @@ class WebMapCog(commands.Cog):
             <canvas id="galaxy-map"></canvas>
             <div id="tooltip" class="map-tooltip"></div>
             <div id="location-info" class="location-info-panel">
-                <button class="info-panel-close" onclick="document.getElementById('location-info').style.display='none'">×</button>
+                <button class="info-panel-close" onclick="window.galaxyMap.closeInfoPanel()">×</button>
                 <!-- Content will be dynamically inserted here -->
             </div>
         </div>
     </div>
     
+    <script src="/landing/js/theme-manager.js"></script>
     <script>{self.get_map_script()}</script>
 </body>
 </html>'''
@@ -893,8 +1141,22 @@ class WebMapCog(commands.Cog):
                 </div>
             </div>
             <div class="header-controls">
-                <a href="/" class="nav-button">HOME</a>
-                <a href="/map" class="nav-button">MAP</a>
+                <div class="wiki-action-buttons">
+                    <a href="/" class="action-button">
+                        <div class="button-icon">🏠</div>
+                        <div class="button-text">
+                            <div class="button-title">HOME</div>
+                        </div>
+                        <div class="button-glow"></div>
+                    </a>
+                    <a href="/map" class="action-button">
+                        <div class="button-icon">🗺️</div>
+                        <div class="button-text">
+                            <div class="button-title">MAP</div>
+                        </div>
+                        <div class="button-glow"></div>
+                    </a>
+                </div>
             </div>
         </header>
         
@@ -911,20 +1173,24 @@ class WebMapCog(commands.Cog):
             <div id="loading" class="loading-message">Loading database...</div>
             <div id="wiki-data" class="wiki-data"></div>
         </div>
-        <div id="location-info" class="location-info-panel">
-            <button class="info-panel-close" onclick="document.getElementById('location-info').style.display='none'">×</button>
-            <!-- Content will be dynamically inserted here -->
-        </div>
     </div>
     
+    <!-- Wiki info panel - positioned outside container for proper overlay behavior -->
+    <div id="wiki-location-info" class="location-info-panel">
+        <button class="info-panel-close">×</button>
+        <!-- Content will be dynamically inserted here -->
+    </div>
+    
+    <script src="/landing/js/theme-manager.js"></script>
     <script>''' + self.get_wiki_script() + '''</script>
 </body>
 </html>'''
     
     def get_shared_css(self):
-        """Get shared CSS styles"""
+        """Get shared CSS styles - Mobile-first responsive design"""
         return '''
         :root {
+            /* Default theme variables - will be overridden by theme manager */
             --primary-color: #00ffff;
             --secondary-color: #00cccc;
             --accent-color: #0088cc;
@@ -942,6 +1208,18 @@ class WebMapCog(commands.Cog):
             --glow-primary: rgba(0, 255, 255, 0.6);
             --glow-secondary: rgba(0, 204, 204, 0.4);
             --gradient-panel: linear-gradient(145deg, rgba(10, 15, 26, 0.95), rgba(26, 35, 50, 0.95));
+            --gradient-holo: linear-gradient(135deg, rgba(0, 255, 255, 0.1), rgba(0, 204, 204, 0.2));
+            
+            /* Mobile-first sizing variables - Progressive touch targets */
+            --base-font-size: 14px;
+            --small-font-size: 12px;
+            --large-font-size: 16px;
+            --touch-target-size: 36px;
+            --checkbox-size: 20px;
+            --button-padding: 0.75rem;
+            --control-spacing: 0.5rem;
+            --panel-padding: 1rem;
+            --element-gap: 0.5rem;
         }
         
         * {
@@ -950,12 +1228,17 @@ class WebMapCog(commands.Cog):
             box-sizing: border-box;
         }
         
+        /* Device-responsive base styles */
         body {
             font-family: 'Tektur', monospace;
+            font-size: var(--base-font-size);
+            line-height: 1.6;
             background: var(--primary-bg);
             color: var(--text-primary);
             min-height: 100vh;
             overflow-x: hidden;
+            -webkit-text-size-adjust: 100%;
+            -webkit-font-smoothing: antialiased;
         }
         
         .static-overlay {
@@ -973,7 +1256,7 @@ class WebMapCog(commands.Cog):
             );
             pointer-events: none;
             z-index: 1;
-            opacity: 0.3;
+            opacity: 0.2;
         }
         
         .scanlines {
@@ -998,11 +1281,12 @@ class WebMapCog(commands.Cog):
             50% { opacity: 1; }
         }
         
+        /* Mobile-first main container */
         .main-container {
             position: relative;
             z-index: 10;
-            padding: 2rem;
-            max-width: 1200px;
+            padding: var(--mobile-padding);
+            width: 100%;
             margin: 0 auto;
             text-align: center;
             display: flex;
@@ -1012,31 +1296,34 @@ class WebMapCog(commands.Cog):
             min-height: 100vh;
         }
         
+        /* Mobile-first game header */
         .game-header {
             background: var(--gradient-panel);
             border: 2px solid var(--primary-color);
-            border-radius: 12px;
-            padding: 2rem;
-            box-shadow: 0 0 40px var(--glow-primary);
-            margin-bottom: 3rem;
+            border-radius: 8px;
+            padding: 1.5rem var(--mobile-padding);
+            box-shadow: 0 0 30px var(--glow-primary);
+            margin-bottom: 2rem;
+            width: 100%;
+            max-width: 500px;
         }
         
         .terminal-indicator {
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 0.5rem;
+            gap: var(--mobile-gap);
             margin-bottom: 1rem;
             font-size: 0.8rem;
             color: var(--text-muted);
         }
         
         .power-light {
-            width: 10px;
-            height: 10px;
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
             background: var(--success-color);
-            box-shadow: 0 0 15px var(--success-color);
+            box-shadow: 0 0 10px var(--success-color);
             animation: pulse 2s infinite;
         }
         
@@ -1045,32 +1332,38 @@ class WebMapCog(commands.Cog):
             50% { opacity: 0.6; }
         }
         
+        /* Mobile-first typography */
         .game-title {
-            font-size: 3rem;
+            font-size: 2rem;
             font-weight: 900;
             color: var(--primary-color);
-            text-shadow: 0 0 30px var(--glow-primary);
+            text-shadow: 0 0 20px var(--glow-primary);
             margin-bottom: 0.5rem;
+            line-height: 1.2;
         }
         
         .game-subtitle {
-            font-size: 0.9rem;
+            font-size: 0.75rem;
             color: var(--text-secondary);
-            letter-spacing: 3px;
+            letter-spacing: 2px;
         }
         
+        /* Mobile-first action buttons */
         .action-buttons {
             display: flex;
-            gap: 2rem;
-            justify-content: center;
-            flex-wrap: wrap;
+            flex-direction: column;
+            gap: var(--element-gap);
+            width: 100%;
+            max-width: 400px;
         }
         
         .action-button {
             display: flex;
             align-items: center;
-            gap: 1rem;
-            padding: 1.5rem 2rem;
+            justify-content: center;
+            gap: var(--element-gap);
+            padding: var(--button-padding);
+            min-height: var(--touch-target-size);
             background: var(--gradient-panel);
             border: 2px solid var(--primary-color);
             border-radius: 8px;
@@ -1079,33 +1372,46 @@ class WebMapCog(commands.Cog):
             position: relative;
             overflow: hidden;
             transition: all 0.3s ease;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+            width: 100%;
+            cursor: pointer;
+            touch-action: manipulation;
         }
         
-        .action-button:hover {
+        .action-button:hover,
+        .action-button:focus {
             transform: translateY(-2px);
-            box-shadow: 0 6px 30px rgba(0, 255, 255, 0.3);
+            box-shadow: 0 6px 25px rgba(0, 255, 255, 0.3);
             border-color: var(--secondary-color);
+            outline: none;
+        }
+        
+        .action-button:active {
+            transform: translateY(0);
         }
         
         .button-icon {
-            font-size: 2rem;
+            font-size: 1.5rem;
             filter: drop-shadow(0 0 10px var(--glow-primary));
+            flex-shrink: 0;
         }
         
         .button-text {
-            text-align: left;
+            text-align: center;
+            flex: 1;
         }
         
         .button-title {
             font-weight: 700;
-            font-size: 1.1rem;
+            font-size: 1rem;
             margin-bottom: 0.25rem;
+            line-height: 1.2;
         }
         
         .button-subtitle {
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             color: var(--text-secondary);
+            line-height: 1.3;
         }
         
         .button-glow {
@@ -1124,11 +1430,527 @@ class WebMapCog(commands.Cog):
         .action-button:hover .button-glow {
             opacity: 0.2;
         }
+        
+        /* Tablet breakpoint - Optimize touch targets for tablet use */
+        @media (min-width: 768px) {
+            :root {
+                --touch-target-size: 32px;
+                --checkbox-size: 18px;
+                --button-padding: 0.6rem;
+                --control-spacing: 0.6rem;
+                --panel-padding: 1.5rem;
+                --element-gap: 0.75rem;
+            }
+            
+            .main-container {
+                padding: 2rem;
+            }
+            
+            .game-header {
+                padding: 2rem;
+                border-radius: 12px;
+                margin-bottom: 2.5rem;
+                max-width: 600px;
+            }
+            
+            .game-title {
+                font-size: 2.5rem;
+            }
+            
+            .game-subtitle {
+                font-size: 0.85rem;
+                letter-spacing: 2.5px;
+            }
+            
+            .action-buttons {
+                flex-direction: row;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 1.5rem;
+                max-width: 700px;
+            }
+            
+            .action-button {
+                flex: 1;
+                min-width: 300px;
+                max-width: 350px;
+            }
+            
+            .button-text {
+                text-align: left;
+            }
+            
+            .power-light {
+                width: 10px;
+                height: 10px;
+            }
+        }
+        
+        /* Desktop breakpoint - Compact layouts for efficiency */
+        @media (min-width: 1024px) {
+            :root {
+                --touch-target-size: 28px;
+                --checkbox-size: 16px;
+                --button-padding: 0.375rem;
+                --control-spacing: 0.375rem;
+                --panel-padding: 0.75rem;
+                --element-gap: 0.375rem;
+                --base-font-size: 14px;
+                --small-font-size: 12px;
+                --large-font-size: 16px;
+            }
+            
+            .main-container {
+                max-width: 1200px;
+                padding: 2rem;
+            }
+            
+            /* More aggressive compact sizing for desktop */
+            .control-button-compact {
+                padding: 0.25rem 0.5rem;
+                min-height: 24px;
+                font-size: 0.7rem;
+                border-radius: 4px;
+            }
+            
+            .nav-button {
+                padding: 0.25rem 0.5rem;
+                min-height: 24px;
+                font-size: 0.75rem;
+                border-radius: 4px;
+            }
+            
+            /* Standard control buttons for desktop */
+            .control-button {
+                padding: 0.25rem 0.75rem;
+                min-height: 26px;
+                font-size: 0.75rem;
+                border-radius: 4px;
+            }
+            
+            /* Route select optimization for desktop */
+            .route-select {
+                padding: 0.25rem 0.5rem;
+                min-height: 26px;
+                font-size: 0.75rem;
+                min-width: 100px;
+            }
+            
+            /* Search input optimization */
+            .search-input {
+                padding: 0.25rem 0.5rem;
+                min-height: 26px;
+                font-size: 0.75rem;
+                max-width: 200px;
+            }
+            
+            /* Toggle controls optimization for desktop */
+            .toggle-control {
+                min-height: 24px;
+                padding: 0.25rem;
+                font-size: 0.75rem;
+                gap: 0.375rem;
+            }
+            
+            /* Control labels for desktop */
+            .control-label {
+                font-size: 0.75rem;
+                margin-right: 0.25rem;
+            }
+            
+            /* Desktop horizontal layouts for efficiency */
+            .control-row {
+                flex-direction: row;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.75rem;
+                margin-bottom: 0.5rem;
+            }
+            
+            .map-controls {
+                max-height: 20vh; /* Reduce height for more map space */
+                padding: 0.75rem;
+            }
+            
+            /* Control group spacing optimization for desktop */
+            .control-group {
+                gap: 0.375rem;
+                margin: 0;
+            }
+            
+            .control-group-compact {
+                gap: 0.25rem;
+            }
+            
+            .route-planning-group {
+                gap: 0.375rem;
+                flex-wrap: nowrap;
+                justify-content: flex-start;
+                max-width: none;
+            }
+            
+            /* Enhanced horizontal layout for desktop */
+            .map-controls .control-row:first-child {
+                display: grid;
+                grid-template-columns: auto 1fr auto;
+                gap: 1rem;
+                align-items: center;
+            }
+            
+            .map-controls .control-row:last-child {
+                display: flex;
+                flex-direction: row;
+                justify-content: space-between;
+                flex-wrap: nowrap;
+            }
+            
+            /* Desktop typography optimization */
+            .terminal-indicator {
+                font-size: 0.7rem;
+                gap: 0.5rem;
+                margin-bottom: 0.75rem;
+            }
+            
+            /* Panel and info typography for desktop */
+            .info-panel {
+                font-size: 0.8rem;
+                line-height: 1.4;
+            }
+            
+            .info-panel h3 {
+                font-size: 1rem;
+                margin-bottom: 0.5rem;
+            }
+            
+            .wiki-content {
+                font-size: 0.85rem;
+                line-height: 1.5;
+            }
+            
+            .game-header {
+                padding: 2.5rem;
+                margin-bottom: 3rem;
+                max-width: 800px;
+            }
+            
+            .game-title {
+                font-size: 3rem;
+            }
+            
+            .game-subtitle {
+                font-size: 0.9rem;
+                letter-spacing: 3px;
+            }
+            
+            .action-buttons {
+                gap: 2rem;
+                max-width: 900px;
+            }
+            
+            .action-button {
+                padding: 1.5rem 2rem;
+                min-width: 350px;
+            }
+            
+            .button-icon {
+                font-size: 2rem;
+            }
+            
+            .button-title {
+                font-size: 1.1rem;
+            }
+            
+            .button-subtitle {
+                font-size: 0.8rem;
+            }
+        }
+        
+        /* Large desktop breakpoint */
+        @media (min-width: 1440px) {
+            .static-overlay {
+                opacity: 0.3;
+            }
+        }
+
+        /* =================================
+           LOCATION INFO PANEL STYLES
+           Used by both map and wiki pages
+           ================================= */
+
+        /* Device-responsive location info panel - slide-up modal design */
+        .location-info-panel {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            width: 100%;
+            max-height: 40vh;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            background: var(--gradient-panel);
+            border: 2px solid var(--primary-color);
+            border-radius: 16px 16px 0 0;
+            padding: var(--panel-padding);
+            box-shadow: 0 -8px 32px var(--glow-primary);
+            z-index: 9999;
+            display: none;
+            transform: translateY(100%);
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            touch-action: pan-y;
+            /* Fix blur on mobile devices */
+            -webkit-transform: translateZ(0);
+            -webkit-backface-visibility: hidden;
+            -webkit-font-smoothing: antialiased;
+            transform-style: preserve-3d;
+        }
+        
+        .location-info-panel.visible {
+            display: block;
+            transform: translateY(0);
+        }
+        
+        /* Add gesture indicator for mobile */
+        .location-info-panel::before {
+            content: '';
+            position: absolute;
+            top: 0.5rem;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 40px;
+            height: 4px;
+            background: var(--text-secondary);
+            border-radius: 2px;
+            opacity: 0.6;
+        }
+        
+        /* Backdrop overlay for mobile modal */
+        .info-panel-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: transparent;
+            z-index: 1500;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+        }
+        
+        .info-panel-backdrop.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .location-info-panel::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .location-info-panel::-webkit-scrollbar-track {
+            background: var(--secondary-bg);
+            border-radius: 4px;
+        }
+
+        .location-info-panel::-webkit-scrollbar-thumb {
+            background: var(--primary-color);
+            border-radius: 4px;
+            border: 1px solid var(--secondary-bg);
+        }
+
+        .location-info-panel::-webkit-scrollbar-thumb:hover {
+            background: var(--text-primary);
+        }
+        
+        /* Smooth scrolling behavior */
+        .location-info-panel {
+            scroll-behavior: smooth;
+            overscroll-behavior: contain;
+        }
+
+        .location-info-panel h3 {
+            color: var(--primary-color);
+            margin: 0 0 1.5rem 0;
+            font-size: 1.3rem;
+            font-weight: 600;
+            text-shadow: 0 0 8px var(--glow-primary);
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 0.75rem;
+            padding-right: 3rem;
+            position: relative;
+        }
+
+        /* Enhanced information hierarchy */
+        .location-detail {
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(64, 224, 208, 0.1);
+        }
+
+        .location-detail:last-child {
+            border-bottom: none;
+        }
+
+        .location-detail strong {
+            color: var(--text-primary);
+            display: block;
+            margin-bottom: 0.25rem;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            opacity: 0.8;
+        }
+        
+        .location-detail-value {
+            color: var(--primary-color);
+            font-size: 1rem;
+            font-weight: 500;
+        }
+        
+        /* Enhanced close button for info panel - touch-friendly */
+        .info-panel-close {
+            position: absolute;
+            top: 0.75rem;
+            right: 0.75rem;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            padding: 0.5rem;
+            line-height: 1;
+            border-radius: 50%;
+            min-height: 44px;
+            min-width: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            touch-action: manipulation;
+        }
+
+        .info-panel-close:hover,
+        .info-panel-close:focus {
+            color: var(--primary-color);
+            background: rgba(64, 224, 208, 0.2);
+            border-color: var(--primary-color);
+            text-shadow: 0 0 10px var(--glow-primary);
+            transform: scale(1.1);
+            outline: none;
+        }
+
+        .info-panel-close:active {
+            transform: scale(0.95);
+        }
+
+        /* Desktop layout - right-side overlay panel */
+        @media (min-width: 1024px) {
+            .location-info-panel {
+                position: fixed;
+                top: 2rem;
+                right: 0;
+                bottom: 2rem;
+                left: auto;
+                width: 350px;
+                max-width: 25vw;
+                max-height: 90vh;
+                border-radius: 8px 0 0 8px;
+                border-left: 2px solid var(--primary-color);
+                border-top: none;
+                border-right: none;
+                border-bottom: none;
+                transform: translateX(100%);
+                transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+                padding: 1.5rem 1rem;
+            }
+            
+            .location-info-panel.visible {
+                display: block;
+                transform: translateX(0);
+            }
+            
+            .location-info-panel::before {
+                display: none; /* Hide mobile gesture indicator */
+            }
+            
+            .info-panel-close {
+                top: 0.75rem;
+                right: 0.75rem;
+                font-size: 1.2rem;
+                background: rgba(0, 0, 0, 0.5);
+                border-radius: 50%;
+                min-height: 32px;
+                min-width: 32px;
+                padding: 0;
+            }
+            
+            .info-panel-backdrop {
+                display: none; /* No backdrop needed on desktop */
+            }
+        }
+        
+        /* Tablet layout - adaptive sizing */
+        @media (min-width: 768px) and (max-width: 1023px) {
+            .location-info-panel {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                width: 100%;
+                max-height: 45vh;
+                border-radius: 16px 16px 0 0;
+                padding: 1.5rem;
+            }
+            
+            .info-panel-close {
+                top: 1rem;
+                right: 1rem;
+                font-size: 1.5rem;
+                padding: 0.5rem;
+                min-height: 44px;
+                min-width: 44px;
+                background: rgba(0, 0, 0, 0.4);
+                border-radius: 50%;
+            }
+        }
+        
+        /* Mobile specific adjustments */
+        @media (max-width: 767px) {
+            .location-info-panel {
+                position: fixed;
+                bottom: 0;
+                right: 0;
+                left: 0;
+                width: 100%;
+                max-height: 35vh;
+                border-radius: 16px 16px 0 0;
+                padding: 1.5rem 1rem 1rem 1rem;
+                z-index: 9999;
+            }
+            
+            .info-panel-close {
+                top: 0.5rem;
+                right: 0.5rem;
+                font-size: 1.25rem;
+                padding: 0.5rem;
+                min-height: 32px;
+                min-width: 32px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(0, 0, 0, 0.3);
+                border-radius: 50%;
+            }
+        }
         '''
     
     def get_map_css(self):
-        """Get map-specific CSS"""
+        """Get map-specific CSS - Mobile-first responsive design"""
         return '''
+        /* Mobile-first map container */
         .map-container {
             position: relative;
             z-index: 10;
@@ -1136,134 +1958,332 @@ class WebMapCog(commands.Cog):
             height: 100vh;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
         
+        /* Device-responsive map header */
         .map-header {
             background: var(--gradient-panel);
             border-bottom: 2px solid var(--primary-color);
-            padding: 1rem 2rem;
+            padding: var(--button-padding) var(--panel-padding);
             display: flex;
-            justify-content: space-between;
-            align-items: center;
+            flex-direction: column;
+            gap: var(--control-spacing);
+            flex-shrink: 0;
         }
         
         .header-section {
             display: flex;
             align-items: center;
-            gap: 2rem;
+            justify-content: space-between;
+            gap: var(--element-gap);
         }
         
+        /* Mobile-first map title */
         .map-title {
-            font-size: 1.5rem;
+            font-size: 1.2rem;
             font-weight: 700;
             color: var(--primary-color);
-            text-shadow: 0 0 20px var(--glow-primary);
+            text-shadow: 0 0 15px var(--glow-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         
         .map-status {
             display: flex;
             align-items: center;
             gap: 0.5rem;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+        
+        #current-time {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--primary-color);
+            text-shadow: 0 0 8px var(--glow-primary);
+            padding: 0.25rem 0.5rem;
+            background: rgba(0, 255, 255, 0.05);
+            border-radius: 4px;
+            border: 1px solid rgba(0, 255, 255, 0.2);
         }
         
         .status-indicator {
-            width: 8px;
-            height: 8px;
+            width: 6px;
+            height: 6px;
             border-radius: 50%;
             background: var(--success-color);
-            box-shadow: 0 0 10px var(--success-color);
+            box-shadow: 0 0 8px var(--success-color);
+            flex-shrink: 0;
         }
         
+        /* Device-responsive header controls */
         .header-controls {
             display: flex;
-            gap: 1rem;
+            gap: var(--control-spacing);
+            flex-wrap: wrap;
+            justify-content: center;
         }
         
         .nav-button {
-            padding: 0.5rem 1rem;
+            padding: var(--control-spacing) var(--button-padding);
+            min-height: var(--touch-target-size);
             background: var(--accent-bg);
             border: 1px solid var(--primary-color);
-            border-radius: 4px;
+            border-radius: 6px;
             text-decoration: none;
+            color: var(--text-primary);
+            font-size: 0.8rem;
+            transition: all 0.3s ease;
+            touch-action: manipulation;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            white-space: nowrap;
+        }
+        
+        .nav-button:hover,
+        .nav-button:focus {
+            background: var(--primary-color);
+            color: var(--primary-bg);
+            box-shadow: 0 0 12px var(--glow-primary);
+            outline: none;
+        }
+        
+        /* Header toggle button */
+        .header-toggle-btn {
+            padding: var(--control-spacing);
+            min-height: var(--touch-target-size);
+            background: var(--accent-bg);
+            border: 1px solid var(--primary-color);
+            border-radius: 6px;
             color: var(--text-primary);
             font-size: 0.9rem;
             transition: all 0.3s ease;
+            touch-action: manipulation;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            width: 40px;
+            height: 40px;
         }
         
-        .nav-button:hover {
+        .header-toggle-btn:hover,
+        .header-toggle-btn:focus {
             background: var(--primary-color);
             color: var(--primary-bg);
             box-shadow: 0 0 15px var(--glow-primary);
         }
         
+        .toggle-icon {
+            font-size: 0.8rem;
+            line-height: 1;
+            transition: transform 0.3s ease;
+        }
+        
+        /* Collapsed header toggle when header is hidden */
+        .header-toggle-collapsed {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: var(--gradient-panel);
+            border-radius: 6px;
+            padding: 5px;
+            border: 1px solid var(--primary-color);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        .header-toggle-collapsed .header-toggle-btn {
+            background: var(--primary-color);
+            color: var(--primary-bg);
+            box-shadow: 0 0 10px var(--glow-primary);
+        }
+        
+        /* Hidden header state */
+        .map-header.hidden {
+            display: none;
+        }
+        
+        /* Hidden controls state */
+        .map-controls.hidden {
+            display: none;
+        }
+        
+        /* When header is hidden, expand map viewport to full height */
+        body.header-hidden .map-viewport {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 5;
+        }
+        
+        /* Smooth transition for header and controls visibility */
+        .map-header,
+        .map-controls {
+            transition: transform 0.3s ease, opacity 0.3s ease;
+        }
+        
+        /* Device-responsive map controls */
         .map-controls {
             background: var(--secondary-bg);
             border-bottom: 1px solid var(--border-color);
-            padding: 1rem 2rem;
+            padding: var(--control-spacing);
             display: flex;
-            justify-content: space-between;
-            align-items: center;
+            flex-direction: column;
+            gap: var(--control-spacing);
+            flex-shrink: 0;
+            max-height: 30vh;
+            overflow-y: auto;
+        }
+        
+        .control-row {
+            display: flex;
+            flex-direction: column;
+            gap: var(--control-spacing);
+            align-items: stretch;
         }
         
         .control-group {
             display: flex;
-            gap: 1rem;
+            gap: var(--control-spacing);
             align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
         }
         
+        .control-group-compact {
+            gap: var(--control-spacing);
+        }
+        
+        .route-planning-group {
+            gap: var(--control-spacing);
+            flex-wrap: wrap;
+            width: 100%;
+            justify-content: center;
+        }
+        
+        /* Device-responsive toggle controls */
         .toggle-control {
             display: flex;
             align-items: center;
-            gap: 0.5rem;
+            gap: var(--control-spacing);
             cursor: pointer;
-            font-size: 0.9rem;
+            font-size: 0.8rem;
             color: var(--text-secondary);
             transition: color 0.3s ease;
+            min-height: var(--touch-target-size);
+            padding: var(--control-spacing);
+            touch-action: manipulation;
         }
         
-        .toggle-control:hover {
+        .toggle-control:hover,
+        .toggle-control:focus {
             color: var(--text-primary);
         }
         
-        .toggle-control input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            accent-color: var(--primary-color);
-            cursor: pointer;
+        .control-label {
+            font-size: 0.8rem;
+            color: var(--primary-color);
+            margin-right: 0.25rem;
+            white-space: nowrap;
         }
         
-        .toggle-control input[type="checkbox"]:checked {
-            box-shadow: 0 0 5px var(--glow-primary);
-        }
+        /* Device-responsive control buttons */
         .control-button {
-            padding: 0.5rem 1rem;
+            padding: var(--button-padding);
+            min-height: var(--touch-target-size);
             background: var(--accent-bg);
             border: 1px solid var(--primary-color);
-            border-radius: 4px;
+            border-radius: 6px;
             color: var(--text-primary);
             font-family: inherit;
-            font-size: 0.9rem;
+            font-size: 0.8rem;
             cursor: pointer;
             transition: all 0.3s ease;
+            white-space: nowrap;
+            touch-action: manipulation;
         }
         
-        .control-button:hover {
+        .control-button:hover,
+        .control-button:focus {
             background: var(--primary-color);
             color: var(--primary-bg);
-            box-shadow: 0 0 15px var(--glow-primary);
+            box-shadow: 0 0 12px var(--glow-primary);
+            outline: none;
         }
         
-        .search-input {
-            padding: 0.5rem 0.75rem;
+        .control-button-compact {
+            padding: var(--control-spacing) var(--button-padding);
+            font-size: 0.75rem;
+            min-height: var(--touch-target-size);
+        }
+        
+        /* Device-responsive route select */
+        .route-select {
+            background: var(--accent-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            padding: var(--button-padding);
+            font-size: 0.8rem;
+            min-height: var(--touch-target-size);
+            min-width: 120px;
+            cursor: pointer;
+            touch-action: manipulation;
+        }
+        
+        .route-select:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 8px var(--glow-primary);
+        }
+        
+        .zoom-display {
+            color: var(--text-primary);
+            font-family: monospace;
+            font-size: 0.8rem;
+            min-width: 50px;
+            text-align: center;
+            padding: 0.5rem;
             background: var(--secondary-bg);
             border: 1px solid var(--border-color);
             border-radius: 4px;
+        }
+        
+        /* Device-responsive checkbox styling - Progressive touch targets */
+        .toggle-control input[type="checkbox"] {
+            width: var(--checkbox-size);
+            height: var(--checkbox-size);
+            accent-color: var(--primary-color);
+            cursor: pointer;
+            touch-action: manipulation;
+            /* Ensure checkbox is centered within its touch target */
+            margin: 0;
+            flex-shrink: 0;
+        }
+        
+        .toggle-control input[type="checkbox"]:checked {
+            box-shadow: 0 0 8px var(--glow-primary);
+        }
+        
+        /* Device-responsive search input */
+        .search-input {
+            padding: var(--button-padding);
+            background: var(--secondary-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
             color: var(--text-primary);
             font-family: inherit;
-            font-size: 0.9rem;
-            min-width: 200px;
+            font-size: 0.8rem;
+            min-height: var(--touch-target-size);
+            width: 100%;
+            max-width: 300px;
             transition: all 0.3s ease;
         }
         
@@ -1279,7 +2299,8 @@ class WebMapCog(commands.Cog):
         
         .search-container {
             position: relative;
-            display: inline-block;
+            width: 100%;
+            max-width: 300px;
         }
         
         .search-dropdown {
@@ -1290,7 +2311,7 @@ class WebMapCog(commands.Cog):
             background: var(--secondary-bg);
             border: 1px solid var(--border-color);
             border-top: none;
-            border-radius: 0 0 4px 4px;
+            border-radius: 0 0 6px 6px;
             max-height: 200px;
             overflow-y: auto;
             z-index: 1000;
@@ -1298,11 +2319,15 @@ class WebMapCog(commands.Cog):
         }
         
         .search-dropdown-item {
-            padding: 0.5rem 0.75rem;
+            padding: var(--button-padding);
             color: var(--text-primary);
             cursor: pointer;
             transition: background-color 0.2s ease;
             border-bottom: 1px solid var(--border-color);
+            min-height: var(--touch-target-size);
+            display: flex;
+            align-items: center;
+            touch-action: manipulation;
         }
         
         .search-dropdown-item:last-child {
@@ -1325,11 +2350,35 @@ class WebMapCog(commands.Cog):
             color: var(--text-secondary);
         }
         
+        /* Map action buttons in header */
+        .map-action-buttons {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .map-action-buttons .action-button {
+            min-width: auto;
+            max-width: none;
+            padding: 0.5rem 1rem;
+            font-size: 0.8rem;
+        }
+        
+        .map-action-buttons .button-icon {
+            font-size: 1.2rem;
+        }
+        
+        .map-action-buttons .button-title {
+            font-size: 0.8rem;
+            margin: 0;
+        }
+        
+        /* Mobile-first map viewport */
         .map-viewport {
             flex: 1;
             position: relative;
             overflow: hidden;
             background: radial-gradient(ellipse at center, var(--secondary-bg) 0%, var(--primary-bg) 100%);
+            touch-action: pan-x pan-y;
         }
         
         #galaxy-map {
@@ -1337,135 +2386,40 @@ class WebMapCog(commands.Cog):
             top: 0;
             left: 0;
             cursor: grab;
+            touch-action: pan-x pan-y;
         }
         
         #galaxy-map:active {
             cursor: grabbing;
         }
         
+        /* Device-responsive tooltip */
         .map-tooltip {
             position: absolute;
             background: var(--gradient-panel);
             border: 1px solid var(--primary-color);
-            border-radius: 4px;
-            padding: 0.75rem 1rem;
-            font-size: 0.85rem;
+            border-radius: 6px;
+            padding: var(--button-padding);
+            font-size: 0.8rem;
             pointer-events: none;
             opacity: 0;
             transition: opacity 0.2s ease;
             z-index: 100;
-            max-width: 300px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
-            backdrop-filter: blur(10px);
+            max-width: 250px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(8px);
+            line-height: 1.4;
         }
+        
         .map-tooltip strong {
             color: var(--primary-color);
             display: block;
             margin-bottom: 0.25rem;
-            font-size: 0.95rem;
+            font-size: 0.9rem;
         }
+        
         .map-tooltip.visible {
             opacity: 1;
-        }
-        
-        .location-info-panel {
-            position: absolute;
-            right: 2rem;
-            bottom: 2rem;
-            width: 350px;
-            max-height: 70vh;
-            overflow-y: auto;
-            background: var(--gradient-panel);
-            border: 2px solid var(--primary-color);
-            border-radius: 8px;
-            padding: 1.5rem;
-            box-shadow: 0 0 30px var(--glow-primary);
-            z-index: 50;
-            display: none;
-            backdrop-filter: blur(10px);
-        }
-
-        .location-info-panel::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        .location-info-panel::-webkit-scrollbar-track {
-            background: var(--secondary-bg);
-            border-radius: 4px;
-        }
-
-        .location-info-panel::-webkit-scrollbar-thumb {
-            background: var(--primary-color);
-            border-radius: 4px;
-        }
-
-        .location-info-panel h3 {
-            color: var(--primary-color);
-            margin-bottom: 1rem;
-            font-size: 1.3rem;
-            text-shadow: 0 0 10px var(--glow-primary);
-            border-bottom: 1px solid var(--border-color);
-            padding-bottom: 0.5rem;
-        }
-
-        .location-detail {
-            margin-bottom: 0.75rem;
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-            line-height: 1.4;
-        }
-
-        .location-detail strong {
-            color: var(--text-primary);
-            display: inline-block;
-            margin-right: 0.5rem;
-        }
-        .route-type-local {
-            color: #88ff88;
-        }
-
-        .route-type-gated {
-            color: #00cccc;
-        }
-
-        .route-type-ungated {
-            color: #ff6600;
-        }
-        /* Map object styles */
-        .location-colony { fill: #00ff88; }
-        .location-space_station { fill: #00ffff; }
-        .location-outpost { fill: #ffaa00; }
-        .location-gate { fill: #ff00ff; }
-        
-        .corridor-line {
-            stroke: var(--border-color);
-            stroke-width: 1;
-            fill: none;
-            opacity: 0.5;
-        }
-        /* Map controls responsive adjustments */
-        @media (max-width: 768px) {
-            .map-controls {
-                flex-direction: column;
-                gap: 1rem;
-                padding: 0.75rem 1rem;
-            }
-            
-            .control-group {
-                width: 100%;
-                justify-content: space-between;
-                flex-wrap: wrap;
-            }
-            
-            .location-info-panel {
-                position: fixed;
-                bottom: 0;
-                right: 0;
-                left: 0;
-                width: 100%;
-                max-height: 50vh;
-                border-radius: 8px 8px 0 0;
-            }
         }
         /* Route visualization enhancements */
         .route-highlight {
@@ -1500,26 +2454,6 @@ class WebMapCog(commands.Cog):
         .danger-level-3 { color: #ffff00; }
         .danger-level-4 { color: #ff8800; }
         .danger-level-5 { color: #ff0000; }
-
-        /* Close button for info panel */
-        .info-panel-close {
-            position: absolute;
-            top: 0.5rem;
-            right: 0.5rem;
-            background: none;
-            border: none;
-            color: var(--text-secondary);
-            font-size: 1.5rem;
-            cursor: pointer;
-            transition: color 0.3s ease;
-            padding: 0.25rem;
-            line-height: 1;
-        }
-
-        .info-panel-close:hover {
-            color: var(--primary-color);
-            text-shadow: 0 0 10px var(--glow-primary);
-        }
         .corridor-active {
             stroke: var(--primary-color);
             stroke-width: 2;
@@ -1602,6 +2536,11 @@ class WebMapCog(commands.Cog):
             cursor: pointer;
             transition: all 0.3s ease;
             white-space: nowrap;
+            min-height: var(--touch-target-size);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            touch-action: manipulation;
         }
         
         .wiki-tab:hover {
@@ -1699,6 +2638,208 @@ class WebMapCog(commands.Cog):
         .wealth-rich { color: var(--success-color); }
         .wealth-moderate { color: var(--warning-color); }
         .wealth-poor { color: var(--error-color); }
+        
+        /* Wiki action buttons in header */
+        .wiki-action-buttons {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .wiki-action-buttons .action-button {
+            min-width: auto;
+            max-width: none;
+            padding: 0.5rem 1rem;
+            font-size: 0.8rem;
+        }
+        
+        .wiki-action-buttons .button-icon {
+            font-size: 1.2rem;
+        }
+        
+        .wiki-action-buttons .button-title {
+            font-size: 0.8rem;
+            margin: 0;
+        }
+        
+        /* Mobile-specific wiki improvements for touch accessibility */
+        @media (max-width: 768px) {
+            .wiki-header {
+                padding: 0.75rem;
+                flex-direction: column;
+                gap: 0.75rem;
+                align-items: stretch;
+            }
+            
+            .header-section {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+            }
+            
+            .wiki-title {
+                font-size: 1.25rem;
+                flex: 1;
+                min-width: 0;
+            }
+            
+            .wiki-status {
+                font-size: 0.75rem;
+                flex-shrink: 0;
+            }
+            
+            .wiki-action-buttons {
+                justify-content: center;
+                gap: 0.75rem;
+            }
+            
+            .wiki-action-buttons .action-button {
+                padding: 0.5rem 0.75rem;
+                min-height: 32px;
+                min-width: 32px;
+                flex: 1;
+                max-width: 120px;
+                font-size: 0.85rem;
+            }
+            
+            .wiki-tabs {
+                padding: 0 0.75rem;
+                gap: 0.25rem;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                -ms-overflow-style: none;
+            }
+            
+            .wiki-tabs::-webkit-scrollbar {
+                display: none;
+            }
+            
+            .wiki-tab {
+                padding: 0.5rem 1rem;
+                font-size: 0.8rem;
+                min-width: 32px;
+                flex-shrink: 0;
+                border-radius: 4px 4px 0 0;
+            }
+            
+            .wiki-content {
+                padding: 0.75rem;
+            }
+            
+            .wiki-section {
+                padding: 1rem;
+                margin-bottom: 1rem;
+            }
+            
+            .wiki-table {
+                font-size: 0.75rem;
+                display: block;
+                overflow-x: auto;
+                white-space: nowrap;
+                -webkit-overflow-scrolling: touch;
+            }
+            
+            .wiki-table thead,
+            .wiki-table tbody,
+            .wiki-table th,
+            .wiki-table td,
+            .wiki-table tr {
+                display: block;
+            }
+            
+            .wiki-table thead tr {
+                position: absolute;
+                top: -9999px;
+                left: -9999px;
+            }
+            
+            .wiki-table tr {
+                border: 1px solid var(--border-color);
+                margin-bottom: 0.5rem;
+                padding: 0.5rem;
+                background: var(--accent-bg);
+                border-radius: 4px;
+            }
+            
+            .wiki-table td {
+                border: none;
+                padding: 0.25rem 0;
+                position: relative;
+                padding-left: 35%;
+                text-align: left;
+            }
+            
+            .wiki-table td:before {
+                content: attr(data-label) ": ";
+                position: absolute;
+                left: 0;
+                width: 30%;
+                padding-right: 0.5rem;
+                white-space: nowrap;
+                color: var(--primary-color);
+                font-weight: bold;
+                font-size: 0.7rem;
+            }
+            
+            .wiki-card {
+                margin-bottom: 0.75rem;
+                padding: 0.75rem;
+            }
+            
+            .wiki-card h4 {
+                font-size: 0.9rem;
+                margin-bottom: 0.4rem;
+            }
+            
+            .wiki-card p {
+                font-size: 0.8rem;
+                line-height: 1.3;
+            }
+        }
+        
+        /* Extra small mobile devices */
+        @media (max-width: 480px) {
+            .wiki-header {
+                padding: 0.5rem;
+            }
+            
+            .wiki-title {
+                font-size: 1.1rem;
+            }
+            
+            .wiki-status {
+                font-size: 0.7rem;
+            }
+            
+            .wiki-action-buttons .action-button {
+                padding: 0.6rem 0.8rem;
+                font-size: 0.75rem;
+            }
+            
+            .wiki-tab {
+                padding: 0.6rem 1rem;
+                font-size: 0.8rem;
+            }
+            
+            .wiki-content {
+                padding: 0.5rem;
+            }
+            
+            .wiki-section {
+                padding: 0.75rem;
+                margin-bottom: 0.75rem;
+            }
+            
+            .wiki-section h3 {
+                font-size: 1.1rem;
+            }
+            
+            .loading-message {
+                padding: 2rem 1rem;
+                font-size: 1rem;
+            }
+        }
         '''
     
     def get_map_script(self):
@@ -1723,6 +2864,24 @@ class WebMapCog(commands.Cog):
                 this.isDragging = false;
                 this.dragStartX = 0;
                 this.dragStartY = 0;
+                this.mouseDownX = 0;
+                this.mouseDownY = 0;
+                this.hasDraggedSinceMouseDown = false;
+                this.dragThreshold = 5; // pixels
+                
+                // Pinch-to-zoom state
+                this.isPinching = false;
+                this.initialPinchDistance = 0;
+                this.initialScale = 1;
+                this.pinchCenterX = 0;
+                this.pinchCenterY = 0;
+                this.touches = [];
+                
+                // Touch tap detection
+                this.touchStartX = 0;
+                this.touchStartY = 0;
+                this.touchStartTime = 0;
+                
                 this.selectedLocation = null;
                 this.selectedCorridor = null;
                 
@@ -1731,10 +2890,12 @@ class WebMapCog(commands.Cog):
                 this.highlightedIndex = -1;
                 this.currentSuggestions = [];
                 this.hoveredCorridor = null;
+                this.lastLocationHash = null;
                 this.showLabels = false;
                 this.showPlayers = false;
                 this.showNPCs = false;
                 this.showRoutes = true;
+                this.showActiveRoutesOnly = false;
                 
                 // Animation timing for pulsing effects
                 this.animationTime = 0;
@@ -1857,6 +3018,11 @@ class WebMapCog(commands.Cog):
                     this.showRoutes = e.target.checked;
                     this.render();
                 });
+                
+                document.getElementById('toggle-active-routes-only').addEventListener('change', e => {
+                    this.showActiveRoutesOnly = e.target.checked;
+                    this.render();
+                });
             }
             
             async loadData() {
@@ -1865,7 +3031,13 @@ class WebMapCog(commands.Cog):
                     this.data = await response.json();
                     this.updateLastUpdate();
                     this.populateRouteDropdowns();
+                    this.updateZoomDisplay();
                     this.render();
+                    
+                    // Run pathfinding test after data is loaded
+                    setTimeout(() => {
+                        this.testPathfinding();
+                    }, 1000); // Delay to ensure rendering is complete
                 } catch (error) {
                     console.error('Failed to load map data:', error);
                 }
@@ -1913,6 +3085,107 @@ class WebMapCog(commands.Cog):
                 };
             }
             
+            // Calculate distance between two touch points
+            getTouchDistance(touch1, touch2) {
+                const dx = touch1.clientX - touch2.clientX;
+                const dy = touch1.clientY - touch2.clientY;
+                return Math.sqrt(dx * dx + dy * dy);
+            }
+            
+            shouldElementBeDimmed(elementId, elementType) {
+                // If a route is plotted, dim elements not part of the route
+                if (this.plannedRoute && this.plannedRoute.length > 1) {
+                    if (elementType === 'location') {
+                        // Don't dim locations that are part of the planned route
+                        return !this.plannedRoute.includes(String(elementId));
+                    }
+                    
+                    if (elementType === 'corridor') {
+                        const corridor = this.data.corridors.find(c => c.id === elementId);
+                        if (corridor) {
+                            // Don't dim corridors that are part of the planned route
+                            return !this.isCorridorInRoute(corridor, this.plannedRoute);
+                        }
+                        return true;
+                    }
+                }
+                
+                // If nothing is selected, don't dim anything
+                if (!this.selectedLocation && !this.selectedCorridor) {
+                    return false;
+                }
+                
+                if (elementType === 'location') {
+                    // Don't dim selected location
+                    if (this.selectedLocation === elementId) {
+                        return false;
+                    }
+                    
+                    // Don't dim locations connected to selected corridor
+                    if (this.selectedCorridor && 
+                        (this.selectedCorridor.origin == elementId || this.selectedCorridor.destination == elementId)) {
+                        return false;
+                    }
+                    
+                    // Don't dim locations directly connected to selected location
+                    if (this.selectedLocation) {
+                        for (const corridor of this.data.corridors) {
+                            if ((corridor.origin == this.selectedLocation && corridor.destination == elementId) ||
+                                (corridor.destination == this.selectedLocation && corridor.origin == elementId)) {
+                                return false;
+                            }
+                        }
+                    }
+                    
+                    // Dim everything else
+                    return true;
+                }
+                
+                if (elementType === 'corridor') {
+                    // Don't dim selected corridor
+                    if (this.selectedCorridor && this.selectedCorridor.id === elementId) {
+                        return false;
+                    }
+                    
+                    // Don't dim corridors connected to selected location
+                    if (this.selectedLocation) {
+                        const corridor = this.data.corridors.find(c => c.id === elementId);
+                        if (corridor && (corridor.origin == this.selectedLocation || corridor.destination == this.selectedLocation)) {
+                            return false;
+                        }
+                    }
+                    
+                    // Dim everything else
+                    return true;
+                }
+                
+                return false;
+            }
+            
+            applyDimming(color) {
+                // Convert hex color to rgba with reduced opacity
+                if (color.startsWith('#')) {
+                    const hex = color.slice(1);
+                    const r = parseInt(hex.substr(0, 2), 16);
+                    const g = parseInt(hex.substr(2, 2), 16);
+                    const b = parseInt(hex.substr(4, 2), 16);
+                    return `rgba(${r}, ${g}, ${b}, 0.2)`;
+                }
+                
+                // If already rgba, reduce the alpha value
+                if (color.startsWith('rgba')) {
+                    return color.replace(/[\\d\\.]+\\)$/g, '0.2)');
+                }
+                
+                // If rgb, convert to rgba with low alpha
+                if (color.startsWith('rgb')) {
+                    return color.replace('rgb', 'rgba').replace(')', ', 0.2)');
+                }
+                
+                // Fallback for other formats
+                return color;
+            }
+
             render() {
                 if (!this.data) return;
                 
@@ -2009,13 +3282,35 @@ class WebMapCog(commands.Cog):
                     
                     if (!origin || !dest) continue;
                     
+                    // Check if any players/NPCs are in this corridor
+                    const travelingPlayers = Object.values(this.data.players).filter(p => 
+                        p.traveling && p.corridor_id === corridor.id
+                    );
+                    const travelingNPCs = Object.values(this.data.npcs).filter(n => 
+                        n.traveling && n.corridor_id === corridor.id
+                    );
+                    const hasTravelers = travelingPlayers.length > 0 || travelingNPCs.length > 0;
+                    
+                    // Skip this corridor if "Active Routes Only" is enabled and no travelers
+                    if (this.showActiveRoutesOnly && !hasTravelers) {
+                        continue;
+                    }
+                    
                     const start = this.worldToScreen(origin.x, origin.y);
                     const end = this.worldToScreen(dest.x, dest.y);
+                    
+                    // Determine if this corridor should be dimmed
+                    const shouldBeDimmed = this.shouldElementBeDimmed(corridor.id, 'corridor');
                     
                     // Determine if this corridor is selected or related to selected location
                     const isSelected = this.selectedCorridor && 
                         this.selectedCorridor.id === corridor.id;
-                    const isRelatedToLocation = this.selectedLocation && 
+                    
+                    // Check if this corridor is part of the planned route
+                    const isPartOfPlannedRoute = this.plannedRoute && this.isCorridorInRoute(corridor, this.plannedRoute);
+                    
+                    // Only highlight location-related corridors if there's no planned route
+                    const isRelatedToLocation = !this.plannedRoute && this.selectedLocation && 
                         (corridor.origin == this.selectedLocation || 
                          corridor.destination == this.selectedLocation);
                     const isHovered = this.hoveredCorridor && 
@@ -2028,55 +3323,63 @@ class WebMapCog(commands.Cog):
                     let strokeStyle = 'rgba(0, 51, 68, 0.3)'; // Default faded
                     let dashPattern = [];
                     
-                    if (corridor.name && corridor.name.includes('Approach')) {
+                    if (corridor.corridor_type === 'local_space' || (corridor.name && corridor.name.includes('Approach'))) {
                         // Local space - dotted line
-                        strokeStyle = 'rgba(136, 255, 136, 0.5)'; // Light green
+                        strokeStyle = shouldBeDimmed ? 'rgba(136, 255, 136, 0.15)' : 'rgba(136, 255, 136, 0.5)'; // Light green
                         dashPattern = [5, 5];
-                    } else if (corridor.name && corridor.name.includes('Ungated')) {
+                    } else if (corridor.corridor_type === 'ungated') {
                         // Ungated - dashed line
-                        strokeStyle = 'rgba(255, 102, 0, 0.5)'; // Orange
+                        strokeStyle = shouldBeDimmed ? 'rgba(255, 102, 0, 0.15)' : 'rgba(255, 102, 0, 0.5)'; // Orange
                         dashPattern = [10, 5];
                     } else {
                         // Gated - solid line
-                        strokeStyle = 'rgba(0, 204, 204, 0.5)'; // Cyan
+                        strokeStyle = shouldBeDimmed ? 'rgba(0, 204, 204, 0.15)' : 'rgba(0, 204, 204, 0.5)'; // Cyan
                     }
                     
-                    // Check if any players/NPCs are in this corridor
-                    const travelingPlayers = Object.values(this.data.players).filter(p => 
-                        p.traveling && p.corridor_id === corridor.id
-                    );
-                    const travelingNPCs = Object.values(this.data.npcs).filter(n => 
-                        n.traveling && n.corridor_id === corridor.id
-                    );
-                    const hasTravelers = travelingPlayers.length > 0 || travelingNPCs.length > 0;
-                    
                     // Apply highlighting
+                    // Calculate zoom-based glow intensity for corridors
+                    const corridorGlowIntensity = this.scale > 2 ? 1 : 
+                                                 this.scale > 1 ? 0.7 : 
+                                                 this.scale > 0.5 ? 0.3 : 0;
+                    
                     if (isSelected) {
                         strokeStyle = '#00ffff';
                         lineWidth = Math.max(4, Math.min(10, 8 / Math.sqrt(this.scale)));
-                        this.ctx.shadowBlur = 20;
+                        this.ctx.shadowBlur = 20 * corridorGlowIntensity;
                         this.ctx.shadowColor = '#00ffff';
-                    } else if (isRelatedToLocation) {
-                        // Highlight routes from/to selected location
-                        if (corridor.name && corridor.name.includes('Approach')) {
+                    } else if (isPartOfPlannedRoute) {
+                        // Highlight corridors that are part of the planned route
+                        if (corridor.corridor_type === 'local_space' || corridor.name && corridor.name.includes('Approach')) {
                             strokeStyle = '#88ff88';
-                        } else if (corridor.name && corridor.name.includes('Ungated')) {
+                        } else if (corridor.corridor_type === 'ungated') {
                             strokeStyle = '#ff6600';
                         } else {
                             strokeStyle = '#00cccc';
                         }
                         lineWidth = Math.max(3, Math.min(8, 6 / Math.sqrt(this.scale)));
-                        this.ctx.shadowBlur = 10;
+                        this.ctx.shadowBlur = 10 * corridorGlowIntensity;
+                        this.ctx.shadowColor = strokeStyle;
+                    } else if (isRelatedToLocation) {
+                        // Highlight routes from/to selected location
+                        if (corridor.corridor_type === 'local_space' || corridor.name && corridor.name.includes('Approach')) {
+                            strokeStyle = '#88ff88';
+                        } else if (corridor.corridor_type === 'ungated') {
+                            strokeStyle = '#ff6600';
+                        } else {
+                            strokeStyle = '#00cccc';
+                        }
+                        lineWidth = Math.max(3, Math.min(8, 6 / Math.sqrt(this.scale)));
+                        this.ctx.shadowBlur = 10 * corridorGlowIntensity;
                         this.ctx.shadowColor = strokeStyle;
                     } else if (isHovered) {
                         lineWidth = Math.max(3, Math.min(8, 6 / Math.sqrt(this.scale)));
-                        this.ctx.shadowBlur = 15;
+                        this.ctx.shadowBlur = 15 * corridorGlowIntensity;
                         this.ctx.shadowColor = strokeStyle;
                     } else if (hasTravelers) {
                         // Enhanced styling for corridors with travelers
                         strokeStyle = '#00aaff';
                         lineWidth = Math.max(4, Math.min(10, 7 / Math.sqrt(this.scale)));
-                        this.ctx.shadowBlur = 15;
+                        this.ctx.shadowBlur = shouldBeDimmed ? 0 : 15 * corridorGlowIntensity;
                         this.ctx.shadowColor = '#00aaff';
                     } else {
                         this.ctx.shadowBlur = 0;
@@ -2101,7 +3404,7 @@ class WebMapCog(commands.Cog):
                     }
                     
                     // Draw direction indicators for selected corridors
-                    if (isSelected || isRelatedToLocation) {
+                    if (isSelected || isRelatedToLocation || isPartOfPlannedRoute) {
                         this.drawCorridorArrow(start, end, strokeStyle);
                     }
                 }
@@ -2138,9 +3441,12 @@ class WebMapCog(commands.Cog):
                         const fadeOut = Math.min(1, (1 - progress) * 4);
                         const alpha = Math.min(fadeIn, fadeOut) * 0.8;
                         
+                        // Reduce travel animation glow when zoomed out
+                        const travelGlowFactor = this.scale > 1 ? 1 : this.scale > 0.5 ? 0.5 : 0;
+                        
                         this.ctx.globalAlpha = alpha;
                         this.ctx.fillStyle = '#00ddff';
-                        this.ctx.shadowBlur = Math.min(10, 8 / Math.sqrt(this.scale));
+                        this.ctx.shadowBlur = Math.min(10, 8 / Math.sqrt(this.scale)) * travelGlowFactor;
                         this.ctx.shadowColor = '#00ddff';
                         
                         const dotSize = Math.max(3, 4 / Math.sqrt(this.scale));
@@ -2170,7 +3476,7 @@ class WebMapCog(commands.Cog):
                         
                         this.ctx.globalAlpha = alpha;
                         this.ctx.fillStyle = '#ffaa00';
-                        this.ctx.shadowBlur = Math.min(8, 6 / Math.sqrt(this.scale));
+                        this.ctx.shadowBlur = Math.min(8, 6 / Math.sqrt(this.scale)) * travelGlowFactor;
                         this.ctx.shadowColor = '#ffaa00';
                         
                         const dotSize = Math.max(2, 3 / Math.sqrt(this.scale));
@@ -2215,94 +3521,116 @@ class WebMapCog(commands.Cog):
             }
             
             drawLocations() {
-                for (const [id, location] of Object.entries(this.data.locations)) {
-                    const pos = this.worldToScreen(location.x, location.y);
-                    
-                    // Skip if off-screen
-                    if (pos.x < -50 || pos.x > this.canvas.width + 50 ||
-                        pos.y < -50 || pos.y > this.canvas.height + 50) continue;
-                    
-                    // Determine color based on type
-                    const colors = {
-                        colony: '#00ff88',
-                        space_station: '#00ffff',
-                        outpost: '#ffaa00',
-                        gate: '#ff00ff'
-                    };
-                    
-                    const color = colors[location.type] || '#ffffff';
-                    
-                    // Increased base sizes for better visibility
-                    const baseSize = location.type === 'gate' ? 25 : 20;
-                    const size = Math.max(baseSize / Math.sqrt(this.scale), 12);
-                    
-                    // Check if location is connected to selected corridor
-                    const isCorridorDestination = this.selectedCorridor && 
-                        (this.selectedCorridor.origin == id || 
-                         this.selectedCorridor.destination == id);
-                    
-                    // Draw location
-                    // Draw location based on type
-                    this.ctx.fillStyle = color;
-                    this.ctx.shadowBlur = Math.min(30, 25 / Math.sqrt(this.scale));
-                    this.ctx.shadowColor = color;
-
-                    if (location.type === 'gate') {
-                        // Draw diamond for gates
-                        this.ctx.beginPath();
-                        this.ctx.moveTo(pos.x, pos.y - size);
-                        this.ctx.lineTo(pos.x + size, pos.y);
-                        this.ctx.lineTo(pos.x, pos.y + size);
-                        this.ctx.lineTo(pos.x - size, pos.y);
-                        this.ctx.closePath();
-                        this.ctx.fill();
-                    } else if (location.type === 'space_station') {
-                        // Draw triangle for space stations
-                        this.ctx.beginPath();
-                        this.ctx.moveTo(pos.x, pos.y - size);
-                        this.ctx.lineTo(pos.x + size * 0.866, pos.y + size * 0.5);
-                        this.ctx.lineTo(pos.x - size * 0.866, pos.y + size * 0.5);
-                        this.ctx.closePath();
-                        this.ctx.fill();
-                    } else if (location.type === 'outpost') {
-                        // Draw square for outposts
-                        this.ctx.fillRect(pos.x - size, pos.y - size, size * 2, size * 2);
-                    } else {
-                        // Draw circle for colonies and other types
-                        this.ctx.beginPath();
-                        this.ctx.arc(pos.x, pos.y, size, 0, Math.PI * 2);
-                        this.ctx.fill();
-                    }
-                    
-                    // Draw selection/highlight indicators
-                    if (this.selectedLocation === id || isCorridorDestination) {
-                        this.ctx.strokeStyle = color;
-                        this.ctx.lineWidth = 3;
-                        this.ctx.beginPath();
-                        this.ctx.arc(pos.x, pos.y, size + 8, 0, Math.PI * 2);
-                        this.ctx.stroke();
+                // Define importance order: gates (background) -> outposts -> space_stations -> colonies (foreground)
+                const renderOrder = ['gate', 'outpost', 'space_station', 'colony'];
+                
+                // Render each location type in order of importance
+                for (const locationType of renderOrder) {
+                    for (const [id, location] of Object.entries(this.data.locations)) {
+                        // Skip if this location is not the current type being rendered
+                        if (location.type !== locationType) continue;
                         
-                        // Pulsing effect for corridor destinations
-                        if (isCorridorDestination) {
-                            const time = Date.now() / 1000;
-                            const pulseSize = size + 12 + Math.sin(time * 3) * 4;
-                            this.ctx.globalAlpha = 0.3;
-                            this.ctx.beginPath();
-                            this.ctx.arc(pos.x, pos.y, pulseSize, 0, Math.PI * 2);
-                            this.ctx.stroke();
-                            this.ctx.globalAlpha = 1;
+                        const pos = this.worldToScreen(location.x, location.y);
+                        
+                        // Skip if off-screen
+                        if (pos.x < -50 || pos.x > this.canvas.width + 50 ||
+                            pos.y < -50 || pos.y > this.canvas.height + 50) continue;
+                        
+                        // Determine if this location should be dimmed
+                        const shouldBeDimmed = this.shouldElementBeDimmed(id, 'location');
+                        
+                        // Determine color based on type
+                        const colors = {
+                            colony: '#00ff88',
+                            space_station: '#00ffff',
+                            outpost: '#ffaa00',
+                            gate: '#ff00ff'
+                        };
+                        
+                        let color = colors[location.type] || '#ffffff';
+                        
+                        // Apply dimming if needed
+                        if (shouldBeDimmed) {
+                            color = this.applyDimming(color);
                         }
-                    }
-                    
-                    // Draw name if labels are enabled
-                    if (this.showLabels && this.scale > 0.8) {
-                        this.ctx.fillStyle = '#ffffff';
-                        this.ctx.font = `${Math.max(12, 14 / Math.sqrt(this.scale))}px 'Tektur', monospace`;
-                        this.ctx.textAlign = 'center';
-                        this.ctx.textBaseline = 'top';
-                        this.ctx.shadowBlur = 5;
-                        this.ctx.shadowColor = '#000000';
-                        this.ctx.fillText(location.name, pos.x, pos.y + size + 5);
+                        
+                        // Increased base sizes for better visibility
+                        const baseSize = location.type === 'gate' ? 25 : 20;
+                        const size = Math.max(baseSize / Math.sqrt(this.scale), 12);
+                        
+                        // Check if location is connected to selected corridor
+                        const isCorridorDestination = this.selectedCorridor && 
+                            (this.selectedCorridor.origin == id || 
+                             this.selectedCorridor.destination == id);
+                        
+                        // Draw location
+                        // Draw location based on type
+                        this.ctx.fillStyle = color;
+                        // Reduce glow effects when zoomed out for performance
+                        const glowIntensity = this.scale > 1 ? Math.min(30, 25 / Math.sqrt(this.scale)) : 
+                                             this.scale > 0.5 ? Math.min(15, 12 / Math.sqrt(this.scale)) : 0;
+                        this.ctx.shadowBlur = shouldBeDimmed ? 0 : glowIntensity;
+                        this.ctx.shadowColor = color;
+
+                        if (location.type === 'gate') {
+                            // Draw diamond for gates
+                            this.ctx.beginPath();
+                            this.ctx.moveTo(pos.x, pos.y - size);
+                            this.ctx.lineTo(pos.x + size, pos.y);
+                            this.ctx.lineTo(pos.x, pos.y + size);
+                            this.ctx.lineTo(pos.x - size, pos.y);
+                            this.ctx.closePath();
+                            this.ctx.fill();
+                        } else if (location.type === 'space_station') {
+                            // Draw triangle for space stations
+                            this.ctx.beginPath();
+                            this.ctx.moveTo(pos.x, pos.y - size);
+                            this.ctx.lineTo(pos.x + size * 0.866, pos.y + size * 0.5);
+                            this.ctx.lineTo(pos.x - size * 0.866, pos.y + size * 0.5);
+                            this.ctx.closePath();
+                            this.ctx.fill();
+                        } else if (location.type === 'outpost') {
+                            // Draw square for outposts
+                            this.ctx.fillRect(pos.x - size, pos.y - size, size * 2, size * 2);
+                        } else {
+                            // Draw circle for colonies and other types
+                            this.ctx.beginPath();
+                            this.ctx.arc(pos.x, pos.y, size, 0, Math.PI * 2);
+                            this.ctx.fill();
+                        }
+                        
+                        // Draw selection/highlight indicators
+                        if (this.selectedLocation === id || isCorridorDestination) {
+                            this.ctx.strokeStyle = color;
+                            this.ctx.lineWidth = 3;
+                            this.ctx.beginPath();
+                            this.ctx.arc(pos.x, pos.y, size + 8, 0, Math.PI * 2);
+                            this.ctx.stroke();
+                            
+                            // Pulsing effect for corridor destinations
+                            if (isCorridorDestination) {
+                                const time = Date.now() / 1000;
+                                const pulseSize = size + 12 + Math.sin(time * 3) * 4;
+                                this.ctx.globalAlpha = 0.3;
+                                this.ctx.beginPath();
+                                this.ctx.arc(pos.x, pos.y, pulseSize, 0, Math.PI * 2);
+                                this.ctx.stroke();
+                                this.ctx.globalAlpha = 1;
+                            }
+                        }
+                        
+                        // Draw name if labels are enabled and zoomed in enough
+                        if (this.showLabels && this.scale > 0.8) {
+                            this.ctx.fillStyle = '#ffffff';
+                            this.ctx.font = `${Math.max(12, 14 / Math.sqrt(this.scale))}px 'Tektur', monospace`;
+                            this.ctx.textAlign = 'center';
+                            this.ctx.textBaseline = 'top';
+                            // Reduce text glow when zoomed out for performance
+                            const textGlowFactor = this.scale > 2 ? 1 : this.scale > 1 ? 0.7 : 0.3;
+                            this.ctx.shadowBlur = 5 * textGlowFactor;
+                            this.ctx.shadowColor = '#000000';
+                            this.ctx.fillText(location.name, pos.x, pos.y + size + 5);
+                        }
                     }
                 }
                 
@@ -2343,30 +3671,38 @@ class WebMapCog(commands.Cog):
                     
                     this.ctx.save();
                     
-                    // Draw pulsing outer ring
-                    this.ctx.globalAlpha = 0.3 * ringPulseFactor;
-                    this.ctx.fillStyle = glowColor;
-                    this.ctx.shadowBlur = Math.min(30, 25 / Math.sqrt(this.scale));
-                    this.ctx.shadowColor = glowColor;
+                    // Calculate player glow intensity based on zoom level
+                    const playerGlowFactor = this.scale > 2 ? 1 : 
+                                            this.scale > 1 ? 0.7 : 
+                                            this.scale > 0.5 ? 0.4 : 0;
                     
-                    this.ctx.beginPath();
-                    this.ctx.arc(pos.x, pos.y, ringSize, 0, Math.PI * 2);
-                    this.ctx.fill();
-                    
-                    // Draw middle ring
-                    this.ctx.globalAlpha = 0.6;
-                    this.ctx.fillStyle = playerColor;
-                    this.ctx.shadowBlur = Math.min(20, 15 / Math.sqrt(this.scale));
-                    this.ctx.shadowColor = playerColor;
-                    
-                    this.ctx.beginPath();
-                    this.ctx.arc(pos.x, pos.y, pulseSize * 1.2, 0, Math.PI * 2);
-                    this.ctx.fill();
+                    // Only draw complex glow effects when zoomed in enough
+                    if (playerGlowFactor > 0) {
+                        // Draw pulsing outer ring
+                        this.ctx.globalAlpha = 0.3 * ringPulseFactor * playerGlowFactor;
+                        this.ctx.fillStyle = glowColor;
+                        this.ctx.shadowBlur = Math.min(30, 25 / Math.sqrt(this.scale)) * playerGlowFactor;
+                        this.ctx.shadowColor = glowColor;
+                        
+                        this.ctx.beginPath();
+                        this.ctx.arc(pos.x, pos.y, ringSize, 0, Math.PI * 2);
+                        this.ctx.fill();
+                        
+                        // Draw middle ring
+                        this.ctx.globalAlpha = 0.6 * playerGlowFactor;
+                        this.ctx.fillStyle = playerColor;
+                        this.ctx.shadowBlur = Math.min(20, 15 / Math.sqrt(this.scale)) * playerGlowFactor;
+                        this.ctx.shadowColor = playerColor;
+                        
+                        this.ctx.beginPath();
+                        this.ctx.arc(pos.x, pos.y, pulseSize * 1.2, 0, Math.PI * 2);
+                        this.ctx.fill();
+                    }
                     
                     // Draw core player indicator
                     this.ctx.globalAlpha = 1.0;
                     this.ctx.fillStyle = '#ffffff';
-                    this.ctx.shadowBlur = Math.min(15, 10 / Math.sqrt(this.scale));
+                    this.ctx.shadowBlur = Math.min(15, 10 / Math.sqrt(this.scale)) * Math.max(0.3, playerGlowFactor);
                     this.ctx.shadowColor = playerColor;
                     
                     this.ctx.beginPath();
@@ -2421,24 +3757,32 @@ class WebMapCog(commands.Cog):
                     
                     this.ctx.save();
                     
-                    // Draw pulsing glow effect
-                    this.ctx.globalAlpha = 0.25 * glowPulseFactor;
-                    this.ctx.fillStyle = glowColor;
-                    this.ctx.shadowBlur = Math.min(25, 20 / Math.sqrt(this.scale));
-                    this.ctx.shadowColor = glowColor;
+                    // Calculate NPC glow intensity based on zoom level
+                    const npcGlowFactor = this.scale > 2 ? 1 : 
+                                         this.scale > 1 ? 0.6 : 
+                                         this.scale > 0.5 ? 0.3 : 0;
                     
-                    this.ctx.beginPath();
-                    this.ctx.moveTo(pos.x, pos.y - glowSize);
-                    this.ctx.lineTo(pos.x + glowSize * 0.8, pos.y);
-                    this.ctx.lineTo(pos.x, pos.y + glowSize);
-                    this.ctx.lineTo(pos.x - glowSize * 0.8, pos.y);
-                    this.ctx.closePath();
-                    this.ctx.fill();
+                    // Only draw complex glow effects when zoomed in enough
+                    if (npcGlowFactor > 0) {
+                        // Draw pulsing glow effect
+                        this.ctx.globalAlpha = 0.25 * glowPulseFactor * npcGlowFactor;
+                        this.ctx.fillStyle = glowColor;
+                        this.ctx.shadowBlur = Math.min(25, 20 / Math.sqrt(this.scale)) * npcGlowFactor;
+                        this.ctx.shadowColor = glowColor;
+                        
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(pos.x, pos.y - glowSize);
+                        this.ctx.lineTo(pos.x + glowSize * 0.8, pos.y);
+                        this.ctx.lineTo(pos.x, pos.y + glowSize);
+                        this.ctx.lineTo(pos.x - glowSize * 0.8, pos.y);
+                        this.ctx.closePath();
+                        this.ctx.fill();
+                    }
                     
                     // Draw main NPC body
                     this.ctx.globalAlpha = 0.9;
                     this.ctx.fillStyle = npcColor;
-                    this.ctx.shadowBlur = Math.min(15, 12 / Math.sqrt(this.scale));
+                    this.ctx.shadowBlur = Math.min(15, 12 / Math.sqrt(this.scale)) * Math.max(0.2, npcGlowFactor);
                     this.ctx.shadowColor = npcColor;
                     
                     this.ctx.beginPath();
@@ -2452,7 +3796,7 @@ class WebMapCog(commands.Cog):
                     // Draw bright core
                     this.ctx.globalAlpha = 1.0;
                     this.ctx.fillStyle = '#ffffff';
-                    this.ctx.shadowBlur = Math.min(8, 6 / Math.sqrt(this.scale));
+                    this.ctx.shadowBlur = Math.min(8, 6 / Math.sqrt(this.scale)) * Math.max(0.2, npcGlowFactor);
                     this.ctx.shadowColor = npcColor;
                     
                     this.ctx.beginPath();
@@ -2471,6 +3815,9 @@ class WebMapCog(commands.Cog):
                 this.isDragging = true;
                 this.dragStartX = e.clientX - this.offsetX;
                 this.dragStartY = e.clientY - this.offsetY;
+                this.mouseDownX = e.clientX;
+                this.mouseDownY = e.clientY;
+                this.hasDraggedSinceMouseDown = false;
                 this.canvas.style.cursor = 'grabbing';
             }
             
@@ -2478,6 +3825,15 @@ class WebMapCog(commands.Cog):
                 const rect = this.canvas.getBoundingClientRect();
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top;
+                
+                // Check if we've moved beyond the drag threshold
+                if (this.isDragging && !this.hasDraggedSinceMouseDown) {
+                    const deltaX = Math.abs(e.clientX - this.mouseDownX);
+                    const deltaY = Math.abs(e.clientY - this.mouseDownY);
+                    if (deltaX > this.dragThreshold || deltaY > this.dragThreshold) {
+                        this.hasDraggedSinceMouseDown = true;
+                    }
+                }
                 
                 if (this.isDragging) {
                     this.offsetX = e.clientX - this.dragStartX;
@@ -2491,6 +3847,16 @@ class WebMapCog(commands.Cog):
                     // Check corridor hover
                     if (this.showRoutes) {
                         for (const corridor of this.data.corridors) {
+                            // Skip if active routes only mode and no travelers
+                            if (this.showActiveRoutesOnly) {
+                                const hasTravelers = Object.values(this.data.players).some(p => 
+                                    p.traveling && p.corridor_id === corridor.id
+                                ) || Object.values(this.data.npcs).some(n => 
+                                    n.traveling && n.corridor_id === corridor.id
+                                );
+                                if (!hasTravelers) continue;
+                            }
+                            
                             if (this.isPointNearLine(worldPos, corridor)) {
                                 hoveredCorridor = corridor;
                                 break;
@@ -2535,20 +3901,44 @@ class WebMapCog(commands.Cog):
             
             handleWheel(e) {
                 e.preventDefault();
-                const delta = e.deltaY > 0 ? 0.9 : 1.1;
-                this.zoom(delta);
+                const rect = this.canvas.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+                const delta = e.deltaY > 0 ? 0.95 : 1.05;
+                this.zoomToPoint(delta, mouseX, mouseY);
             }
             
             handleClick(e) {
+                // Only process clicks if no significant drag occurred
+                if (this.hasDraggedSinceMouseDown) {
+                    return;
+                }
+                
                 const rect = this.canvas.getBoundingClientRect();
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top;
+                
+                this.processInteraction(x, y);
+            }
+            
+            // Unified method to handle both mouse clicks and touch taps
+            processInteraction(x, y) {
                 const worldPos = this.screenToWorld(x, y);
                 
                 // Check for corridor click first (they're drawn underneath)
                 let clickedCorridor = null;
                 if (this.showRoutes) {
                     for (const corridor of this.data.corridors) {
+                        // Skip if active routes only mode and no travelers
+                        if (this.showActiveRoutesOnly) {
+                            const hasTravelers = Object.values(this.data.players).some(p => 
+                                p.traveling && p.corridor_id === corridor.id
+                            ) || Object.values(this.data.npcs).some(n => 
+                                n.traveling && n.corridor_id === corridor.id
+                            );
+                            if (!hasTravelers) continue;
+                        }
+                        
                         if (this.isPointNearLine(worldPos, corridor)) {
                             clickedCorridor = corridor;
                             break;
@@ -2577,15 +3967,23 @@ class WebMapCog(commands.Cog):
                     if (this.routePlanningMode && this.routeStartLocation) {
                         // Plot route from start to clicked location
                         if (this.plotRoute(this.routeStartLocation, clickedLocation.id)) {
-                            // Route successfully plotted, select the destination
-                            this.selectLocation(clickedLocation.id, clickedLocation.location);
+                            // Route successfully plotted, exit route planning mode
+                            this.routePlanningMode = false;
+                            this.routeStartLocation = null;
+                            
+                            // Update status to show success
+                            const statusEl = document.getElementById('route-planning-status');
+                            if (statusEl) {
+                                statusEl.textContent = 'Route plotted successfully!';
+                                statusEl.style.color = '#00ff00';
+                            }
                         }
-                    } else {
-                        // Normal location selection
+                    } else if (!this.plannedRoute) {
+                        // Normal location selection (only if no route is plotted)
                         this.selectLocation(clickedLocation.id, clickedLocation.location);
                     }
                     this.selectedCorridor = null;
-                } else if (clickedCorridor) {
+                } else if (clickedCorridor && !this.plannedRoute) {
                     this.selectCorridor(clickedCorridor);
                     this.selectedLocation = null;
                     this.hideLocationInfo();
@@ -2600,32 +3998,204 @@ class WebMapCog(commands.Cog):
             }
             
             handleTouchStart(e) {
+                e.preventDefault();
+                
+                // Store current touches
+                this.touches = Array.from(e.touches);
+                
                 if (e.touches.length === 1) {
+                    // Single touch - pan mode
                     const touch = e.touches[0];
                     this.isDragging = true;
+                    this.isPinching = false;
                     this.dragStartX = touch.clientX - this.offsetX;
                     this.dragStartY = touch.clientY - this.offsetY;
+                    this.mouseDownX = touch.clientX;
+                    this.mouseDownY = touch.clientY;
+                    this.hasDraggedSinceMouseDown = false;
+                    
+                    // Store touch start position for tap detection
+                    this.touchStartX = touch.clientX;
+                    this.touchStartY = touch.clientY;
+                    this.touchStartTime = Date.now();
+                } else if (e.touches.length === 2) {
+                    // Two touches - pinch mode
+                    this.isDragging = false;
+                    this.isPinching = true;
+                    
+                    const touch1 = e.touches[0];
+                    const touch2 = e.touches[1];
+                    
+                    // Calculate initial distance and center point
+                    this.initialPinchDistance = this.getTouchDistance(touch1, touch2);
+                    this.initialScale = this.scale;
+                    
+                    // Calculate center point between fingers
+                    this.pinchCenterX = (touch1.clientX + touch2.clientX) / 2;
+                    this.pinchCenterY = (touch1.clientY + touch2.clientY) / 2;
+                    
+                    this.hasDraggedSinceMouseDown = false;
                 }
             }
             
             handleTouchMove(e) {
                 e.preventDefault();
-                if (e.touches.length === 1 && this.isDragging) {
+                
+                // Update touch array
+                this.touches = Array.from(e.touches);
+                
+                if (e.touches.length === 1 && this.isDragging && !this.isPinching) {
+                    // Single touch panning
                     const touch = e.touches[0];
+                    
+                    // Check if we've moved beyond the drag threshold
+                    if (!this.hasDraggedSinceMouseDown) {
+                        const deltaX = Math.abs(touch.clientX - this.mouseDownX);
+                        const deltaY = Math.abs(touch.clientY - this.mouseDownY);
+                        if (deltaX > this.dragThreshold || deltaY > this.dragThreshold) {
+                            this.hasDraggedSinceMouseDown = true;
+                        }
+                    }
+                    
                     this.offsetX = touch.clientX - this.dragStartX;
                     this.offsetY = touch.clientY - this.dragStartY;
                     this.render();
+                } else if (e.touches.length === 2 && this.isPinching) {
+                    // Two-finger pinch-to-zoom
+                    const touch1 = e.touches[0];
+                    const touch2 = e.touches[1];
+                    
+                    // Calculate current distance between touches
+                    const currentDistance = this.getTouchDistance(touch1, touch2);
+                    
+                    // Calculate zoom factor based on distance change
+                    if (this.initialPinchDistance > 0) {
+                        const distanceRatio = currentDistance / this.initialPinchDistance;
+                        const newScale = this.initialScale * distanceRatio;
+                        
+                        // Apply zoom bounds
+                        if (newScale >= 0.1 && newScale <= 100) {
+                            // Calculate current center point between fingers
+                            const currentCenterX = (touch1.clientX + touch2.clientX) / 2;
+                            const currentCenterY = (touch1.clientY + touch2.clientY) / 2;
+                            
+                            // Get canvas position of pinch center
+                            const rect = this.canvas.getBoundingClientRect();
+                            const canvasCenterX = currentCenterX - rect.left;
+                            const canvasCenterY = currentCenterY - rect.top;
+                            
+                            // Convert to world coordinates before zoom
+                            const worldPoint = this.screenToWorld(canvasCenterX, canvasCenterY);
+                            
+                            // Apply new scale
+                            this.scale = newScale;
+                            
+                            // Adjust offset to keep the pinch center point stationary
+                            const newScreenPoint = this.worldToScreen(worldPoint.x, worldPoint.y);
+                            this.offsetX += canvasCenterX - newScreenPoint.x;
+                            this.offsetY += canvasCenterY - newScreenPoint.y;
+                            
+                            this.updateZoomDisplay();
+                            this.render();
+                            this.hasDraggedSinceMouseDown = true;
+                        }
+                    }
                 }
             }
             
             handleTouchEnd(e) {
-                this.isDragging = false;
+                // Check for tap before processing other touch end logic
+                if (e.touches.length === 0 && this.isDragging && !this.isPinching) {
+                    // Single touch ended - check if it was a tap
+                    const touchEndTime = Date.now();
+                    const touchDuration = touchEndTime - this.touchStartTime;
+                    
+                    // Get the touch that just ended (from changedTouches)
+                    if (e.changedTouches.length > 0) {
+                        const endTouch = e.changedTouches[0];
+                        const deltaX = Math.abs(endTouch.clientX - this.touchStartX);
+                        const deltaY = Math.abs(endTouch.clientY - this.touchStartY);
+                        
+                        // Check if this was a tap (short duration, small movement)
+                        const maxTapDuration = 300; // milliseconds
+                        const isWithinTimeLimit = touchDuration < maxTapDuration;
+                        const isWithinMovementLimit = !this.hasDraggedSinceMouseDown;
+                        
+                        if (isWithinTimeLimit && isWithinMovementLimit) {
+                            // This was a tap - process as interaction
+                            const rect = this.canvas.getBoundingClientRect();
+                            const x = endTouch.clientX - rect.left;
+                            const y = endTouch.clientY - rect.top;
+                            this.processInteraction(x, y);
+                        }
+                    }
+                }
+                
+                // Update touch array
+                this.touches = Array.from(e.touches);
+                
+                if (e.touches.length === 0) {
+                    // All touches ended - reset states
+                    this.isDragging = false;
+                    this.isPinching = false;
+                    this.initialPinchDistance = 0;
+                } else if (e.touches.length === 1 && this.isPinching) {
+                    // Went from pinch to single touch - switch to pan mode
+                    this.isPinching = false;
+                    this.initialPinchDistance = 0;
+                    
+                    const touch = e.touches[0];
+                    this.isDragging = true;
+                    this.dragStartX = touch.clientX - this.offsetX;
+                    this.dragStartY = touch.clientY - this.offsetY;
+                    this.mouseDownX = touch.clientX;
+                    this.mouseDownY = touch.clientY;
+                    
+                    // Reset tap detection for new touch
+                    this.touchStartX = touch.clientX;
+                    this.touchStartY = touch.clientY;
+                    this.touchStartTime = Date.now();
+                } else if (e.touches.length >= 2 && !this.isPinching) {
+                    // Went from single touch to pinch - switch to pinch mode
+                    this.isDragging = false;
+                    this.isPinching = true;
+                    
+                    const touch1 = e.touches[0];
+                    const touch2 = e.touches[1];
+                    
+                    this.initialPinchDistance = this.getTouchDistance(touch1, touch2);
+                    this.initialScale = this.scale;
+                    this.pinchCenterX = (touch1.clientX + touch2.clientX) / 2;
+                    this.pinchCenterY = (touch1.clientY + touch2.clientY) / 2;
+                }
             }
             
             zoom(factor) {
                 const newScale = this.scale * factor;
-                if (newScale >= 0.5 && newScale <= 50) {
+                if (newScale >= 0.1 && newScale <= 100) {
                     this.scale = newScale;
+                    this.updateZoomDisplay();
+                    this.render();
+                }
+            }
+            
+            zoomToPoint(factor, screenX, screenY) {
+                const newScale = this.scale * factor;
+                if (newScale >= 0.1 && newScale <= 100) {
+                    // Convert screen coordinates to world coordinates before zoom
+                    const worldPoint = this.screenToWorld(screenX, screenY);
+                    
+                    // Update scale
+                    this.scale = newScale;
+                    
+                    // Convert world coordinates back to screen coordinates after zoom
+                    const newScreenPoint = this.worldToScreen(worldPoint.x, worldPoint.y);
+                    
+                    // Adjust offset to keep the world point under the cursor
+                    this.offsetX += screenX - newScreenPoint.x;
+                    this.offsetY += screenY - newScreenPoint.y;
+                    
+                    this.updateZoomDisplay();
                     this.render();
                 }
             }
@@ -2634,6 +4204,50 @@ class WebMapCog(commands.Cog):
                 this.scale = 1;
                 this.offsetX = 0;
                 this.offsetY = 0;
+                this.updateZoomDisplay();
+                this.render();
+            }
+            
+            updateZoomDisplay() {
+                const zoomElement = document.getElementById('zoom-level');
+                if (zoomElement) {
+                    zoomElement.textContent = Math.round(this.scale * 100) + '%';
+                }
+            }
+            
+            zoomToFit() {
+                if (!this.data || !this.data.locations || Object.keys(this.data.locations).length === 0) return;
+                
+                // Find bounds of all locations
+                let minX = Infinity, maxX = -Infinity;
+                let minY = Infinity, maxY = -Infinity;
+                
+                Object.values(this.data.locations).forEach(location => {
+                    minX = Math.min(minX, location.x);
+                    maxX = Math.max(maxX, location.x);
+                    minY = Math.min(minY, location.y);
+                    maxY = Math.max(maxY, location.y);
+                });
+                
+                // Add padding
+                const padding = 50;
+                const width = maxX - minX + padding * 2;
+                const height = maxY - minY + padding * 2;
+                
+                // Calculate scale to fit
+                const scaleX = this.canvas.width / width;
+                const scaleY = this.canvas.height / height;
+                const newScale = Math.min(scaleX, scaleY, 100); // Don't exceed max zoom
+                
+                // Center the view
+                const centerX = (minX + maxX) / 2;
+                const centerY = (minY + maxY) / 2;
+                
+                this.scale = Math.max(newScale, 0.1); // Don't go below min zoom
+                this.offsetX = this.canvas.width / 2 - centerX * this.scale;
+                this.offsetY = this.canvas.height / 2 - centerY * this.scale;
+                
+                this.updateZoomDisplay();
                 this.render();
             }
             
@@ -2663,6 +4277,15 @@ class WebMapCog(commands.Cog):
                 // Focus on the first match
                 const firstMatch = matches[0];
                 this.selectSuggestion(firstMatch);
+            }
+            
+            clearSearch() {
+                const searchInput = document.getElementById('search-input');
+                searchInput.value = '';
+                this.hideSearchDropdown();
+                searchInput.focus();
+                // Clear any search timeout
+                clearTimeout(this.searchTimeout);
             }
             
             showSearchSuggestions(searchTerm) {
@@ -2745,6 +4368,16 @@ class WebMapCog(commands.Cog):
                 const startSelect = document.getElementById('route-start');
                 const endSelect = document.getElementById('route-end');
                 const midpointSelect = document.getElementById('route-midpoint');
+                
+                // Generate hash of current location data to detect changes
+                const locationKeys = Object.keys(this.data.locations).sort();
+                const locationHash = locationKeys.map(key => `${key}:${this.data.locations[key].name}`).join('|');
+                
+                // Only repopulate if location data has changed
+                if (this.lastLocationHash === locationHash) {
+                    return; // No changes, preserve dropdown state
+                }
+                this.lastLocationHash = locationHash;
                 
                 // Save current selected values
                 const currentStart = startSelect.value;
@@ -2840,6 +4473,7 @@ class WebMapCog(commands.Cog):
                 this.routePlanningMode = false;
                 this.routeStartLocation = null;
                 this.currentRoute = null;
+                this.plannedRoute = null; // Also clear the actual plotted route
                 
                 // Clear the dropdowns
                 document.getElementById('route-start').value = '';
@@ -2893,12 +4527,36 @@ class WebMapCog(commands.Cog):
             }
             
             plotRoute(fromId, toId) {
-                console.log('Plotting route from', fromId, 'to', toId);
+                console.log(`[PLOT_ROUTE] Starting route plot from ${fromId} to ${toId}`);
+                
+                // Validate inputs
+                if (!fromId || !toId) {
+                    console.error('[PLOT_ROUTE] Invalid fromId or toId');
+                    return false;
+                }
+                
+                // Check if locations exist
+                if (!this.data.locations[String(fromId)]) {
+                    console.error(`[PLOT_ROUTE] From location ${fromId} does not exist`);
+                    return false;
+                }
+                if (!this.data.locations[String(toId)]) {
+                    console.error(`[PLOT_ROUTE] To location ${toId} does not exist`);
+                    return false;
+                }
+                
+                // Debug connectivity for start and end locations
+                this.debugCorridorConnectivity(fromId);
+                this.debugCorridorConnectivity(toId);
+                
                 const route = this.findShortestPath(fromId, toId);
-                console.log('Found route:', route);
+                console.log(`[PLOT_ROUTE] Pathfinding result:`, route);
+                
                 if (route && route.length > 1) {
                     this.plannedRoute = route;
                     this.routePlanningMode = false;
+                    
+                    console.log(`[PLOT_ROUTE] Route successfully planned with ${route.length} waypoints`);
                     
                     // Calculate route stats
                     const stats = this.calculateRouteStats(route);
@@ -2906,12 +4564,14 @@ class WebMapCog(commands.Cog):
                     // Update status with route information
                     const statusEl = document.getElementById('route-planning-status');
                     if (statusEl) {
-                        statusEl.innerHTML = `<br>Route: ${route.length - 1} jumps | ${stats.totalTime}h | Danger: ${stats.avgDanger.toFixed(1)}/10`;
+                        const routeInfo = `Route: ${route.length - 1} jumps | ${stats.totalTime}h | Danger: ${stats.avgDanger.toFixed(1)}/10`;
+                        statusEl.innerHTML = `<br>${routeInfo}`;
                         statusEl.style.color = 'var(--text-primary)';
+                        console.log(`[PLOT_ROUTE] Updated status: ${routeInfo}`);
                     }
                     
                     // Update button
-                    const routeButton = document.querySelector('button');
+                    const routeButton = document.querySelector('.location-plot-route-btn');
                     if (routeButton) {
                         routeButton.textContent = '🗑️ Clear Route';
                         routeButton.onclick = () => this.clearRoute();
@@ -2921,9 +4581,10 @@ class WebMapCog(commands.Cog):
                     return true;
                 } else {
                     // No route found
+                    console.warn(`[PLOT_ROUTE] No route found between ${fromId} and ${toId}`);
                     const statusEl = document.getElementById('route-planning-status');
                     if (statusEl) {
-                        statusEl.textContent = 'No route found!';
+                        statusEl.textContent = 'No route found! Check corridor connectivity.';
                         statusEl.style.color = 'var(--danger-color, #ff4444)';
                     }
                     return false;
@@ -2940,7 +4601,7 @@ class WebMapCog(commands.Cog):
                     statusEl.textContent = '';
                 }
                 
-                const routeButton = document.querySelector('button');
+                const routeButton = document.querySelector('.location-plot-route-btn');
                 if (routeButton && this.selectedLocation) {
                     routeButton.textContent = '📍 Plot Route';
                     routeButton.onclick = () => this.startRoutePlanning(this.selectedLocation);
@@ -2949,24 +4610,79 @@ class WebMapCog(commands.Cog):
                 this.render();
             }
             
+            // Helper function to check if a corridor is part of the planned route
+            isCorridorInRoute(corridor, route) {
+                if (!route || route.length < 2) {
+                    return false;
+                }
+                
+                // Check if this corridor connects any consecutive waypoints in the route
+                for (let i = 0; i < route.length - 1; i++) {
+                    const fromId = String(route[i]);
+                    const toId = String(route[i + 1]);
+                    
+                    // Check if corridor connects these two waypoints (in either direction)
+                    if ((corridor.origin == fromId && corridor.destination == toId) ||
+                        (corridor.origin == toId && corridor.destination == fromId)) {
+                        return true;
+                    }
+                }
+                
+                return false;
+            }
+            
             findShortestPath(fromId, toId) {
-                // Simple Dijkstra's algorithm for pathfinding
-                if (fromId === toId) return [fromId];
+                // Enhanced Dijkstra's algorithm for pathfinding with debugging
+                console.log(`[PATHFINDING] Starting pathfinding from ${fromId} to ${toId}`);
+                
+                // Normalize IDs to strings for consistent comparison
+                fromId = String(fromId);
+                toId = String(toId);
+                
+                if (fromId === toId) {
+                    console.log(`[PATHFINDING] Same location, returning single node path`);
+                    return [fromId];
+                }
+                
+                // Check if both locations exist
+                if (!this.data.locations[fromId]) {
+                    console.error(`[PATHFINDING] From location ${fromId} does not exist`);
+                    return null;
+                }
+                if (!this.data.locations[toId]) {
+                    console.error(`[PATHFINDING] To location ${toId} does not exist`);
+                    return null;
+                }
+                
+                // Log corridor data for debugging
+                console.log(`[PATHFINDING] Total corridors available: ${this.data.corridors.length}`);
+                const relevantCorridors = this.data.corridors.filter(c => 
+                    String(c.origin) === fromId || String(c.destination) === fromId ||
+                    String(c.origin) === toId || String(c.destination) === toId
+                );
+                console.log(`[PATHFINDING] Corridors connected to start/end: ${relevantCorridors.length}`);
                 
                 const distances = {};
                 const previous = {};
                 const unvisited = new Set();
                 
-                // Initialize all locations
+                // Initialize all locations (convert keys to strings)
                 for (const [id] of Object.entries(this.data.locations)) {
-                    distances[id] = Infinity;
-                    previous[id] = null;
-                    unvisited.add(id);
+                    const stringId = String(id);
+                    distances[stringId] = Infinity;
+                    previous[stringId] = null;
+                    unvisited.add(stringId);
                 }
                 
                 distances[fromId] = 0;
+                console.log(`[PATHFINDING] Initialized ${unvisited.size} locations`);
                 
-                while (unvisited.size > 0) {
+                let iterations = 0;
+                const maxIterations = Object.keys(this.data.locations).length * 2;
+                
+                while (unvisited.size > 0 && iterations < maxIterations) {
+                    iterations++;
+                    
                     // Find unvisited node with smallest distance
                     let current = null;
                     let minDistance = Infinity;
@@ -2979,45 +4695,100 @@ class WebMapCog(commands.Cog):
                     }
                     
                     if (current === null || distances[current] === Infinity) {
+                        console.log(`[PATHFINDING] No more reachable nodes. Stopping at iteration ${iterations}`);
                         break; // No path exists
                     }
                     
+                    console.log(`[PATHFINDING] Iteration ${iterations}: Processing node ${current} (distance: ${distances[current]})`);
+                    
                     if (current === toId) {
                         // Found destination, reconstruct path
+                        console.log(`[PATHFINDING] Destination reached! Reconstructing path...`);
                         const path = [];
                         let node = toId;
                         while (node !== null) {
                             path.unshift(node);
                             node = previous[node];
                         }
+                        console.log(`[PATHFINDING] Path found: ${path.join(' -> ')} (${path.length} nodes, ${path.length - 1} jumps)`);
                         return path;
                     }
                     
                     unvisited.delete(current);
                     
                     // Check all corridors from current location
+                    let neighborsFound = 0;
                     for (const corridor of this.data.corridors) {
                         let neighbor = null;
-                        if (corridor.origin == current) {
-                            neighbor = corridor.destination;
-                        } else if (corridor.destination == current) {
-                            neighbor = corridor.origin;
+                        
+                        // Normalize corridor IDs for comparison
+                        const corridorOrigin = String(corridor.origin);
+                        const corridorDest = String(corridor.destination);
+                        
+                        if (corridorOrigin === current) {
+                            neighbor = corridorDest;
+                        } else if (corridorDest === current) {
+                            neighbor = corridorOrigin;
                         }
                         
                         if (neighbor && unvisited.has(neighbor)) {
+                            neighborsFound++;
                             // Use travel time as weight (with danger level as penalty)
                             const weight = (corridor.travel_time || 1) + (corridor.danger_level || 0) * 0.5;
                             const alt = distances[current] + weight;
                             
                             if (alt < distances[neighbor]) {
+                                const oldDistance = distances[neighbor];
                                 distances[neighbor] = alt;
                                 previous[neighbor] = current;
+                                console.log(`[PATHFINDING] Updated ${neighbor}: ${oldDistance} -> ${alt} via ${current}`);
                             }
                         }
                     }
+                    
+                    if (neighborsFound === 0) {
+                        console.log(`[PATHFINDING] No neighbors found for ${current}`);
+                    } else {
+                        console.log(`[PATHFINDING] Found ${neighborsFound} neighbors for ${current}`);
+                    }
                 }
                 
+                console.log(`[PATHFINDING] Pathfinding completed after ${iterations} iterations. No path found.`);
+                console.log(`[PATHFINDING] Final distances to target: ${distances[toId]}`);
                 return null; // No path found
+            }
+            
+            debugCorridorConnectivity(locationId) {
+                // Debug method to check what corridors are connected to a location
+                const normalizedId = String(locationId);
+                const location = this.data.locations[normalizedId];
+                
+                if (!location) {
+                    console.error(`[DEBUG] Location ${locationId} not found`);
+                    return;
+                }
+                
+                console.log(`[DEBUG] Checking connectivity for ${location.name} (ID: ${normalizedId})`);
+                
+                const connectedCorridors = this.data.corridors.filter(c => 
+                    String(c.origin) === normalizedId || String(c.destination) === normalizedId
+                );
+                
+                console.log(`[DEBUG] Found ${connectedCorridors.length} connected corridors:`);
+                
+                connectedCorridors.forEach((corridor, index) => {
+                    const otherLocationId = String(corridor.origin) === normalizedId ? 
+                        String(corridor.destination) : String(corridor.origin);
+                    const otherLocation = this.data.locations[otherLocationId];
+                    
+                    console.log(`[DEBUG] ${index + 1}. ${corridor.name || 'Unnamed'} -> ` +
+                        `${otherLocation ? otherLocation.name : 'Unknown'} (ID: ${otherLocationId}), ` +
+                        `Time: ${corridor.travel_time}, Danger: ${corridor.danger_level}`);
+                });
+                
+                if (connectedCorridors.length === 0) {
+                    console.warn(`[DEBUG] Location ${location.name} has no corridor connections!`);
+                }
             }
             
             calculateRouteStats(route) {
@@ -3025,32 +4796,111 @@ class WebMapCog(commands.Cog):
                 let totalDanger = 0;
                 let corridorCount = 0;
                 
+                console.log(`[ROUTE_STATS] Calculating stats for route: ${route.join(' -> ')}`);
+                
                 for (let i = 0; i < route.length - 1; i++) {
-                    const fromId = route[i];
-                    const toId = route[i + 1];
+                    const fromId = String(route[i]);
+                    const toId = String(route[i + 1]);
                     
-                    // Find the corridor between these locations
+                    // Find the corridor between these locations with proper type comparison
                     const corridor = this.data.corridors.find(c => 
-                        (c.origin == fromId && c.destination == toId) ||
-                        (c.origin == toId && c.destination == fromId)
+                        (String(c.origin) === fromId && String(c.destination) === toId) ||
+                        (String(c.origin) === toId && String(c.destination) === fromId)
                     );
                     
                     if (corridor) {
-                        totalTime += corridor.travel_time || 1;
-                        totalDanger += corridor.danger_level || 0;
+                        const segmentTime = corridor.travel_time || 1;
+                        const segmentDanger = corridor.danger_level || 0;
+                        totalTime += segmentTime;
+                        totalDanger += segmentDanger;
                         corridorCount++;
+                        console.log(`[ROUTE_STATS] Segment ${i+1}: ${fromId} -> ${toId}, Time: ${segmentTime}, Danger: ${segmentDanger}`);
+                    } else {
+                        console.error(`[ROUTE_STATS] No corridor found for segment ${fromId} -> ${toId}`);
                     }
                 }
                 
-                return {
+                const stats = {
                     totalTime,
                     avgDanger: corridorCount > 0 ? totalDanger / corridorCount : 0,
                     corridorCount
                 };
+                
+                console.log(`[ROUTE_STATS] Final stats:`, stats);
+                return stats;
+            }
+            
+            testPathfinding() {
+                // Test method to validate pathfinding with sample data
+                console.log('[TEST] Starting pathfinding test...');
+                
+                if (!this.data || !this.data.locations || !this.data.corridors) {
+                    console.error('[TEST] No data available for testing');
+                    return;
+                }
+                
+                const locationIds = Object.keys(this.data.locations);
+                console.log(`[TEST] Available locations: ${locationIds.length}`);
+                console.log(`[TEST] Available corridors: ${this.data.corridors.length}`);
+                
+                if (locationIds.length < 2) {
+                    console.error('[TEST] Need at least 2 locations for testing');
+                    return;
+                }
+                
+                // Test with first two locations
+                const fromId = locationIds[0];
+                const toId = locationIds[1];
+                
+                console.log(`[TEST] Testing route from ${fromId} to ${toId}`);
+                this.debugCorridorConnectivity(fromId);
+                this.debugCorridorConnectivity(toId);
+                
+                const route = this.findShortestPath(fromId, toId);
+                
+                if (route) {
+                    console.log(`[TEST] Test successful! Route found: ${route.join(' -> ')}`);
+                    const stats = this.calculateRouteStats(route);
+                    console.log(`[TEST] Route stats:`, stats);
+                } else {
+                    console.log(`[TEST] No route found between ${fromId} and ${toId}`);
+                    
+                    // Try to find any connected locations
+                    console.log('[TEST] Looking for any connected locations...');
+                    const connectedPairs = [];
+                    
+                    for (const corridor of this.data.corridors) {
+                        const origin = String(corridor.origin);
+                        const dest = String(corridor.destination);
+                        
+                        if (this.data.locations[origin] && this.data.locations[dest]) {
+                            connectedPairs.push([origin, dest]);
+                        }
+                    }
+                    
+                    console.log(`[TEST] Found ${connectedPairs.length} directly connected location pairs`);
+                    
+                    if (connectedPairs.length > 0) {
+                        const [testFrom, testTo] = connectedPairs[0];
+                        console.log(`[TEST] Testing with directly connected pair: ${testFrom} -> ${testTo}`);
+                        const testRoute = this.findShortestPath(testFrom, testTo);
+                        
+                        if (testRoute) {
+                            console.log(`[TEST] Direct connection test successful: ${testRoute.join(' -> ')}`);
+                        } else {
+                            console.error('[TEST] Even direct connection failed - there may be a bug in the pathfinding');
+                        }
+                    }
+                }
             }
 
             drawPlannedRoute() {
-                if (!this.plannedRoute || this.plannedRoute.length < 2) return;
+                if (!this.plannedRoute || this.plannedRoute.length < 2) {
+                    console.log('[DRAW_ROUTE] No route to draw or route too short');
+                    return;
+                }
+                
+                console.log(`[DRAW_ROUTE] Drawing route with ${this.plannedRoute.length} waypoints: ${this.plannedRoute.join(' -> ')}`);
                 
                 this.ctx.save();
                 
@@ -3060,9 +4910,10 @@ class WebMapCog(commands.Cog):
                 this.ctx.lineCap = 'round';
                 this.ctx.lineJoin = 'round';
                 
-                // Add glow effect
+                // Add glow effect based on zoom level
+                const routeGlowFactor = this.scale > 1 ? 1 : this.scale > 0.5 ? 0.6 : 0.2;
                 this.ctx.shadowColor = '#00ffff';
-                this.ctx.shadowBlur = 15;
+                this.ctx.shadowBlur = 15 * routeGlowFactor;
                 
                 // Draw animated dashed line
                 const dashLength = 20 / this.scale;
@@ -3071,9 +4922,10 @@ class WebMapCog(commands.Cog):
                 this.ctx.lineDashOffset = animationOffset;
                 
                 // Draw each segment of the planned route
+                let segmentsDrawn = 0;
                 for (let i = 0; i < this.plannedRoute.length - 1; i++) {
-                    const fromId = this.plannedRoute[i];
-                    const toId = this.plannedRoute[i + 1];
+                    const fromId = String(this.plannedRoute[i]);
+                    const toId = String(this.plannedRoute[i + 1]);
                     
                     const fromLocation = this.data.locations[fromId];
                     const toLocation = this.data.locations[toId];
@@ -3086,67 +4938,100 @@ class WebMapCog(commands.Cog):
                         this.ctx.moveTo(start.x, start.y);
                         this.ctx.lineTo(end.x, end.y);
                         this.ctx.stroke();
+                        segmentsDrawn++;
+                        
+                        console.log(`[DRAW_ROUTE] Drew segment ${i+1}: ${fromLocation.name} -> ${toLocation.name}`);
+                    } else {
+                        console.error(`[DRAW_ROUTE] Missing location data for segment ${fromId} -> ${toId}`);
                     }
                 }
+                console.log(`[DRAW_ROUTE] Drew ${segmentsDrawn} route segments`);
                 
                 // Draw route waypoint markers
                 this.ctx.setLineDash([]); // Reset dash
                 this.ctx.shadowBlur = 0;
                 
+                // Draw intermediate waypoints (not start/end)
+                let waypointsDrawn = 0;
                 for (let i = 1; i < this.plannedRoute.length - 1; i++) {
-                    const locationId = this.plannedRoute[i];
+                    const locationId = String(this.plannedRoute[i]);
                     const location = this.data.locations[locationId];
                     
                     if (location) {
                         const pos = this.worldToScreen(location.x, location.y);
                         
-                        // Draw waypoint circle
+                        // Draw waypoint circle (larger for better visibility)
                         this.ctx.fillStyle = '#00ffff';
                         this.ctx.beginPath();
-                        this.ctx.arc(pos.x, pos.y, 6, 0, 2 * Math.PI);
+                        this.ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
                         this.ctx.fill();
                         
                         // Draw inner circle
                         this.ctx.fillStyle = '#004444';
                         this.ctx.beginPath();
-                        this.ctx.arc(pos.x, pos.y, 3, 0, 2 * Math.PI);
+                        this.ctx.arc(pos.x, pos.y, 4, 0, 2 * Math.PI);
                         this.ctx.fill();
                         
                         // Draw waypoint number
                         this.ctx.fillStyle = '#ffffff';
-                        this.ctx.font = `${Math.max(10, 12 / Math.sqrt(this.scale))}px Arial`;
+                        this.ctx.font = `bold ${Math.max(12, 14 / Math.sqrt(this.scale))}px Arial`;
                         this.ctx.textAlign = 'center';
                         this.ctx.textBaseline = 'middle';
                         this.ctx.fillText(i.toString(), pos.x, pos.y);
+                        waypointsDrawn++;
+                        
+                        console.log(`[DRAW_ROUTE] Drew waypoint ${i}: ${location.name}`);
+                    } else {
+                        console.error(`[DRAW_ROUTE] Missing location data for waypoint ${locationId}`);
                     }
                 }
+                console.log(`[DRAW_ROUTE] Drew ${waypointsDrawn} waypoint markers`);
                 
                 // Highlight start and end points
                 if (this.plannedRoute.length >= 2) {
                     // Start point (green)
-                    const startLocation = this.data.locations[this.plannedRoute[0]];
+                    const startLocation = this.data.locations[String(this.plannedRoute[0])];
                     if (startLocation) {
                         const startPos = this.worldToScreen(startLocation.x, startLocation.y);
                         this.ctx.strokeStyle = '#00ff00';
-                        this.ctx.lineWidth = 3;
+                        this.ctx.lineWidth = 4;
                         this.ctx.beginPath();
-                        this.ctx.arc(startPos.x, startPos.y, 12, 0, 2 * Math.PI);
+                        this.ctx.arc(startPos.x, startPos.y, 15, 0, 2 * Math.PI);
                         this.ctx.stroke();
+                        
+                        // Add start label
+                        this.ctx.fillStyle = '#00ff00';
+                        this.ctx.font = `bold ${Math.max(10, 12 / Math.sqrt(this.scale))}px Arial`;
+                        this.ctx.textAlign = 'center';
+                        this.ctx.textBaseline = 'top';
+                        this.ctx.fillText('START', startPos.x, startPos.y + 20);
+                        
+                        console.log(`[DRAW_ROUTE] Drew start point: ${startLocation.name}`);
                     }
                     
                     // End point (red)
-                    const endLocation = this.data.locations[this.plannedRoute[this.plannedRoute.length - 1]];
+                    const endLocation = this.data.locations[String(this.plannedRoute[this.plannedRoute.length - 1])];
                     if (endLocation) {
                         const endPos = this.worldToScreen(endLocation.x, endLocation.y);
                         this.ctx.strokeStyle = '#ff0000';
-                        this.ctx.lineWidth = 3;
+                        this.ctx.lineWidth = 4;
                         this.ctx.beginPath();
-                        this.ctx.arc(endPos.x, endPos.y, 12, 0, 2 * Math.PI);
+                        this.ctx.arc(endPos.x, endPos.y, 15, 0, 2 * Math.PI);
                         this.ctx.stroke();
+                        
+                        // Add end label
+                        this.ctx.fillStyle = '#ff0000';
+                        this.ctx.font = `bold ${Math.max(10, 12 / Math.sqrt(this.scale))}px Arial`;
+                        this.ctx.textAlign = 'center';
+                        this.ctx.textBaseline = 'top';
+                        this.ctx.fillText('END', endPos.x, endPos.y + 20);
+                        
+                        console.log(`[DRAW_ROUTE] Drew end point: ${endLocation.name}`);
                     }
                 }
                 
                 this.ctx.restore();
+                console.log('[DRAW_ROUTE] Route drawing completed');
             }
 
             isPointNearLine(point, corridor) {
@@ -3207,9 +5092,9 @@ class WebMapCog(commands.Cog):
                 
                 // Determine corridor type
                 let corridorType = 'Gated Route';
-                if (corridor.name && corridor.name.includes('Approach')) {
+                if (corridor.corridor_type === 'local_space' || corridor.name && corridor.name.includes('Approach')) {
                     corridorType = 'Local Space';
-                } else if (corridor.name && corridor.name.includes('Ungated')) {
+                } else if (corridor.corridor_type === 'ungated') {
                     corridorType = 'Ungated Route';
                 }
                 
@@ -3262,8 +5147,8 @@ class WebMapCog(commands.Cog):
                         outgoingRoutes.forEach(r => {
                             const dest = this.data.locations[r.destination];
                             if (dest) {
-                                const type = r.name && r.name.includes('Approach') ? '🌌' : 
-                                           r.name && r.name.includes('Ungated') ? '⭕' : '🔵';
+                                const type = r.corridor_type === 'local_space' || (r.name && r.name.includes('Approach')) ? '🌌' : 
+                                           r.corridor_type === 'ungated' ? '⭕' : '🔵';
                                 routeInfo += `${type} → ${dest.name}<br>`;
                             }
                         });
@@ -3274,8 +5159,8 @@ class WebMapCog(commands.Cog):
                         incomingRoutes.forEach(r => {
                             const origin = this.data.locations[r.origin];
                             if (origin) {
-                                const type = r.name && r.name.includes('Approach') ? '🌌' : 
-                                           r.name && r.name.includes('Ungated') ? '⭕' : '🔵';
+                                const type = r.corridor_type === 'local_space' || (r.name && r.name.includes('Approach')) ? '🌌' : 
+                                           r.corridor_type === 'ungated' ? '⭕' : '🔵';
                                 routeInfo += `${type} ← ${origin.name}<br>`;
                             }
                         });
@@ -3284,6 +5169,7 @@ class WebMapCog(commands.Cog):
                 
                 // Update info panel
                 this.locationInfo.innerHTML = `
+                    <button class="info-panel-close">×</button>
                     <h3>${location.name}</h3>
                     <div class="location-detail">
                         <strong>Type:</strong> ${location.type.replace('_', ' ')}
@@ -3315,9 +5201,25 @@ class WebMapCog(commands.Cog):
                     <div class="location-detail" style="margin-top: 10px; font-size: 0.8rem; color: var(--text-secondary);">
                         🌌 = Local Space | 🔵 = Gated | ⭕ = Ungated
                     </div>
+                    <div class="location-actions" style="margin-top: 15px; text-align: center;">
+                        <button class="control-button location-plot-route-btn" onclick="galaxyMap.startRoutePlanning('${id}')">📍 Plot Route</button>
+                    </div>
                 `;
                 
+                // No backdrop needed on mobile
+                
                 this.locationInfo.style.display = 'block';
+                this.locationInfo.classList.add('visible');
+                
+                // Add event listener for close button with touch support
+                const closeBtn = this.locationInfo.querySelector('.info-panel-close');
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', () => this.closeInfoPanel());
+                    closeBtn.addEventListener('touchend', (e) => {
+                        e.stopPropagation();
+                        this.closeInfoPanel();
+                    });
+                }
             }
             
             selectCorridor(corridor) {
@@ -3331,10 +5233,10 @@ class WebMapCog(commands.Cog):
                 // Determine corridor type
                 let corridorType = 'Gated Route';
                 let typeIcon = '🔵';
-                if (corridor.name && corridor.name.includes('Approach')) {
+                if (corridor.corridor_type === 'local_space' || corridor.name && corridor.name.includes('Approach')) {
                     corridorType = 'Local Space Route';
                     typeIcon = '🌌';
-                } else if (corridor.name && corridor.name.includes('Ungated')) {
+                } else if (corridor.corridor_type === 'ungated') {
                     corridorType = 'Ungated Route';
                     typeIcon = '⭕';
                 }
@@ -3351,6 +5253,7 @@ class WebMapCog(commands.Cog):
                 
                 // Update info panel with corridor information
                 this.locationInfo.innerHTML = `
+                    <button class="info-panel-close">×</button>
                     <h3>${typeIcon} ${corridor.name || 'Unknown Route'}</h3>
                     <div class="location-detail">
                         <strong>Type:</strong> ${corridorType}
@@ -3382,17 +5285,124 @@ class WebMapCog(commands.Cog):
                     </div>
                 `;
                 
+                // No backdrop needed on mobile
+                
                 this.locationInfo.style.display = 'block';
+                this.locationInfo.classList.add('visible');
+                
+                // Add event listener for close button with touch support
+                const closeBtn = this.locationInfo.querySelector('.info-panel-close');
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', () => this.closeInfoPanel());
+                    closeBtn.addEventListener('touchend', (e) => {
+                        e.stopPropagation();
+                        this.closeInfoPanel();
+                    });
+                }
             }
             
             hideLocationInfo() {
                 this.locationInfo.style.display = 'none';
+                this.locationInfo.classList.remove('visible');
+            }
+            
+            createBackdrop() {
+                // Remove existing backdrop if present
+                const existingBackdrop = document.querySelector('.info-panel-backdrop');
+                if (existingBackdrop) {
+                    existingBackdrop.parentNode.removeChild(existingBackdrop);
+                }
+                
+                // Create backdrop element for mobile
+                const backdrop = document.createElement('div');
+                backdrop.className = 'info-panel-backdrop';
+                backdrop.onclick = () => this.closeInfoPanel();
+                document.body.appendChild(backdrop);
+                
+                // Show backdrop with transition
+                setTimeout(() => {
+                    backdrop.classList.add('visible');
+                }, 10);
+            }
+            
+            closeInfoPanel() {
+                // Hide the info panel without clearing the selection/highlighting
+                this.locationInfo.style.display = 'none';
+                this.locationInfo.classList.remove('visible');
+                
+                // Remove backdrop if it exists
+                const backdrop = document.querySelector('.info-panel-backdrop');
+                if (backdrop) {
+                    backdrop.classList.remove('visible');
+                    // Remove backdrop element after transition
+                    setTimeout(() => {
+                        if (backdrop.parentNode) {
+                            backdrop.parentNode.removeChild(backdrop);
+                        }
+                    }, 300);
+                }
+                
+                // Keep selectedLocation and selectedCorridor intact so highlighting persists
             }
         }
 
+        // Header toggle functionality
+        function toggleHeader() {
+            const header = document.getElementById('map-header');
+            const controls = document.querySelector('.map-controls');
+            const collapsedToggle = document.getElementById('header-toggle-collapsed');
+            const toggleIcon = document.querySelector('#header-toggle .toggle-icon');
+            
+            if (header.classList.contains('hidden')) {
+                // Show header and controls
+                header.classList.remove('hidden');
+                if (controls) controls.classList.remove('hidden');
+                document.body.classList.remove('header-hidden');
+                collapsedToggle.style.display = 'none';
+                if (toggleIcon) toggleIcon.textContent = '▲';
+                localStorage.setItem('headerVisible', 'true');
+            } else {
+                // Hide header and controls
+                header.classList.add('hidden');
+                if (controls) controls.classList.add('hidden');
+                document.body.classList.add('header-hidden');
+                collapsedToggle.style.display = 'block';
+                localStorage.setItem('headerVisible', 'false');
+            }
+            
+            // Trigger canvas resize after a brief delay to allow CSS changes
+            setTimeout(() => {
+                if (window.galaxyMap) {
+                    window.galaxyMap.setupCanvas();
+                }
+            }, 100);
+        }
+        
+        // Make toggleHeader globally accessible
+        window.toggleHeader = toggleHeader;
+        
         // Initialize map when page loads
         document.addEventListener('DOMContentLoaded', () => {
+            // Initialize theme from URL parameter or storage
+            if (window.themeManager) {
+                window.themeManager.initializeTheme('blue');
+            }
+            
             window.galaxyMap = new GalaxyMap();
+            
+            // Restore header state on page load
+            const headerVisible = localStorage.getItem('headerVisible');
+            if (headerVisible === 'false') {
+                const header = document.getElementById('map-header');
+                const controls = document.querySelector('.map-controls');
+                const collapsedToggle = document.getElementById('header-toggle-collapsed');
+                if (header && collapsedToggle) {
+                    header.classList.add('hidden');
+                    if (controls) controls.classList.add('hidden');
+                    document.body.classList.add('header-hidden');
+                    collapsedToggle.style.display = 'block';
+                }
+            }
         });
         '''
     
@@ -3401,14 +5411,18 @@ class WebMapCog(commands.Cog):
         return '''
         class GalacticWiki {
             constructor() {
+                console.log('Wiki: GalacticWiki constructor called');
                 this.currentTab = 'locations';
                 this.data = null;
                 this.init();
             }
             
             async init() {
+                console.log('Wiki: init() called');
                 this.setupEventListeners();
+                console.log('Wiki: Event listeners set up');
                 await this.loadData();
+                console.log('Wiki: Data loaded');
             }
             
             setupEventListeners() {
@@ -3417,6 +5431,29 @@ class WebMapCog(commands.Cog):
                         const tabName = tab.dataset.tab;
                         this.switchTab(tabName);
                     });
+                });
+                
+                // Event delegation for location and route rows
+                document.addEventListener('click', (e) => {
+                    console.log('Wiki: Click detected on:', e.target);
+                    console.log('Wiki: Click target classes:', e.target.className);
+                    console.log('Wiki: Click target parent:', e.target.parentElement);
+                    
+                    const locationRow = e.target.closest('.location-row');
+                    const routeRow = e.target.closest('.route-row');
+                    
+                    console.log('Wiki: Location row found:', locationRow);
+                    console.log('Wiki: Route row found:', routeRow);
+                    
+                    if (locationRow) {
+                        const locationId = locationRow.dataset.locationId;
+                        console.log('Wiki: Calling showLocationInfoFromWiki with ID:', locationId);
+                        this.showLocationInfoFromWiki(locationId);
+                    } else if (routeRow) {
+                        const routeId = routeRow.dataset.routeId;
+                        console.log('Wiki: Calling showRouteInfoFromWiki with ID:', routeId);
+                        this.showRouteInfoFromWiki(routeId);
+                    }
                 });
             }
             
@@ -3524,7 +5561,7 @@ class WebMapCog(commands.Cog):
                     locations.sort((a, b) => a.name.localeCompare(b.name));
                     
                     for (const loc of locations) {
-                        html += `<tr onclick="window.galacticWiki.showLocationInfoFromWiki('${loc.id}')" style="cursor: pointer;">`;
+                        html += `<tr class="location-row" data-location-id="${loc.id}" style="cursor: pointer;">`;
                         html += `<td><strong>${loc.name}</strong></td>`;
                         html += `<td>${loc.type}</td>`;
                         html += `<td class="wealth-${loc.wealth}">${loc.wealth}</td>`;
@@ -3558,8 +5595,16 @@ class WebMapCog(commands.Cog):
                     const seconds = route.travel_time % 60;
                     const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
                     
-                    html += `<tr onclick="window.galacticWiki.showRouteInfoFromWiki('${route.id}')" style="cursor: pointer;">`;
-                    html += `<td><strong>${route.name}</strong></td>`;
+                    // Determine route emoji based on type
+                    let routeEmoji = '🔵'; // Default gated
+                    if (route.corridor_type === 'local_space' || (route.name && route.name.includes('Approach'))) {
+                        routeEmoji = '🌌'; // Local space
+                    } else if (route.corridor_type === 'ungated') {
+                        routeEmoji = '⭕'; // Ungated
+                    }
+                    
+                    html += `<tr class="route-row" data-route-id="${route.id}" style="cursor: pointer;">`;
+                    html += `<td><strong>${routeEmoji} ${route.name}</strong></td>`;
                     html += `<td>${route.origin_name} (${route.origin_system})</td>`;
                     html += `<td>${route.dest_name} (${route.dest_system})</td>`;
                     html += `<td>${timeStr}</td>`;
@@ -3675,12 +5720,23 @@ class WebMapCog(commands.Cog):
                 console.log('Wiki: Attempting to show location info for:', locationId);
                 console.log('Wiki: Data available:', !!this.data);
                 console.log('Wiki: Locations available:', !!this.data?.locations);
+                console.log('Wiki: All locations:', this.data?.locations);
+                
+                if (!this.data || !this.data.locations) {
+                    console.error('Wiki: No data or locations available');
+                    return;
+                }
                 
                 // Find the location data - locations is an array in wiki data
-                const location = this.data.locations.find(loc => loc.id == locationId);
+                console.log('Wiki: Looking for location ID (type):', typeof locationId, locationId);
+                const location = this.data.locations.find(loc => {
+                    console.log('Wiki: Comparing with location ID (type):', typeof loc.id, loc.id);
+                    return loc.id == locationId || String(loc.id) === String(locationId);
+                });
                 console.log('Wiki: Found location:', location);
                 if (!location) {
                     console.error('Wiki: Location not found:', locationId);
+                    console.log('Wiki: Available location IDs:', this.data.locations.map(l => l.id));
                     return;
                 }
                 
@@ -3691,7 +5747,7 @@ class WebMapCog(commands.Cog):
                 const npcCount = (Array.isArray(npcs) ? npcs : Object.values(npcs)).filter(n => n.location === locationId).length;
                 
                 // Get info panel element
-                const locationInfo = document.getElementById('location-info');
+                const locationInfo = document.getElementById('wiki-location-info');
                 console.log('Wiki: Location info panel element:', locationInfo);
                 if (!locationInfo) {
                     console.error('Wiki: Location info panel element not found');
@@ -3700,7 +5756,7 @@ class WebMapCog(commands.Cog):
                 
                 // Populate info panel with location details
                 locationInfo.innerHTML = `
-                    <button class="info-panel-close" onclick="document.getElementById('location-info').style.display='none'">×</button>
+                    <button class="info-panel-close">×</button>
                     <h3>${location.name}</h3>
                     <div class="location-detail">
                         <strong>Type:</strong> ${location.type.replace('_', ' ')}
@@ -3717,6 +5773,13 @@ class WebMapCog(commands.Cog):
                     <div class="location-detail">
                         <strong>Faction Control:</strong> ${location.faction}
                     </div>
+                    ${location.owner_name ? `
+                    <div class="location-detail">
+                        <strong>Owner:</strong> ${location.owner_name}
+                    </div>
+                    <div class="location-detail">
+                        <strong>Docking Fee:</strong> ${location.docking_fee || 0} credits
+                    </div>` : ''}
                     <div class="location-detail">
                         <strong>Players Here:</strong> ${playerCount}
                     </div>
@@ -3727,24 +5790,104 @@ class WebMapCog(commands.Cog):
                     <div class="location-detail">
                         <strong>Description:</strong> ${location.description}
                     </div>` : ''}
+                    ${this.getConnectedRoutesInfo(locationId)}
                 `;
                 
                 // Show the info panel
-                console.log('Wiki: Setting location info panel display to block');
+                console.log('Wiki: Showing location info panel');
+                // No backdrop needed
                 locationInfo.style.display = 'block';
-                console.log('Wiki: Location info panel display style is now:', locationInfo.style.display);
+                locationInfo.classList.add('visible');
+                
+                // Add event listener for close button with touch support
+                const closeBtn = locationInfo.querySelector('.info-panel-close');
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', () => this.closeInfoPanel());
+                    closeBtn.addEventListener('touchend', (e) => {
+                        e.stopPropagation();
+                        this.closeInfoPanel();
+                    });
+                }
+                
+                // Ensure proper overlay behavior for wiki panel
+                setTimeout(() => {
+                    const isVisible = locationInfo.classList.contains('visible');
+                    const hasDisplay = locationInfo.style.display === 'block';
+                    const computedStyle = window.getComputedStyle(locationInfo);
+                    console.log('Wiki: Panel visible class:', isVisible, 'Display style:', hasDisplay);
+                    console.log('Wiki: Computed position:', computedStyle.position, 'z-index:', computedStyle.zIndex);
+                    
+                    // Ensure the panel displays as a proper overlay
+                    if (!isVisible || hasDisplay !== 'block' || computedStyle.position !== 'fixed') {
+                        console.warn('Wiki: Panel not displaying properly, applying enhanced styles');
+                        locationInfo.style.position = 'fixed';
+                        locationInfo.style.display = 'block';
+                        locationInfo.style.zIndex = '9999';
+                        locationInfo.style.bottom = '0';
+                        locationInfo.style.left = '0';
+                        locationInfo.style.right = '0';
+                        locationInfo.style.transform = 'translateY(0)';
+                        locationInfo.classList.add('visible');
+                    }
+                }, 100);
+                
+                console.log('Wiki: Location info panel visibility class added');
             }
             
+            getConnectedRoutesInfo(locationId) {
+                if (!this.data || !this.data.routes) return '';
+                
+                const connectedRoutes = this.data.routes.filter(r => 
+                    r.origin == locationId || r.destination == locationId
+                );
+                
+                if (connectedRoutes.length === 0) return '';
+                
+                let routeInfo = '<div class="location-detail"><strong>Connected Routes:</strong><br>';
+                
+                connectedRoutes.forEach(route => {
+                    let emoji = '🔵'; // Default gated
+                    if (route.corridor_type === 'local_space' || (route.name && route.name.includes('Approach'))) {
+                        emoji = '🌌'; // Local space
+                    } else if (route.corridor_type === 'ungated') {
+                        emoji = '⭕'; // Ungated
+                    }
+                    
+                    // Determine destination name
+                    const isOrigin = route.origin == locationId;
+                    const destinationName = isOrigin ? route.dest_name : route.origin_name;
+                    const direction = isOrigin ? '→' : '←';
+                    
+                    routeInfo += `${emoji} ${direction} ${destinationName}<br>`;
+                });
+                
+                routeInfo += '<div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">';
+                routeInfo += '🌌 = Local Space | 🔵 = Gated | ⭕ = Ungated</div>';
+                routeInfo += '</div>';
+                
+                return routeInfo;
+            }
+
             showRouteInfoFromWiki(routeId) {
                 console.log('Wiki: Attempting to show route info for:', routeId);
                 console.log('Wiki: Data available:', !!this.data);
                 console.log('Wiki: Routes available:', !!this.data?.routes);
                 
+                if (!this.data || !this.data.routes) {
+                    console.error('Wiki: No data or routes available');
+                    return;
+                }
+                
                 // Find the route data - routes is an array in wiki data
-                const route = this.data.routes.find(r => r.id == routeId);
+                console.log('Wiki: Looking for route ID (type):', typeof routeId, routeId);
+                const route = this.data.routes.find(r => {
+                    console.log('Wiki: Comparing with route ID (type):', typeof r.id, r.id);
+                    return r.id == routeId || String(r.id) === String(routeId);
+                });
                 console.log('Wiki: Found route:', route);
                 if (!route) {
                     console.error('Wiki: Route not found:', routeId);
+                    console.log('Wiki: Available route IDs:', this.data.routes.map(r => r.id));
                     return;
                 }
                 
@@ -3758,17 +5901,25 @@ class WebMapCog(commands.Cog):
                 const travelers = (Array.isArray(players) ? players : Object.values(players)).filter(p => p.traveling && p.corridor_id === routeId);
                 
                 // Get info panel element  
-                const locationInfo = document.getElementById('location-info');
+                const locationInfo = document.getElementById('wiki-location-info');
                 console.log('Wiki: Route info panel element:', locationInfo);
                 if (!locationInfo) {
                     console.error('Wiki: Route info panel element not found');
                     return;
                 }
                 
+                // Determine route emoji based on type
+                let routeEmoji = '🔵'; // Default gated
+                if (route.corridor_type === 'local_space' || (route.name && route.name.includes('Approach'))) {
+                    routeEmoji = '🌌'; // Local space
+                } else if (route.corridor_type === 'ungated') {
+                    routeEmoji = '⭕'; // Ungated
+                }
+                
                 // Populate info panel with route details
                 locationInfo.innerHTML = `
-                    <button class="info-panel-close" onclick="document.getElementById('location-info').style.display='none'">×</button>
-                    <h3>🛸 ${route.name || 'Unknown Route'}</h3>
+                    <button class="info-panel-close">×</button>
+                    <h3>${routeEmoji} ${route.name || 'Unknown Route'}</h3>
                     <div class="location-detail">
                         <strong>Route:</strong> ${route.origin_name} → ${route.dest_name}
                     </div>
@@ -3796,15 +5947,98 @@ class WebMapCog(commands.Cog):
                 `;
                 
                 // Show the info panel
-                console.log('Wiki: Setting route info panel display to block');
+                console.log('Wiki: Showing route info panel');
+                // No backdrop needed
                 locationInfo.style.display = 'block';
-                console.log('Wiki: Route info panel display style is now:', locationInfo.style.display);
+                locationInfo.classList.add('visible');
+                
+                // Add event listener for close button with touch support
+                const closeBtn = locationInfo.querySelector('.info-panel-close');
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', () => this.closeInfoPanel());
+                    closeBtn.addEventListener('touchend', (e) => {
+                        e.stopPropagation();
+                        this.closeInfoPanel();
+                    });
+                }
+                
+                // Ensure proper overlay behavior for wiki panel
+                setTimeout(() => {
+                    const isVisible = locationInfo.classList.contains('visible');
+                    const hasDisplay = locationInfo.style.display === 'block';
+                    const computedStyle = window.getComputedStyle(locationInfo);
+                    console.log('Wiki: Route panel visible class:', isVisible, 'Display style:', hasDisplay);
+                    console.log('Wiki: Computed position:', computedStyle.position, 'z-index:', computedStyle.zIndex);
+                    
+                    // Ensure the panel displays as a proper overlay
+                    if (!isVisible || hasDisplay !== 'block' || computedStyle.position !== 'fixed') {
+                        console.warn('Wiki: Route panel not displaying properly, applying enhanced styles');
+                        locationInfo.style.position = 'fixed';
+                        locationInfo.style.display = 'block';
+                        locationInfo.style.zIndex = '9999';
+                        locationInfo.style.bottom = '0';
+                        locationInfo.style.left = '0';
+                        locationInfo.style.right = '0';
+                        locationInfo.style.transform = 'translateY(0)';
+                        locationInfo.classList.add('visible');
+                    }
+                }, 100);
+                
+                console.log('Wiki: Route info panel visibility class added');
+            }
+            
+            createBackdrop() {
+                // Remove existing backdrop if present
+                const existingBackdrop = document.querySelector('.info-panel-backdrop');
+                if (existingBackdrop) {
+                    existingBackdrop.parentNode.removeChild(existingBackdrop);
+                }
+                
+                // Create backdrop element for mobile
+                const backdrop = document.createElement('div');
+                backdrop.className = 'info-panel-backdrop';
+                backdrop.onclick = () => this.closeInfoPanel();
+                document.body.appendChild(backdrop);
+                
+                // Show backdrop with transition
+                setTimeout(() => {
+                    backdrop.classList.add('visible');
+                }, 10);
+            }
+            
+            closeInfoPanel() {
+                // Hide the wiki info panel without clearing any selection state
+                const locationInfo = document.getElementById('wiki-location-info');
+                if (locationInfo) {
+                    locationInfo.style.display = 'none';
+                    locationInfo.classList.remove('visible');
+                }
+                
+                // Remove backdrop if it exists
+                const backdrop = document.querySelector('.info-panel-backdrop');
+                if (backdrop) {
+                    backdrop.classList.remove('visible');
+                    // Remove backdrop element after transition
+                    setTimeout(() => {
+                        if (backdrop.parentNode) {
+                            backdrop.parentNode.removeChild(backdrop);
+                        }
+                    }, 300);
+                }
             }
         }
         
         // Initialize wiki when page loads
         document.addEventListener('DOMContentLoaded', () => {
+            console.log('Wiki: DOMContentLoaded event fired');
+            
+            // Initialize theme from URL parameter or storage
+            if (window.themeManager) {
+                window.themeManager.initializeTheme('blue');
+            }
+            
             window.galacticWiki = new GalacticWiki();
+            console.log('Wiki: GalacticWiki instance created and assigned to window');
         });
         '''
 

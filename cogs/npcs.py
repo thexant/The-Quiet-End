@@ -33,66 +33,96 @@ class NPCCog(commands.Cog):
         self.bot.loop.create_task(self._background_event_simulation_loop())
 
     async def _radio_message_loop(self):
-        """Variable interval radio message task with chance component"""
+        """Initialize individual NPC radio timers for truly random distribution"""
+        await self._schedule_all_npc_timers()
+        
+        # Keep the loop running but just for error handling and periodic checks
         while True:
             try:
-                # Get all alive dynamic NPCs
-                npcs = self.db.execute_query(
-                    """SELECT n.npc_id, n.name, n.callsign, n.ship_name, n.current_location,
-                              l.name as location_name, l.system_name, l.x_coord, l.y_coord,
-                              n.last_radio_message
-                       FROM dynamic_npcs n
-                       LEFT JOIN locations l ON n.current_location = l.location_id
-                       WHERE n.is_alive = 1 AND n.current_location IS NOT NULL""",
-                    fetch='all'
-                )
-
-                if npcs:
-                    # Each NPC has a chance to send a message (not all at once)
-                    for npc_data in npcs:
-                        npc_id, name, callsign, ship_name, location_id, location_name, system_name, x_coord, y_coord, last_message = npc_data
-
-                        # 3% chance each cycle for any given NPC to send a message
-                        if random.random() < 0.03:
-                            # Check cooldown (don't spam messages from same NPC)
-                            if last_message:
-                                try:
-                                    last_time = datetime.fromisoformat(last_message)
-                                    if datetime.now() - last_time < timedelta(hours=2):
-                                        continue
-                                except (ValueError, TypeError):
-                                    # Handle cases where last_message is not a valid ISO format string
-                                    pass
-
-
-                            # Get random message template and format it
-                            message_template = get_random_radio_message()
-                            message = message_template.format(
-                                name=name.split()[0],  # First name only
-                                callsign=callsign,
-                                ship=ship_name,
-                                location=location_name or "Unknown",
-                                system=system_name or "Unknown"
-                            )
-
-                            # Send the message
-                            await self._send_npc_radio_message(name, callsign, location_name or "Deep Space", system_name or "Unknown", message)
-
-                            # Update last radio message time
-                            self.db.execute_query(
-                                "UPDATE dynamic_npcs SET last_radio_message = ? WHERE npc_id = ?",
-                                (datetime.now().isoformat(), npc_id)
-                            )
-
-                            # Small delay between messages if multiple NPCs are sending
-                            await asyncio.sleep(random.uniform(300, 1200))
-
+                await asyncio.sleep(3600)  # Check every hour for any issues
             except Exception as e:
                 print(f"❌ Error in NPC radio message loop: {e}")
+                await asyncio.sleep(60)
 
-            # Wait random time before next cycle (30-90 minutes)
-            next_delay = random.uniform(30 * 60, 90 * 60)  # Convert to seconds
-            await asyncio.sleep(next_delay)
+    async def _schedule_all_npc_timers(self):
+        """Schedule individual timers for each NPC"""
+        try:
+            # Get all alive dynamic NPCs
+            npcs = self.db.execute_query(
+                """SELECT n.npc_id, n.name, n.callsign, n.ship_name, n.current_location,
+                          l.name as location_name, l.system_name, l.x_coord, l.y_coord,
+                          n.last_radio_message
+                   FROM dynamic_npcs n
+                   LEFT JOIN locations l ON n.current_location = l.location_id
+                   WHERE n.is_alive = 1 AND n.current_location IS NOT NULL""",
+                fetch='all'
+            )
+
+            if npcs:
+                for npc_data in npcs:
+                    npc_id = npc_data[0]
+                    # Schedule this NPC with a random delay (2-12 hours to stagger startup)
+                    initial_delay = random.uniform(7200, 43200)  # 2-12 hours
+                    asyncio.create_task(self._individual_npc_timer(npc_data, initial_delay))
+                    
+                print(f"📡 Scheduled radio timers for {len(npcs)} NPCs with staggered starts")
+                
+        except Exception as e:
+            print(f"❌ Error scheduling NPC timers: {e}")
+
+    async def _individual_npc_timer(self, npc_data, initial_delay=0):
+        """Individual timer for a single NPC's radio messages"""
+        npc_id, name, callsign, ship_name, location_id, location_name, system_name, x_coord, y_coord, last_message = npc_data
+        
+        # Wait for initial staggered delay
+        if initial_delay > 0:
+            await asyncio.sleep(initial_delay)
+        
+        while True:
+            try:
+                # Check if NPC is still alive and has a location
+                npc_check = self.db.execute_query(
+                    """SELECT n.current_location, l.name as location_name, l.system_name
+                       FROM dynamic_npcs n
+                       LEFT JOIN locations l ON n.current_location = l.location_id
+                       WHERE n.npc_id = ? AND n.is_alive = 1 AND n.current_location IS NOT NULL""",
+                    (npc_id,),
+                    fetch='one'
+                )
+                
+                if not npc_check:
+                    print(f"📡 NPC {name} ({callsign}) timer stopped - NPC deceased or relocated")
+                    break
+                
+                # Update location data if it changed
+                location_id, location_name, system_name = npc_check
+                
+                # Send radio message
+                message_template = get_random_radio_message()
+                message = message_template.format(
+                    name=name.split()[0],  # First name only
+                    callsign=callsign,
+                    ship=ship_name,
+                    location=location_name or "Unknown",
+                    system=system_name or "Unknown"
+                )
+
+                await self._send_npc_radio_message(name, callsign, location_name or "Deep Space", system_name or "Unknown", message)
+
+                # Update last radio message time
+                self.db.execute_query(
+                    "UPDATE dynamic_npcs SET last_radio_message = ? WHERE npc_id = ?",
+                    (datetime.now().isoformat(), npc_id)
+                )
+
+                # Wait for next message (3-12 hours, truly random per NPC)
+                next_delay = random.uniform(10800, 43200)  # 3-12 hours in seconds
+                await asyncio.sleep(next_delay)
+                
+            except Exception as e:
+                print(f"❌ Error in NPC {name} ({callsign}) radio timer: {e}")
+                # Wait a bit before retrying to avoid spam
+                await asyncio.sleep(300)  # 5 minutes
 
     async def _dynamic_npc_movement_loop(self):
         """Variable interval movement task"""
@@ -335,14 +365,53 @@ class NPCCog(commands.Cog):
         ]
         return random.choice(causes)    
 
+    async def _generate_jobs_for_npcs(self):
+        """Generate jobs for static NPCs on a cycle"""
+        try:
+            # Clear old jobs first (keep only jobs from last 3 hours to prevent buildup)
+            self.db.execute_query(
+                "DELETE FROM npc_jobs WHERE created_at < datetime('now', '-3 hours')"
+            )
+            
+            # Get all static NPCs with their locations and occupations
+            static_npcs = self.db.execute_query(
+                """SELECT npc_id, location_id, occupation
+                   FROM static_npcs 
+                   WHERE location_id IS NOT NULL""",
+                fetch='all'
+            )
+            
+            # Get the NPC interactions cog to use its job generation method
+            npc_interactions_cog = self.bot.get_cog('NPCInteractionsCog')
+            if not npc_interactions_cog:
+                return
+                
+            for npc_data in static_npcs:
+                npc_id, location_id, occupation = npc_data
+                npc_type = 'static'  # Hardcoded since this is the static NPCs table
+                
+                # 30% chance for each NPC to generate jobs this cycle
+                if random.random() < 0.30:
+                    await npc_interactions_cog.generate_npc_jobs(npc_id, npc_type, location_id, occupation)
+                    
+                    # Small delay between job generations
+                    await asyncio.sleep(random.uniform(1, 3))
+                    
+        except Exception as e:
+            print(f"❌ Error generating NPC jobs: {e}")
+
     async def _background_job_simulation_loop(self):
-        """Background simulation of NPCs taking and completing jobs"""
+        """Background simulation of NPCs taking and completing jobs, and generating new jobs"""
         while True:
             try:
                 # Random interval between 45-90 minutes
                 next_delay = random.uniform(45 * 60, 90 * 60)
                 await asyncio.sleep(next_delay)
                 
+                # First, generate new jobs for static NPCs
+                await self._generate_jobs_for_npcs()
+                
+                # Then simulate dynamic NPCs taking jobs
                 # Get NPCs that could potentially take jobs (not traveling, alive)
                 available_npcs = self.db.execute_query(
                     """SELECT n.npc_id, n.name, n.callsign, n.current_location, n.credits,
@@ -501,7 +570,7 @@ class NPCCog(commands.Cog):
                     f"{callsign} to any nearby vessels, requesting technical assistance."
                 ],
                 "death_chance": 0.05,
-                "death_cause": "equipment failure"
+                "death_cause": "an equipment failure"
             },
             {
                 "name": "Pirate Encounter",
@@ -511,7 +580,7 @@ class NPCCog(commands.Cog):
                     f"{callsign} to all stations, suspicious activity in {system_name} system!"
                 ],
                 "death_chance": 0.15,
-                "death_cause": "pirate attack"
+                "death_cause": "a pirate attack"
             },
             {
                 "name": "Navigation Error",
@@ -521,7 +590,7 @@ class NPCCog(commands.Cog):
                     f"{callsign} requesting guidance, navigation systems malfunctioning."
                 ],
                 "death_chance": 0.08,
-                "death_cause": "lost in space"
+                "death_cause": "becoming lost in space"
             },
             {
                 "name": "Medical Emergency",
@@ -531,7 +600,7 @@ class NPCCog(commands.Cog):
                     f"{callsign} to any medical vessels, urgent medical situation!"
                 ],
                 "death_chance": 0.12,
-                "death_cause": "medical emergency"
+                "death_cause": "a medical emergency"
             },
             {
                 "name": "Asteroid Field",
@@ -541,7 +610,17 @@ class NPCCog(commands.Cog):
                     f"{callsign} reporting dangerous space debris. Navigation hazardous."
                 ],
                 "death_chance": 0.10,
-                "death_cause": "asteroid impact"
+                "death_cause": "an asteroid impact"
+            },
+            {
+                "name": "Spontaneous Explosion",
+                "radio_messages": [
+                    f"{callsign} reporting unknown hissing sound from ship engines.",
+                    f"This is {name}, it's feeling really hot in here.",
+                    f"{callsign} Here, seeing unknown objects approaching."
+                ],
+                "death_chance": 0.13,
+                "death_cause": "a spontaneous explosion"
             },
             {
                 "name": "Solar Storm",
@@ -660,8 +739,12 @@ class NPCCog(commands.Cog):
         
     def generate_static_npc_batch_data(self, location_id: int, population: int = None, 
                                       location_type: str = None, wealth_level: int = None, 
-                                      has_black_market: bool = None) -> List[tuple]:
+                                      has_black_market: bool = None, is_derelict: bool = False) -> List[tuple]:
         """Generate static NPC data for batch insertion without database calls"""
+        
+        # Skip NPC generation for derelict locations
+        if is_derelict:
+            return []
         
         # Calculate number of NPCs
         if location_type == 'gate':
@@ -824,6 +907,21 @@ class NPCCog(commands.Cog):
                 (callsign,),
                 fetch='one'
             )[0]
+            
+            # Start radio timer for the new NPC (only if stationary, traveling NPCs start when they arrive)
+            if not start_traveling:
+                # Get location details for the timer
+                location_info = self.db.execute_query(
+                    "SELECT name, system_name FROM locations WHERE location_id = ?",
+                    (start_location,),
+                    fetch='one'
+                )
+                location_name, system_name = location_info if location_info else ("Unknown", "Unknown")
+                
+                npc_data = (npc_id, name, callsign, ship_name, start_location, 
+                           location_name, system_name, None, None, None)
+                initial_delay = random.uniform(7200, 43200)  # 2-12 hours
+                asyncio.create_task(self._individual_npc_timer(npc_data, initial_delay))
             
             if start_traveling and destination_location:
                 # Schedule arrival
@@ -1023,6 +1121,22 @@ class NPCCog(commands.Cog):
         
         # Announce arrival if players are present
         await self._announce_npc_arrival(dest_location, npc_name)
+        
+        # Start radio timer for the arrived NPC
+        npc_details = self.db.execute_query(
+            """SELECT n.npc_id, n.name, n.callsign, n.ship_name, n.current_location,
+                      l.name as location_name, l.system_name, l.x_coord, l.y_coord,
+                      n.last_radio_message
+               FROM dynamic_npcs n
+               LEFT JOIN locations l ON n.current_location = l.location_id
+               WHERE n.npc_id = ?""",
+            (npc_id,),
+            fetch='one'
+        )
+        
+        if npc_details:
+            initial_delay = random.uniform(0, 3600)  # 0-60 minutes
+            asyncio.create_task(self._individual_npc_timer(npc_details, initial_delay))
         
         # Clean up task
         if npc_id in self.dynamic_npc_tasks:

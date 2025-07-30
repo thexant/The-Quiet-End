@@ -161,15 +161,15 @@ class CorridorEventsCog(commands.Cog):
         if severity <= 2:
             danger_text = "Minor radiation exposure"
             effects_text = "• Mild radiation sickness risk\n• Electronic interference\n• Increased cancer risk"
-            precaution_help = "**🚨 Emergency:** Max shielding, power strain risk\n**⚠️ Standard:** Balanced protection\n**🔧 Basic:** Minimal protection, safe"
+            precaution_help = "**🚨 Emergency:** Maximum shielding protocols, high power draw\n**⚠️ Standard:** Balanced radiation countermeasures\n**🔧 Basic:** Conservative shielding approach"
         elif severity <= 4:
             danger_text = "DANGEROUS radiation levels"
             effects_text = "• Severe radiation poisoning risk\n• Critical system damage\n• Immediate health effects"
-            precaution_help = "**🚨 Emergency:** Essential for survival, system risk\n**⚠️ Standard:** Moderate protection\n**🔧 Basic:** Insufficient protection"
+            precaution_help = "**🚨 Emergency:** Full radiation protocols, system strain\n**⚠️ Standard:** Standard protective measures\n**🔧 Basic:** Light countermeasures only"
         else:
             danger_text = "**LETHAL** radiation storm"
             effects_text = "• **FATAL** radiation exposure\n• Complete system shutdown\n• Immediate life threat"
-            precaution_help = "**🚨 Emergency:** Only chance of survival\n**⚠️ Standard:** Still dangerous\n**🔧 Basic:** Nearly useless"
+            precaution_help = "**🚨 Emergency:** Maximum protection protocols\n**⚠️ Standard:** Heavy defensive measures\n**🔧 Basic:** Minimal resource commitment"
         
         embed.add_field(name="🎚️ Severity Level", value=f"Level {severity}/5 - {danger_text}", inline=False)
         embed.add_field(name="⚠️ Potential Effects", value=effects_text, inline=False)
@@ -189,15 +189,15 @@ class CorridorEventsCog(commands.Cog):
         if severity <= 2:
             danger_text = "Small raider patrol"
             effects_text = "• Light weapons fire\n• Attempted boarding\n• Cargo theft risk"
-            precaution_help = "**🚨 Emergency:** Full combat mode, heavy casualties\n**⚠️ Standard:** Defensive engagement\n**🔧 Basic:** Evasive maneuvers only"
+            precaution_help = "**🚨 Emergency:** All weapons hot, aggressive stance\n**⚠️ Standard:** Defensive combat posture\n**🔧 Basic:** Evasive maneuvers only"
         elif severity <= 4:
             danger_text = "MAJOR raider fleet"
             effects_text = "• Heavy weapons barrage\n• Multiple boarding attempts\n• Ship capture risk"
-            precaution_help = "**🚨 Emergency:** All weapons hot, extreme danger\n**⚠️ Standard:** Tactical defense\n**🔧 Basic:** Risky evasion"
+            precaution_help = "**🚨 Emergency:** Full combat engagement\n**⚠️ Standard:** Tactical defensive stance\n**🔧 Basic:** Evasion and retreat"
         else:
             danger_text = "**OVERWHELMING** raider armada"
             effects_text = "• Devastating firepower\n• Coordinated assault\n• **TOTAL DESTRUCTION** risk"
-            precaution_help = "**🚨 Emergency:** Last stand protocols\n**⚠️ Standard:** Still very dangerous\n**🔧 Basic:** Near-certain death"
+            precaution_help = "**🚨 Emergency:** Maximum firepower deployment\n**⚠️ Standard:** Heavy defensive measures\n**🔧 Basic:** High-risk evasion attempt"
         
         embed.add_field(name="🎚️ Severity Level", value=f"Level {severity}/5 - {danger_text}", inline=False)
         embed.add_field(name="⚠️ Potential Effects", value=effects_text, inline=False)
@@ -218,15 +218,15 @@ class CorridorEventsCog(commands.Cog):
         if severity <= 2:
             danger_text = "Minor electromagnetic interference"
             effects_text = "• Communication disruption\n• Sensor degradation\n• Minor navigation errors"
-            precaution_help = "**🚨 Emergency:** Full isolation, comms blackout\n**⚠️ Standard:** Filtered operation\n**🔧 Basic:** Minimal countermeasures"
+            precaution_help = "**🚨 Emergency:** Complete electromagnetic isolation\n**⚠️ Standard:** Selective system hardening\n**🔧 Basic:** Light interference filtering"
         elif severity <= 4:
             danger_text = "MAJOR electromagnetic storm"
             effects_text = "• Complete communication blackout\n• Navigation system failure\n• Life support interference"
-            precaution_help = "**🚨 Emergency:** Total shutdown, complete protection\n**⚠️ Standard:** Hardened systems\n**🔧 Basic:** Basic filtering only"
+            precaution_help = "**🚨 Emergency:** Full system isolation protocols\n**⚠️ Standard:** Enhanced electromagnetic shielding\n**🔧 Basic:** Standard interference countermeasures"
         else:
             danger_text = "**CATASTROPHIC** electromagnetic storm"
             effects_text = "• Total system shutdown risk\n• Hull integrity threats\n• Complete navigation loss"
-            precaution_help = "**🚨 Emergency:** Faraday cage mode required\n**⚠️ Standard:** Still risky\n**🔧 Basic:** Completely inadequate"
+            precaution_help = "**🚨 Emergency:** Complete electromagnetic lockdown\n**⚠️ Standard:** Heavy interference mitigation\n**🔧 Basic:** Minimal system protection"
         
         embed.add_field(name="🎚️ Severity Level", value=f"Level {severity}/5 - {danger_text}", inline=False)
         embed.add_field(name="⚠️ Potential Effects", value=effects_text, inline=False)
@@ -247,15 +247,15 @@ class CorridorEventsCog(commands.Cog):
         if severity <= 2:
             danger_text = "Minor spore contamination"
             effects_text = "• Hull surface contamination\n• Air filtration stress\n• Minor respiratory irritation"
-            precaution_help = "**🚨 Emergency:** Full quarantine, life support strain\n**⚠️ Standard:** Controlled containment\n**🔧 Basic:** Surface protection only"
+            precaution_help = "**🚨 Emergency:** Complete quarantine lockdown\n**⚠️ Standard:** Controlled containment protocols\n**🔧 Basic:** Basic contamination prevention"
         elif severity <= 4:
             danger_text = "MAJOR contamination event"
             effects_text = "• Significant hull contamination\n• Air system compromise\n• Respiratory health risks"
-            precaution_help = "**🚨 Emergency:** Emergency protocols essential\n**⚠️ Standard:** Adequate containment\n**🔧 Basic:** Minimal protection"
+            precaution_help = "**🚨 Emergency:** Full contamination protocols\n**⚠️ Standard:** Standard biological containment\n**🔧 Basic:** Light protective measures"
         else:
             danger_text = "**CRITICAL** contamination crisis"
             effects_text = "• Massive hull infestation\n• Life support failure risk\n• **LETHAL** spore exposure"
-            precaution_help = "**🚨 Emergency:** Life or death protocols\n**⚠️ Standard:** Still very dangerous\n**🔧 Basic:** Nearly suicidal"
+            precaution_help = "**🚨 Emergency:** Maximum containment measures\n**⚠️ Standard:** Heavy biological countermeasures\n**🔧 Basic:** Conservative response approach"
         
         embed.add_field(name="🎚️ Severity Level", value=f"Level {severity}/5 - {danger_text}", inline=False)
         embed.add_field(name="⚠️ Potential Effects", value=effects_text, inline=False)
@@ -348,21 +348,12 @@ class CorridorEventsCog(commands.Cog):
             if not user:
                 continue
             
-            # Apply full damage
-            self.db.execute_query(
-                "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                (base_hp_damage, user_id)
-            )
-            self.db.execute_query(
-                "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                (base_ship_damage, user_id)
-            )
-            # Check for character death
+            # Apply full damage and check for death
             char_cog = self.bot.get_cog('CharacterCog')
             if char_cog:
-                died_from_hp = await char_cog.check_character_death(user_id, channel.guild, f"died from exposure to a {event_type.replace('_', ' ')}")
+                died_from_hp = await char_cog.update_character_hp(user_id, -base_hp_damage, channel.guild, f"died from exposure to a {event_type.replace('_', ' ')}")
                 if not died_from_hp:
-                     await char_cog.check_ship_death(user_id, channel.guild, f"ship critically damaged by a {event_type.replace('_', ' ')}")
+                     await char_cog.update_ship_hull(user_id, -base_ship_damage, channel.guild, f"ship critically damaged by a {event_type.replace('_', ' ')}")
             # Show individual consequence
             embed = discord.Embed(
                 title="💀 FAILURE TO RESPOND",
@@ -405,22 +396,15 @@ class CorridorEventsCog(commands.Cog):
             user_response = responses.get(user_id, 'no_response')
             damage = await self._calculate_event_damage(event_type, severity, user_response)
             
-            if damage['hp_loss'] > 0:
-                self.db.execute_query(
-                    "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                    (damage['hp_loss'], user_id)
-                )
-            
-            if damage['ship_damage'] > 0:
-                self.db.execute_query(
-                    "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                    (damage['ship_damage'], user_id)
-                )
-            
             # Check for character death
             char_cog = self.bot.get_cog('CharacterCog')
-            if char_cog and damage['hp_loss'] > 0:
-                await char_cog.check_character_death(user_id, channel.guild)
+            if char_cog:
+                if damage['hp_loss'] > 0:
+                    died_from_hp = await char_cog.update_character_hp(user_id, -damage['hp_loss'], channel.guild)
+                    if not died_from_hp and damage['ship_damage'] > 0:
+                        await char_cog.update_ship_hull(user_id, -damage['ship_damage'], channel.guild)
+                elif damage['ship_damage'] > 0:
+                    await char_cog.update_ship_hull(user_id, -damage['ship_damage'], channel.guild)
             
             # Record consequences
             user = channel.guild.get_member(user_id)
@@ -814,14 +798,9 @@ class CorridorEventView(discord.ui.View):
             
             # Apply damages
             self.bot.db.execute_query(
-                "UPDATE characters SET hp = MAX(1, hp - ?), money = MAX(0, money - ?) WHERE user_id = ?",
-                (hp_damage, credit_loss, user.id)
+                "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                (credit_loss, user.id)
             )
-            self.bot.db.execute_query(
-                "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                (ship_damage, user.id)
-            )
-            
             # Create and send the damage result embed
             embed = discord.Embed(
                 title="💥 CATASTROPHIC CONSEQUENCES",
@@ -837,13 +816,15 @@ class CorridorEventView(discord.ui.View):
             # Send the embed to show the damage
             await channel.send(embed=embed)
             
-            # Check for character death
+            # Check for character death after critical failure
             char_cog = self.bot.get_cog('CharacterCog')
-            if char_cog and (outcome.get('critical_failure', False) or not outcome['success']):
-                response_type = outcome.get('response_type', 'response')
-                died_from_hp = await char_cog.check_character_death(user.id, channel.guild, f"died from a {event_type.replace('_', ' ')} after a {response_type.replace('_',' ')}")
+            if char_cog:
+                died_from_hp = await char_cog.update_character_hp(user.id, -hp_damage, channel.guild, "Critical system failure")
                 if not died_from_hp:
-                    await char_cog.check_ship_death(user.id, channel.guild, f"ship destroyed by a {event_type.replace('_', ' ')} after a {response_type.replace('_',' ')}")
+                    await char_cog.update_ship_hull(user.id, -ship_damage, channel.guild)
+            
+            return  # Exit early to prevent duplicate embeds
+            
             
         elif outcome['success']:
             # Success: Minimal or no damage, possible benefits
@@ -851,20 +832,14 @@ class CorridorEventView(discord.ui.View):
             ship_damage = max(0, int(base_ship_damage * 0.1))
             exp_gain = severity * 5
             
-            if hp_damage > 0 or ship_damage > 0:
-                self.bot.db.execute_query(
-                    "UPDATE characters SET hp = MAX(1, hp - ?), experience = experience + ? WHERE user_id = ?",
-                    (hp_damage, exp_gain, user.id)
-                )
-                self.bot.db.execute_query(
-                    "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                    (ship_damage, user.id)
-                )
-            else:
-                self.bot.db.execute_query(
-                    "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
-                    (exp_gain, user.id)
-                )
+            self.bot.db.execute_query(
+                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                (exp_gain, user.id)
+            )
+            if hp_damage > 0:
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_character_hp(user.id, -hp_damage, channel.guild, "Minor crisis exposure")
             
             embed = discord.Embed(
                 title="🛡️ SUCCESSFUL MITIGATION",
@@ -924,22 +899,19 @@ class CorridorEventView(discord.ui.View):
                     inline=False
                 )
             
-            # Apply the damage
-            self.bot.db.execute_query(
-                "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                (hp_damage, user.id)
-            )
-            self.bot.db.execute_query(
-                "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                (ship_damage, user.id)
-            )
         
         await channel.send(embed=embed)
         
         # Check for character death
         char_cog = self.bot.get_cog('CharacterCog')
-        if char_cog and (outcome.get('critical_failure', False) or not outcome['success']):
-            await char_cog.check_character_death(user.id, channel.guild)
+        if char_cog:
+            if outcome.get('critical_failure', False) or not outcome['success']:
+                died_from_hp = await char_cog.update_character_hp(user.id, -hp_damage, channel.guild, "Crisis damage")
+                if not died_from_hp:
+                    await char_cog.update_ship_hull(user.id, -ship_damage, channel.guild)
+            else:
+                await char_cog.update_character_hp(user.id, -hp_damage, channel.guild, "Crisis damage")
+                await char_cog.update_ship_hull(user.id, -ship_damage, channel.guild)
         
 async def setup(bot):
     await bot.add_cog(CorridorEventsCog(bot))

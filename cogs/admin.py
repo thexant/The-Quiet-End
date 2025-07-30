@@ -1151,7 +1151,7 @@ class AdminCog(commands.Cog):
         
         # Find the NPC
         npc_info = self.db.execute_query(
-            "SELECT npc_id, name, is_alive FROM dynamic_npcs WHERE callsign = ?",
+            "SELECT npc_id, name, is_alive, current_location, destination_location FROM dynamic_npcs WHERE callsign = ?",
             (callsign.upper(),),
             fetch='one'
         )
@@ -1160,7 +1160,7 @@ class AdminCog(commands.Cog):
             await interaction.response.send_message(f"❌ No NPC found with callsign {callsign}", ephemeral=True)
             return
         
-        npc_id, name, is_alive = npc_info
+        npc_id, name, is_alive, current_location, destination_location = npc_info
         
         if not is_alive:
             await interaction.response.send_message(f"❌ {name} ({callsign}) is already dead!", ephemeral=True)
@@ -1171,6 +1171,27 @@ class AdminCog(commands.Cog):
             "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = ?",
             (npc_id,)
         )
+        
+        # Post obituary to galactic news with random death cause
+        death_causes = [
+            "system malfunction", "corridor instability", "reactor overload",
+            "life support failure", "navigation error", "power core breach", 
+            "hull breach", "unknown circumstances", "mechanical failure",
+            "hypoxia incident", "radiation exposure", "debris impact",
+            "equipment failure", "structural collapse", "communications blackout", 
+            "fuel system explosion", "gravity generator malfunction",
+            "pressure seal failure", "electronic systems failure",
+            "asteroid collision", "solar radiation storm", "magnetic field anomaly"
+        ]
+        
+        cause = random.choice(death_causes)
+        
+        # Get galactic news cog and post obituary
+        galactic_news_cog = self.bot.get_cog('GalacticNews')
+        # Use destination_location if current_location is None (NPC is traveling)
+        obituary_location = current_location or destination_location
+        if galactic_news_cog and obituary_location:
+            await galactic_news_cog.post_character_obituary(name, obituary_location, cause)
         
         await interaction.response.send_message(
             f"💀 Killed dynamic NPC: **{name}** ({callsign})",
@@ -1507,8 +1528,58 @@ class AdminCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Error during cleanup: {str(e)}", ephemeral=True)
     
-# Add this to admin.py
-
+    @admin_group.command(name="cleanup_ship_exchange", description="Clean up expired ship exchange listings and offers")
+    async def cleanup_ship_exchange(self, interaction: discord.Interaction):
+        """Clean up expired ship exchange listings and offers"""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Get counts before cleanup
+            expired_listings = self.db.execute_query(
+                "SELECT COUNT(*) FROM ship_exchange_listings WHERE expires_at < datetime('now') AND is_active = 1",
+                fetch='one'
+            )[0]
+            
+            expired_offers = self.db.execute_query(
+                "SELECT COUNT(*) FROM ship_exchange_offers WHERE offer_expires_at < datetime('now') AND status = 'pending'",
+                fetch='one'
+            )[0]
+            
+            # Perform cleanup
+            self.db.cleanup_expired_ship_listings()
+            
+            # Get stats after cleanup
+            stats = self.db.get_ship_exchange_stats()
+            
+            embed = discord.Embed(
+                title="🧹 Ship Exchange Cleanup Complete",
+                color=0x00ff00 if (expired_listings + expired_offers) > 0 else 0x4169E1
+            )
+            
+            embed.add_field(name="Expired Listings Removed", value=str(expired_listings), inline=True)
+            embed.add_field(name="Expired Offers Removed", value=str(expired_offers), inline=True)
+            embed.add_field(name="Total Cleaned", value=str(expired_listings + expired_offers), inline=True)
+            
+            embed.add_field(name="Current Active Listings", value=str(stats['active_listings']), inline=True)
+            embed.add_field(name="Current Pending Offers", value=str(stats['pending_offers']), inline=True)
+            embed.add_field(name="Total Exchanges Completed", value=str(stats['completed_exchanges']), inline=True)
+            
+            if expired_listings == 0 and expired_offers == 0:
+                embed.add_field(
+                    name="ℹ️ No Cleanup Needed",
+                    value="No expired ship exchange data found",
+                    inline=False
+                )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            await interaction.followup.send(f"Error during ship exchange cleanup: {str(e)}", ephemeral=True)
+    
     @admin_group.command(name="fix_ship_activities", description="Generate activities for ships that don't have them")
     async def fix_ship_activities(self, interaction: discord.Interaction):
         """Generate ship activities for all ships missing them"""
@@ -1862,11 +1933,18 @@ class AdminCog(commands.Cog):
                 "job_tracking", "jobs", "shop_items", "inventory",
                 "corridor_events", "travel_sessions", "repeaters",
                 "logbook_entries", "groups", "ships", "characters",
-                "corridors", "locations",
-                "news_queue", "galactic_history", "game_panels",
+                "galactic_history", "corridors", "locations",
+                "news_queue", "game_panels",
                 "endgame_evacuations", "endgame_config",
                 "galaxy_settings", "galaxy_info"
             ]
+            
+            # Temporarily disable foreign key constraints for faster clearing
+            try:
+                self.db.execute_query("PRAGMA foreign_keys=OFF")
+                print("🔧 Temporarily disabled foreign key constraints for reset")
+            except Exception as e:
+                print(f"⚠️ Could not disable foreign keys: {e}")
             
             # Delete all data
             for table in tables_to_clear_in_order:
@@ -1875,6 +1953,21 @@ class AdminCog(commands.Cog):
                 except Exception as e:
                     # Some tables might not exist, which is fine
                     print(f"Note: Could not clear table {table}: {e}")
+            
+            # Re-enable foreign key constraints
+            try:
+                self.db.execute_query("PRAGMA foreign_keys=ON")
+                print("🔧 Re-enabled foreign key constraints after reset")
+            except Exception as e:
+                print(f"⚠️ Could not re-enable foreign keys: {e}")
+            
+            # Force WAL checkpoint after major deletions to prevent deadlocks
+            try:
+                self.db.execute_query("PRAGMA wal_checkpoint(TRUNCATE)")
+                print("✅ WAL checkpoint completed after full reset")
+                await asyncio.sleep(0.5)  # Allow checkpoint to complete
+            except Exception as e:
+                print(f"⚠️ WAL checkpoint failed after reset: {e}")
             
             # Delete Discord channels
             channels_deleted = 0
@@ -1945,11 +2038,11 @@ class AdminCog(commands.Cog):
                 
                 # Step 2: Start transaction for database operations
                 try:
-                    self.db.execute_query("BEGIN TRANSACTION")
+                    conn = self.db.begin_transaction()
                     
                     # Calculate and refund home values
-                    home_refunds = self.db.execute_query("""
-                        SELECT lh.owner_id, SUM(lh.purchase_price + COALESCE(lh.upgrade_cost, 0)) as total_value
+                    home_refunds = self.db.execute_in_transaction(conn, """
+                        SELECT lh.owner_id, SUM(lh.price) as total_value
                         FROM location_homes lh 
                         WHERE lh.owner_id IS NOT NULL 
                         GROUP BY lh.owner_id
@@ -1958,7 +2051,7 @@ class AdminCog(commands.Cog):
                     total_refunds = 0
                     for owner_id, home_value in home_refunds:
                         # Add credits to character account
-                        self.db.execute_query(
+                        self.db.execute_in_transaction(conn,
                             "UPDATE characters SET credits = credits + ? WHERE user_id = ?",
                             (home_value, owner_id)
                         )
@@ -1968,40 +2061,47 @@ class AdminCog(commands.Cog):
                     reset_counts["Players Refunded"] = len(home_refunds)
                 
                     # Step 3: Count what will be deleted
-                    reset_counts["Locations"] = self.db.execute_query(
+                    reset_counts["Locations"] = self.db.execute_in_transaction(conn,
                         "SELECT COUNT(*) FROM locations", fetch='one'
                     )[0]
-                    reset_counts["Corridors"] = self.db.execute_query(
+                    reset_counts["Corridors"] = self.db.execute_in_transaction(conn,
                         "SELECT COUNT(*) FROM corridors", fetch='one'
                     )[0]
-                    reset_counts["Homes"] = self.db.execute_query(
+                    reset_counts["Homes"] = self.db.execute_in_transaction(conn,
                         "SELECT COUNT(*) FROM location_homes", fetch='one'
                     )[0]
 
                     # Get location channels before deletion
-                    location_channels = self.db.execute_query(
+                    location_channels = self.db.execute_in_transaction(conn,
                         "SELECT channel_id FROM locations WHERE channel_id IS NOT NULL",
                         fetch='all'
                     )
 
                     # Get temporary travel channels
-                    temp_channels = self.db.execute_query(
+                    temp_channels = self.db.execute_in_transaction(conn,
                         "SELECT DISTINCT temp_channel_id FROM travel_sessions WHERE temp_channel_id IS NOT NULL",
                         fetch='all'
                     )
 
                     # Step 4: Clear galaxy data using comprehensive method
-                    await self._clear_comprehensive_galaxy_data()
+                    await self._clear_comprehensive_galaxy_data_in_transaction(conn)
 
                     # Step 5: Set character locations to NULL so they'll respawn at colonies
-                    self.db.execute_query("UPDATE characters SET current_location = NULL, docked_at_location = NULL")
+                    self.db.execute_in_transaction(conn, "UPDATE characters SET current_location = NULL")
+                    
+                    # Step 6: Clear ship docking locations since locations will be reset
+                    self.db.execute_in_transaction(conn, "UPDATE ships SET docked_at_location = NULL")
                     
                     # Commit the transaction
-                    self.db.execute_query("COMMIT")
+                    self.db.commit_transaction(conn)
                     
                 except Exception as e:
-                    # Rollback on error
-                    self.db.execute_query("ROLLBACK")
+                    # Rollback on error (only if transaction is active)
+                    try:
+                        self.db.rollback_transaction(conn)
+                    except:
+                        # No active transaction to rollback
+                        pass
                     print(f"Database transaction failed during galaxy reset: {e}")
                     raise e
 
@@ -2108,6 +2208,11 @@ class AdminCog(commands.Cog):
                 self.db.execute_query("DELETE FROM groups")
                 self.db.execute_query("UPDATE characters SET group_id = NULL")
 
+        # Ensure all tables exist after reset
+        print("🔧 Recreating database tables after reset...")
+        self.db.init_database()
+        print("✅ Database tables recreated successfully")
+
         return reset_counts
 
     async def _clear_comprehensive_galaxy_data(self):
@@ -2140,30 +2245,137 @@ class AdminCog(commands.Cog):
                 # Travel sessions that reference corridors/locations
                 "travel_sessions", "corridor_events",
                 
+                # Clear history before locations due to foreign key constraints
+                "galactic_history",
+                
                 # Finally clear corridors and locations
                 "corridors", "locations",
                 
-                # Clear history and news
-                "galactic_history", "news_queue",
+                # Clear news
+                "news_queue"
                 
-                # Clear endgame config if exists
-                "endgame_config", "endgame_evacuations"
+                # Skip endgame tables - not essential for galaxy reset
             ]
             
-            for table in tables_to_clear:
+            # Temporarily disable foreign key constraints for faster clearing (with timeout protection)
+            fk_disabled = False
+            try:
+                self.db.execute_query("PRAGMA foreign_keys=OFF")
+                fk_disabled = True
+                print("🔧 Temporarily disabled foreign key constraints for galaxy clearing")
+            except Exception as e:
+                print(f"⚠️ Could not disable foreign keys (continuing anyway): {e}")
+            
+            # Clear tables with timeout protection
+            for i, table in enumerate(tables_to_clear):
                 try:
+                    # Add progress indicator for user feedback
+                    if i % 5 == 0:
+                        print(f"🗑️ Clearing table {i+1}/{len(tables_to_clear)}: {table}")
+                    
                     self.db.execute_query(f"DELETE FROM {table}")
+                    
+                    # Brief yield every few tables to prevent blocking
+                    if i % 3 == 0:
+                        await asyncio.sleep(0.05)
+                        
                 except Exception as e:
                     # Some tables might not exist, which is fine
                     print(f"Note: Could not clear table {table}: {e}")
             
-            # Clear game panels for this guild
-            self.db.execute_query("DELETE FROM game_panels")
+            # Re-enable foreign key constraints only if we disabled them
+            if fk_disabled:
+                try:
+                    self.db.execute_query("PRAGMA foreign_keys=ON")
+                    print("🔧 Re-enabled foreign key constraints after galaxy clearing")
+                except Exception as e:
+                    print(f"⚠️ Could not re-enable foreign keys: {e}")
+                    # Force re-enable with a new connection if needed
+                    try:
+                        self.db.execute_query("PRAGMA foreign_keys=ON")
+                    except:
+                        pass  # Give up gracefully
+            
+            # Skip game panels deletion - they'll update automatically when new galaxy exists
+            
+            # Force WAL checkpoint after major deletions (use PASSIVE for galaxy reset to avoid blocking)
+            try:
+                # Use PASSIVE checkpoint for galaxy reset - less aggressive but safer
+                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
+                print("✅ WAL checkpoint (PASSIVE) completed after galaxy data clearing")
+                await asyncio.sleep(0.2)  # Shorter wait for PASSIVE checkpoint
+            except Exception as e:
+                print(f"⚠️ WAL checkpoint failed after galaxy clearing: {e}")
+                # Don't block the reset if checkpoint fails
             
             print("✅ Comprehensive galaxy data clearing complete")
             
         except Exception as e:
             print(f"❌ Error during comprehensive galaxy clearing: {e}")
+            raise
+
+    async def _clear_comprehensive_galaxy_data_in_transaction(self, conn):
+        """Use the same comprehensive clearing logic as the galaxy generator, within a transaction"""
+        print("🗑️ Performing comprehensive galaxy data clearing in transaction...")
+        
+        try:
+            # Clear in reverse dependency order to avoid foreign key issues
+            # This is the same order used in galaxy_generator.py _clear_existing_galaxy_data
+            
+            # First, clear tables that depend on locations
+            tables_to_clear = [
+                "home_activities", "home_interiors", "home_market_listings", 
+                "home_invitations", "location_homes", "character_reputation",
+                "location_items", "location_logs", "shop_items", "jobs", 
+                "job_tracking", "location_storage", "location_income_log",
+                "location_access_control", "location_upgrades", "location_ownership",
+                "location_economy", "economic_events",
+                
+                # NPC related tables
+                "npc_respawn_queue", "npc_inventory", "npc_trade_inventory",
+                "npc_jobs", "npc_job_completions", "static_npcs", "dynamic_npcs",
+                
+                # Black market tables
+                "black_market_items", "black_markets",
+                
+                # Sub-locations and repeaters
+                "sub_locations", "repeaters",
+                
+                # Travel sessions that reference corridors/locations
+                "travel_sessions", "corridor_events",
+                
+                # Clear history before locations due to foreign key constraints
+                "galactic_history",
+                
+                # Finally clear corridors and locations
+                "corridors", "locations",
+                
+                # Clear news
+                "news_queue"
+                
+                # Skip endgame tables - not essential for galaxy reset
+            ]
+            
+            for table in tables_to_clear:
+                try:
+                    self.db.execute_in_transaction(conn, f"DELETE FROM {table}")
+                except Exception as e:
+                    # Some tables might not exist, which is fine
+                    print(f"Note: Could not clear table {table}: {e}")
+            
+            # Skip game panels deletion - they'll update automatically when new galaxy exists
+            
+            # Force WAL checkpoint after major deletions (note: checkpoint operations should not be in transactions)
+            try:
+                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")  # Use PASSIVE within transaction context
+                print("✅ WAL checkpoint completed after galaxy data clearing in transaction")
+            except Exception as e:
+                print(f"⚠️ WAL checkpoint failed after galaxy clearing in transaction: {e}")
+            
+            print("✅ Comprehensive galaxy data clearing in transaction complete")
+            
+        except Exception as e:
+            print(f"❌ Error during comprehensive galaxy clearing in transaction: {e}")
             raise
     
     @app_commands.command(name="cleanup", description="Cleanup Unused Channels")
@@ -2177,7 +2389,7 @@ class AdminCog(commands.Cog):
         
         # Check if player has a character and is logged in
         char_data = self.db.execute_query(
-            "SELECT name, is_logged_in, current_location, current_ship_id, group_id FROM characters WHERE user_id = ?",
+            "SELECT name, is_logged_in, current_location, current_ship_id, group_id, current_home_id FROM characters WHERE user_id = ?",
             (player.id,),
             fetch='one'
         )
@@ -2186,7 +2398,7 @@ class AdminCog(commands.Cog):
             await interaction.response.send_message(f"{player.mention} doesn't have a character.", ephemeral=True)
             return
         
-        char_name, is_logged_in, current_location, current_ship_id, group_id = char_data
+        char_name, is_logged_in, current_location, current_ship_id, group_id, current_home_id = char_data
         
         if not is_logged_in:
             await interaction.response.send_message(f"**{char_name}** is not currently logged in.", ephemeral=True)
@@ -2229,10 +2441,13 @@ class AdminCog(commands.Cog):
         
         if current_location:
             await channel_manager.remove_user_location_access(player, current_location)
-            await channel_manager.immediate_logout_cleanup(interaction.guild, current_location)
+            await channel_manager.immediate_logout_cleanup(interaction.guild, current_location, current_ship_id, current_home_id)
         elif current_ship_id:
             await channel_manager.remove_user_ship_access(player, current_ship_id)
-            await channel_manager.immediate_logout_cleanup(interaction.guild, None, current_ship_id)
+            await channel_manager.immediate_logout_cleanup(interaction.guild, None, current_ship_id, current_home_id)
+        elif current_home_id:
+            await channel_manager.remove_user_home_access(player, current_home_id)
+            await channel_manager.immediate_logout_cleanup(interaction.guild, None, None, current_home_id)
         
         # Clean up activity tracker
         if hasattr(self.bot, 'activity_tracker'):
@@ -2363,6 +2578,181 @@ class AdminCog(commands.Cog):
             
         except Exception as e:
             await interaction.followup.send(f"❌ Backup failed: {str(e)}", ephemeral=True)
+    
+    @admin_group.command(name="item", description="Delete items from player inventory")
+    @app_commands.describe(player="Player to delete items from (optional - defaults to yourself)")
+    async def delete_item(self, interaction: discord.Interaction, player: Optional[discord.Member] = None):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        # Use specified player or default to admin
+        target_user = player if player else interaction.user
+        
+        # Check if target has a character
+        char_info = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (target_user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            target_name = player.display_name if player else "You"
+            await interaction.response.send_message(f"{target_name} don't have a character.", ephemeral=True)
+            return
+        
+        char_name = char_info[0]
+        
+        # Get player's inventory
+        items = self.db.execute_query(
+            '''SELECT i.item_name, i.item_type, i.quantity, i.description, i.value, 
+                      i.item_id, CASE WHEN ce.equipment_id IS NOT NULL THEN 1 ELSE 0 END as is_equipped
+               FROM inventory i
+               LEFT JOIN character_equipment ce ON i.item_id = ce.item_id AND ce.user_id = i.owner_id
+               WHERE i.owner_id = ?
+               ORDER BY is_equipped DESC, i.item_type, i.item_name''',
+            (target_user.id,),
+            fetch='all'
+        )
+        
+        if not items:
+            target_possessive = f"{player.display_name}'s" if player else "Your"
+            await interaction.response.send_message(f"{target_possessive} inventory is empty.", ephemeral=True)
+            return
+        
+        # Create the deletion view
+        from utils.views import AdminInventoryDeleteView
+        view = AdminInventoryDeleteView(self.bot, target_user.id, items, char_name)
+        
+        target_text = f"**{char_name}**'s" if player else "your"
+        embed = discord.Embed(
+            title="🗑️ Admin Item Deletion",
+            description=f"Select items to delete from {target_text} inventory.\n⚠️ **This action cannot be undone!**",
+            color=0xff0000
+        )
+        embed.add_field(name="Target Character", value=char_name, inline=True)
+        embed.add_field(name="Total Items", value=len(items), inline=True)
+        embed.set_footer(text="Admin Tool • Items will be permanently deleted")
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        
+    @admin_group.command(name="cleanup_dead_characters", description="Find and kill characters that should be dead (HP ≤ 0 or hull ≤ 0)")
+    @app_commands.describe(
+        dry_run="If True, only shows what would be killed without actually doing it"
+    )
+    async def cleanup_dead_characters(self, interaction: discord.Interaction, dry_run: bool = True):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Find characters with HP ≤ 0
+            dead_hp_chars = self.db.execute_query("""
+                SELECT c.user_id, c.name, c.hp 
+                FROM characters c 
+                WHERE c.hp <= 0 AND c.is_logged_in = 1
+            """, fetch='all')
+            
+            # Find characters with hull ≤ 0  
+            dead_hull_chars = self.db.execute_query("""
+                SELECT c.user_id, c.name, s.hull_integrity 
+                FROM characters c 
+                JOIN ships s ON c.user_id = s.owner_id 
+                WHERE s.hull_integrity <= 0 AND c.is_logged_in = 1
+            """, fetch='all')
+            
+            total_found = len(dead_hp_chars) + len(dead_hull_chars)
+            
+            if total_found == 0:
+                embed = discord.Embed(
+                    title="✅ No Dead Characters Found",
+                    description="All characters with HP ≤ 0 or hull ≤ 0 have already been properly killed.",
+                    color=0x00ff00
+                )
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                return
+            
+            # Create report embed
+            embed = discord.Embed(
+                title="☠️ Dead Characters Cleanup" + (" (DRY RUN)" if dry_run else ""),
+                description=f"Found {total_found} characters that should be dead but aren't.",
+                color=0xff0000 if not dry_run else 0xffaa00
+            )
+            
+            if dead_hp_chars:
+                hp_list = []
+                for user_id, name, hp in dead_hp_chars:
+                    member = interaction.guild.get_member(user_id)
+                    member_name = member.display_name if member else f"Unknown ({user_id})"
+                    hp_list.append(f"• **{name}** ({member_name}): {hp} HP")
+                
+                embed.add_field(
+                    name=f"💔 Characters with HP ≤ 0 ({len(dead_hp_chars)})",
+                    value="\n".join(hp_list[:10]) + (f"\n... and {len(hp_list)-10} more" if len(hp_list) > 10 else ""),
+                    inline=False
+                )
+            
+            if dead_hull_chars:
+                hull_list = []
+                for user_id, name, hull in dead_hull_chars:
+                    member = interaction.guild.get_member(user_id)
+                    member_name = member.display_name if member else f"Unknown ({user_id})"
+                    hull_list.append(f"• **{name}** ({member_name}): {hull} Hull")
+                
+                embed.add_field(
+                    name=f"🚢 Characters with Hull ≤ 0 ({len(dead_hull_chars)})",
+                    value="\n".join(hull_list[:10]) + (f"\n... and {len(hull_list)-10} more" if len(hull_list) > 10 else ""),
+                    inline=False
+                )
+            
+            if dry_run:
+                embed.add_field(
+                    name="ℹ️ Dry Run Mode",
+                    value="No characters were actually killed. Run with `dry_run: False` to execute the cleanup.",
+                    inline=False
+                )
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                return
+            
+            # Actually kill the characters
+            char_cog = self.bot.get_cog('CharacterCog')
+            if not char_cog:
+                await interaction.followup.send("❌ Character system not available.", ephemeral=True)
+                return
+            
+            killed_count = 0
+            
+            # Kill HP-dead characters
+            for user_id, name, hp in dead_hp_chars:
+                try:
+                    await char_cog.update_character_hp(user_id, 0, interaction.guild, "Administrative cleanup - HP was already ≤ 0")
+                    killed_count += 1
+                except Exception as e:
+                    print(f"Failed to kill character {name} ({user_id}) with HP {hp}: {e}")
+            
+            # Kill hull-dead characters  
+            for user_id, name, hull in dead_hull_chars:
+                try:
+                    await char_cog.update_ship_hull(user_id, 0, interaction.guild, "Administrative cleanup - Hull was already ≤ 0")
+                    killed_count += 1
+                except Exception as e:
+                    print(f"Failed to kill character {name} ({user_id}) with hull {hull}: {e}")
+            
+            embed.add_field(
+                name="✅ Cleanup Complete",
+                value=f"Successfully processed {killed_count}/{total_found} characters.",
+                inline=False
+            )
+            
+            embed.color = 0x00ff00
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+            print(f"🧹 Dead character cleanup: {interaction.user.name} processed {killed_count} characters in {interaction.guild.name}")
+            
+        except Exception as e:
+            await interaction.followup.send(f"❌ Cleanup failed: {str(e)}", ephemeral=True)
     
     # ... (keep all your other existing admin commands)
 
@@ -2630,6 +3020,9 @@ class ServerResetConfirmView(discord.ui.View):
             return
         
         await interaction.response.send_message("Server reset cancelled. No changes were made.", ephemeral=True)
+
+
         
+
 async def setup(bot):
     await bot.add_cog(AdminCog(bot))

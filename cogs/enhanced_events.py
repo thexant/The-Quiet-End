@@ -523,10 +523,9 @@ class EnhancedEventsCog(commands.Cog):
                     )
                 else:
                     damage = random.randint(10, 20)
-                    self.bot.db.execute_query(
-                        "UPDATE ships SET hull_integrity = MAX(0, hull_integrity - ?) WHERE owner_id = ?",
-                        (damage, user_id)
-                    )
+                    char_cog = self.bot.get_cog('CharacterCog')
+                    if char_cog:
+                        await char_cog.update_ship_hull(user_id, -damage, interaction.guild)
                     
                     await interaction.response.send_message(
                         f"⚡ **{char_name}** deploys countermeasures but they're only partially effective! Ship takes {damage} hull damage from drone attacks.",
@@ -631,10 +630,9 @@ class EnhancedEventsCog(commands.Cog):
                     )
                 else:
                     damage = random.randint(20, 40)
-                    self.bot.db.execute_query(
-                        "UPDATE ships SET hull_integrity = MAX(0, hull_integrity - ?) WHERE owner_id = ?",
-                        (damage, user_id)
-                    )
+                    char_cog = self.bot.get_cog('CharacterCog')
+                    if char_cog:
+                        await char_cog.update_ship_hull(user_id, -damage, interaction.guild)
                     
                     await interaction.response.send_message(
                         f"💥 **{char_name}** fights valiantly but the drones overwhelm the ship's defenses! Hull takes {damage} damage.",
@@ -1106,10 +1104,9 @@ class EnhancedEventsCog(commands.Cog):
                     damage = random.randint(25, 50)
                     fine = random.randint(500, 1000)
                     
-                    self.bot.db.execute_query(
-                        "UPDATE ships SET hull_integrity = MAX(0, hull_integrity - ?) WHERE owner_id = ?",
-                        (damage, user_id)
-                    )
+                    char_cog = self.bot.get_cog('CharacterCog')
+                    if char_cog:
+                        await char_cog.update_ship_hull(user_id, -damage, interaction.guild)
                     
                     self.bot.db.execute_query(
                         "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
@@ -1193,7 +1190,7 @@ class EnhancedEventsCog(commands.Cog):
         selected_event = random.choices(events, weights=weights)[0]
         
         # Trigger the event
-        await self._execute_location_event(channel, selected_event, players_present, location_name)
+        await self._execute_location_event(channel, selected_event, players_present, location_name, location_id)
         
         return selected_event
     async def apply_galaxy_wide_npc_effects(self, event_type: str, severity: int = 1):
@@ -1712,7 +1709,9 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message(f"🔧 **{char_name}**'s expert engineering assistance helps stabilize the gate's energy core, preventing a catastrophe! Gate authorities award you {reward} credits.", ephemeral=False)
             else:
                 damage = random.randint(15, 30)
-                self.bot.db.execute_query("UPDATE ships SET hull_integrity = MAX(0, hull_integrity - ?) WHERE owner_id = ?", (damage, interaction.user.id))
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_ship_hull(interaction.user.id, -damage, interaction.guild)
                 await interaction.response.send_message(f"💥 **{char_name}** attempts to help but is caught in an energy discharge! The ship takes {damage} hull damage.", ephemeral=False)
 
         async def shields_callback(interaction: discord.Interaction):
@@ -1737,7 +1736,7 @@ class EnhancedEventsCog(commands.Cog):
             await interaction.response.send_message(f"🏃 **{char_name}** wisely moves their ship to a safe distance to watch the events unfold.", ephemeral=False)
         
         contain_button.callback = contain_callback
-        shields_button.callback = shields_button
+        shields_button.callback = shields_callback
         evacuate_button.callback = evacuate_callback
 
         view.add_item(contain_button)
@@ -1793,7 +1792,9 @@ class EnhancedEventsCog(commands.Cog):
             roll = random.random()
             if roll < 0.25: # 25% chance of damage
                 damage = random.randint(5, 10)
-                self.bot.db.execute_query("UPDATE ships SET hull_integrity = MAX(0, hull_integrity - ?) WHERE owner_id = ?", (damage, interaction.user.id))
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_ship_hull(interaction.user.id, -damage, interaction.guild)
                 await interaction.response.send_message(f"💥 **{char_name}** flies through the echo and a wave of temporal feedback rattles the ship! It takes {damage} hull damage.", ephemeral=False)
             elif roll > 0.9: # 10% chance of a boon
                 fuel_gain = random.randint(10, 20)
@@ -2154,10 +2155,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
             else:
                 damage = random.randint(5, 15)
-                self.bot.db.execute_query(
-                    "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                    (damage, user_id)
-                )
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_ship_hull(user_id, -damage, interaction.guild)
                 
                 await interaction.response.send_message(
                     f"🤖 **{char_name}**'s defenses fail! Scavenger drones strip {damage} hull integrity from the ship.",
@@ -2363,9 +2363,12 @@ class EnhancedEventsCog(commands.Cog):
                 credits_lost = random.randint(200, 500)
                 
                 self.bot.db.execute_query(
-                    "UPDATE characters SET hp = MAX(1, hp - ?), money = MAX(0, money - ?) WHERE user_id = ?",
-                    (damage, credits_lost, user_id)
+                    "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                    (credits_lost, user_id)
                 )
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_character_hp(user_id, -damage, interaction.guild, "Corporate security damage")
                 
                 await interaction.response.send_message(
                     f"💥 **{char_name}** is overwhelmed by corporate security! Lost {damage} health and {credits_lost} credits in fines and 'damages'.",
@@ -2442,10 +2445,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
             else:
                 damage = random.randint(5, 15)
-                self.bot.db.execute_query(
-                    "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                    (damage, user_id)
-                )
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_ship_hull(user_id, -damage, interaction.guild)
                 await interaction.response.send_message(
                     f"💥 Despite careful navigation, **{char_name}**'s ship scrapes against debris. Hull takes {damage} damage.",
                     ephemeral=False
@@ -2485,9 +2487,12 @@ class EnhancedEventsCog(commands.Cog):
                 damage = random.randint(15, 35)
                 fuel_loss = random.randint(10, 20)
                 self.bot.db.execute_query(
-                    "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?), current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
-                    (damage, fuel_loss, user_id)
+                    "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
+                    (fuel_loss, user_id)
                 )
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_ship_hull(user_id, -damage, interaction.guild)
                 await interaction.response.send_message(
                     f"💥 **{char_name}**'s reckless speed causes multiple collisions! Hull damage: {damage}, Fuel lost: {fuel_loss}",
                     ephemeral=False
@@ -2580,9 +2585,12 @@ class EnhancedEventsCog(commands.Cog):
                     damage = random.randint(20, 40)
                     credits_lost = random.randint(50, 200)
                     self.bot.db.execute_query(
-                        "UPDATE characters SET hp = MAX(1, hp - ?), money = MAX(0, money - ?) WHERE user_id = ?",
-                        (damage, credits_lost, user_id)
+                        "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                        (credits_lost, user_id)
                     )
+                    char_cog = self.bot.get_cog('CharacterCog')
+                    if char_cog:
+                        await char_cog.update_character_hp(user_id, -damage, interaction.guild, "Pirate trap damage")
                     await interaction.response.send_message(
                         f"💥 **{char_name}** falls into a pirate trap! Lost {damage} health and {credits_lost} credits.",
                         ephemeral=False
@@ -3576,6 +3584,36 @@ class EnhancedEventsCog(commands.Cog):
             await interaction.followup.send(f"❌ Error triggering event: {str(e)}", ephemeral=True)
             print(f"❌ Error in admin event trigger: {e}")
 
+    @app_commands.command(name="clear_all_effects", description="Clear all active location effects immediately (Admin only)")
+    async def clear_all_effects(self, interaction: discord.Interaction):
+        """Clear all active location effects from the database"""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ You need administrator permissions to use this command.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        
+        try:
+            # Get count of effects before clearing
+            result = self.bot.db.execute_query("SELECT COUNT(*) FROM active_location_effects", fetch='one')
+            effects_count = result[0] if result else 0
+            
+            # Clear all active location effects
+            self.bot.db.execute_query("DELETE FROM active_location_effects")
+            
+            await interaction.followup.send(
+                f"✅ **All Location Effects Cleared**\n"
+                f"Removed {effects_count} active effects from all locations.\n"
+                f"Players can now travel freely!", 
+                ephemeral=True
+            )
+            
+            print(f"🧹 Admin {interaction.user.display_name} cleared {effects_count} location effects")
+            
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error clearing effects: {str(e)}", ephemeral=True)
+            print(f"❌ Error clearing location effects: {e}")
+
     async def _trigger_specific_location_event(self, location_id: int, location_type: str, event_key: str, player_ids: list):
         """Trigger a specific location event by key"""
         wealth = 5  # Default wealth for admin events
@@ -3611,7 +3649,7 @@ class EnhancedEventsCog(commands.Cog):
             fetch='one'
         )[0]
         
-        await self._execute_location_event(channel, target_event, player_ids, location_name)
+        await self._execute_location_event(channel, target_event, player_ids, location_name, location_id)
 
     async def _trigger_space_phenomena_event(self, location_id: int, event_key: str, player_ids: list, location_name: str):
         """Trigger a space phenomena event"""
@@ -3855,10 +3893,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
             else:
                 damage = random.randint(5, 15)
-                self.bot.db.execute_query(
-                    "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                    (damage, interaction.user.id)
-                )
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_character_hp(interaction.user.id, -damage, interaction.guild, "System failure damage")
                 
                 await interaction.response.send_message(
                     f"⚡ **{char_name}** attempts repairs but triggers a secondary failure! Took {damage} damage from electrical discharge.",
@@ -4718,10 +4755,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
             else:
                 damage = random.randint(5, 12)
-                self.bot.db.execute_query(
-                    "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                    (damage, interaction.user.id)
-                )
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_character_hp(interaction.user.id, -damage, interaction.guild, "Navigation hazard damage")
                 
                 await interaction.response.send_message(
                     f"⚡ **{char_name}** attempts repairs but causes additional damage! Took {damage} damage from equipment failure.",
@@ -4835,10 +4871,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
             else:  # 40% chance of danger
                 damage = random.randint(10, 25)
-                self.bot.db.execute_query(
-                    "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                    (damage, interaction.user.id)
-                )
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_character_hp(interaction.user.id, -damage, interaction.guild, "Asteroid collision damage")
                 
                 await interaction.response.send_message(
                     f"⚠️ **{char_name}** investigates but triggers an automated defense system! Took {damage} damage!",
@@ -4941,10 +4976,9 @@ class EnhancedEventsCog(commands.Cog):
         
         if random.random() < 0.4:  # 40% chance of minor damage
             damage = random.randint(3, 8)
-            self.bot.db.execute_query(
-                "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                (damage, user_id)
-            )
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog:
+                await char_cog.update_character_hp(user_id, -damage, channel.guild, "Distress beacon damage")
             effects.append(f"• Radiation exposure: -{damage} HP")
         
         if effects:
@@ -4982,10 +5016,9 @@ class EnhancedEventsCog(commands.Cog):
         
         if effect_roll < 0.3:  # Negative effect
             damage = random.randint(5, 15)
-            self.bot.db.execute_query(
-                "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                (damage, user_id)
-            )
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog:
+                await char_cog.update_character_hp(user_id, -damage, channel.guild, "Nebula damage")
             embed.add_field(name="💥 Effect", value=f"Quantum disturbance causes disorientation: -{damage} HP", inline=False)
         
         elif effect_roll < 0.7:  # Neutral effect
@@ -5013,14 +5046,10 @@ class EnhancedEventsCog(commands.Cog):
         hp_damage = random.randint(8, 20)
         hull_damage = random.randint(5, 15)
         
-        self.bot.db.execute_query(
-            "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-            (hp_damage, user_id)
-        )
-        self.bot.db.execute_query(
-            "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-            (hull_damage, user_id)
-        )
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.update_character_hp(user_id, -hp_damage, channel.guild, "Radiation exposure")
+            await char_cog.update_ship_hull(user_id, -hull_damage, channel.guild)
         
         embed.add_field(
             name="☢️ Radiation Exposure",
@@ -5038,7 +5067,7 @@ class EnhancedEventsCog(commands.Cog):
 
 
 
-    async def _execute_location_event(self, channel, event, players, location_name):
+    async def _execute_location_event(self, channel, event, players, location_name, location_id=None):
         """Execute a location event"""
         embed = discord.Embed(
             title=f"📍 Event at {location_name}",
@@ -5050,6 +5079,37 @@ class EnhancedEventsCog(commands.Cog):
             await event['handler'](channel, players, event)
         else:
             await channel.send(embed=embed)
+            
+            # Apply non-interactive event effects if location_id is provided
+            if location_id and event.get('effects') and not event.get('interactive'):
+                await self._apply_event_effects(location_id, event['effects'], event['name'])
+
+    async def _apply_event_effects(self, location_id: int, effects: dict, event_name: str):
+        """Apply event effects to the location"""
+        try:
+            for effect_type, effect_value in effects.items():
+                # Determine duration based on effect type (in minutes for reasonable gameplay)
+                duration_hours = 0.25  # Default 15 minutes
+                if effect_type in ['travel_ban', 'major_disruption']:
+                    duration_hours = 0.08  # 5 minutes for severe effects
+                elif effect_type in ['travel_danger', 'danger_level']:
+                    duration_hours = 0.17  # 10 minutes for danger effects
+                elif effect_type in ['wealth_bonus', 'efficiency_bonus']:
+                    duration_hours = 0.5  # 30 minutes for positive effects
+                
+                # Add the effect to the database
+                self.bot.db.add_location_effect(
+                    location_id=location_id,
+                    effect_type=effect_type,
+                    effect_value=effect_value,
+                    source_event=event_name,
+                    duration_hours=duration_hours
+                )
+            
+            print(f"✅ Applied {len(effects)} effects from event '{event_name}' to location {location_id}")
+            
+        except Exception as e:
+            print(f"❌ Error applying event effects: {e}")
 
     async def _handle_solar_flare(self, location_id, players, location_name, event_name, description, color):
         """Handle solar flare - system interference"""
@@ -5104,10 +5164,9 @@ class EnhancedEventsCog(commands.Cog):
                 
                 if effect_roll < 0.3:  # Negative effect
                     damage = random.randint(5, 15)
-                    self.bot.db.execute_query(
-                        "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                        (damage, player_id)
-                    )
+                    char_cog = self.bot.get_cog('CharacterCog')
+                    if char_cog:
+                        await char_cog.update_character_hp(player_id, -damage, channel.guild, "Solar flare damage")
                     effect_text = f"You get injured in the static fog storm: -{damage} HP"
                 
                 elif effect_roll < 0.6:  # Neutral effect
@@ -5207,14 +5266,10 @@ class EnhancedEventsCog(commands.Cog):
             damage = random.randint(8, 20)
             hull_damage = random.randint(5, 15)
             
-            self.bot.db.execute_query(
-                "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                (damage, player_id)
-            )
-            self.bot.db.execute_query(
-                "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                (hull_damage, player_id)
-            )
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog:
+                await char_cog.update_character_hp(player_id, -damage, channel.guild, "Solar flare radiation")
+                await char_cog.update_ship_hull(player_id, -hull_damage, channel.guild)
             
             member = channel.guild.get_member(player_id)
             if member:
@@ -5568,10 +5623,9 @@ class EnhancedEventsCog(commands.Cog):
                 )
             else:  # 30% chance of danger
                 damage = random.randint(10, 20)
-                self.bot.db.execute_query(
-                    "UPDATE characters SET hp = MAX(1, hp - ?) WHERE user_id = ?",
-                    (damage, user_id)
-                )
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_character_hp(user_id, -damage, interaction.guild, "Station lockdown damage")
                 
                 await interaction.response.send_message(
                     f"⚠️ **{char_name}** triggers an energy discharge! Took {damage} damage from the exposure!",
@@ -5666,9 +5720,12 @@ class EnhancedEventsCog(commands.Cog):
                 credits_lost = random.randint(100, 300)
                 
                 self.bot.db.execute_query(
-                    "UPDATE characters SET hp = MAX(1, hp - ?), money = MAX(0, money - ?) WHERE user_id = ?",
-                    (damage, credits_lost, user_id)
+                    "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                    (credits_lost, user_id)
                 )
+                char_cog = self.bot.get_cog('CharacterCog')
+                if char_cog:
+                    await char_cog.update_character_hp(user_id, -damage, interaction.guild, "Pirate defeat damage")
                 
                 await interaction.response.send_message(
                     f"💥 **{char_name}** is defeated by the pirates! Lost {damage} health and {credits_lost} credits.",
@@ -5832,10 +5889,9 @@ class AsteroidFieldView(BaseEventView):
             await interaction.response.send_message(f"💥 {interaction.user.display_name} takes asteroid damage!", ephemeral=True)
             
             # Apply damage
-            self.bot.db.execute_query(
-                "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                (damage_if_fail, interaction.user.id)
-            )
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog:
+                await char_cog.update_ship_hull(interaction.user.id, -damage_if_fail, interaction.guild)
         
         # Check if all players have chosen
         if len(self.player_choices) >= len(self.players):
@@ -5938,8 +5994,14 @@ class ReputationEventView(BaseEventView):
                 # Apply minor reputation change to nearby locations
                 if rep_minor != 0:
                     nearby_locations = self.bot.db.execute_query(
-                        "SELECT destination_location FROM corridors WHERE origin_location = ? AND is_active = 1",
-                        (self.location_id,),
+                        """SELECT DISTINCT CASE 
+                               WHEN origin_location = ? THEN destination_location
+                               ELSE origin_location
+                           END as nearby_location
+                           FROM corridors 
+                           WHERE (origin_location = ? OR (destination_location = ? AND is_bidirectional = 1)) 
+                           AND is_active = 1""",
+                        (self.location_id, self.location_id, self.location_id),
                         fetch='all'
                     )
                     for (nearby_id,) in nearby_locations[:3]:  # Limit to 3 nearby locations

@@ -39,7 +39,7 @@ class ItemTradingCog(commands.Cog):
         )
         
         if not giver_char:
-            await interaction.response.send_message("You don't have a character! Use `/character create` first.", ephemeral=True)
+            await interaction.response.send_message("You don't have a character! Use the game panel to create a character first.", ephemeral=True)
             return
         
         receiver_char = self.db.execute_query(
@@ -66,7 +66,7 @@ class ItemTradingCog(commands.Cog):
         
         # Find the item in giver's inventory
         inventory_item = self.db.execute_query(
-            "SELECT item_id, item_name, quantity, item_type, description, value FROM inventory WHERE owner_id = ? AND LOWER(item_name) LIKE LOWER(?) AND quantity >= ?",
+            "SELECT item_id, item_name, quantity, item_type, description, value, metadata FROM inventory WHERE owner_id = ? AND LOWER(item_name) LIKE LOWER(?) AND quantity >= ?",
             (interaction.user.id, f"%{item}%", quantity),
             fetch='one'
         )
@@ -75,7 +75,11 @@ class ItemTradingCog(commands.Cog):
             await interaction.response.send_message(f"You don't have enough '{item}' to give. Check your inventory with `/character inventory`.", ephemeral=True)
             return
         
-        item_id, actual_name, current_qty, item_type, description, value = inventory_item
+        item_id, actual_name, current_qty, item_type, description, value, metadata = inventory_item
+        
+        # Ensure metadata exists using helper function
+        from utils.item_config import ItemConfig
+        metadata = ItemConfig.ensure_item_metadata(actual_name, metadata)
         
         # Remove from giver's inventory
         if current_qty == quantity:
@@ -100,9 +104,9 @@ class ItemTradingCog(commands.Cog):
             )
         else:
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (player.id, actual_name, item_type, quantity, description, value)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (player.id, actual_name, item_type, quantity, description, value, metadata)
             )
         
         # Send success message to location channel
@@ -156,7 +160,7 @@ class ItemTradingCog(commands.Cog):
         )
         
         if not seller_char:
-            await interaction.response.send_message("You don't have a character! Use `/character create` first.", ephemeral=True)
+            await interaction.response.send_message("You don't have a character! Use the game panel to create a character first.", ephemeral=True)
             return
         
         buyer_char = self.db.execute_query(
@@ -364,7 +368,7 @@ class TradeOfferView(discord.ui.View):
             
             # Get item details for transfer
             item_details = self.bot.db.execute_query(
-                "SELECT item_name, item_type, description, value FROM inventory WHERE item_id = ?",
+                "SELECT item_name, item_type, description, value, metadata FROM inventory WHERE item_id = ?",
                 (self.item_id,),
                 fetch='one'
             )
@@ -372,7 +376,23 @@ class TradeOfferView(discord.ui.View):
             if not item_details:
                 raise Exception("Item details not found")
             
-            actual_name, item_type, description, value = item_details
+            actual_name, item_type, description, value, metadata = item_details
+            
+            # Ensure metadata exists, create if missing
+            if not metadata:
+                from utils.item_config import ItemConfig
+                try:
+                    metadata = ItemConfig.create_item_metadata(actual_name)
+                except:
+                    # Fallback metadata for items without definitions
+                    import json
+                    metadata = json.dumps({
+                        "usage_type": "consumable",
+                        "effect_value": 10,
+                        "single_use": True,
+                        "uses_remaining": 1,
+                        "rarity": "common"
+                    })
             
             # Remove item from seller
             if seller_item[0] == self.quantity:
@@ -397,9 +417,9 @@ class TradeOfferView(discord.ui.View):
                 )
             else:
                 self.bot.db.execute_query(
-                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
-                       VALUES (?, ?, ?, ?, ?, ?)''',
-                    (self.buyer_id, actual_name, item_type, self.quantity, description, value)
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                    (self.buyer_id, actual_name, item_type, self.quantity, description, value, metadata)
                 )
             
             # Success embed

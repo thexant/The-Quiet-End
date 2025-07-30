@@ -7,7 +7,7 @@ import atexit
 import time
 
 class Database:
-    def __init__(self, db_path="beta2.db"):
+    def __init__(self, db_path="THEQUIETEND.db"):
         self.db_path = db_path
         self.lock = threading.Lock()
         self._shutdown = False
@@ -36,7 +36,7 @@ class Database:
             # Increase timeout
             conn.execute("PRAGMA busy_timeout=30000")
             conn.commit()
-            print("✅ Database WAL mode enabled and optimized")
+            print("[OK] Database WAL mode enabled and optimized")
         finally:
             conn.close()
     
@@ -118,6 +118,7 @@ class Database:
         
         # Use a much longer timeout for better reliability
         conn = sqlite3.connect(self.db_path, timeout=60.0, check_same_thread=False)
+        conn.row_factory = sqlite3.Row  # Enable dict-like access to rows
         
         # Track active connections
         with self._connection_lock:
@@ -134,6 +135,25 @@ class Database:
             conn.close()
         except:
             pass
+    
+    def get_active_connection_count(self):
+        """Get the current number of active connections for monitoring"""
+        with self._connection_lock:
+            return len(self._active_connections)
+    
+    def cleanup_stale_connections(self):
+        """Force cleanup of any stale connections - emergency measure"""
+        with self._connection_lock:
+            stale_connections = list(self._active_connections)
+            for conn in stale_connections:
+                try:
+                    conn.close()
+                    self._active_connections.discard(conn)
+                    print(f"🧹 Cleaned up stale connection")
+                except:
+                    pass
+            if stale_connections:
+                print(f"🧹 Cleaned up {len(stale_connections)} stale connections")
             
     def execute_read_query(self, query, params=None, fetch='all'):
         """Execute a read-only query without acquiring the main lock"""
@@ -156,12 +176,79 @@ class Database:
             self._close_connection(conn)
             
     def execute_query(self, query, params=None, fetch=None, many=False):
-        """Execute a single query with automatic connection management"""
+        """Execute a single query with automatic connection management and reduced lock time"""
         if self._shutdown:
             raise RuntimeError("Database is shutting down")
             
         max_retries = 3
-        retry_delay = 0.5  # Start with longer delay
+        retry_delay = 0.1  # Reduced retry delay for faster recovery
+        
+        for attempt in range(max_retries):
+            try:
+                # Use shorter lock duration by preparing everything first
+                if many and params:
+                    # Bulk operations
+                    with self.lock:
+                        conn = self.get_connection()
+                        try:
+                            cursor = conn.cursor()
+                            cursor.executemany(query, params)
+                            conn.commit()
+                            return cursor.rowcount if fetch is None else None
+                        finally:
+                            cursor.close()
+                            self._close_connection(conn)  # FIX: Properly close connection
+                else:
+                    # Single operations with minimal lock time
+                    with self.lock:
+                        conn = self.get_connection()
+                        try:
+                            cursor = conn.cursor()
+                            
+                            if params:
+                                cursor.execute(query, params)
+                            else:
+                                cursor.execute(query)
+                            
+                            if fetch == 'one':
+                                result = cursor.fetchone()
+                            elif fetch == 'all':
+                                result = cursor.fetchall()
+                            elif fetch == 'lastrowid':
+                                result = cursor.lastrowid
+                            else:
+                                result = None
+                            
+                            conn.commit()
+                            return result
+                        finally:
+                            cursor.close()
+                            self._close_connection(conn)  # FIX: Properly close connection
+                
+            except sqlite3.Error as e:
+                if attempt < max_retries - 1 and "database is locked" in str(e):
+                    print(f"⚠️ Database locked on attempt {attempt + 1}, retrying...")
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+                else:
+                    print(f"❌ Database error after {attempt + 1} attempts: {e}")
+                    raise
+            except Exception as e:
+                print(f"❌ Unexpected database error: {e}")
+                print(f"Query: {query}")
+                if not many:
+                    print(f"Params: {params}")
+                else:
+                    print(f"Params: {len(params) if params else 0} rows")
+                raise
+    
+    def bulk_execute(self, operations: list):
+        """Execute multiple operations in a single transaction to reduce lock time"""
+        if self._shutdown:
+            raise RuntimeError("Database is shutting down")
+        
+        max_retries = 3
+        retry_delay = 0.1
         
         for attempt in range(max_retries):
             try:
@@ -170,62 +257,68 @@ class Database:
                     try:
                         cursor = conn.cursor()
                         
-                        # Support bulk inserts with executemany
-                        if many and params:
-                            cursor.executemany(query, params)
-                        elif params:
-                            cursor.execute(query, params or [])
-                        else:
-                            cursor.execute(query)
-                        
-                        if fetch == 'one':
-                            result = cursor.fetchone()
-                        elif fetch == 'all':
-                            result = cursor.fetchall()
-                        elif fetch == 'lastrowid':
-                            result = cursor.lastrowid
-                        else:
-                            result = None
+                        # Execute all operations in a single transaction
+                        for query, params in operations:
+                            if params:
+                                cursor.execute(query, params)
+                            else:
+                                cursor.execute(query)
                         
                         conn.commit()
-                        return result
-                    except sqlite3.Error as e:
-                        conn.rollback()
-                        if attempt < max_retries - 1 and "database is locked" in str(e):
-                            print(f"⚠️ Database locked on attempt {attempt + 1}, retrying...")
-                            time.sleep(retry_delay * (attempt + 1))
-                            continue
-                        raise e
+                        return True
                     finally:
-                        self._close_connection(conn)
-            except Exception as e:
+                        cursor.close()
+                        self._close_connection(conn)  # FIX: Properly close connection
+                        
+            except sqlite3.Error as e:
                 if attempt < max_retries - 1 and "database is locked" in str(e):
+                    print(f"⚠️ Database locked during bulk operation on attempt {attempt + 1}, retrying...")
                     time.sleep(retry_delay * (attempt + 1))
                     continue
-                print(f"❌ Database error: {e}")
-                print(f"Query: {query}")
-                if not many:
-                    print(f"Params: {params}")
                 else:
-                    print(f"Params: {len(params) if params else 0} rows")
-                raise e
+                    print(f"❌ Bulk operation failed after {attempt + 1} attempts: {e}")
+                    raise
+            except Exception as e:
+                print(f"❌ Unexpected error during bulk operation: {e}")
+                raise
+        
+        return False
 
     def begin_transaction(self):
-        """Begin a transaction with proper connection tracking"""
+        """Begin a transaction with proper connection tracking and verification"""
         if self._shutdown:
             raise RuntimeError("Database is shutting down")
         
+        # Check connection pool health before acquiring lock (with bypass for urgent operations)
+        try:
+            self._verify_connection_pool_health()
+        except Exception as e:
+            print(f"⚠️ Connection pool health check failed, continuing anyway: {e}")
+        
+        print("🔧 DB DEBUG: Attempting to acquire database lock...")
         # Try to acquire lock with timeout
         acquired = self.lock.acquire(timeout=30)
         if not acquired:
+            print("🔧 DB DEBUG: Failed to acquire database lock after 30s timeout")
             raise RuntimeError("Could not acquire database lock for transaction")
         
+        print("🔧 DB DEBUG: Database lock acquired, getting connection...")
         try:
             conn = self.get_connection()
+            # Light verification - just ensure connection works
+            try:
+                self._verify_connection_state(conn)
+            except Exception as e:
+                print(f"⚠️ Connection verification failed, continuing anyway: {e}")
+                # Don't block the transaction if verification fails
+            
+            print("🔧 DB DEBUG: Connection verified, starting IMMEDIATE transaction...")
             # Use IMMEDIATE to lock the database right away
             conn.execute("BEGIN IMMEDIATE")
+            print("🔧 DB DEBUG: Transaction started successfully")
             return conn
-        except:
+        except Exception as e:
+            print(f"🔧 DB DEBUG: Failed to begin transaction: {e}")
             # If we fail to begin transaction, release the lock
             self.lock.release()
             raise
@@ -250,13 +343,36 @@ class Database:
                     results.append(None)
             return results
         finally:
+            cursor.close()  # FIX: Close cursor too
             self._close_connection(conn)
             
     def execute_in_transaction(self, conn, query, params=None, fetch=None):
         """Execute a query within an existing transaction"""
         try:
             cursor = conn.cursor()
+            # Log DELETE and INSERT statements for debugging
+            if query.strip().upper().startswith(('DELETE', 'INSERT')):
+                query_type = query.split()[0].upper()
+                if 'DELETE' in query.upper():
+                    # Extract table name from DELETE FROM table_name
+                    from_match = query.upper().find(' FROM ')
+                    if from_match > 0:
+                        table_part = query[from_match + 6:].split()[0]  # Get first word after FROM
+                        print(f"🔧 DB DEBUG: Executing {query_type} FROM {table_part}")
+                elif 'INSERT' in query.upper():
+                    # Extract table name from INSERT INTO table_name
+                    into_match = query.upper().find(' INTO ')
+                    if into_match > 0:
+                        table_part = query[into_match + 6:].split()[0]  # Get first word after INTO
+                        print(f"🔧 DB DEBUG: Executing {query_type} INTO {table_part}")
+            
+            import time
+            start_time = time.time()
             cursor.execute(query, params or [])
+            execution_time = time.time() - start_time
+            
+            if execution_time > 1.0:  # Log slow queries
+                print(f"🔧 DB DEBUG: Slow query ({execution_time:.2f}s): {query[:100]}...")
 
             if fetch == 'one':
                 return cursor.fetchone()
@@ -295,6 +411,69 @@ class Database:
             self._close_connection(conn)
             if self.lock.locked():
                 self.lock.release()
+    
+    def _verify_connection_pool_health(self):
+        """Verify connection pool is not exhausted and clean up stale connections"""
+        try:
+            # Quick check with timeout protection
+            with self._connection_lock:
+                active_count = len(self._active_connections)
+                
+                # Only do expensive cleanup if we have many connections
+                if active_count > 15:  # Increased threshold to be less aggressive
+                    print(f"⚠️ High number of active connections: {active_count}, cleaning up...")
+                    # Only clean up obviously stale connections to avoid hanging
+                    stale_connections = []
+                    checked_count = 0
+                    
+                    for conn in list(self._active_connections):
+                        # Limit how many connections we test to avoid hanging
+                        if checked_count >= 5:
+                            break
+                        checked_count += 1
+                        
+                        try:
+                            # Quick test with timeout-like behavior
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT 1")
+                            cursor.fetchone()
+                        except:
+                            # Connection is stale, mark for removal
+                            stale_connections.append(conn)
+                    
+                    # Remove stale connections
+                    for conn in stale_connections:
+                        try:
+                            self._active_connections.discard(conn)
+                            conn.close()
+                        except:
+                            pass
+                    
+                    if stale_connections:
+                        print(f"🔧 Cleaned up {len(stale_connections)} stale connections")
+                
+        except Exception as e:
+            print(f"⚠️ Error during connection pool health check (skipping): {e}")
+            # Don't let health check failures block the main operation
+    
+    def _verify_connection_state(self, conn):
+        """Verify a connection is in a usable state"""
+        try:
+            # Just test basic functionality - don't mess with transactions
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            result = cursor.fetchone()
+            if not result or result[0] != 1:
+                raise RuntimeError("Connection failed basic functionality test")
+            
+        except Exception as e:
+            print(f"❌ Connection state verification failed: {e}")
+            raise RuntimeError(f"Connection is not in a usable state: {e}")
+    
+    def get_active_connection_count(self):
+        """Get the current number of active connections"""
+        with self._connection_lock:
+            return len(self._active_connections)
     
     def check_integrity(self):
         """Check database integrity"""
@@ -339,7 +518,8 @@ class Database:
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                current_home_id INTEGER
+                current_home_id INTEGER,
+                defense INTEGER DEFAULT 0
             )''',
             '''CREATE TABLE IF NOT EXISTS ship_customization (
                 ship_id INTEGER PRIMARY KEY,
@@ -415,6 +595,7 @@ class Database:
             )''',
             '''ALTER TABLE galaxy_info ADD COLUMN last_shift_check TEXT''',
             '''ALTER TABLE galaxy_info ADD COLUMN current_shift TEXT''',
+            '''ALTER TABLE galaxy_info ADD COLUMN is_manually_paused BOOLEAN DEFAULT 0''',
             # Character reputation system
             '''CREATE TABLE IF NOT EXISTS character_reputation (
                 reputation_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -614,6 +795,8 @@ class Database:
                 is_generated BOOLEAN DEFAULT 0,
                 is_derelict BOOLEAN DEFAULT 0,
                 gate_status TEXT DEFAULT 'active',
+                reconnection_eta TIMESTAMP,
+                abandoned_since TIMESTAMP,
                 original_location_id INTEGER,
                 relocated_to_id INTEGER,
                 channel_last_active TIMESTAMP,
@@ -635,8 +818,10 @@ class Database:
                 travel_time INTEGER DEFAULT 300,
                 fuel_cost INTEGER DEFAULT 20,
                 danger_level INTEGER DEFAULT 3,
+                corridor_type TEXT DEFAULT 'ungated',
                 is_active BOOLEAN DEFAULT 1,
                 is_generated BOOLEAN DEFAULT 0,
+                is_bidirectional BOOLEAN DEFAULT 1,
                 last_shift TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 next_shift TIMESTAMP,
                 FOREIGN KEY (origin_location) REFERENCES locations (location_id),
@@ -699,6 +884,7 @@ class Database:
                 start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 end_time TIMESTAMP,
                 status TEXT DEFAULT 'traveling',
+                last_event_time TIMESTAMP,
                 FOREIGN KEY (group_id) REFERENCES groups (group_id),
                 FOREIGN KEY (user_id) REFERENCES characters (user_id),
                 FOREIGN KEY (origin_location) REFERENCES locations (location_id),
@@ -715,6 +901,12 @@ class Database:
                 stock INTEGER DEFAULT -1,
                 description TEXT,
                 metadata TEXT,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS shop_refresh (
+                location_id INTEGER PRIMARY KEY,
+                last_refreshed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
             
@@ -1349,6 +1541,11 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
+            
+            # Performance indexes for galactic_history table
+            '''CREATE INDEX IF NOT EXISTS idx_galactic_history_location_id ON galactic_history (location_id)''',
+            '''CREATE INDEX IF NOT EXISTS idx_galactic_history_event_date ON galactic_history (event_date)''',
+            '''CREATE INDEX IF NOT EXISTS idx_galactic_history_location_date ON galactic_history (location_id, event_date)''',
             # NPC job completions tracking
             '''CREATE TABLE IF NOT EXISTS npc_job_completions (
                 completion_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1408,7 +1605,11 @@ class Database:
             '''ALTER TABLE black_market_items ADD COLUMN stock INTEGER DEFAULT 1''',
 
             '''ALTER TABLE shop_items ADD COLUMN metadata TEXT DEFAULT NULL''',
+            '''ALTER TABLE shop_items ADD COLUMN sold_by_player BOOLEAN DEFAULT FALSE''',
             '''ALTER TABLE jobs ADD COLUMN unloading_started_at DATETIME;''',
+            '''ALTER TABLE travel_sessions ADD COLUMN last_event_time TIMESTAMP''',
+            '''ALTER TABLE corridors ADD COLUMN is_bidirectional BOOLEAN DEFAULT 1''',
+            '''ALTER TABLE corridors ADD COLUMN corridor_type TEXT DEFAULT 'ungated' ''',
             '''CREATE TABLE IF NOT EXISTS federal_supply_items (
                 supply_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 location_id INTEGER NOT NULL,
@@ -1494,7 +1695,202 @@ class Database:
                 FOREIGN KEY (inviter_id) REFERENCES characters (user_id),
                 FOREIGN KEY (invitee_id) REFERENCES characters (user_id),
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
-            )'''
+            )''',
+            
+            # Shipyard inventory system for persistent ship stock
+            '''CREATE TABLE IF NOT EXISTS shipyard_inventory (
+                inventory_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id INTEGER NOT NULL,
+                ship_name TEXT NOT NULL,
+                ship_type TEXT NOT NULL,
+                ship_class TEXT NOT NULL,
+                tier INTEGER NOT NULL,
+                price INTEGER NOT NULL,
+                cargo_capacity INTEGER NOT NULL,
+                speed_rating INTEGER NOT NULL,
+                combat_rating INTEGER NOT NULL,
+                fuel_efficiency INTEGER NOT NULL,
+                special_features TEXT,
+                is_player_sold BOOLEAN DEFAULT 0,
+                original_owner_id INTEGER,
+                condition_rating INTEGER DEFAULT 100,
+                market_value INTEGER,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_refresh TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                FOREIGN KEY (original_owner_id) REFERENCES characters (user_id)
+            )''',
+            
+            # Ship exchange system tables
+            '''CREATE TABLE IF NOT EXISTS ship_exchange_listings (
+                listing_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ship_id INTEGER NOT NULL,
+                owner_id INTEGER NOT NULL,
+                listed_at_location INTEGER NOT NULL,
+                asking_price INTEGER DEFAULT 0,
+                desired_ship_types TEXT DEFAULT '[]',
+                listing_description TEXT,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1,
+                FOREIGN KEY (ship_id) REFERENCES ships (ship_id),
+                FOREIGN KEY (owner_id) REFERENCES characters (user_id),
+                FOREIGN KEY (listed_at_location) REFERENCES locations (location_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS ship_exchange_offers (
+                offer_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                listing_id INTEGER NOT NULL,
+                offerer_id INTEGER NOT NULL,
+                offered_ship_id INTEGER NOT NULL,
+                credits_adjustment INTEGER DEFAULT 0,
+                offer_message TEXT,
+                offer_expires_at TIMESTAMP NOT NULL,
+                status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'accepted', 'declined', 'expired')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                responded_at TIMESTAMP,
+                FOREIGN KEY (listing_id) REFERENCES ship_exchange_listings (listing_id),
+                FOREIGN KEY (offerer_id) REFERENCES characters (user_id),
+                FOREIGN KEY (offered_ship_id) REFERENCES ships (ship_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS ship_exchange_history (
+                exchange_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                original_listing_id INTEGER NOT NULL,
+                seller_id INTEGER NOT NULL,
+                buyer_id INTEGER NOT NULL,
+                seller_ship_id INTEGER NOT NULL,
+                buyer_ship_id INTEGER NOT NULL,
+                credits_exchanged INTEGER DEFAULT 0,
+                exchange_location INTEGER NOT NULL,
+                completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (seller_id) REFERENCES characters (user_id),
+                FOREIGN KEY (buyer_id) REFERENCES characters (user_id),
+                FOREIGN KEY (exchange_location) REFERENCES locations (location_id)
+            )''',
+            
+            # Ambient events tracking table
+            '''CREATE TABLE IF NOT EXISTS ambient_event_tracking (
+                location_id INTEGER PRIMARY KEY,
+                last_ambient_event TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                total_events_generated INTEGER DEFAULT 0,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            
+            # Active location effects from events
+            '''CREATE TABLE IF NOT EXISTS active_location_effects (
+                effect_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id INTEGER NOT NULL,
+                effect_type TEXT NOT NULL,
+                effect_value TEXT NOT NULL,
+                source_event TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            
+            # Add reconnection_eta field for moving gates
+            '''ALTER TABLE locations ADD COLUMN reconnection_eta TIMESTAMP''',
+            
+            # Add abandoned_since field for tracking abandoned gate duration
+            '''ALTER TABLE locations ADD COLUMN abandoned_since TIMESTAMP''',
+            
+            # Quest system tables
+            '''CREATE TABLE IF NOT EXISTS quests (
+                quest_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                start_location_id INTEGER NOT NULL,
+                reward_money INTEGER DEFAULT 0,
+                reward_items TEXT DEFAULT '[]',
+                reward_experience INTEGER DEFAULT 0,
+                created_by INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1,
+                max_completions INTEGER DEFAULT -1,
+                current_completions INTEGER DEFAULT 0,
+                required_level INTEGER DEFAULT 1,
+                required_items TEXT DEFAULT '[]',
+                estimated_duration TEXT,
+                danger_level INTEGER DEFAULT 1,
+                FOREIGN KEY (start_location_id) REFERENCES locations (location_id),
+                FOREIGN KEY (created_by) REFERENCES characters (user_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS quest_objectives (
+                objective_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quest_id INTEGER NOT NULL,
+                objective_order INTEGER NOT NULL,
+                objective_type TEXT NOT NULL CHECK(objective_type IN ('travel', 'obtain_item', 'deliver_item', 'sell_item', 'earn_money', 'visit_location', 'talk_to_npc')),
+                target_location_id INTEGER,
+                target_item TEXT,
+                target_quantity INTEGER DEFAULT 1,
+                target_amount INTEGER DEFAULT 0,
+                target_npc_id INTEGER,
+                description TEXT NOT NULL,
+                is_optional BOOLEAN DEFAULT 0,
+                FOREIGN KEY (quest_id) REFERENCES quests (quest_id) ON DELETE CASCADE,
+                FOREIGN KEY (target_location_id) REFERENCES locations (location_id),
+                UNIQUE(quest_id, objective_order)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS quest_progress (
+                progress_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quest_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                current_objective INTEGER DEFAULT 1,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                objectives_completed TEXT DEFAULT '[]',
+                quest_status TEXT DEFAULT 'active' CHECK(quest_status IN ('active', 'completed', 'failed', 'abandoned')),
+                completion_data TEXT DEFAULT '{}',
+                FOREIGN KEY (quest_id) REFERENCES quests (quest_id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                UNIQUE(quest_id, user_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS quest_completions (
+                completion_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quest_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                reward_received TEXT DEFAULT '{}',
+                completion_time_minutes INTEGER,
+                FOREIGN KEY (quest_id) REFERENCES quests (quest_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )''',
+
+            # Equipment system tables
+            '''CREATE TABLE IF NOT EXISTS character_equipment (
+                equipment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                slot_name TEXT NOT NULL,
+                item_id INTEGER NOT NULL,
+                equipped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                FOREIGN KEY (item_id) REFERENCES inventory (item_id),
+                UNIQUE(user_id, slot_name)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS active_stat_modifiers (
+                modifier_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                modifier_type TEXT NOT NULL,
+                stat_name TEXT NOT NULL,
+                modifier_value INTEGER NOT NULL,
+                source_type TEXT NOT NULL CHECK(source_type IN ('equipment', 'consumable')),
+                source_item_name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )''',
+
+            # Add equipment properties to inventory
+            '''ALTER TABLE inventory ADD COLUMN equippable BOOLEAN DEFAULT 0''',
+            '''ALTER TABLE inventory ADD COLUMN equipment_slot TEXT''',
+            '''ALTER TABLE inventory ADD COLUMN stat_modifiers TEXT''',
+            
+            # Add defense stat to characters
+            '''ALTER TABLE characters ADD COLUMN defense INTEGER DEFAULT 0'''
         ]
         
         for q in queries:
@@ -1512,6 +1908,66 @@ class Database:
                 # log any other unexpected errors but keep going
                 print(f"❌ Error running init query: {e}")
         self._add_faction_column_safely()
+        self._classify_existing_corridors()
+
+    # Effect management methods
+    def add_location_effect(self, location_id: int, effect_type: str, effect_value: str, source_event: str, duration_hours: int = 24):
+        """Add an active effect to a location (replaces existing effect of same type)"""
+        from datetime import datetime, timedelta
+        expires_at = datetime.now() + timedelta(hours=duration_hours)
+        
+        # Remove existing effects of the same type at this location to prevent stacking
+        self.execute_query(
+            "DELETE FROM active_location_effects WHERE location_id = ? AND effect_type = ?",
+            (location_id, effect_type)
+        )
+        
+        self.execute_query(
+            """INSERT INTO active_location_effects 
+               (location_id, effect_type, effect_value, source_event, expires_at) 
+               VALUES (?, ?, ?, ?, ?)""",
+            (location_id, effect_type, str(effect_value), source_event, expires_at)
+        )
+
+    def get_active_location_effects(self, location_id: int):
+        """Get all active effects for a location"""
+        from datetime import datetime
+        # First clean up expired effects
+        self.execute_query(
+            "DELETE FROM active_location_effects WHERE expires_at < ?",
+            (datetime.now(),)
+        )
+        
+        # Return active effects
+        return self.execute_query(
+            """SELECT effect_type, effect_value, source_event, created_at, expires_at 
+               FROM active_location_effects 
+               WHERE location_id = ? AND (expires_at IS NULL OR expires_at > ?)""",
+            (location_id, datetime.now()),
+            fetch='all'
+        )
+
+    def remove_location_effects(self, location_id: int, effect_type: str = None):
+        """Remove effects from a location, optionally filtered by type"""
+        if effect_type:
+            self.execute_query(
+                "DELETE FROM active_location_effects WHERE location_id = ? AND effect_type = ?",
+                (location_id, effect_type)
+            )
+        else:
+            self.execute_query(
+                "DELETE FROM active_location_effects WHERE location_id = ?",
+                (location_id,)
+            )
+
+    def cleanup_expired_effects(self):
+        """Remove all expired effects"""
+        from datetime import datetime
+        result = self.execute_query(
+            "DELETE FROM active_location_effects WHERE expires_at < ?",
+            (datetime.now(),)
+        )
+        return result
 
 
     def _add_faction_column_safely(self):
@@ -1531,3 +1987,374 @@ class Database:
             self._close_connection(conn)
         except Exception as e:
             print(f"❌ Error adding faction column: {e}")
+
+    def _classify_existing_corridors(self):
+        """Classify existing corridors with proper corridor_type values"""
+        try:
+            # Check if corridor_type column exists
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(corridors)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'corridor_type' not in columns:
+                print("⚠️ corridor_type column not found - migration will handle this")
+                self._close_connection(conn)
+                return
+            
+            # Check ALL corridors for classification (including fixing misclassified ones)
+            cursor.execute("SELECT COUNT(*) FROM corridors")
+            total_count = cursor.fetchone()[0]
+            
+            print(f"🔄 Validating classification of {total_count} corridors...")
+            
+            # Get all corridors with location and system information
+            cursor.execute("""
+                SELECT c.corridor_id, c.name, c.origin_location, c.destination_location,
+                       o.location_type as origin_type, d.location_type as dest_type,
+                       o.system_name as origin_system, d.system_name as dest_system,
+                       c.corridor_type as current_type
+                FROM corridors c
+                JOIN locations o ON c.origin_location = o.location_id
+                JOIN locations d ON c.destination_location = d.location_id
+            """)
+            
+            all_corridors = cursor.fetchall()
+            
+            # Batch update corridors by type (track changes)
+            updates = {'gated': [], 'ungated': [], 'local_space': []}
+            corrections = 0
+            
+            for corridor_id, name, origin_id, dest_id, origin_type, dest_type, origin_system, dest_system, current_type in all_corridors:
+                # Use improved classification logic with system information
+                same_system = origin_system == dest_system
+                
+                # Local space routes (name-based detection or same system connections)
+                if any(keyword in name.lower() for keyword in ['local space', 'approach', 'arrival', 'departure']):
+                    correct_type = 'local_space'
+                # Major location ↔ Gate connections must ALWAYS be local_space if in same system
+                elif (origin_type in ['colony', 'space_station', 'outpost'] and dest_type == 'gate') or \
+                     (origin_type == 'gate' and dest_type in ['colony', 'space_station', 'outpost']):
+                    if same_system:
+                        correct_type = 'local_space'  # Major location to local gate = local space ONLY
+                    else:
+                        correct_type = 'ungated'  # Major location to distant gate = ungated
+                # Gate to gate connections
+                elif origin_type == 'gate' and dest_type == 'gate':
+                    if same_system:
+                        correct_type = 'local_space'  # Gates in same system = local space
+                    else:
+                        correct_type = 'gated'  # Gates in different systems = gated corridor
+                # Major location to major location connections
+                else:
+                    correct_type = 'ungated'  # Major location to major location = ungated
+                
+                # Only update if the type needs to be corrected
+                if current_type != correct_type:
+                    updates[correct_type].append(corridor_id)
+                    corrections += 1
+            
+            # Execute batch updates only for corridors that need correction
+            for corridor_type, corridor_ids in updates.items():
+                if corridor_ids:
+                    placeholders = ','.join(['?' for _ in corridor_ids])
+                    cursor.execute(f"""
+                        UPDATE corridors SET corridor_type = ? 
+                        WHERE corridor_id IN ({placeholders})
+                    """, [corridor_type] + corridor_ids)
+                    print(f"  ✅ Corrected {len(corridor_ids)} corridors to '{corridor_type}'")
+            
+            conn.commit()
+            self._close_connection(conn)
+            
+            if corrections > 0:
+                print(f"✅ Fixed {corrections} misclassified corridors out of {total_count} total")
+            else:
+                print(f"✅ All {total_count} corridors already correctly classified")
+            
+        except Exception as e:
+            print(f"❌ Error classifying corridors: {e}")
+            if 'conn' in locals():
+                self._close_connection(conn)
+    
+    def get_galaxy_setting(self, setting_name: str, default_value: str = None) -> str:
+        """Get a galaxy setting value"""
+        try:
+            result = self.execute_query(
+                "SELECT setting_value FROM galaxy_settings WHERE setting_name = ?",
+                (setting_name,),
+                fetch='one'
+            )
+            return result[0] if result else default_value
+        except Exception as e:
+            print(f"Error getting galaxy setting {setting_name}: {e}")
+            return default_value
+    
+    def set_galaxy_setting(self, setting_name: str, setting_value: str):
+        """Set a galaxy setting value"""
+        try:
+            self.execute_query(
+                """INSERT OR REPLACE INTO galaxy_settings (setting_name, setting_value, updated_at)
+                   VALUES (?, ?, datetime('now'))""",
+                (setting_name, setting_value)
+            )
+        except Exception as e:
+            print(f"Error setting galaxy setting {setting_name}: {e}")
+    
+    # Ship Exchange Helper Methods
+    def cleanup_expired_ship_listings(self):
+        """Remove expired ship exchange listings and offers"""
+        try:
+            # Deactivate expired listings
+            self.execute_query(
+                "UPDATE ship_exchange_listings SET is_active = 0 WHERE expires_at < datetime('now') AND is_active = 1"
+            )
+            
+            # Mark expired offers
+            self.execute_query(
+                "UPDATE ship_exchange_offers SET status = 'expired' WHERE offer_expires_at < datetime('now') AND status = 'pending'"
+            )
+            
+            print("✅ Cleaned up expired ship exchange listings and offers")
+        except Exception as e:
+            print(f"❌ Error cleaning up expired ship exchange data: {e}")
+    
+    def get_ship_exchange_stats(self, location_id: int = None):
+        """Get statistics about ship exchange activity"""
+        try:
+            if location_id:
+                # Stats for specific location
+                active_listings = self.execute_query(
+                    "SELECT COUNT(*) FROM ship_exchange_listings WHERE listed_at_location = ? AND is_active = 1 AND expires_at > datetime('now')",
+                    (location_id,),
+                    fetch='one'
+                )[0]
+                
+                pending_offers = self.execute_query(
+                    '''SELECT COUNT(*) FROM ship_exchange_offers seo
+                       JOIN ship_exchange_listings sel ON seo.listing_id = sel.listing_id
+                       WHERE sel.listed_at_location = ? AND seo.status = 'pending' ''',
+                    (location_id,),
+                    fetch='one'
+                )[0]
+                
+                completed_exchanges = self.execute_query(
+                    "SELECT COUNT(*) FROM ship_exchange_history WHERE exchange_location = ?",
+                    (location_id,),
+                    fetch='one'
+                )[0]
+                
+                return {
+                    'active_listings': active_listings,
+                    'pending_offers': pending_offers,
+                    'completed_exchanges': completed_exchanges
+                }
+            else:
+                # Global stats
+                active_listings = self.execute_query(
+                    "SELECT COUNT(*) FROM ship_exchange_listings WHERE is_active = 1 AND expires_at > datetime('now')",
+                    fetch='one'
+                )[0]
+                
+                pending_offers = self.execute_query(
+                    "SELECT COUNT(*) FROM ship_exchange_offers WHERE status = 'pending'",
+                    fetch='one'
+                )[0]
+                
+                completed_exchanges = self.execute_query(
+                    "SELECT COUNT(*) FROM ship_exchange_history",
+                    fetch='one'
+                )[0]
+                
+                return {
+                    'active_listings': active_listings,
+                    'pending_offers': pending_offers,
+                    'completed_exchanges': completed_exchanges
+                }
+                
+        except Exception as e:
+            print(f"❌ Error getting ship exchange stats: {e}")
+            return {'active_listings': 0, 'pending_offers': 0, 'completed_exchanges': 0}
+    
+    def get_user_ship_exchange_activity(self, user_id: int):
+        """Get a user's ship exchange activity summary"""
+        try:
+            # Active listings
+            active_listings = self.execute_query(
+                '''SELECT COUNT(*) FROM ship_exchange_listings 
+                   WHERE owner_id = ? AND is_active = 1 AND expires_at > datetime('now') ''',
+                (user_id,),
+                fetch='one'
+            )[0]
+            
+            # Pending offers made
+            offers_made = self.execute_query(
+                "SELECT COUNT(*) FROM ship_exchange_offers WHERE offerer_id = ? AND status = 'pending'",
+                (user_id,),
+                fetch='one'
+            )[0]
+            
+            # Pending offers received
+            offers_received = self.execute_query(
+                '''SELECT COUNT(*) FROM ship_exchange_offers seo
+                   JOIN ship_exchange_listings sel ON seo.listing_id = sel.listing_id
+                   WHERE sel.owner_id = ? AND seo.status = 'pending' ''',
+                (user_id,),
+                fetch='one'
+            )[0]
+            
+            # Completed exchanges (as seller)
+            exchanges_sold = self.execute_query(
+                "SELECT COUNT(*) FROM ship_exchange_history WHERE seller_id = ?",
+                (user_id,),
+                fetch='one'
+            )[0]
+            
+            # Completed exchanges (as buyer)
+            exchanges_bought = self.execute_query(
+                "SELECT COUNT(*) FROM ship_exchange_history WHERE buyer_id = ?",
+                (user_id,),
+                fetch='one'
+            )[0]
+            
+            return {
+                'active_listings': active_listings,
+                'offers_made': offers_made,
+                'offers_received': offers_received,
+                'exchanges_sold': exchanges_sold,
+                'exchanges_bought': exchanges_bought
+            }
+            
+        except Exception as e:
+            print(f"❌ Error getting user ship exchange activity: {e}")
+            return {'active_listings': 0, 'offers_made': 0, 'offers_received': 0, 'exchanges_sold': 0, 'exchanges_bought': 0}
+    
+    # Shipyard Inventory Management Methods
+    def get_shipyard_inventory(self, location_id: int) -> List[Dict]:
+        """Get all ships in a shipyard's inventory"""
+        try:
+            result = self.execute_query(
+                """SELECT inventory_id, ship_name, ship_type, ship_class, tier, price,
+                          cargo_capacity, speed_rating, combat_rating, fuel_efficiency,
+                          special_features, is_player_sold, original_owner_id,
+                          condition_rating, market_value, added_at
+                   FROM shipyard_inventory 
+                   WHERE location_id = ?
+                   ORDER BY is_player_sold ASC, tier ASC, price ASC""",
+                (location_id,),
+                fetch='all'
+            )
+            
+            ships = []
+            for row in result:
+                ships.append({
+                    'inventory_id': row[0],
+                    'name': row[1],
+                    'type': row[2],
+                    'class': row[3],
+                    'tier': row[4],
+                    'price': row[5],
+                    'cargo_capacity': row[6],
+                    'speed_rating': row[7],
+                    'combat_rating': row[8],
+                    'fuel_efficiency': row[9],
+                    'special_features': row[10],
+                    'is_player_sold': bool(row[11]),
+                    'original_owner_id': row[12],
+                    'condition_rating': row[13],
+                    'market_value': row[14],
+                    'added_at': row[15]
+                })
+            return ships
+        except Exception as e:
+            print(f"Error getting shipyard inventory: {e}")
+            return []
+    
+    def add_ship_to_inventory(self, location_id: int, ship_data: Dict, is_player_sold: bool = False, original_owner_id: int = None):
+        """Add a ship to shipyard inventory"""
+        try:
+            self.execute_query(
+                """INSERT INTO shipyard_inventory 
+                   (location_id, ship_name, ship_type, ship_class, tier, price,
+                    cargo_capacity, speed_rating, combat_rating, fuel_efficiency,
+                    special_features, is_player_sold, original_owner_id,
+                    condition_rating, market_value)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    location_id,
+                    ship_data['name'],
+                    ship_data['type'],
+                    ship_data['class'],
+                    ship_data['tier'],
+                    ship_data['price'],
+                    ship_data['cargo_capacity'],
+                    ship_data['speed_rating'],
+                    ship_data['combat_rating'],
+                    ship_data['fuel_efficiency'],
+                    ship_data.get('special_features'),
+                    is_player_sold,
+                    original_owner_id,
+                    ship_data.get('condition_rating', 100),
+                    ship_data.get('market_value', ship_data['price'])
+                )
+            )
+        except Exception as e:
+            print(f"Error adding ship to inventory: {e}")
+    
+    def remove_ship_from_inventory(self, inventory_id: int):
+        """Remove a ship from shipyard inventory (when purchased)"""
+        try:
+            self.execute_query(
+                "DELETE FROM shipyard_inventory WHERE inventory_id = ?",
+                (inventory_id,)
+            )
+        except Exception as e:
+            print(f"Error removing ship from inventory: {e}")
+    
+    def refresh_shipyard_inventory(self, location_id: int, new_ships: List[Dict]):
+        """Refresh shipyard inventory, keeping player-sold ships"""
+        try:
+            # Remove only non-player-sold ships
+            self.execute_query(
+                "DELETE FROM shipyard_inventory WHERE location_id = ? AND is_player_sold = 0",
+                (location_id,)
+            )
+            
+            # Add new ships
+            for ship in new_ships:
+                self.add_ship_to_inventory(location_id, ship, is_player_sold=False)
+                
+            # Update last refresh time for all ships at this location
+            self.execute_query(
+                "UPDATE shipyard_inventory SET last_refresh = datetime('now') WHERE location_id = ?",
+                (location_id,)
+            )
+        except Exception as e:
+            print(f"Error refreshing shipyard inventory: {e}")
+    
+    def check_inventory_refresh_needed(self, location_id: int, refresh_hours: int = 12) -> bool:
+        """Check if shipyard inventory needs refreshing"""
+        try:
+            result = self.execute_query(
+                """SELECT last_refresh FROM shipyard_inventory 
+                   WHERE location_id = ? 
+                   ORDER BY last_refresh DESC LIMIT 1""",
+                (location_id,),
+                fetch='one'
+            )
+            
+            if not result:
+                return True  # No inventory yet, needs refresh
+            
+            last_refresh = result[0]
+            # Check if refresh_hours have passed since last refresh
+            check_result = self.execute_query(
+                """SELECT datetime('now') > datetime(?, '+{} hours')""".format(refresh_hours),
+                (last_refresh,),
+                fetch='one'
+            )
+            
+            return bool(check_result[0]) if check_result else True
+        except Exception as e:
+            print(f"Error checking refresh status: {e}")
+            return True

@@ -3,10 +3,12 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import random
+import json
 from utils.location_utils import get_character_location_status
 from datetime import datetime
 import asyncio
 from utils.item_effects import ItemEffectChecker
+from utils.views import ObserveModal, RadioModal, GiveItemSelectView, SellItemSelectView, LogoutConfirmView
 
 
 
@@ -14,37 +16,6 @@ from utils.item_effects import ItemEffectChecker
 
 
 
-class RadioModal(discord.ui.Modal):
-    def __init__(self, bot):
-        super().__init__(title="📡 Radio Transmission")
-        self.bot = bot
-        
-        # Add message input field
-        self.message = discord.ui.TextInput(
-            label="Message to Transmit",
-            placeholder="Enter your radio message...",
-            style=discord.TextStyle.paragraph,
-            required=True,
-            max_length=1000
-        )
-        self.add_item(self.message)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        # Get the RadioCog to use its existing logic
-        radio_cog = self.bot.get_cog('RadioCog')
-        if not radio_cog:
-            await interaction.response.send_message(
-                "Radio system unavailable.", 
-                ephemeral=True
-            )
-            return
-        
-        # Call the radio_send command's logic directly
-        await radio_cog.radio_send.callback(
-            radio_cog, 
-            interaction, 
-            self.message.value
-        )
 
 
 
@@ -65,6 +36,57 @@ class CharacterCog(commands.Cog):
 
 # Add this to your character.py cog
 
+    def _get_galaxy_info(self):
+        """Get galaxy information including time, shift, players online, and galaxy name"""
+        # Get current galaxy time using TimeSystem
+        try:
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            current_datetime = time_system.calculate_current_ingame_time()
+            if current_datetime:
+                current_date = time_system.format_ingame_datetime(current_datetime)
+                # Get the current shift
+                shift_name, shift_period = time_system.get_current_shift()
+            else:
+                current_date = "Unknown Date"
+                shift_name = "Unknown Shift"
+                shift_period = "unknown"
+        except:
+            # Fallback if TimeSystem is not available
+            current_date = "Unknown Date"
+            shift_name = "Unknown Shift"
+            shift_period = "unknown"
+
+        # Get logged in players count
+        logged_in_count = self.bot.db.execute_query(
+            "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
+            fetch='one'
+        )[0]
+
+        # Get galaxy name from galaxy_info table
+        galaxy_info = self.bot.db.execute_query(
+            "SELECT name FROM galaxy_info WHERE galaxy_id = 1",
+            fetch='one'
+        )
+        galaxy_name = galaxy_info[0] if galaxy_info else "Unknown Galaxy"
+
+        # Add shift emoji based on period
+        shift_emojis = {
+            "morning": "🌅",
+            "day": "☀️",
+            "evening": "🌆",
+            "night": "🌙"
+        }
+        shift_emoji = shift_emojis.get(shift_period, "🌐")
+
+        return {
+            'galaxy_name': galaxy_name,
+            'current_date': current_date,
+            'shift_name': shift_name,
+            'shift_emoji': shift_emoji,
+            'logged_in_count': logged_in_count
+        }
+
     @app_commands.command(name="tqe", description="The Quiet End - View game overview panel")
     async def tqe_overview(self, interaction: discord.Interaction):
         """Display The Quiet End overview panel with character, location, and galaxy info"""
@@ -78,9 +100,87 @@ class CharacterCog(commands.Cog):
             fetch='one'
         )
         
+        # Check if this command is being run in a location channel
+        location_channel_check = self.db.execute_query(
+            "SELECT location_id, name, location_type FROM locations WHERE channel_id = ?",
+            (interaction.channel.id,),
+            fetch='one'
+        )
+        
+        # Check if this command is being run in a home interior channel
+        home_channel_check = self.db.execute_query(
+            "SELECT home_id FROM home_interiors WHERE channel_id = ?",
+            (interaction.channel.id,),
+            fetch='one'
+        )
+        
+        # Check if this command is being run in a ship interior channel
+        ship_channel_check = self.db.execute_query(
+            "SELECT ship_id FROM ships WHERE channel_id = ?",
+            (interaction.channel.id,),
+            fetch='one'
+        )
+        
+        # Check if this command is being run in a transit channel
+        # Transit channels have names starting with "transit-" and are typically in the transit category
+        transit_channel_check = (
+            interaction.channel.name.startswith("transit-") and 
+            interaction.channel.category and 
+            interaction.channel.category.name == "🚀 IN TRANSIT"
+        )
+        
+        # Show basic panel unless user is logged in AND in a recognized channel (location, home, ship, or transit)
+        # Basic panel conditions: (no character) OR (not logged in) OR (not in any recognized channel)
+        show_basic_panel = (
+            not char_data or 
+            (char_data and not char_data[1]) or  # char_data[1] is is_logged_in
+            (not location_channel_check and not home_channel_check and not ship_channel_check and not transit_channel_check)
+        )
+        
+        if show_basic_panel:
+            galaxy_info = self._get_galaxy_info()
+            
+            # Create basic embed with galaxy info only
+            embed = discord.Embed(
+                title="🌌 The Quiet End - Galaxy Overview",
+                description="Current galaxy status and information",
+                color=0x1a1a2e
+            )
+            
+            embed.add_field(
+                name="🌍 Galaxy",
+                value=f"**Name:** {galaxy_info['galaxy_name']}\n"
+                      f"**Date:** {galaxy_info['current_date']}\n"
+                      f"**Shift:** {galaxy_info['shift_emoji']} {galaxy_info['shift_name']}\n"
+                      f"**Players Online:** {galaxy_info['logged_in_count']}",
+                inline=False
+            )
+            
+            # Customize message based on whether user has a character
+            if char_data:
+                getting_started_text = "• Click **Login** to connect to your character\n• Use `/tqe` in a location channel after logging in for full features"
+            else:
+                getting_started_text = "• Click **Login** to connect to your character\n• Use the game panel to create a character if you don't have a character yet"
+            
+            embed.add_field(
+                name="🚀 Getting Started",
+                value=getting_started_text,
+                inline=False
+            )
+            
+            embed.set_footer(text="The Quiet End • Use Login to access full features")
+            
+            # Import BasicTQEView from utils.views
+            from utils.views import BasicTQEView
+            view = BasicTQEView(self.bot)
+            
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            return
+        
+        # Original behavior for no character in location channels or other scenarios
         if not char_data:
             await interaction.response.send_message(
-                "You don't have a character! Use `/character create` first.",
+                "You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -184,52 +284,14 @@ class CharacterCog(commands.Cog):
             )
         
         # Galaxy Information Section
-        # Get current galaxy time using TimeSystem
-        # Get current galaxy time using TimeSystem
-        try:
-            from utils.time_system import TimeSystem
-            time_system = TimeSystem(self.bot)
-            current_datetime = time_system.calculate_current_ingame_time()
-            if current_datetime:
-                current_date = time_system.format_ingame_datetime(current_datetime)
-                # Get the current shift
-                shift_name, shift_period = time_system.get_current_shift()
-            else:
-                current_date = "Unknown Date"
-                shift_name = "Unknown Shift"
-        except:
-            # Fallback if TimeSystem is not available
-            current_date = "Unknown Date"
-            shift_name = "Unknown Shift"
-
-        # Get logged in players count
-        logged_in_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
-            fetch='one'
-        )[0]
-
-        # Get galaxy name from galaxy_info table
-        galaxy_info = self.db.execute_query(
-            "SELECT name FROM galaxy_info WHERE galaxy_id = 1",
-            fetch='one'
-        )
-        galaxy_name = galaxy_info[0] if galaxy_info else "Unknown Galaxy"
-
-        # Add shift emoji based on period
-        shift_emojis = {
-            "morning": "🌅",
-            "day": "☀️",
-            "evening": "🌆",
-            "night": "🌙"
-        }
-        shift_emoji = shift_emojis.get(shift_period, "🌐")
-
+        galaxy_info = self._get_galaxy_info()
+        
         embed.add_field(
             name="🌍 Galaxy",
-            value=f"**Name:** {galaxy_name}\n"
-                  f"**Date:** {current_date}\n"
-                  f"**Shift:** {shift_emoji} {shift_name}\n"
-                  f"**Players Online:** {logged_in_count}",
+            value=f"**Name:** {galaxy_info['galaxy_name']}\n"
+                  f"**Date:** {galaxy_info['current_date']}\n"
+                  f"**Shift:** {galaxy_info['shift_emoji']} {galaxy_info['shift_name']}\n"
+                  f"**Players Online:** {galaxy_info['logged_in_count']}",
             inline=True
         )
         
@@ -261,7 +323,7 @@ class CharacterCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "You don't have a character yet! Use `/character create` first.",
+                "You don't have a character yet! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -280,7 +342,7 @@ class CharacterCog(commands.Cog):
         if xp_awarded:
             embed.add_field(name="✨ Introspection", value="Deep thinking has expanded your awareness. (+5 XP)", inline=False)
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="observe", description="Describe what your character observes around them")
     @app_commands.describe(observation="What you observe in your surroundings")
@@ -293,7 +355,7 @@ class CharacterCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "You don't have a character yet! Use `/character create` first.",
+                "You don't have a character yet! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -330,21 +392,31 @@ class CharacterCog(commands.Cog):
 
     @app_commands.command(name="status", description="Quick access to character information and management")
     async def status_shorthand(self, interaction: discord.Interaction):
-        # Check if user has a character
+        # Check if user has a character and get HP info
         char_data = self.db.execute_query(
-            "SELECT name, is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT name, is_logged_in, hp, max_hp FROM characters WHERE user_id = ?",
             (interaction.user.id,),
             fetch='one'
         )
         
         if not char_data:
             await interaction.response.send_message(
-                "You don't have a character! Use `/character create` first.",
+                "You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
         
-        char_name, is_logged_in = char_data
+        char_name, is_logged_in, hp, max_hp = char_data
+        
+        # Get ship fuel and hull info
+        ship_data = self.db.execute_query(
+            """SELECT s.current_fuel, s.fuel_capacity, s.hull_integrity, s.max_hull, s.name
+               FROM ships s 
+               INNER JOIN player_ships ps ON s.ship_id = ps.ship_id 
+               WHERE ps.owner_id = ? AND ps.is_active = 1""",
+            (interaction.user.id,),
+            fetch='one'
+        )
         
         # Create the character panel embed
         embed = discord.Embed(
@@ -357,6 +429,47 @@ class CharacterCog(commands.Cog):
         status_emoji = "🟢" if is_logged_in else "⚫"
         status_text = "Online" if is_logged_in else "Offline"
         embed.add_field(name="Status", value=f"{status_emoji} {status_text}", inline=True)
+        
+        # Add HP info with modifiers
+        from utils.stat_system import StatSystem
+        stat_system = StatSystem(self.db)
+        base_stats, effective_stats = stat_system.calculate_effective_stats(interaction.user.id)
+        
+        if base_stats and effective_stats:
+            effective_max_hp = effective_stats.get('max_hp', max_hp)
+            effective_hp = min(hp, effective_max_hp)
+            hp_percent = (effective_hp / effective_max_hp) * 100 if effective_max_hp > 0 else 0
+            hp_display = f"{effective_hp}/{stat_system.format_stat_display(base_stats.get('max_hp', max_hp), effective_max_hp)}"
+        else:
+            hp_percent = (hp / max_hp) * 100 if max_hp > 0 else 0
+            hp_display = f"{hp}/{max_hp}"
+        
+        hp_emoji = "🟢" if hp_percent > 70 else "🟡" if hp_percent > 30 else "🔴"
+        embed.add_field(name="Health", value=f"{hp_emoji} {hp_display}", inline=True)
+        
+        # Add defense if > 0
+        if base_stats and effective_stats:
+            defense_value = effective_stats.get('defense', 0)
+            if defense_value > 0:
+                base_defense = base_stats.get('defense', 0)
+                defense_display = stat_system.format_stat_display(base_defense, defense_value)
+                embed.add_field(name="Defense", value=f"🛡️ {defense_display}%", inline=True)
+        
+        # Add ship info if available
+        if ship_data:
+            current_fuel, fuel_capacity, hull_integrity, max_hull, ship_name = ship_data
+            
+            # Fuel status
+            fuel_percent = (current_fuel / fuel_capacity) * 100 if fuel_capacity > 0 else 0
+            fuel_emoji = "🟢" if fuel_percent > 70 else "🟡" if fuel_percent > 30 else "🔴"
+            embed.add_field(name="Fuel", value=f"{fuel_emoji} {current_fuel}/{fuel_capacity}", inline=True)
+            
+            # Hull status  
+            hull_percent = (hull_integrity / max_hull) * 100 if max_hull > 0 else 0
+            hull_emoji = "🟢" if hull_percent > 70 else "🟡" if hull_percent > 30 else "🔴"
+            embed.add_field(name="Hull", value=f"{hull_emoji} {hull_integrity}/{max_hull}", inline=True)
+        else:
+            embed.add_field(name="Ship", value="❌ No active ship", inline=True)
         
         embed.add_field(
             name="Available Actions",
@@ -371,64 +484,114 @@ class CharacterCog(commands.Cog):
 
     @app_commands.command(name="here", description="Quick access to location panel and interactions")
     async def here_shorthand(self, interaction: discord.Interaction):
-        # Check if user is in a ship interior
-        ship_check = self.db.execute_query(
-            "SELECT current_ship_id FROM characters WHERE user_id = ?",
-            (interaction.user.id,),
+        # Check if this command is being run in a ship interior channel
+        ship_channel_check = self.db.execute_query(
+            "SELECT ship_id, name, ship_type, interior_description, owner_id FROM ships WHERE channel_id = ?",
+            (interaction.channel.id,),
             fetch='one'
         )
         
-        if ship_check and ship_check[0]:
-            # User is in ship interior, use ShipInteriorView
+        if ship_channel_check:
+            # User is running command in a ship interior channel, use ShipInteriorView
             from utils.views import ShipInteriorView
             view = ShipInteriorView(self.bot, interaction.user.id)
             
-            # Get ship info
-            ship_info = self.db.execute_query(
-                '''SELECT s.name, s.ship_type, s.interior_description, s.owner_id
-                   FROM ships s 
-                   JOIN characters c ON c.current_ship_id = s.ship_id
-                   WHERE c.user_id = ?''',
-                (interaction.user.id,),
-                fetch='one'
+            ship_id, ship_name, ship_type, interior_desc, owner_id = ship_channel_check
+            
+            embed = discord.Embed(
+                title="🚀 Ship Interior Panel",
+                description=f"**{ship_name}** ({ship_type}) - Ship Control Panel",
+                color=0x1f2937
             )
             
-            if ship_info:
-                ship_name, ship_type, interior_desc, owner_id = ship_info
-                
-                embed = discord.Embed(
-                    title="🚀 Ship Interior Panel",
-                    description=f"**{ship_name}** ({ship_type}) - Ship Control Panel",
-                    color=0x1f2937
-                )
-                
-                if interior_desc:
-                    embed.add_field(
-                        name="Interior Description",
-                        value=interior_desc[:1000] + ("..." if len(interior_desc) > 1000 else ""),
-                        inline=False
-                    )
-                
-                # Show if user is owner or visitor
-                status = "Owner" if owner_id == interaction.user.id else "Visitor"
+            if interior_desc:
                 embed.add_field(
-                    name="Status",
-                    value=f"⚡ {status}",
-                    inline=True
-                )
-                
-                embed.add_field(
-                    name="Available Actions",
-                    value="Use the buttons below to interact with the ship",
+                    name="Interior Description",
+                    value=interior_desc[:1000] + ("..." if len(interior_desc) > 1000 else ""),
                     inline=False
                 )
-                
-                embed.set_footer(text="Use the buttons to control ship functions!")
-                
-                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-                return
+            
+            # Show if user is owner or visitor
+            status = "Owner" if owner_id == interaction.user.id else "Visitor"
+            embed.add_field(
+                name="Status",
+                value=f"⚡ {status}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="Available Actions",
+                value="Use the buttons below to interact with the ship",
+                inline=False
+            )
+            
+            embed.set_footer(text="Use the buttons to control ship functions!")
+            
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            return
         
-        # Fall back to normal location panel
+        # Check if this command is being run in a home interior channel
+        home_channel_check = self.db.execute_query(
+            """SELECT lh.home_id, lh.home_name, lh.owner_id, lh.interior_description 
+               FROM location_homes lh 
+               JOIN home_interiors hi ON lh.home_id = hi.home_id 
+               WHERE hi.channel_id = ?""",
+            (interaction.channel.id,),
+            fetch='one'
+        )
+        
+        if home_channel_check:
+            # User is running command in a home interior channel, use HomeInteriorView
+            from utils.views import HomeInteriorView
+            view = HomeInteriorView(self.bot, interaction.user.id)
+            
+            home_id, home_name, owner_id, interior_desc = home_channel_check
+            
+            embed = discord.Embed(
+                title="🏠 Home Interior Panel",
+                description=f"**{home_name}** - Home Control Panel",
+                color=0x8B4513
+            )
+            
+            if interior_desc:
+                embed.add_field(
+                    name="Interior Description",
+                    value=interior_desc[:1000] + ("..." if len(interior_desc) > 1000 else ""),
+                    inline=False
+                )
+            
+            # Show if user is owner or visitor
+            status = "Owner" if owner_id == interaction.user.id else "Visitor"
+            embed.add_field(
+                name="Status",
+                value=f"🏡 {status}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="Available Actions",
+                value="Use the buttons below to interact with your home",
+                inline=False
+            )
+            
+            embed.set_footer(text="Use the buttons to control home functions!")
+            
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            return
+        
+        # Check if this command is being run in a location channel
+        location_channel_check = self.db.execute_query(
+            "SELECT location_id, name, location_type FROM locations WHERE channel_id = ?",
+            (interaction.channel.id,),
+            fetch='one'
+        )
+        
+        if location_channel_check:
+            # User is running command in a location channel, use normal location panel
+            await self.location_info.callback(self, interaction)
+            return
+        
+        # Fall back to normal location panel for other channels
         await self.location_info.callback(self, interaction)
     
 
@@ -449,7 +612,7 @@ class CharacterCog(commands.Cog):
         )
         if not row:
             await interaction.response.send_message(
-                "You don’t have a character yet! Use `/character create` first.",
+                "You don’t have a character yet! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -462,6 +625,42 @@ class CharacterCog(commands.Cog):
         if xp_awarded:
             try:
                 await interaction.followup.send("✨ *You feel slightly more experienced from that action.* (+5 XP)", ephemeral=True)
+            except:
+                pass  # Ignore if follow-up fails
+
+    @app_commands.command(
+        name="say", 
+        description="Speak as your character"
+    )
+    @app_commands.describe(
+        message="What your character says"
+    )
+    async def say(self, interaction: discord.Interaction, message: str):
+        # Check if user has a logged-in character
+        char_data = self.db.execute_query(
+            "SELECT name, is_logged_in FROM characters WHERE user_id = ? AND is_logged_in = 1",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_data:
+            await interaction.response.send_message(
+                "You don't have a character yet or your character isn't logged in! Use the game panel to create a character first and make sure to log in.",
+                ephemeral=True
+            )
+            return
+
+        char_name = char_data[0]
+        # Use the same format as the automatic message replacement system
+        speech_content = f"**{char_name}** says: {message}"
+        
+        await interaction.response.send_message(speech_content)
+        
+        # Award passive XP like other roleplay commands
+        xp_awarded = await self.try_award_passive_xp(interaction.user.id, "say")
+        if xp_awarded:
+            try:
+                await interaction.followup.send("✨ *Your words resonate with newfound understanding.* (+5 XP)", ephemeral=True)
             except:
                 pass  # Ignore if follow-up fails
                 
@@ -483,7 +682,7 @@ class CharacterCog(commands.Cog):
             pass  # Use fallback if time system unavailable
         if existing:
             await interaction.response.send_message(
-                "You already have a character! Use `/character view` to see your stats.",
+                "You already have a character! Use the game panel to create a character to see your stats.",
                 ephemeral=True
             )
             return
@@ -534,30 +733,31 @@ class CharacterCog(commands.Cog):
             (interaction.user.id,)
         )
         
+        # Get character name and location name for roleplay message
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
         location_name = self.db.execute_query(
             "SELECT name FROM locations WHERE location_id = ?",
             (current_location,),
             fetch='one'
         )[0]
         
+        # Send visible roleplay message with embed
         embed = discord.Embed(
-            title="🛬 Ship Docked",
-            description=f"Your ship has docked at **{location_name}**.",
-            color=0x00ff00
+            title="🛬 Docked",
+            description=f"**{char_name}** has docked their ship at **{location_name}**",
+            color=0x00aa00
         )
-        
-        embed.add_field(
-            name="Status Change",
-            value="• You can now engage in personal combat\n• Access to all location services\n• Limited radio range (location only)",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
     @character_group.command(name="undock", description="Undock and move to space near the location")
     async def undock_ship(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, current_ship_id FROM characters WHERE user_id = ?",
             (interaction.user.id,),
             fetch='one'
         )
@@ -573,21 +773,32 @@ class CharacterCog(commands.Cog):
                 ephemeral=True
             )
             return
-        current_location, location_status = char_data
+        current_location, location_status, current_ship_id = char_data
         
-        # NEW: Check for active stationary jobs
-        active_jobs = self.db.execute_query(
+        # block if inside ship interior
+        if current_ship_id:
+            await interaction.response.send_message(
+                "❌ You cannot undock while inside your ship interior! Use `/tqe` to leave your ship first.",
+                ephemeral=True
+            )
+            return
+        
+        # Check for active jobs that need to be completed at this location
+        # Only block undocking for stationary jobs or transport jobs without a different destination
+        blocking_jobs = self.db.execute_query(
             '''SELECT COUNT(*) FROM jobs j 
-               JOIN job_tracking jt ON j.job_id = jt.job_id
-               WHERE j.taken_by = ? AND j.job_status = 'active' AND jt.start_location = ?''',
-            (interaction.user.id, current_location),
+               LEFT JOIN job_tracking jt ON j.job_id = jt.job_id
+               WHERE j.taken_by = ? AND j.job_status = 'active' 
+               AND (jt.start_location = ? OR (jt.start_location IS NULL AND j.location_id = ?))
+               AND (j.destination_location_id IS NULL OR j.destination_location_id = ?)''',
+            (interaction.user.id, current_location, current_location, current_location),
             fetch='one'
         )[0]
         
-        if active_jobs > 0:
+        if blocking_jobs > 0:
             embed = discord.Embed(
                 title="⚠️ Active Job Warning",
-                description=f"You have {active_jobs} active job(s) at this location. Undocking will cancel them!",
+                description=f"You have {blocking_jobs} active job(s) that must be completed at this location. Undocking will cancel them!",
                 color=0xff9900
             )
             embed.add_field(
@@ -614,25 +825,26 @@ class CharacterCog(commands.Cog):
             (interaction.user.id,)
         )
         
+        # Get character name and location name for roleplay message
+        char_name = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
         location_name = self.db.execute_query(
             "SELECT name FROM locations WHERE location_id = ?",
             (current_location,),
             fetch='one'
         )[0]
         
+        # Send visible roleplay message with embed
         embed = discord.Embed(
-            title="🚀 Ship Undocked",
-            description=f"Your ship is now in space near **{location_name}**.",
+            title="🚀 Undocked",
+            description=f"**{char_name}** has undocked their ship and entered space near **{location_name}**",
             color=0x4169e1
         )
-        
-        embed.add_field(
-            name="Status Change",
-            value="• You can now engage in ship combat\n• Limited access to location services\n• Full radio range available",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
     @character_group.command(name="view", description="View your character information")
     async def view_character(self, interaction: discord.Interaction):
         result = self.bot.db.execute_query(
@@ -671,7 +883,7 @@ class CharacterCog(commands.Cog):
 
         if not result:
             await interaction.response.send_message(
-                "You don't have a character! Use `/character create` first.",
+                "You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -689,7 +901,19 @@ class CharacterCog(commands.Cog):
             embed.set_thumbnail(url=image_url)
         if callsign:
             embed.add_field(name="Radio Callsign", value=callsign, inline=True)
-        embed.add_field(name="Health", value=f"{hp}/{max_hp}", inline=True)
+        # Health with modifiers
+        from utils.stat_system import StatSystem
+        stat_system = StatSystem(self.db)
+        base_stats, effective_stats = stat_system.calculate_effective_stats(interaction.user.id)
+        
+        if base_stats and effective_stats:
+            effective_max_hp = effective_stats.get('max_hp', max_hp)
+            effective_hp = min(hp, effective_max_hp)  # Cap current HP to effective max
+            hp_display = f"{effective_hp}/{stat_system.format_stat_display(base_stats.get('max_hp', max_hp), effective_max_hp)}"
+        else:
+            hp_display = f"{hp}/{max_hp}"
+        
+        embed.add_field(name="Health", value=hp_display, inline=True)
         embed.add_field(name="Credits", value=f"{credits:,}", inline=True)
         
         # Login status
@@ -717,12 +941,49 @@ class CharacterCog(commands.Cog):
             # Character is truly lost in space
             embed.add_field(name="Location", value="💀 Lost in Deep Space", inline=True)
 
-        # Skills
-        embed.add_field(name="Engineering", value=str(eng), inline=True)
-        embed.add_field(name="Navigation", value=str(nav), inline=True)
-        embed.add_field(name="Combat", value=str(combat_skill), inline=True)
-        embed.add_field(name="Medical", value=str(medical_skill), inline=True)
-        embed.add_field(name="⚖️ Reputation", value="Use `/reputation` to view your standings.", inline=True)
+        # Skills with modifiers
+        from utils.stat_system import StatSystem
+        stat_system = StatSystem(self.db)
+        base_stats, effective_stats = stat_system.calculate_effective_stats(interaction.user.id)
+        
+        if base_stats and effective_stats:
+            # Show modified stats
+            embed.add_field(
+                name="Engineering", 
+                value=stat_system.format_stat_display(base_stats.get('engineering', eng), effective_stats.get('engineering', eng)), 
+                inline=True
+            )
+            embed.add_field(
+                name="Navigation", 
+                value=stat_system.format_stat_display(base_stats.get('navigation', nav), effective_stats.get('navigation', nav)), 
+                inline=True
+            )
+            embed.add_field(
+                name="Combat", 
+                value=stat_system.format_stat_display(base_stats.get('combat', combat_skill), effective_stats.get('combat', combat_skill)), 
+                inline=True
+            )
+            embed.add_field(
+                name="Medical", 
+                value=stat_system.format_stat_display(base_stats.get('medical', medical_skill), effective_stats.get('medical', medical_skill)), 
+                inline=True
+            )
+            
+            # Add defense if > 0
+            defense_value = effective_stats.get('defense', 0)
+            if defense_value > 0:
+                embed.add_field(
+                    name="Defense",
+                    value=f"{stat_system.format_stat_display(base_stats.get('defense', 0), defense_value)}%",
+                    inline=True
+                )
+        else:
+            # Fallback to original display
+            embed.add_field(name="Engineering", value=str(eng), inline=True)
+            embed.add_field(name="Navigation", value=str(nav), inline=True)
+            embed.add_field(name="Combat", value=str(combat_skill), inline=True)
+            embed.add_field(name="Medical", value=str(medical_skill), inline=True)
+        embed.add_field(name="⚖️ Reputation", value="Use `/tqe` and access the 'Extras > Bounties and Reputation' menu to view your standings.", inline=True)
         # Level & Experience
         embed.add_field(name="Level", value=str(level), inline=True)
         embed.add_field(name="Experience", value=f"{experience:,} EXP", inline=True)
@@ -738,20 +999,20 @@ class CharacterCog(commands.Cog):
         if current_ship_id:
             embed.add_field(
                 name="🚀 Ship Interior Status",
-                value="• Inside your ship\n• Radio uses ship's docking location\n• Use `/ship interior leave` to exit",
+                value="• Inside your ship\n• Radio uses ship's docking location\n• Use `/tqe` to exit",
                 inline=False
             )
         elif location_name:
             if location_status == "docked":
                 embed.add_field(
                     name="🛬 Docked Status",
-                    value="• Full location access\n• Personal combat available\n• Use `/character undock` to move to space",
+                    value="• Full location access\n• Personal combat available\n• Use `/tqe` to move to space",
                     inline=False
                 )
             else:
                 embed.add_field(
                     name="🚀 In-Space Status",
-                    value="• Ship combat available\n• Limited location services\n• Use `/character dock` to dock",
+                    value="• Ship combat available\n• Limited location services\n• Use `/tqe` to dock",
                     inline=False
                 )
 
@@ -767,7 +1028,7 @@ class CharacterCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "You don't have a character! Use `/character create` first.",
+                "You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -899,16 +1160,18 @@ class CharacterCog(commands.Cog):
         
         if not char_check:
             await interaction.response.send_message(
-                "You don't have a character! Use `/character create` first.",
+                "You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
         
         items = self.db.execute_query(
-            '''SELECT item_name, item_type, quantity, description, value
-               FROM inventory 
-               WHERE owner_id = ?
-               ORDER BY item_type, item_name''',
+            '''SELECT i.item_name, i.item_type, i.quantity, i.description, i.value, 
+                      i.item_id, CASE WHEN ce.equipment_id IS NOT NULL THEN 1 ELSE 0 END as is_equipped
+               FROM inventory i
+               LEFT JOIN character_equipment ce ON i.item_id = ce.item_id AND ce.user_id = i.owner_id
+               WHERE i.owner_id = ?
+               ORDER BY is_equipped DESC, i.item_type, i.item_name''',
             (interaction.user.id,),
             fetch='all'
         )
@@ -927,20 +1190,21 @@ class CharacterCog(commands.Cog):
             item_types = {}
             total_value = 0
             
-            for name, item_type, quantity, description, value in items:
+            for name, item_type, quantity, description, value, item_id, is_equipped in items:
                 if item_type not in item_types:
                     item_types[item_type] = []
                 
-                item_types[item_type].append((name, quantity, value))
+                item_types[item_type].append((name, quantity, value, is_equipped))
                 total_value += value * quantity
             
             # Add summary of items by type
             for item_type, type_items in item_types.items():
                 items_text = []
-                for name, quantity, value in type_items[:5]:  # Limit display
+                for name, quantity, value, is_equipped in type_items[:5]:  # Limit display
                     qty_text = f" x{quantity}" if quantity > 1 else ""
                     value_text = f" ({value * quantity} credits)" if value > 0 else ""
-                    items_text.append(f"{name}{qty_text}{value_text}")
+                    equipped_text = " ⚡" if is_equipped else ""
+                    items_text.append(f"{name}{qty_text}{value_text}{equipped_text}")
                 
                 if len(type_items) > 5:
                     items_text.append(f"...and {len(type_items) - 5} more")
@@ -1211,8 +1475,8 @@ class CharacterCog(commands.Cog):
         
         # Check cooldown
         cooldown_data = self.db.execute_query(
-            "SELECT last_search_time FROM search_cooldowns WHERE user_id = ?",
-            (interaction.user.id,),
+            "SELECT last_search_time FROM search_cooldowns WHERE user_id = ? AND location_id = ?",
+            (interaction.user.id, current_location),
             fetch='one'
         )
         
@@ -1284,16 +1548,10 @@ class CharacterCog(commands.Cog):
         await asyncio.sleep(search_duration - sum(updates) if updates else search_duration)
         
         # Update cooldown
-        if cooldown_data:
-            self.db.execute_query(
-                "UPDATE search_cooldowns SET last_search_time = ?, location_id = ? WHERE user_id = ?",
-                (current_time.isoformat(), current_location, interaction.user.id)
-            )
-        else:
-            self.db.execute_query(
-                "INSERT INTO search_cooldowns (user_id, last_search_time, location_id) VALUES (?, ?, ?)",
-                (interaction.user.id, current_time.isoformat(), current_location)
-            )
+        self.db.execute_query(
+            "INSERT OR REPLACE INTO search_cooldowns (user_id, last_search_time, location_id) VALUES (?, ?, ?)",
+            (interaction.user.id, current_time.isoformat(), current_location)
+        )
         
         # Generate search results
         # Check for dropped items at this location FIRST
@@ -1399,12 +1657,16 @@ class CharacterCog(commands.Cog):
                                     (actual_quantity, existing_item[0])
                                 )
                             else:
+                                # Ensure proper metadata using helper function
+                                existing_metadata = dropped[6] if len(dropped) > 6 else None
+                                metadata = ItemConfig.ensure_item_metadata(actual_name, existing_metadata)
+                                
                                 self.db.execute_query(
                                     '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, 
-                                       description, value)
-                                       VALUES (?, ?, ?, ?, ?, ?)''',
+                                       description, value, metadata)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
                                     (interaction.user.id, actual_name, dropped[1], actual_quantity,
-                                     dropped[3], dropped[4])
+                                     dropped[3], dropped[4], metadata)
                                 )
                             
                             items_added.append(f"{actual_quantity}x **{actual_name}**")
@@ -1483,7 +1745,7 @@ class CharacterCog(commands.Cog):
             )
             embed.add_field(
                 name="💡 Tip",
-                value="Use `/character search` to find these items, or `/character pickup` to grab a specific one!",
+                value="Use `/character search` to find these items, or the game panel to create a character to grab a specific one!",
                 inline=False
             )
         
@@ -1622,6 +1884,73 @@ class CharacterCog(commands.Cog):
             
             print(f"Released {len(owned_homes)} homes from character {user_id}")
     
+    async def _handle_ship_exchange_death_cleanup(self, user_id: int):
+        """Handle ship exchange listings when a player dies - transfer ships to location inventory"""
+        
+        # Get all active ship exchange listings owned by the deceased player
+        listings = self.db.execute_query(
+            '''SELECT sel.listing_id, sel.ship_id, sel.listed_at_location, sel.asking_price,
+                      s.name, s.ship_type, s.tier, s.condition_rating, s.market_value,
+                      s.cargo_capacity, s.speed_rating, s.combat_rating, s.fuel_efficiency
+               FROM ship_exchange_listings sel
+               JOIN ships s ON sel.ship_id = s.ship_id
+               WHERE sel.owner_id = ? AND sel.is_active = 1''',
+            (user_id,),
+            fetch='all'
+        )
+        
+        if not listings:
+            return
+        
+        print(f"Processing {len(listings)} ship exchange listings for deceased player {user_id}")
+        
+        for listing in listings:
+            (listing_id, ship_id, location_id, asking_price, ship_name, ship_type, 
+             tier, condition, market_value, cargo_capacity, speed_rating, 
+             combat_rating, fuel_efficiency) = listing
+            
+            # Calculate reduced price (75% of asking price, minimum 50% of market value)
+            reduced_price = max(int(asking_price * 0.75), int(market_value * 0.5))
+            
+            # Transfer ship to location's shipyard inventory
+            try:
+                self.db.execute_query(
+                    '''INSERT INTO shipyard_inventory 
+                       (location_id, ship_name, ship_type, ship_class, tier, price, 
+                        cargo_capacity, speed_rating, combat_rating, fuel_efficiency, 
+                        condition_rating, market_value, is_player_sold, original_owner_id)
+                       VALUES (?, ?, ?, 'civilian', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)''',
+                    (location_id, ship_name, ship_type, tier, reduced_price, 
+                     cargo_capacity, speed_rating, combat_rating, fuel_efficiency, 
+                     condition, market_value, user_id)
+                )
+                
+                print(f"Transferred {ship_name} to location {location_id} inventory at {reduced_price:,} credits")
+                
+            except Exception as e:
+                print(f"Failed to transfer ship {ship_name} to location inventory: {e}")
+        
+        # Deactivate all ship exchange listings from this player
+        self.db.execute_query(
+            "UPDATE ship_exchange_listings SET is_active = 0 WHERE owner_id = ?",
+            (user_id,)
+        )
+        
+        # Cancel all pending offers made by this player
+        self.db.execute_query(
+            "UPDATE ship_exchange_offers SET status = 'expired' WHERE offerer_id = ?",
+            (user_id,)
+        )
+        
+        # Cancel all pending offers on this player's ships
+        offer_listings = [listing[0] for listing in listings]
+        if offer_listings:
+            placeholders = ','.join(['?' for _ in offer_listings])
+            self.db.execute_query(
+                f"UPDATE ship_exchange_offers SET status = 'expired' WHERE listing_id IN ({placeholders})",
+                offer_listings
+            )
+    
     async def check_character_death(self, user_id: int, guild: discord.Guild, reason: str = "unknown"):
         """Check if character has died (HP <= 0) and execute death if needed"""
         char_data = self.db.execute_query(
@@ -1718,8 +2047,22 @@ class CharacterCog(commands.Cog):
         # Delete character and associated data
         self.db.execute_query("DELETE FROM characters WHERE user_id = ?", (user_id,))
         self.db.execute_query("DELETE FROM character_identity WHERE user_id = ?", (user_id,))
+        self.db.execute_query("DELETE FROM character_inventory WHERE user_id = ?", (user_id,))
+        self.db.execute_query("DELETE FROM inventory WHERE owner_id = ?", (user_id,))
+        
+        # Handle ship exchange listings - transfer to location inventory before deleting ships
+        await self._handle_ship_exchange_death_cleanup(user_id)
+        
+        # Comprehensive ship cleanup - delete ALL ships owned by the user
+        self.db.execute_query("DELETE FROM ships WHERE owner_id = ?", (user_id,))
+        self.db.execute_query("DELETE FROM player_ships WHERE owner_id = ?", (user_id,))
+        
+        # Clean up ship-related data
         if ship_id:
-             self.db.execute_query("DELETE FROM ships WHERE ship_id = ?", (ship_id,))
+            self.db.execute_query("DELETE FROM ship_upgrades WHERE ship_id = ?", (ship_id,))
+            self.db.execute_query("DELETE FROM ship_customizations WHERE ship_id = ?", (ship_id,))
+            self.db.execute_query("DELETE FROM ship_activities WHERE ship_id = ?", (ship_id,))
+            self.db.execute_query("DELETE FROM ship_interiors WHERE ship_id = ?", (ship_id,))
         self.db.execute_query(
             "UPDATE travel_sessions SET status = 'character_death' WHERE user_id = ? AND status = 'traveling'",
             (user_id,)
@@ -1766,6 +2109,47 @@ class CharacterCog(commands.Cog):
             inline=False
         )
 
+        # Send DM to the deceased player with detailed death information
+        if member:
+            try:
+                death_dm_embed = discord.Embed(
+                    title="💀 Your Character Has Died",
+                    description=f"**{char_name}** has met their end in the harsh void of space.",
+                    color=0x8b0000
+                )
+                
+                death_dm_embed.add_field(
+                    name="📍 Location of Death",
+                    value=location_name if location_name else "Deep Space",
+                    inline=True
+                )
+                
+                death_dm_embed.add_field(
+                    name="⚰️ Cause of Death", 
+                    value=reason.title() if reason != "unknown" else "Unknown Circumstances",
+                    inline=True
+                )
+                
+                death_dm_embed.add_field(
+                    name="💫 What Happened",
+                    value=obituary_text,
+                    inline=False
+                )
+                
+                death_dm_embed.add_field(
+                    name="🔄 Next Steps",
+                    value="Your character's journey has ended, but yours continues. Use the game panel to create a character to forge a new path among the stars.",
+                    inline=False
+                )
+                
+                death_dm_embed.set_footer(text="The void claims another soul. Your location channel access has been removed.")
+                
+                await member.send(embed=death_dm_embed)
+            except discord.Forbidden:
+                print(f"Could not send death DM to {member.display_name} - DMs disabled")
+            except Exception as e:
+                print(f"Error sending death DM to {member.display_name}: {e}")
+
         # Announce in location channel if it exists
         if location_id:
             location_channel_id_result = self.db.execute_query("SELECT channel_id FROM locations WHERE location_id = ?", (location_id,), fetch='one')
@@ -1792,10 +2176,63 @@ class CharacterCog(commands.Cog):
 
     async def update_character_hp(self, user_id: int, hp_change: int, guild: discord.Guild, reason: str = ""):
         """Update character HP and check for death"""
+        # Handle healing (positive hp_change) normally
+        if hp_change >= 0:
+            self.db.execute_query(
+                "UPDATE characters SET hp = MAX(0, hp + ?) WHERE user_id = ?",
+                (hp_change, user_id)
+            )
+            return await self.check_character_death(user_id, guild, reason)
+        
+        # Handle damage (negative hp_change) with defense reduction
+        from utils.stat_system import StatSystem
+        stat_system = StatSystem(self.db)
+        
+        # Calculate damage reduction (convert to positive for calculation)
+        damage_amount = abs(hp_change)
+        final_damage, damage_reduced = stat_system.calculate_damage_reduction(user_id, damage_amount)
+        
+        # Apply the final damage (convert back to negative)
+        final_hp_change = -final_damage
+        
         self.db.execute_query(
             "UPDATE characters SET hp = MAX(0, hp + ?) WHERE user_id = ?",
-            (hp_change, user_id)
+            (final_hp_change, user_id)
         )
+        
+        # Send damage reduction notification if damage was reduced
+        if damage_reduced > 0:
+            try:
+                # Get character's current location for notification
+                char_data = self.db.execute_query(
+                    "SELECT current_location FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                
+                if char_data and char_data[0]:
+                    location_id = char_data[0]
+                    location_data = self.db.execute_query(
+                        "SELECT channel_id FROM locations WHERE location_id = ?",
+                        (location_id,),
+                        fetch='one'
+                    )
+                    
+                    if location_data and location_data[0]:
+                        channel = guild.get_channel(location_data[0])
+                        if channel:
+                            user = guild.get_member(user_id)
+                            if user:
+                                embed = discord.Embed(
+                                    title="🛡️ Armor Protection",
+                                    description=f"Damage reduced by: **{damage_reduced}** due to armor",
+                                    color=0x4169E1
+                                )
+                                await channel.send(embed=embed, delete_after=10)
+            except Exception as e:
+                # Don't let notification failures stop damage processing
+                print(f"Failed to send damage reduction notification: {e}")
+        
         return await self.check_character_death(user_id, guild, reason)
         
     async def update_ship_hull(self, user_id: int, hull_change: int, guild: discord.Guild, reason: str = ""):
@@ -1815,7 +2252,7 @@ class CharacterCog(commands.Cog):
         
         if not char_data:
             await interaction.response.send_message(
-                "You don't have a character! Use `/character create` first.",
+                "You don't have a character! Use the game panel to create a character first.",
                 ephemeral=True
             )
             return
@@ -2000,9 +2437,18 @@ class CharacterCog(commands.Cog):
         
         embed.add_field(
             name="💡 Tip",
-            value="Use `/character location` to interact with your current location.",
+            value="Use `/tqe` to interact with your current location.",
             inline=False
         )
+        
+        # Auto-resume time system if this is the first player to log in
+        try:
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            # This will check conditions and only resume if appropriate
+            time_system.auto_resume_time()
+        except Exception as e:
+            print(f"⚠️ LOGIN: Failed to check auto-resume time system: {e}")
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -2122,13 +2568,13 @@ class CharacterCog(commands.Cog):
             (user_id,)
         )
         
-        # Get current location and ship for cleanup
+        # Get current location, ship, and home for cleanup
         char_state = self.db.execute_query(
-            "SELECT current_location, current_ship_id FROM characters WHERE user_id = ?",
+            "SELECT current_location, current_ship_id, current_home_id FROM characters WHERE user_id = ?",
             (user_id,),
             fetch='one'
         )
-        current_location, current_ship_id = char_state if char_state else (None, None)
+        current_location, current_ship_id, current_home_id = char_state if char_state else (None, None, None)
 
         # Log out the character
         self.db.execute_query(
@@ -2142,10 +2588,13 @@ class CharacterCog(commands.Cog):
 
         if current_location:
             await channel_manager.remove_user_location_access(interaction.user, current_location)
-            await channel_manager.immediate_logout_cleanup(interaction.guild, current_location)
+            await channel_manager.immediate_logout_cleanup(interaction.guild, current_location, current_ship_id, current_home_id)
         elif current_ship_id:
             await channel_manager.remove_user_ship_access(interaction.user, current_ship_id)
-            await channel_manager.immediate_logout_cleanup(interaction.guild, None, current_ship_id)
+            await channel_manager.immediate_logout_cleanup(interaction.guild, None, current_ship_id, current_home_id)
+        elif current_home_id:
+            await channel_manager.remove_user_home_access(interaction.user, current_home_id)
+            await channel_manager.immediate_logout_cleanup(interaction.guild, None, None, current_home_id)
         
         # Clean up activity tracker
         if hasattr(self.bot, 'activity_tracker'):
@@ -2165,9 +2614,18 @@ class CharacterCog(commands.Cog):
         
         embed.add_field(
             name="🔄 Next Login",
-            value="Use `/character login` to resume your journey exactly where you left off.",
+            value="Use the game panel to login and resume your journey exactly where you left off.",
             inline=False
         )
+        
+        # Auto-pause time system if this was the last player to log out
+        try:
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            # This will check conditions and only pause if no players remain
+            time_system.auto_pause_time()
+        except Exception as e:
+            print(f"⚠️ LOGOUT: Failed to check auto-pause time system: {e}")
         
         if hasattr(interaction, 'response') and not interaction.response.is_done():
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -2177,7 +2635,7 @@ class CharacterCog(commands.Cog):
     async def _execute_auto_logout(self, user_id: int, reason: str):
         """Execute automatic logout (called by activity tracker)"""
         char_data = self.db.execute_query(
-            "SELECT name, current_location, current_ship_id FROM characters WHERE user_id = ?",
+            "SELECT name, current_location, current_ship_id, current_home_id FROM characters WHERE user_id = ?",
             (user_id,),
             fetch='one'
         )
@@ -2185,7 +2643,7 @@ class CharacterCog(commands.Cog):
         if not char_data:
             return
         
-        char_name, current_location, current_ship_id = char_data
+        char_name, current_location, current_ship_id, current_home_id = char_data
         
         # Cancel any active jobs
         self.db.execute_query(
@@ -2239,10 +2697,13 @@ class CharacterCog(commands.Cog):
                     
                     if current_location:
                         await channel_manager.remove_user_location_access(member, current_location)
-                        await channel_manager.immediate_logout_cleanup(guild, current_location)
+                        await channel_manager.immediate_logout_cleanup(guild, current_location, current_ship_id, current_home_id)
                     elif current_ship_id:
                         await channel_manager.remove_user_ship_access(member, current_ship_id)
-                        await channel_manager.immediate_logout_cleanup(guild, None, current_ship_id)
+                        await channel_manager.immediate_logout_cleanup(guild, None, current_ship_id, current_home_id)
+                    elif current_home_id:
+                        await channel_manager.remove_user_home_access(member, current_home_id)
+                        await channel_manager.immediate_logout_cleanup(guild, None, None, current_home_id)
                     
                     break
         
@@ -2264,7 +2725,14 @@ class CharacterCog(commands.Cog):
             except:
                 pass  # Failed to DM user
         
-        print(f"🚪 Auto-logout: {char_name} (ID: {user_id}) - {reason}")
+        # Auto-pause time system if this was the last player to log out
+        try:
+            from utils.time_system import TimeSystem
+            time_system = TimeSystem(self.bot)
+            # This will check conditions and only pause if no players remain
+            time_system.auto_pause_time()
+        except Exception as e:
+            print(f"⚠️ AUTO-LOGOUT: Failed to check auto-pause time system: {e}")
         
         print(f"🚪 Auto-logout: {char_name} (ID: {user_id}) - {reason}")
         
@@ -2380,10 +2848,12 @@ class CharacterCog(commands.Cog):
                 (quantity, existing_item[0])
             )
         else:
+            from utils.item_config import ItemConfig
+            metadata = ItemConfig.create_item_metadata(actual_name)
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (interaction.user.id, actual_name, item_type, quantity, description, value)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, actual_name, item_type, quantity, description, value, metadata)
             )
         
         embed = discord.Embed(
@@ -2552,7 +3022,7 @@ class CharacterCog(commands.Cog):
                                         color=0xffd700
                                     )
                                     embed.add_field(name="Rewards", value=f"• +{skill_points_gained} skill points\n• +10 max HP", inline=False)
-                                    embed.add_field(name="💡 Tip", value="Use `/character skills` to spend your skill points!", inline=False)
+                                    embed.add_field(name="💡 Tip", value="Use the 'Character > Skills' menu in `/tqe` to spend your skill points!", inline=False)
                                     
                                     await location_channel.send(f"{user.mention}", embed=embed)
                     except Exception as e:
@@ -2778,6 +3248,20 @@ class TrainingConfirmView(discord.ui.View):
             await interaction.response.send_message("This isn't your training session!", ephemeral=True)
             return
         
+        # Check if user still has enough money
+        current_money = self.bot.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not current_money or current_money[0] < self.cost:
+            await interaction.response.send_message(
+                f"Training costs {self.cost:,} credits. You only have {current_money[0] if current_money else 0:,}.",
+                ephemeral=True
+            )
+            return
+        
         # Deduct cost
         self.bot.db.execute_query(
             "UPDATE characters SET money = money - ? WHERE user_id = ?",
@@ -2970,12 +3454,13 @@ class UndockJobConfirmView(discord.ui.View):
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        # Cancel active jobs
+        # Cancel active jobs at this location
         active_jobs = self.bot.db.execute_query(
             '''SELECT j.job_id FROM jobs j 
-               JOIN job_tracking jt ON j.job_id = jt.job_id
-               WHERE j.taken_by = ? AND j.job_status = 'active' AND jt.start_location = ?''',
-            (self.user_id, self.location_id),
+               LEFT JOIN job_tracking jt ON j.job_id = jt.job_id
+               WHERE j.taken_by = ? AND j.job_status = 'active' 
+               AND (jt.start_location = ? OR (jt.start_location IS NULL AND j.location_id = ?))''',
+            (self.user_id, self.location_id, self.location_id),
             fetch='all'
         )
         
@@ -3011,227 +3496,147 @@ class CharacterPanelView(discord.ui.View):
         self.bot = bot
         self.user_id = user_id
         
-        # Check for active job and add job button if needed
-        self._add_job_button_if_needed()
+        # Check for active quest and add quest button if needed
+        self._add_quest_button_if_needed()
     
-    def check_job_status(self):
-        """Check if user has active job and if it's ready for completion"""
-        # Get active job info - UPDATED to include destination_location_id and job location
-        job_info = self.bot.db.execute_query(
-            '''SELECT j.job_id, j.title, j.description, j.reward_money, j.taken_at, j.duration_minutes,
-                      j.danger_level, l.name as location_name, j.job_status, j.location_id, 
-                      j.destination_location_id
-               FROM jobs j
-               JOIN locations l ON j.location_id = l.location_id
-               WHERE j.taken_by = ? AND j.is_taken = 1''',
+    def check_quest_status(self):
+        """Check if user has active quest and if it's ready for completion"""
+        # Get active quest info
+        quest_info = self.bot.db.execute_query(
+            '''SELECT qp.quest_id, q.title, q.description, qp.current_objective,
+                      qp.objectives_completed, q.reward_money
+               FROM quest_progress qp
+               JOIN quests q ON qp.quest_id = q.quest_id
+               WHERE qp.user_id = ? AND qp.quest_status = 'active' ''',
             (self.user_id,),
             fetch='one'
         )
         
-        if not job_info:
-            return None, False  # No active job
+        if not quest_info:
+            return None, False  # No active quest
         
-        # Unpack with new fields
-        (job_id, title, description, reward, taken_at, duration_minutes, danger, 
-         location_name, job_status, job_location_id, destination_location_id) = job_info
+        quest_id, title, description, current_objective, completed_obj_json, reward = quest_info
         
-        # Check if job is ready for completion
-        is_ready = False
-        
-        # Check for transport job finalization
-        if job_status == 'awaiting_finalization':
-            is_ready = True
-        else:
-            # Determine if this is a transport job using the new logic
-            title_lower = title.lower()
-            desc_lower = description.lower()
-            
-            # Check destination_location_id first for definitive classification
-            if destination_location_id and destination_location_id != job_location_id:
-                # Has a different destination location = definitely a transport job
-                is_transport_job = True
-            elif destination_location_id is None:
-                # No destination set - check keywords to determine if it's a transport job (NPC-style)
-                is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
-                                  any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
-            else:
-                # destination_location_id == job_location_id = stationary job
-                is_transport_job = False
-            
-            if is_transport_job:
-                # For transport jobs with specific destinations, check if at correct location
-                if destination_location_id:
-                    # Get player's current location
-                    player_location = self.bot.db.execute_query(
-                        "SELECT current_location FROM characters WHERE user_id = ?",
-                        (self.user_id,),
-                        fetch='one'
-                    )
-                    
-                    if player_location and player_location[0] == destination_location_id:
-                        is_ready = True  # At correct destination
-                    else:
-                        is_ready = False  # Not at destination yet
-                else:
-                    # NPC transport job - check elapsed time
-                    from datetime import datetime
-                    taken_time = datetime.fromisoformat(taken_at)
-                    current_time = datetime.utcnow()
-                    elapsed_minutes = (current_time - taken_time).total_seconds() / 60
-                    is_ready = elapsed_minutes >= duration_minutes
-            else:
-                # For stationary jobs, check location tracking
-                tracking = self.bot.db.execute_query(
-                    "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
-                    (job_id, self.user_id),
-                    fetch='one'
-                )
-                
-                if tracking:
-                    time_at_location, required_duration = tracking
-                    time_at_location = float(time_at_location) if time_at_location else 0.0
-                    required_duration = float(required_duration) if required_duration else 1.0
-                    is_ready = time_at_location >= required_duration
-        
-        return job_info, is_ready
-    
-    def _add_job_button_if_needed(self):
-        """Add job button if user has an active job"""
-        job_info, is_ready = self.check_job_status()
-        
-        if job_info:
-            # User has an active job, add the appropriate button
-            if is_ready:
-                job_button = discord.ui.Button(
-                    label="Complete Job",
-                    style=discord.ButtonStyle.success,
-                    emoji="✅"
-                )
-                job_button.callback = self.complete_job
-            else:
-                job_button = discord.ui.Button(
-                    label="Job Status",
-                    style=discord.ButtonStyle.primary,
-                    emoji="💼"
-                )
-                job_button.callback = self.view_job_status
-            
-            self.add_item(job_button)
-    
-    async def complete_job(self, interaction: discord.Interaction):
-        """Handle job completion"""
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This is not your panel!", ephemeral=True)
-            return
-        
-        # Get the EconomyCog and call its job completion logic
-        econ_cog = self.bot.get_cog('EconomyCog')
-        if econ_cog:
-            await econ_cog.job_complete.callback(econ_cog, interaction)
-        else:
-            await interaction.response.send_message("Job system is currently unavailable.", ephemeral=True)
-    
-    async def view_job_status(self, interaction: discord.Interaction):
-        """Handle viewing job status"""
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This is not your panel!", ephemeral=True)
-            return
-        
-        # Force a manual update first (same as job_status command)
-        econ_cog = self.bot.get_cog('EconomyCog')
-        if econ_cog:
-            await econ_cog._manual_job_update(interaction.user.id)
-        
-        # Get job info (same logic as job_status command)
-        job_info = self.bot.db.execute_query(
-            '''SELECT j.job_id, j.title, j.description, j.reward_money, j.taken_at, j.duration_minutes,
-                      j.danger_level, l.name as location_name, j.job_status
-               FROM jobs j
-               JOIN locations l ON j.location_id = l.location_id
-               WHERE j.taken_by = ? AND j.is_taken = 1''',
-            (interaction.user.id,),
+        # Get total objectives for this quest
+        total_objectives = self.bot.db.execute_query(
+            "SELECT COUNT(*) FROM quest_objectives WHERE quest_id = ?",
+            (quest_id,),
             fetch='one'
-        )
+        )[0]
         
-        if not job_info:
-            await interaction.response.send_message("You don't have any active jobs.", ephemeral=True)
-            return
-
-        job_id, title, description, reward, taken_at, duration_minutes, danger, location_name, job_status = job_info
-
-        # Determine job type
-        title_lower = title.lower()
-        desc_lower = description.lower()
-        is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
-                          any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
-
-        from datetime import datetime
-        taken_time = datetime.fromisoformat(taken_at)
-        current_time = datetime.utcnow()
-        elapsed_minutes = (current_time - taken_time).total_seconds() / 60
-
-        # Truncate description to prevent Discord limit issues
-        truncated_description = description[:800] + "..." if len(description) > 800 else description
+        # Parse completed objectives
+        import json
+        try:
+            completed_objectives = json.loads(completed_obj_json) if completed_obj_json else []
+        except:
+            completed_objectives = []
         
-        embed = discord.Embed(
-            title="💼 Current Job Status",
-            description=f"**{title}**\n{truncated_description}",
-            color=0x4169E1
-        )
-
-        # Status based on job type and current state
-        if job_status == 'awaiting_finalization':
-            status_text = "🚛 **Unloading cargo** - Use `/job complete` to finalize immediately"
-            progress_text = "✅ Transport completed, finalizing delivery..."
-        elif job_status == 'completed':
-            status_text = "✅ **Completed** - Job finished!"
-            progress_text = "Job has been completed successfully"
-        elif is_transport_job:
-            if elapsed_minutes >= duration_minutes:
-                status_text = "✅ **Ready for completion** - Use `/job complete`"
-                progress_text = "Minimum travel time completed"
+        # Check if quest is ready for completion
+        is_ready = len(completed_objectives) >= total_objectives
+        
+        return quest_info, is_ready
+    
+    def _add_quest_button_if_needed(self):
+        """Add quest button if user has an active quest"""
+        quest_info, is_ready = self.check_quest_status()
+        
+        if quest_info:
+            # User has an active quest, add the appropriate button
+            if is_ready:
+                quest_button = discord.ui.Button(
+                    label="Complete Quest",
+                    style=discord.ButtonStyle.success,
+                    emoji="🏆"
+                )
+                quest_button.callback = self.complete_quest
             else:
-                remaining_minutes = duration_minutes - elapsed_minutes
-                status_text = f"⏳ **In Transit** - {remaining_minutes:.1f} minutes remaining"
-                progress_pct = (elapsed_minutes / duration_minutes) * 100
-                bars = int(progress_pct // 10)
-                progress_text = "🟩" * bars + "⬜" * (10 - bars) + f" {progress_pct:.0f}%"
-        else:
-            # Stationary job - check tracking
-            tracking = self.bot.db.execute_query(
-                "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
-                (job_id, interaction.user.id),
-                fetch='one'
-            )
+                # Quest is not ready yet
+                quest_button = discord.ui.Button(
+                    label="Quest Status",
+                    style=discord.ButtonStyle.primary,
+                    emoji="📜"
+                )
+                quest_button.callback = self.view_quest_status
             
-            if tracking:
-                time_at_location, required_duration = tracking
-                time_at_location = float(time_at_location) if time_at_location else 0.0
-                required_duration = float(required_duration) if required_duration else 1.0
-                
-                if time_at_location >= required_duration:
-                    status_text = "✅ **Ready for completion** - Use `/job complete`"
-                    progress_text = "Required time at location completed"
-                else:
-                    remaining = max(0, required_duration - time_at_location)
-                    status_text = f"📍 **Working on-site** - {remaining:.1f} minutes remaining"
-                    progress_pct = min(100, (time_at_location / required_duration) * 100)
-                    bars = int(progress_pct // 10)
-                    progress_text = "🟩" * bars + "⬜" * (10 - bars) + f" {progress_pct:.0f}%"
-            else:
-                status_text = "📍 **Needs location tracking** - Use `/job complete` to start"
-                progress_text = "Location-based work not yet started"
-
-        # Truncate field values to stay under Discord's 1024 character limit
-        status_text = status_text[:1020] + "..." if len(status_text) > 1020 else status_text
-        progress_text = progress_text[:1020] + "..." if len(progress_text) > 1020 else progress_text
-
-        embed.add_field(name="Status", value=status_text, inline=False)
-        embed.add_field(name="Progress", value=progress_text, inline=False)
+            self.add_item(quest_button)
+    
+    async def complete_quest(self, interaction: discord.Interaction):
+        """Handle quest completion"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get the QuestCog and call its completion logic
+        quest_cog = self.bot.get_cog('QuestCog')
+        if quest_cog:
+            # Check if quest is actually ready for completion
+            quest_info, is_ready = self.check_quest_status()
+            if not quest_info or not is_ready:
+                await interaction.response.send_message("Your quest is not ready for completion yet.", ephemeral=True)
+                return
+            
+            # Trigger quest completion directly
+            quest_id = quest_info[0]
+            await quest_cog._complete_quest(quest_id, self.user_id)
+            await interaction.response.send_message("🏆 Quest completed! Check your location channel for rewards.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Quest system is currently unavailable.", ephemeral=True)
+    
+    async def view_quest_status(self, interaction: discord.Interaction):
+        """Handle viewing quest status"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get quest info
+        quest_info, is_ready = self.check_quest_status()
+        
+        if not quest_info:
+            await interaction.response.send_message("You don't have any active quests.", ephemeral=True)
+            return
+        
+        quest_id, title, description, current_objective, completed_obj_json, reward = quest_info
+        
+        # Get all objectives for this quest
+        objectives = self.bot.db.execute_query(
+            '''SELECT objective_order, objective_type, description, target_location_id, 
+                      target_item, target_quantity, target_amount
+               FROM quest_objectives 
+               WHERE quest_id = ? 
+               ORDER BY objective_order''',
+            (quest_id,),
+            fetch='all'
+        )
+        
+        # Parse completed objectives
+        import json
+        try:
+            completed_objectives = json.loads(completed_obj_json) if completed_obj_json else []
+        except:
+            completed_objectives = []
+        
+        # Create embed
+        embed = discord.Embed(
+            title="📜 Current Quest Status",
+            description=f"**{title}**\n{description[:500]}{'...' if len(description) > 500 else ''}",
+            color=0x6c5ce7
+        )
+        
+        # Add objectives status
+        objectives_text = ""
+        for obj_order, obj_type, obj_desc, target_location_id, target_item, target_qty, target_amount in objectives:
+            status_emoji = "✅" if obj_order in completed_objectives else "⏳"
+            objectives_text += f"{status_emoji} **{obj_order}.** {obj_desc}\n"
+        
+        embed.add_field(
+            name="Objectives Progress",
+            value=objectives_text[:1024] if objectives_text else "No objectives found",
+            inline=False
+        )
+        
         embed.add_field(name="Reward", value=f"{reward:,} credits", inline=True)
-        embed.add_field(name="Danger", value="⚠️" * danger if danger > 0 else "Safe", inline=True)
-        embed.add_field(name="Location", value=location_name[:1020] if len(location_name) > 1020 else location_name, inline=True)
-
+        embed.add_field(name="Status", value="🏆 Ready to Complete!" if is_ready else "⏳ In Progress", inline=True)
+        
         await interaction.response.send_message(embed=embed, ephemeral=True)
     
     @discord.ui.button(label="Character Info", style=discord.ButtonStyle.primary, emoji="👤")
@@ -3277,6 +3682,116 @@ class CharacterPanelView(discord.ui.View):
         char_cog = self.bot.get_cog('CharacterCog')
         if char_cog:
             await char_cog.view_skills.callback(char_cog, interaction)
+    
+    @discord.ui.button(label="Equipment", style=discord.ButtonStyle.secondary, emoji="⚔️")
+    async def view_equipment(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        from utils.stat_system import StatSystem
+        from utils.item_config import ItemConfig
+        
+        stat_system = StatSystem(self.bot.db)
+        
+        # Get equipped items
+        equipped_items = stat_system.get_equipped_items(self.user_id)
+        
+        # Get base and effective stats
+        base_stats, effective_stats = stat_system.calculate_effective_stats(self.user_id)
+        
+        # Create equipment embed
+        embed = discord.Embed(
+            title="⚔️ Equipment & Stat Modifiers",
+            description="Your currently equipped items and their effects",
+            color=0x8B4513
+        )
+        
+        # Show equipment slots
+        slot_display = {
+            "head": "🎩 Head",
+            "eyes": "👓 Eyes", 
+            "torso": "👕 Torso",
+            "arms_left": "💪 Left Arm",
+            "arms_right": "💪 Right Arm",
+            "hands_left": "🤚 Left Hand",
+            "hands_right": "🤚 Right Hand",
+            "legs_left": "🦵 Left Leg",
+            "legs_right": "🦵 Right Leg",
+            "feet_left": "👟 Left Foot",
+            "feet_right": "👟 Right Foot"
+        }
+        
+        equipment_text = ""
+        for slot, display_name in slot_display.items():
+            if slot in equipped_items:
+                item = equipped_items[slot]
+                modifiers = item['modifiers']
+                mod_text = ""
+                if modifiers:
+                    mod_list = [f"{stat}+{val}" for stat, val in modifiers.items()]
+                    mod_text = f" ({', '.join(mod_list)})"
+                equipment_text += f"{display_name}: **{item['name']}**{mod_text}\n"
+            else:
+                equipment_text += f"{display_name}: *Empty*\n"
+        
+        embed.add_field(
+            name="🎒 Equipment Slots",
+            value=equipment_text[:1024] if equipment_text else "No equipment slots found",
+            inline=False
+        )
+        
+        # Show current stat effects
+        if base_stats and effective_stats:
+            stats_text = ""
+            for stat_name in ['hp', 'max_hp', 'engineering', 'navigation', 'combat', 'medical', 'defense']:
+                if stat_name in base_stats and stat_name in effective_stats:
+                    # Only show defense if > 0
+                    if stat_name == 'defense' and effective_stats[stat_name] <= 0:
+                        continue
+                    
+                    display_text = stat_system.format_stat_display(
+                        base_stats[stat_name], 
+                        effective_stats[stat_name]
+                    )
+                    # Add % for defense
+                    if stat_name == 'defense':
+                        display_text += "%"
+                    stats_text += f"**{stat_name.replace('_', ' ').title()}:** {display_text}\n"
+            
+            embed.add_field(
+                name="📊 Current Stats (Base + Modifiers)",
+                value=stats_text[:1024] if stats_text else "No stats available",
+                inline=False
+            )
+        
+        # Create equipment management view
+        equipment_view = EquipmentManagementView(self.bot, self.user_id)
+        await interaction.response.send_message(embed=embed, view=equipment_view, ephemeral=True)
+    
+    @discord.ui.button(label="Actions", style=discord.ButtonStyle.primary, emoji="⚡", row=1)
+    async def actions_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open character actions panel"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Create actions embed
+        embed = discord.Embed(
+            title="⚡ Character Actions",
+            description="Use the buttons below to perform character actions:",
+            color=0x4169E1
+        )
+        
+        embed.add_field(
+            name="Available Actions",
+            value="• **Say** - Speak as your character\n• **Think** - Share internal thoughts\n• **Act** - Perform roleplay actions\n• **Drop Item** - Drop items from inventory\n• **Pickup Item** - Pick up items from location\n• **Give Item** - Give items to other players\n• **Sell Item** - Sell items to other players",
+            inline=False
+        )
+        
+        # Create the actions view
+        actions_view = ActionsView(self.bot, self.user_id)
+        await interaction.response.send_message(embed=embed, view=actions_view, ephemeral=True)
     
     @discord.ui.button(label="Enter Ship", style=discord.ButtonStyle.secondary, emoji="🚀", row=1)
     async def enter_ship_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3338,14 +3853,36 @@ class CharacterPanelView(discord.ui.View):
         )
         
         if ship_channel:
+            # Send area movement embed to location channel BEFORE removing access
+            char_name = self.bot.db.execute_query(
+                "SELECT name FROM characters WHERE user_id = ?",
+                (interaction.user.id,),
+                fetch='one'
+            )[0]
+            
+            # Ensure location channel exists and get it
+            location_channel = await channel_manager.get_or_create_location_channel(
+                interaction.guild, location_id
+            )
+            
+            if location_channel:
+                embed = discord.Embed(
+                    title="🚪 Area Movement",
+                    description=f"**{char_name}** enters the **{ship_info[1]}**.",
+                    color=0x7289DA
+                )
+                try:
+                    await location_channel.send(embed=embed)
+                except Exception as e:
+                    print(f"❌ Failed to send ship entry embed: {e}")
+            
             # Update character to be inside ship
             self.bot.db.execute_query(
                 "UPDATE characters SET current_ship_id = ? WHERE user_id = ?",
                 (active_ship_id, interaction.user.id)
             )
             
-            # Remove from location channel
-            await channel_manager.remove_user_location_access(interaction.user, location_id)
+            # Keep location channel access - users should retain access to both ship and location channels
             
             await interaction.followup.send(
                 f"You've entered your ship. Head to {ship_channel.mention}",
@@ -3378,6 +3915,505 @@ class CharacterPanelView(discord.ui.View):
         # Open the radio modal
         modal = RadioModal(self.bot)
         await interaction.response.send_modal(modal)
+
+class ActionsView(discord.ui.View):
+    """View for character actions: drop, pickup, think, say, and act"""
+    
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+    
+    @discord.ui.button(label="Say", style=discord.ButtonStyle.primary, emoji="💬")
+    async def say_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = SayModal(self.bot)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Think", style=discord.ButtonStyle.secondary, emoji="💭")
+    async def think_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = ThinkModal(self.bot)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Act", style=discord.ButtonStyle.success, emoji="🎭")
+    async def act_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = ActModal(self.bot)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Drop Item", style=discord.ButtonStyle.danger, emoji="📦")
+    async def drop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = DropModal(self.bot)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Pickup Item", style=discord.ButtonStyle.primary, emoji="🔄")
+    async def pickup_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = PickupModal(self.bot)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Give Item", style=discord.ButtonStyle.success, emoji="🤝", row=1)
+    async def give_item_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Check if user has any items
+        inventory = self.bot.db.execute_query(
+            """SELECT item_name FROM inventory 
+               WHERE owner_id = ? AND quantity > 0 
+               LIMIT 1""",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not inventory:
+            await interaction.response.send_message("You don't have any items to give!", ephemeral=True)
+            return
+        
+        # Check if there are other players at the same location
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not char_data or not char_data[0]:
+            await interaction.response.send_message("You must be at a location to give items!", ephemeral=True)
+            return
+        
+        other_players = self.bot.db.execute_query(
+            """SELECT c.user_id FROM characters c 
+               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1
+               LIMIT 1""",
+            (char_data[0], self.user_id),
+            fetch='one'
+        )
+        
+        if not other_players:
+            await interaction.response.send_message("No other players at this location!", ephemeral=True)
+            return
+        
+        # Create the give item selection view
+        view = GiveItemSelectView(self.bot, self.user_id)
+        embed = discord.Embed(
+            title="🎁 Give Item",
+            description="Select an item from your inventory to give to another player:",
+            color=0x2ecc71
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Sell Item", style=discord.ButtonStyle.primary, emoji="💰", row=1)
+    async def sell_item_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Check if user has any items
+        inventory = self.bot.db.execute_query(
+            """SELECT item_name FROM inventory 
+               WHERE owner_id = ? AND quantity > 0 
+               LIMIT 1""",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not inventory:
+            await interaction.response.send_message("You don't have any items to sell!", ephemeral=True)
+            return
+        
+        # Check if there are other players at the same location
+        char_data = self.bot.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (self.user_id,),
+            fetch='one'
+        )
+        
+        if not char_data or not char_data[0]:
+            await interaction.response.send_message("You must be at a location to sell items!", ephemeral=True)
+            return
+        
+        other_players = self.bot.db.execute_query(
+            """SELECT c.user_id FROM characters c 
+               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1
+               LIMIT 1""",
+            (char_data[0], self.user_id),
+            fetch='one'
+        )
+        
+        if not other_players:
+            await interaction.response.send_message("No other players at this location!", ephemeral=True)
+            return
+        
+        # Create the sell item selection view
+        view = SellItemSelectView(self.bot, self.user_id)
+        embed = discord.Embed(
+            title="💰 Sell Item",
+            description="Select an item from your inventory to sell to another player:",
+            color=0xf39c12
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Observe", style=discord.ButtonStyle.secondary, emoji="👁️")
+    async def observe_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        modal = ObserveModal(self.bot)
+        await interaction.response.send_modal(modal)
+
+class SayModal(discord.ui.Modal, title="Speak as Character"):
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+    
+    message = discord.ui.TextInput(
+        label="What does your character say?",
+        placeholder="Enter your character's dialogue...",
+        style=discord.TextStyle.paragraph,
+        max_length=2000
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Call the say command logic
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.say.callback(char_cog, interaction, self.message.value)
+        else:
+            await interaction.response.send_message("Character system unavailable.", ephemeral=True)
+
+class ThinkModal(discord.ui.Modal, title="Character Thoughts"):
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+    
+    thought = discord.ui.TextInput(
+        label="What is your character thinking?",
+        placeholder="Enter your character's internal thoughts...",
+        style=discord.TextStyle.paragraph,
+        max_length=2000
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Call the think command logic
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.think.callback(char_cog, interaction, self.thought.value)
+        else:
+            await interaction.response.send_message("Character system unavailable.", ephemeral=True)
+
+class ActModal(discord.ui.Modal, title="Character Action"):
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+    
+    action = discord.ui.TextInput(
+        label="What action does your character perform?",
+        placeholder="Describe your character's action...",
+        style=discord.TextStyle.paragraph,
+        max_length=2000
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Call the act command logic
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.act.callback(char_cog, interaction, self.action.value)
+        else:
+            await interaction.response.send_message("Character system unavailable.", ephemeral=True)
+
+class DropModal(discord.ui.Modal, title="Drop Item"):
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+    
+    item_name = discord.ui.TextInput(
+        label="Item Name",
+        placeholder="Name of the item to drop...",
+        max_length=200
+    )
+    
+    quantity = discord.ui.TextInput(
+        label="Quantity (default: 1)",
+        placeholder="1",
+        default="1",
+        required=False,
+        max_length=10
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Parse quantity
+        try:
+            qty = int(self.quantity.value) if self.quantity.value.strip() else 1
+        except ValueError:
+            qty = 1
+        
+        # Call the drop command logic
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.drop_item.callback(char_cog, interaction, self.item_name.value, qty)
+        else:
+            await interaction.response.send_message("Character system unavailable.", ephemeral=True)
+
+class PickupModal(discord.ui.Modal, title="Pick Up Item"):
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+    
+    item_name = discord.ui.TextInput(
+        label="Item Name",
+        placeholder="Name of the item to pick up...",
+        max_length=200
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Call the pickup command logic
+        char_cog = self.bot.get_cog('CharacterCog')
+        if char_cog:
+            await char_cog.pickup_item.callback(char_cog, interaction, self.item_name.value)
+        else:
+            await interaction.response.send_message("Character system unavailable.", ephemeral=True)
+
+
+class EquipmentManagementView(discord.ui.View):
+    def __init__(self, bot, user_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+    
+    @discord.ui.button(label="Equip Item", style=discord.ButtonStyle.success, emoji="⚔️")
+    async def equip_item(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Get equippable items from inventory
+        from utils.item_config import ItemConfig
+        
+        equippable_items = self.bot.db.execute_query(
+            '''SELECT item_id, item_name, description 
+               FROM inventory 
+               WHERE owner_id = ? AND quantity > 0''',
+            (self.user_id,),
+            fetch='all'
+        )
+        
+        # Filter for equippable items
+        available_items = []
+        for item_id, item_name, description in equippable_items:
+            if ItemConfig.is_equippable(item_name):
+                available_items.append((item_id, item_name, description))
+        
+        if not available_items:
+            await interaction.response.send_message("You don't have any equippable items!", ephemeral=True)
+            return
+        
+        # Create select menu for equippable items
+        select = EquipmentSelect(self.bot, self.user_id, available_items)
+        view = discord.ui.View()
+        view.add_item(select)
+        
+        embed = discord.Embed(
+            title="⚔️ Equip Item",
+            description="Select an item to equip:",
+            color=0x00ff00
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Unequip Item", style=discord.ButtonStyle.danger, emoji="❌")
+    async def unequip_item(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        from utils.stat_system import StatSystem
+        
+        stat_system = StatSystem(self.bot.db)
+        equipped_items = stat_system.get_equipped_items(self.user_id)
+        
+        if not equipped_items:
+            await interaction.response.send_message("You don't have any items equipped!", ephemeral=True)
+            return
+        
+        # Create select menu for equipped items
+        select = UnequipmentSelect(self.bot, self.user_id, equipped_items)
+        view = discord.ui.View()
+        view.add_item(select)
+        
+        embed = discord.Embed(
+            title="❌ Unequip Item", 
+            description="Select an item to unequip:",
+            color=0xff0000
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, emoji="🔄")
+    async def refresh_equipment(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your panel!", ephemeral=True)
+            return
+        
+        # Refresh the equipment display by editing the current message
+        from utils.stat_system import StatSystem
+        
+        # Get character equipment
+        equipment = self.bot.db.execute_query(
+            '''SELECT ce.slot_name, ce.item_id, i.item_name 
+               FROM character_equipment ce
+               JOIN inventory i ON ce.item_id = i.item_id
+               WHERE ce.user_id = ?''',
+            (self.user_id,),
+            fetch='all'
+        ) or []
+        
+        # Create embed
+        embed = discord.Embed(
+            title="⚔️ Equipment",
+            color=0x00ff00
+        )
+        
+        if equipment:
+            equipment_dict = {item[0]: f"{item[2]} (ID: {item[1]})" for item in equipment}
+            for slot in ['weapon', 'armor', 'shield', 'accessory']:
+                value = equipment_dict.get(slot, "None")
+                embed.add_field(
+                    name=slot.title(),
+                    value=value,
+                    inline=False
+                )
+        else:
+            embed.add_field(
+                name="No Equipment",
+                value="You don't have any equipment equipped yet.",
+                inline=False
+            )
+        
+        # Create new equipment management view
+        equipment_view = EquipmentManagementView(self.bot, self.user_id)
+        await interaction.response.edit_message(embed=embed, view=equipment_view)
+
+
+class EquipmentSelect(discord.ui.Select):
+    def __init__(self, bot, user_id: int, items: list):
+        self.bot = bot
+        self.user_id = user_id
+        
+        # Create options from items
+        options = []
+        for item_id, item_name, description in items[:25]:  # Discord limit
+            from utils.item_config import ItemConfig
+            slot = ItemConfig.get_equipment_slot(item_name)
+            modifiers = ItemConfig.get_stat_modifiers(item_name)
+            
+            mod_text = ""
+            if modifiers:
+                mod_list = [f"{stat}+{val}" for stat, val in modifiers.items()]
+                mod_text = f" ({', '.join(mod_list)})"
+            
+            options.append(discord.SelectOption(
+                label=item_name[:100],
+                value=str(item_id),
+                description=f"Slot: {slot}{mod_text}"[:100]
+            ))
+        
+        super().__init__(placeholder="Choose an item to equip...", options=options)
+    
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your selection!", ephemeral=True)
+            return
+        
+        from utils.stat_system import StatSystem
+        
+        item_id = int(self.values[0])
+        
+        # Get item name
+        item_data = self.bot.db.execute_query(
+            "SELECT item_name FROM inventory WHERE item_id = ?",
+            (item_id,),
+            fetch='one'
+        )
+        
+        if not item_data:
+            await interaction.response.send_message("Item not found!", ephemeral=True)
+            return
+        
+        item_name = item_data[0]
+        stat_system = StatSystem(self.bot.db)
+        
+        # Try to equip the item
+        success = stat_system.equip_item(self.user_id, item_id, item_name)
+        
+        if success:
+            await interaction.response.send_message(f"✅ Successfully equipped **{item_name}**!", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ Cannot equip **{item_name}** - slot may be occupied or item incompatible.", ephemeral=True)
+
+
+class UnequipmentSelect(discord.ui.Select):
+    def __init__(self, bot, user_id: int, equipped_items: dict):
+        self.bot = bot
+        self.user_id = user_id
+        
+        # Create options from equipped items
+        options = []
+        for slot_name, item_info in equipped_items.items():
+            modifiers = item_info['modifiers']
+            mod_text = ""
+            if modifiers:
+                mod_list = [f"{stat}+{val}" for stat, val in modifiers.items()]
+                mod_text = f" ({', '.join(mod_list)})"
+            
+            options.append(discord.SelectOption(
+                label=item_info['name'][:100],
+                value=slot_name,
+                description=f"Slot: {slot_name.replace('_', ' ').title()}{mod_text}"[:100]
+            ))
+        
+        super().__init__(placeholder="Choose an item to unequip...", options=options)
+    
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your selection!", ephemeral=True)
+            return
+        
+        from utils.stat_system import StatSystem
+        
+        slot_name = self.values[0]
+        stat_system = StatSystem(self.bot.db)
+        
+        # Get the item name for the response
+        equipped_items = stat_system.get_equipped_items(self.user_id)
+        item_name = equipped_items.get(slot_name, {}).get('name', 'Unknown Item')
+        
+        # Try to unequip the item
+        success = stat_system.unequip_item(self.user_id, slot_name)
+        
+        if success:
+            await interaction.response.send_message(f"✅ Successfully unequipped **{item_name}** from {slot_name.replace('_', ' ').title()}!", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ Failed to unequip item from {slot_name.replace('_', ' ').title()}.", ephemeral=True)
+
         
 async def setup(bot):
     await bot.add_cog(CharacterCog(bot))

@@ -328,81 +328,80 @@ class FactionsCog(commands.Cog):
             embed.set_footer(text="You are the faction leader!")
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @faction_group.command(name="disband", description="Disband your faction and distribute bank funds to all members")
+    async def faction_disband(self, interaction: discord.Interaction):
+        # Check if user is faction leader
+        faction_data = self.db.execute_query(
+            '''SELECT f.faction_id, f.name, f.emoji, f.bank_balance
+               FROM factions f
+               WHERE f.leader_id = ?''',
+            (interaction.user.id,),
+            fetch='one'
+        )
         
-        @faction_group.command(name="disband", description="Disband your faction and distribute bank funds to all members")
-        async def faction_disband(self, interaction: discord.Interaction):
-            # Check if user is faction leader
-            faction_data = self.db.execute_query(
-                '''SELECT f.faction_id, f.name, f.emoji, f.bank_balance
-                   FROM factions f
-                   WHERE f.leader_id = ?''',
-                (interaction.user.id,),
-                fetch='one'
-            )
-            
-            if not faction_data:
-                return await interaction.response.send_message("Only faction leaders can disband their faction!", ephemeral=True)
-            
-            faction_id, faction_name, emoji, bank_balance = faction_data
-            
-            # Get member count
-            member_count = self.db.execute_query(
-                "SELECT COUNT(*) FROM faction_members WHERE faction_id = ?",
-                (faction_id,),
-                fetch='one'
-            )[0]
-            
-            # Calculate payout per member
-            payout_per_member = 0
-            if member_count > 0 and bank_balance > 0:
-                payout_per_member = bank_balance // member_count
-            
-            # Check if faction owns any locations
-            owned_locations = self.db.execute_query(
-                '''SELECT COUNT(*) FROM location_ownership 
-                   WHERE faction_id = ?''',
-                (faction_id,),
-                fetch='one'
-            )[0]
-            
-            # Show confirmation
-            embed = discord.Embed(
-                title=f"{emoji} Disband {faction_name}?",
-                description="⚠️ **This action cannot be undone!**\n\nDisbanding will:",
-                color=0xff0000
-            )
-            
-            disband_effects = []
-            if bank_balance > 0 and member_count > 0:
-                disband_effects.append(f"• Distribute **{payout_per_member:,} credits** to each of the **{member_count}** members")
-                disband_effects.append(f"• Total payout: **{payout_per_member * member_count:,} credits**")
-            else:
-                disband_effects.append(f"• No funds to distribute (Bank: {bank_balance:,} credits)")
-            
-            if owned_locations > 0:
-                disband_effects.append(f"• Release ownership of **{owned_locations}** location(s)")
-            
-            disband_effects.append("• Permanently delete the faction")
-            disband_effects.append("• Remove all members from the faction")
-            
-            embed.add_field(name="Effects", value="\n".join(disband_effects), inline=False)
-            
-            embed.add_field(name="Current Bank", value=f"{bank_balance:,} credits", inline=True)
-            embed.add_field(name="Members", value=str(member_count), inline=True)
-            if payout_per_member > 0:
-                embed.add_field(name="Per Member", value=f"{payout_per_member:,} credits", inline=True)
-            
-            view = DisbandConfirmView(
-                self.bot, 
-                interaction.user.id, 
-                faction_id, 
-                faction_name, 
-                payout_per_member, 
-                member_count
-            )
-            
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-            
+        if not faction_data:
+            return await interaction.response.send_message("Only faction leaders can disband their faction!", ephemeral=True)
+        
+        faction_id, faction_name, emoji, bank_balance = faction_data
+        
+        # Get member count
+        member_count = self.db.execute_query(
+            "SELECT COUNT(*) FROM faction_members WHERE faction_id = ?",
+            (faction_id,),
+            fetch='one'
+        )[0]
+        
+        # Calculate payout per member
+        payout_per_member = 0
+        if member_count > 0 and bank_balance > 0:
+            payout_per_member = bank_balance // member_count
+        
+        # Check if faction owns any locations
+        owned_locations = self.db.execute_query(
+            '''SELECT COUNT(*) FROM location_ownership 
+               WHERE faction_id = ?''',
+            (faction_id,),
+            fetch='one'
+        )[0]
+        
+        # Show confirmation
+        embed = discord.Embed(
+            title=f"{emoji} Disband {faction_name}?",
+            description="⚠️ **This action cannot be undone!**\n\nDisbanding will:",
+            color=0xff0000
+        )
+        
+        disband_effects = []
+        if bank_balance > 0 and member_count > 0:
+            disband_effects.append(f"• Distribute **{payout_per_member:,} credits** to each of the **{member_count}** members")
+            disband_effects.append(f"• Total payout: **{payout_per_member * member_count:,} credits**")
+        else:
+            disband_effects.append(f"• No funds to distribute (Bank: {bank_balance:,} credits)")
+        
+        if owned_locations > 0:
+            disband_effects.append(f"• Release ownership of **{owned_locations}** location(s)")
+        
+        disband_effects.append("• Permanently delete the faction")
+        disband_effects.append("• Remove all members from the faction")
+        
+        embed.add_field(name="Effects", value="\n".join(disband_effects), inline=False)
+        
+        embed.add_field(name="Current Bank", value=f"{bank_balance:,} credits", inline=True)
+        embed.add_field(name="Members", value=str(member_count), inline=True)
+        if payout_per_member > 0:
+            embed.add_field(name="Per Member", value=f"{payout_per_member:,} credits", inline=True)
+        
+        view = DisbandConfirmView(
+            self.bot, 
+            interaction.user.id, 
+            faction_id, 
+            faction_name, 
+            payout_per_member, 
+            member_count
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     @faction_group.command(name="invite", description="Invite a player to your faction")
     @app_commands.describe(member="The player to invite")
     async def faction_invite(self, interaction: discord.Interaction, member: discord.Member):

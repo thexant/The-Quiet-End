@@ -190,15 +190,15 @@ class ContactsView(discord.ui.View):
                         progress_bar = "█" * filled + "░" * (bar_length - filled)
                         
                         location_info = (
-                            f"📡 **IN TRANSIT**: {corridor_name or 'Hyperspace Corridor'}\n"
+                            f"🚀 **IN TRANSIT**: {corridor_name or 'Hyperspace Corridor'}\n"
                             f"   ├─ Origin: {origin_name or 'Unknown'}\n"
                             f"   ├─ Destination: {dest_name or 'Unknown'}\n"
                             f"   └─ Progress: [{progress_bar}] {progress:.0f}%"
                         )
                     except Exception as e:
-                        location_info = f"📡 **IN TRANSIT**: {corridor_name or 'Hyperspace Corridor'}"
+                        location_info = f"🚀 **IN TRANSIT**: {corridor_name or 'Hyperspace Corridor'}"
                 else:
-                    location_info = f"📡 **IN TRANSIT**: {corridor_name or 'Hyperspace Corridor'}"
+                    location_info = f"🚀 **IN TRANSIT**: {corridor_name or 'Hyperspace Corridor'}"
                     
             elif ship_id and not location_id:  # Character is in their ship interior
                 try:
@@ -215,7 +215,7 @@ class ContactsView(discord.ui.View):
                     location_info = "🚀 **SHIP INTERIOR**: Unknown Vessel"
                     
             elif location_id:  # Character is at a location
-                status_icon = "🛬" if status == "docked" else "🌌"
+                status_icon = "🛬" if status == "docked" else "🚀"
                 faction_tag = ""
                 if faction and faction not in ['neutral', 'Independent']:
                     faction_tag = f" [{faction.upper()}]"

@@ -6,14 +6,14 @@ Modify these values to customize your server experience
 
 # Bot Configuration
 BOT_CONFIG = {
-    'token': 'YOUR_TOKEN_HERE',  # REPLACE WITH YOUR ACTUAL TOKEN OR USE ENVIRONMENT VARIABLE
+    'token': 'FUCKYOU',  # REPLACE WITH YOUR ACTUAL TOKEN OR USE ENVIRONMENT VARIABLE
     'command_prefix': '!',           # Prefix for text commands (slash commands don't use this)
-    'description': 'A 27th century space RPG bot',
-    'activity_name': 'The Stars',  # Bot status message
+    'description': 'A 27th century sci-fi RPG',
+    'activity_name': 'Entropy',  # Bot status message
 }
 
 
-ALLOWED_GUILD_ID = 1234567890
+ALLOWED_GUILD_ID = 1391985652001800333
 
 
 # Galaxy Generation Settings
@@ -39,10 +39,12 @@ GALAXY_CONFIG = {
 }
 
 WEBMAP_CONFIG = {
-    'auto_start': False,              # Set to True to auto-start web map on bot startup
+    'auto_start': True,              # Set to True to auto-start web map on bot startup
     'auto_start_port': 8090,          # Port to use when auto-starting
     'auto_start_host': '0.0.0.0',     # Host to bind to when auto-starting
-    'auto_start_time': 30,         # Seconds to wait after bot startup before starting web map
+    'auto_start_time': 3,            # Seconds to wait after bot startup before starting web map
+    'auto_start_domain': 'thequietend.servegame.com',        # Domain name for auto-started server (optional)
+    'auto_start_https_proxy': True,  # Force HTTPS URLs when behind proxy (default: False)
 }
 
 # Game Balance Settings
@@ -57,8 +59,8 @@ GAME_BALANCE = {
         'wealth_sell_bonus': 0.02       # +2% sell price per wealth level
     },
     'job_settings': {
-        'max_jobs_per_location': 8,  # Maximum jobs at any location
-        'job_generation_chance': 0.75, # 70% chance to generate job every cycle
+        'max_jobs_per_location': 12,  # Maximum jobs at any location
+        'job_generation_chance': 0.90, # 70% chance to generate job every cycle
         'job_expiry_hours': (4, 12), # Jobs expire between 4-12 hours
         'skill_improvement_chance': 0.2 # 20% chance to gain skill from jobs
     }
@@ -67,7 +69,7 @@ GAME_BALANCE = {
 # Event System Settings
 EVENT_CONFIG = {
     'corridor_management': {
-        'check_interval_hours': 6,   # How often to check for corridor events
+        'check_interval_hours': 3,   # How often to check for corridor events
         'base_shift_chance': 5,      # 5% base chance of shift per check
         'base_collapse_chance': 0.5, # 0.5% base chance of collapse
         'time_multiplier_max': 3     # Maximum time-based multiplier
@@ -158,30 +160,104 @@ ADMIN_CONFIG = {
     'backup_on_major_changes': True  # Backup database on major admin actions
 }
 
-# Add this section to config.py
-
-# Event System Configuration
-EVENT_CONFIG = {
-    'base_event_frequency': 0.25,     # Base chance per 15-minute check
-    'travel_event_frequency': 0.15,   # Base chance for travel events
-    'galaxy_event_frequency': 0.10,   # Base chance for galaxy-wide events
-    'min_event_spacing_minutes': 30,  # Minimum time between events at same location
-    'event_timeout_seconds': 300,     # How long interactive events stay active
-    'max_concurrent_events': 3,       # Maximum events per location
+# Ambient Events Configuration
+AMBIENT_EVENTS_CONFIG = {
+    # Core ambient event settings
+    'enabled': True,                  # Master toggle for ambient events
+    'check_interval_minutes': 15,     # How often to check for ambient events
+    'base_event_chance': 0.25,        # Base chance per check cycle (25%)
     
-    # Event weights by location type
-    'location_event_weights': {
-        'colony': 1.2,
-        'space_station': 1.3,
-        'outpost': 0.9,
-        'gate': 0.8
+    # Event frequency and timing
+    'frequency_settings': {
+        'location_event_frequency': 0.25,     # Base chance for location events
+        'travel_event_frequency': 0.15,       # Base chance for travel events  
+        'galaxy_event_frequency': 0.10,       # Base chance for galaxy-wide events
+        'min_event_spacing_minutes': 30,      # Minimum time between events at same location
+        'max_concurrent_events': 3,           # Maximum simultaneous events per location
+        'event_timeout_seconds': 300,         # How long interactive events stay active
     },
     
-    # Wealth modifiers for events
-    'wealth_modifiers': {
-        'poor_event_increase': 1.4,    # Poor locations get more negative events
-        'rich_event_decrease': 0.7,    # Rich locations get fewer negative events
-        'wealth_threshold_poor': 3,
-        'wealth_threshold_rich': 7
+    # Base event chances by location type
+    'location_chances': {
+        'colony': {
+            'positive_events': 0.40,           # 40% chance for positive events
+            'neutral_events': 0.35,            # 35% chance for neutral events
+            'negative_events': 0.25,           # 25% chance for negative events
+        },
+        'space_station': {
+            'positive_events': 0.35,
+            'neutral_events': 0.40,
+            'negative_events': 0.25,
+        },
+        'outpost': {
+            'positive_events': 0.30,
+            'neutral_events': 0.35,
+            'negative_events': 0.35,
+        },
+        'gate': {
+            'positive_events': 0.25,
+            'neutral_events': 0.50,
+            'negative_events': 0.25,
+        }
+    },
+    
+    # Location type event multipliers
+    'location_multipliers': {
+        'colony': 1.2,                 # Colonies are 20% more active
+        'space_station': 1.2,          # Space stations are 20% more active
+        'outpost': 0.9,                # Outposts are 10% less active
+        'gate': 0.8,                   # Gates are 20% less active
+    },
+    
+    # Event chance modifiers
+    'modifier_settings': {
+        # Population density effects
+        'population_modifiers': {
+            'high_population_multiplier': 1.3,    # 30% more events in busy areas
+            'low_population_multiplier': 0.7,     # 30% fewer events in quiet areas
+            'population_threshold_high': 50,       # Player count for high population
+            'population_threshold_low': 5,         # Player count for low population
+        },
+        
+        # Wealth effects on event types
+        'wealth_modifiers': {
+            'poor_negative_increase': 1.5,        # Poor locations get 50% more negative events
+            'poor_positive_decrease': 0.6,        # Poor locations get 40% fewer positive events
+            'rich_negative_decrease': 0.5,        # Rich locations get 50% fewer negative events
+            'rich_positive_increase': 1.4,        # Rich locations get 40% more positive events
+            'wealth_threshold_poor': 3,           # Wealth level considered poor
+            'wealth_threshold_rich': 7,           # Wealth level considered rich
+        },
+        
+        # Time-based modifiers
+        'time_modifiers': {
+            'peak_hours_multiplier': 1.2,         # 20% more events during peak hours
+            'off_hours_multiplier': 0.8,          # 20% fewer events during off hours
+            'peak_hours_start': 18,               # Peak hours start (6 PM UTC)
+            'peak_hours_end': 23,                 # Peak hours end (11 PM UTC)
+        },
+        
+        # Recent activity modifiers
+        'activity_modifiers': {
+            'recent_event_cooldown': 0.5,         # 50% reduction if event happened recently
+            'high_activity_bonus': 1.3,           # 30% bonus for very active locations
+            'activity_threshold_minutes': 60,      # Time window for activity tracking
+        }
+    },
+    
+    # Minimum time between events (per location)
+    'cooldown_settings': {
+        'global_cooldown_minutes': 5,          # Minimum time between any events globally
+        'location_cooldown_minutes': 30,       # Minimum time between events at same location
+        'player_cooldown_minutes': 10,         # Minimum time between events affecting same player
+        'event_type_cooldown_minutes': 45,     # Minimum time between same event types
+    },
+    
+    # Advanced settings
+    'advanced_settings': {
+        'max_failed_attempts': 3,              # Max failed event generation attempts before skipping
+        'event_history_retention_hours': 24,   # How long to keep event history for cooldowns
+        'cleanup_interval_hours': 6,           # How often to clean up old event data
+        'debug_logging': False,                # Enable detailed event generation logging
     }
 }

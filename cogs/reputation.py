@@ -55,8 +55,14 @@ class ReputationCog(commands.Cog):
 
             # Find neighbors and add to queue for propagation
             neighbors = self.db.execute_query(
-                "SELECT destination_location FROM corridors WHERE origin_location = ? AND is_active = 1",
-                (current_loc_id,),
+                """SELECT DISTINCT CASE 
+                       WHEN origin_location = ? THEN destination_location
+                       ELSE origin_location
+                   END as neighbor_location
+                   FROM corridors 
+                   WHERE (origin_location = ? OR (destination_location = ? AND is_bidirectional = 1)) 
+                   AND is_active = 1""",
+                (current_loc_id, current_loc_id, current_loc_id),
                 fetch='all'
             )
 

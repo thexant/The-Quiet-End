@@ -10,6 +10,7 @@ from cogs.corridor_events import CorridorEventsCog
 import sqlite3
 from typing import Optional
 from utils.item_effects import ItemEffectChecker
+from utils.location_effects import LocationEffectsManager
 
 class DockingFeeView(discord.ui.View):
     def __init__(self, bot, user_id, location_id, fee, origin_location_id):
@@ -239,7 +240,7 @@ class TravelCog(commands.Cog):
         """Handle corridor selection and initiate travel"""
         # grab the choice they just made
         choice = int(interaction.data['values'][0])
-        cid, cname, dest_name, travel_time, cost, _ = next(
+        cid, cname, dest_name, travel_time, cost, dest_type, origin_type, same_system, corridor_type = next(
             c for c in corridors if c[0] == choice
         )
         # Get ship efficiency and modify travel time
@@ -254,8 +255,35 @@ class TravelCog(commands.Cog):
         efficiency_modifier = 1.6 - (ship_efficiency * 0.08)  # 1.36 to 0.8 range
         actual_travel_time = max(int(travel_time * efficiency_modifier), 120)  # Minimum 2 minutes
 
+        # Apply location effects
+        effects_manager = LocationEffectsManager(self.db)
+        travel_modifiers = effects_manager.get_travel_modifiers(origin_id)
+        
+        # Check for travel ban
+        if travel_modifiers['travel_ban']:
+            await interaction.response.send_message(
+                "🚫 **Travel Restricted**: Current location conditions prevent departure.\n"
+                + "\n".join(effects_manager.get_active_effect_descriptions(origin_id)),
+                ephemeral=True
+            )
+            return
+        
+        # Apply travel delay effects
+        delay_modifier = 1.0 + (travel_modifiers['travel_delay'] * 0.2)  # 20% delay per level
+        
+        # Apply fuel efficiency effects
+        fuel_efficiency_modifier = travel_modifiers['fuel_efficiency']
+        
+        # Apply travel bonus (reduces time)
+        bonus_modifier = max(0.5, 1.0 - (travel_modifiers['travel_bonus'] * 0.15))  # 15% reduction per bonus level
+        
+        # Combine all modifiers
+        final_travel_time = max(int(actual_travel_time * delay_modifier * bonus_modifier), 120)
+        final_fuel_cost = max(1, int(cost * fuel_efficiency_modifier))
+        
         # Update the variables for the rest of the function
-        travel_time = actual_travel_time
+        travel_time = final_travel_time
+        cost = final_fuel_cost
         # Check fuel
         char_fuel = self.db.execute_query(
             "SELECT s.current_fuel FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = ?",
@@ -282,6 +310,11 @@ class TravelCog(commands.Cog):
             cname,
             dest_name
         )
+        
+        if transit_chan is None:
+            print(f"❌ Failed to create transit channel for corridor {cname} to {dest_name}")
+            await interaction.followup.send("❌ Failed to create transit channel. Travel cancelled.", ephemeral=True)
+            return
 
         # Record the session (storing transit_chan.id safely)
         start = datetime.utcnow()
@@ -292,12 +325,13 @@ class TravelCog(commands.Cog):
               (user_id, corridor_id, origin_location, destination_location,
                start_time, end_time, temp_channel_id, status)
             VALUES (?, ?, ?, 
-                    (SELECT destination_location FROM corridors WHERE corridor_id = ?),
+                    (SELECT CASE WHEN origin_location = ? THEN destination_location ELSE origin_location END FROM corridors WHERE corridor_id = ?),
                     ?, ?, ?, 'traveling')
             """,
             (
                 interaction.user.id,
                 cid,
+                origin_id,
                 origin_id,
                 cid,
                 start.isoformat(),
@@ -317,7 +351,7 @@ class TravelCog(commands.Cog):
             time_display = f"{mins}m {secs}s"
         
         await interaction.response.edit_message(
-            content=f"🚀 Departure confirmed. ETA: {time_display}",
+            content=f"🚀 Departure confirmed. ETA: {time_display}. Your transit channel is {transit_chan.mention if transit_chan else 'unavailable'}.",
             view=None
         )
 
@@ -362,9 +396,9 @@ class TravelCog(commands.Cog):
         description="Depart along a chosen corridor"
     )
     async def travel_go(self, interaction: discord.Interaction):
-        # fetch both current location and docking status
+        # fetch both current location, docking status, and ship interior status
         row = self.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, current_ship_id FROM characters WHERE user_id = ?",
             (interaction.user.id,),
             fetch='one'
         )
@@ -378,11 +412,19 @@ class TravelCog(commands.Cog):
                     ephemeral=True
                 )
                 return
-        origin_id, status = row
+        origin_id, status, current_ship_id = row
+        
+        # block if inside ship interior
+        if current_ship_id:
+            return await interaction.response.send_message(
+                "❌ You cannot travel while inside your ship interior! Use `/tqe` to leave your ship first.",
+                ephemeral=True
+            )
+        
         # block if docked
         if status == "docked":
             return await interaction.response.send_message(
-                "❌ You must undock before travelling! Use `/character undock`.",
+                "❌ You must undock before travelling! Use `/tqe` to undock.",
                 ephemeral=True
             )
         # NEW: Check for active jobs before allowing travel
@@ -411,7 +453,7 @@ class TravelCog(commands.Cog):
 
         if not login_status or not login_status[0]:
             return await interaction.response.send_message(
-                "❌ You must be logged in to travel! Use `/character login` first.",
+                "❌ You must be logged in to travel! Use the game panel to login first.",
                 ephemeral=True
             )
         travel_restriction = await self.check_travel_restrictions(interaction.user.id)
@@ -430,7 +472,7 @@ class TravelCog(commands.Cog):
 
         if current_home and current_home[0]:
             await interaction.response.send_message(
-                "❌ You cannot travel while inside a home! Use `/home interior leave` first.",
+                "❌ You cannot travel while inside a home! Use `/tqe` to leave your home first.",
                 ephemeral=True
             )
             return
@@ -447,24 +489,53 @@ class TravelCog(commands.Cog):
                 ephemeral=True
             )
             return    
-        # 🔥 FIXED: use origin_location, join on locations, and fetch='all'
+        # 🔥 FIXED: include bidirectional routes with proper classification data
         corridors = self.db.execute_query(
             '''
             SELECT c.corridor_id,
                    c.name,
-                   l.name AS dest_name,
+                   CASE 
+                       WHEN c.origin_location = ? THEN l_dest.name
+                       ELSE l_orig.name
+                   END AS dest_name,
                    c.travel_time,
                    c.fuel_cost,
-                   l.location_type
+                   CASE 
+                       WHEN c.origin_location = ? THEN l_dest.location_type
+                       ELSE l_orig.location_type
+                   END AS dest_type,
+                   lo.location_type AS origin_type,
+                   CASE WHEN lo.system_name = CASE 
+                       WHEN c.origin_location = ? THEN l_dest.system_name
+                       ELSE l_orig.system_name
+                   END THEN 1 ELSE 0 END AS same_system,
+                   c.corridor_type
               FROM corridors c
-              JOIN locations l ON c.destination_location = l.location_id
-             WHERE c.origin_location = ? AND c.is_active = 1
+              JOIN locations l_dest ON c.destination_location = l_dest.location_id
+              JOIN locations l_orig ON c.origin_location = l_orig.location_id
+              JOIN locations lo ON ? = lo.location_id
+             WHERE (c.origin_location = ? OR (c.destination_location = ? AND c.is_bidirectional = 1)) 
+               AND c.is_active = 1
             ''',
-            (origin_id,),
+            (origin_id, origin_id, origin_id, origin_id, origin_id, origin_id),
             fetch='all'
         )
         if not corridors:
             return await interaction.response.send_message("No corridors depart from here.", ephemeral=True)
+
+        # Deduplicate corridors by (destination, corridor_type) to prevent true duplicates
+        # while allowing different route types to the same destination
+        seen_routes = set()
+        unique_corridors = []
+        for corridor in corridors:
+            corridor_id, corridor_name, dest_name, travel_time, fuel_cost, dest_type, origin_type, same_system, corridor_type = corridor
+            # Create unique key: destination name + corridor type
+            route_key = (dest_name, corridor_type)
+            if route_key not in seen_routes:
+                seen_routes.add(route_key)
+                unique_corridors.append(corridor)
+        
+        corridors = unique_corridors
 
         # Get current location name for clearer route display
         current_location_name = self.db.execute_query(
@@ -501,8 +572,8 @@ class TravelCog(commands.Cog):
             # Use regular single-page view for 25 or fewer corridors
             # Build the dropdown
             options = []
-            for cid, cname, dest_name, ttime, cost, dest_type in corridors:
-                label = f"{current_location_name} → {dest_name}"
+            for cid, cname, dest_name, ttime, cost, dest_type, origin_type, same_system, corridor_type in corridors:
+                label = f"To {dest_name}"
                 hours   = ttime // 3600
                 minutes = (ttime % 3600) // 60
                 if hours:
@@ -510,13 +581,30 @@ class TravelCog(commands.Cog):
                 else:
                     time_text = f"{minutes}m"
 
-                # Determine travel type
-                if "Approach" in cname:
+                # Determine travel type based on corridor_type and architectural rules
+                if corridor_type == 'local_space':
                     travel_type = "🌌 LOCAL"
-                elif "Ungated" in cname:
+                elif corridor_type == 'ungated':
                     travel_type = "⭕ UNGATED"
+                elif corridor_type == 'gated':
+                    # Validate: gated corridors should NEVER connect gates to their local locations
+                    major_types = {'colony', 'space_station', 'outpost'}
+                    is_gate_to_local = (origin_type == 'gate' and dest_type in major_types and same_system) or \
+                                       (origin_type in major_types and dest_type == 'gate' and same_system)
+                    
+                    if is_gate_to_local:
+                        # This should be local space, not gated - flag as error but display as local
+                        travel_type = "🌌 LOCAL"
+                    else:
+                        travel_type = "🔵 GATED"
                 else:
-                    travel_type = "🔵 GATED"
+                    # Fallback for legacy corridors without proper corridor_type
+                    if "Approach" in cname or "Local Space" in cname:
+                        travel_type = "🌌 LOCAL"
+                    elif "Ungated" in cname:
+                        travel_type = "⭕ UNGATED"
+                    else:
+                        travel_type = "🔵 GATED"
 
                 desc = f"via {cname} · {time_text} · {cost}⚡ fuel · {travel_type}"
                 options.append(discord.SelectOption(
@@ -525,7 +613,7 @@ class TravelCog(commands.Cog):
                     value=str(cid)
                 ))
 
-            select = ui.Select(placeholder="Choose your corridor", options=options, min_values=1, max_values=1)
+            select = ui.Select(placeholder="Choose your destination", options=options, min_values=1, max_values=1)
 
             async def on_select(inter: discord.Interaction):
                 if inter.user.id != interaction.user.id:
@@ -545,7 +633,7 @@ class TravelCog(commands.Cog):
 
             # grab the choice they just made
             choice = int(select.values[0])
-            cid, cname, dest_name, travel_time, cost, _ = next(
+            cid, cname, dest_name, travel_time, cost, dest_type, origin_type, same_system, corridor_type = next(
                 c for c in corridors if c[0] == choice
             )
             # Get ship efficiency and modify travel time
@@ -560,8 +648,41 @@ class TravelCog(commands.Cog):
             efficiency_modifier = 1.6 - (ship_efficiency * 0.08)  # 1.36 to 0.8 range
             actual_travel_time = max(int(travel_time * efficiency_modifier), 120)  # Minimum 2 minute
 
+            # Apply location effects
+            # First need to get the current location (origin_id)
+            origin_location = self.bot.db.execute_query(
+                "SELECT current_location FROM characters WHERE user_id = ?",
+                (inter.user.id,), fetch='one'
+            )[0]
+            
+            effects_manager = LocationEffectsManager(self.bot.db)
+            travel_modifiers = effects_manager.get_travel_modifiers(origin_location)
+            
+            # Check for travel ban
+            if travel_modifiers['travel_ban']:
+                await inter.response.send_message(
+                    "🚫 **Travel Restricted**: Current location conditions prevent departure.\n"
+                    + "\n".join(effects_manager.get_active_effect_descriptions(origin_location)),
+                    ephemeral=True
+                )
+                return
+            
+            # Apply travel delay effects
+            delay_modifier = 1.0 + (travel_modifiers['travel_delay'] * 0.2)  # 20% delay per level
+            
+            # Apply fuel efficiency effects
+            fuel_efficiency_modifier = travel_modifiers['fuel_efficiency']
+            
+            # Apply travel bonus (reduces time)
+            bonus_modifier = max(0.5, 1.0 - (travel_modifiers['travel_bonus'] * 0.15))  # 15% reduction per bonus level
+            
+            # Combine all modifiers
+            final_travel_time = max(int(actual_travel_time * delay_modifier * bonus_modifier), 120)
+            final_fuel_cost = max(1, int(cost * fuel_efficiency_modifier))
+            
             # Update the variables for the rest of the function
-            travel_time = actual_travel_time
+            travel_time = final_travel_time
+            cost = final_fuel_cost
             # Check fuel
             char_fuel = self.db.execute_query(
                 "SELECT s.current_fuel FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = ?",
@@ -588,6 +709,11 @@ class TravelCog(commands.Cog):
                 cname,
                 dest_name
             )
+            
+            if transit_chan is None:
+                print(f"❌ Failed to create transit channel for corridor {cname} to {dest_name}")
+                await inter.response.send_message("❌ Failed to create transit channel. Travel cancelled.", ephemeral=True)
+                return
 
             # Record the session (storing transit_chan.id safely)
             start = datetime.utcnow()
@@ -598,12 +724,13 @@ class TravelCog(commands.Cog):
                   (user_id, corridor_id, origin_location, destination_location,
                    start_time, end_time, temp_channel_id, status)
                 VALUES (?, ?, ?, 
-                        (SELECT destination_location FROM corridors WHERE corridor_id = ?),
+                        (SELECT CASE WHEN origin_location = ? THEN destination_location ELSE origin_location END FROM corridors WHERE corridor_id = ?),
                         ?, ?, ?, 'traveling')
                 """,
                 (
                     inter.user.id,
                     cid,
+                    origin_id,
                     origin_id,
                     cid,
                     start.isoformat(),
@@ -623,7 +750,7 @@ class TravelCog(commands.Cog):
                 time_display = f"{mins}m {secs}s"
             
             await inter.response.edit_message(
-                content=f"🚀 Departure confirmed. ETA: {time_display}",
+                content=f"🚀 Departure confirmed. ETA: {time_display}. Your transit channel is {transit_chan.mention if transit_chan else 'unavailable'}.",
                 view=None
             )
 
@@ -663,10 +790,6 @@ class TravelCog(commands.Cog):
                 inter.user.id, cid, travel_time, dest_name, transit_chan, inter.guild
             ))
 
-        select.callback = on_select
-        view = ui.View(timeout=60)
-        view.add_item(select)
-        await interaction.response.send_message("Select your route to depart:", view=view, ephemeral=True)
     async def _check_active_jobs(self, user_id: int, interaction: discord.Interaction) -> bool:
         """Check if user has active stationary jobs and warn them. Returns True if should proceed."""
         active_jobs = self.db.execute_query(
@@ -919,6 +1042,7 @@ class TravelCog(commands.Cog):
     async def _complete_travel_after_delay(self, user_id, corridor_id, travel_time, dest_name, transit_chan, guild):
         """Waits for travel time and then hands off to the arrival handler."""
         await asyncio.sleep(travel_time)
+        print(f"🔍 DEBUG: Travel completed for user {user_id}, corridor {corridor_id}, transit_chan: {transit_chan}")
 
         try:
             session_info = self.db.execute_query(
@@ -939,6 +1063,8 @@ class TravelCog(commands.Cog):
             await self._handle_arrival_access(user_id, dest_location_id, origin_location_id, guild, transit_chan)
         except Exception as e:
             print(f"❌ Error during initial travel completion: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             # ✅ FIXED: Ensure channel is always cleaned up here, after arrival is fully handled.
             if transit_chan:
@@ -947,6 +1073,7 @@ class TravelCog(commands.Cog):
 
     async def _handle_arrival_access(self, user_id: int, dest_location_id: int, origin_location_id: int, guild: discord.Guild, transit_chan: discord.TextChannel):
         """Handles docking access checks, fees, and combat for faction-controlled areas."""
+        print(f"🔍 DEBUG: _handle_arrival_access called for user {user_id}, dest {dest_location_id}, transit_chan: {transit_chan}")
         # Get destination and character info with fallback for missing faction column
         try:
             location_info = self.db.execute_query("SELECT name, faction FROM locations WHERE location_id = ?", (dest_location_id,), fetch='one')
@@ -1109,6 +1236,7 @@ class TravelCog(commands.Cog):
 
     async def _grant_final_access(self, user_id: int, dest_location_id: int, guild: discord.Guild, transit_chan: discord.TextChannel, arrival_message: str = ""):
         """Finalizes arrival, updates DB and channels, and cleans up."""
+        print(f"🔍 DEBUG: _grant_final_access called for user {user_id}, dest {dest_location_id}, transit_chan: {transit_chan}")
         try:
             # Update character location first
             self.db.execute_query(
@@ -1160,10 +1288,22 @@ class TravelCog(commands.Cog):
                 except Exception as perm_error:
                     print(f"❌ Failed to set permissions for {member.name} in {location_channel.name}: {perm_error}")
                 
+                # Check for transport job notifications with delay to ensure user sees arrival
+                import asyncio
+                asyncio.create_task(self._delayed_transport_job_check(user_id, dest_location_id))
+                
+                # Get character name for arrival message
+                char_data = self.db.execute_query(
+                    "SELECT name FROM characters WHERE user_id = ?",
+                    (user_id,),
+                    fetch='one'
+                )
+                character_name = char_data[0] if char_data else member.display_name
+                
                 # Send arrival announcement in destination channel
                 embed = discord.Embed(
                     title="🚀 Arrival",
-                    description=f"{member.mention} has arrived from their journey!",
+                    description=f"**{character_name}** has arrived from their journey!",
                     color=0x00ff00
                 )
                 try:
@@ -1171,9 +1311,25 @@ class TravelCog(commands.Cog):
                 except Exception as e:
                     print(f"❌ Failed to send arrival embed: {e}")
                 
+                # Check for travel completion XP bonus (15% chance)
+                # Temporarily commented out due to AttributeError - needs bot restart
+                # await self._try_award_travel_xp_bonus(user_id, location_channel)
+                
                 # Notify user in transit channel with link to destination
+                print(f"🔍 DEBUG: About to send arrival message. transit_chan: {transit_chan}, location_channel: {location_channel}")
                 if transit_chan:
                     try:
+                        # Validate transit channel is still accessible
+                        print(f"🔍 DEBUG: Validating transit channel accessibility...")
+                        try:
+                            await transit_chan.fetch_message(transit_chan.last_message_id) if transit_chan.last_message_id else None
+                            print(f"🔍 DEBUG: Transit channel validation passed")
+                        except (discord.NotFound, discord.Forbidden, AttributeError):
+                            print(f"❌ Transit channel {transit_chan.id} is no longer accessible")
+                            # Try to send via DM as fallback
+                            await self._send_arrival_dm_fallback(member, dest_location_id, location_channel)
+                            return
+                        
                         if not arrival_message:
                             location_name = self.db.execute_query(
                                 "SELECT name FROM locations WHERE location_id = ?",
@@ -1182,24 +1338,39 @@ class TravelCog(commands.Cog):
                             )
                             arrival_message = f"✅ Arrived at **{location_name[0] if location_name else 'Unknown Location'}**!"
                         
+                        print(f"🔍 DEBUG: About to send message: '{arrival_message}\\n📍 You can now access {location_channel.mention}'")
                         await transit_chan.send(
                             f"{arrival_message}\n📍 You can now access {location_channel.mention}"
                         )
+                        print(f"✅ Sent arrival message to transit channel for user {user_id}")
+                        
+                    except discord.HTTPException as http_error:
+                        print(f"❌ Discord HTTP error sending arrival message: {http_error}")
+                        await self._send_arrival_dm_fallback(member, dest_location_id, location_channel)
                     except Exception as msg_error:
-                        print(f"❌ Failed to send arrival message: {msg_error}")
+                        print(f"❌ Unexpected error sending arrival message: {msg_error}")
+                        await self._send_arrival_dm_fallback(member, dest_location_id, location_channel)
+                else:
+                    print(f"❌ No transit channel available for arrival message - sending DM fallback")
+                    await self._send_arrival_dm_fallback(member, dest_location_id, location_channel)
             else:
                 print(f"❌ Could not create or access destination channel for location {dest_location_id}")
                 # Still notify in transit channel
                 if transit_chan:
-                    location_name = self.db.execute_query(
-                        "SELECT name FROM locations WHERE location_id = ?",
-                        (dest_location_id,),
-                        fetch='one'
-                    )
-                    await transit_chan.send(
-                        f"✅ Arrived at **{location_name[0] if location_name else 'Unknown Location'}**!\n"
-                        f"⚠️ There was an issue creating the location channel. Please contact an admin."
-                    )
+                    try:
+                        location_name = self.db.execute_query(
+                            "SELECT name FROM locations WHERE location_id = ?",
+                            (dest_location_id,),
+                            fetch='one'
+                        )
+                        await transit_chan.send(
+                            f"✅ Arrived at **{location_name[0] if location_name else 'Unknown Location'}**!\n"
+                            f"⚠️ There was an issue creating the location channel. Please contact an admin."
+                        )
+                        print(f"✅ Sent fallback arrival message to transit channel for user {user_id}")
+                    except Exception as fallback_error:
+                        print(f"❌ Failed to send fallback message to transit channel: {fallback_error}")
+                        await self._send_arrival_dm_fallback(member, dest_location_id, None)
                         
             # Cleanup progress tracking
             for key in list(self.active_status_messages.keys()):
@@ -1244,6 +1415,67 @@ class TravelCog(commands.Cog):
         else:
             print(f"❌ Could not find member {user_id} to give location access during retreat")
 
+    async def _delayed_transport_job_check(self, user_id: int, dest_location_id: int):
+        """Wait a few seconds then check for transport job notifications"""
+        import asyncio
+        await asyncio.sleep(3)  # 3 second delay
+        await self._check_transport_job_notifications(user_id, dest_location_id)
+
+    async def _check_transport_job_notifications(self, user_id: int, dest_location_id: int):
+        """Check if the user has transport jobs that are ready for completion at this destination"""
+        try:
+            # Check for transport jobs that have this location as their destination
+            transport_jobs = self.db.execute_query(
+                '''SELECT job_id, title, reward_money 
+                   FROM jobs 
+                   WHERE taken_by = ? 
+                   AND is_taken = 1 
+                   AND destination_location_id = ?
+                   AND job_status != 'completed'
+                   AND job_status != 'awaiting_finalization' ''',
+                (user_id, dest_location_id),
+                fetch='all'
+            )
+            
+            if not transport_jobs:
+                return  # No transport jobs for this destination
+            
+            # Get location info for the notification
+            location_info = self.db.execute_query(
+                "SELECT name, channel_id FROM locations WHERE location_id = ?",
+                (dest_location_id,),
+                fetch='one'
+            )
+            
+            if not location_info or not location_info[1]:
+                print(f"❌ Could not find channel for location {dest_location_id}")
+                return
+                
+            location_name, channel_id = location_info
+            channel = self.bot.get_channel(channel_id)
+            user = self.bot.get_user(user_id)
+            
+            if not channel or not user:
+                print(f"❌ Could not find channel {channel_id} or user {user_id}")
+                return
+            
+            # Send notifications for each transport job
+            for job_id, title, reward in transport_jobs:
+                embed = discord.Embed(
+                    title="🚛 Transport Job Ready for Completion!",
+                    description=f"**{title}** has reached its destination!",
+                    color=0x00aa00
+                )
+                embed.add_field(name="📍 Destination", value=location_name, inline=True)
+                embed.add_field(name="💰 Reward", value=f"{reward:,} credits", inline=True)
+                embed.add_field(name="💡 Next Step", value="Use `/tqe` to start unloading", inline=False)
+                
+                await channel.send(f"{user.mention}, your transport job is ready for completion!", embed=embed, delete_after=60)
+                print(f"✅ Sent transport job notification for job {job_id} to {user.name} in {location_name}")
+                
+        except Exception as e:
+            print(f"❌ Error checking transport job notifications: {e}")
+
 
     @travel_group.command(name="routes", description="View available travel routes from current location")
     async def view_routes(self, interaction: discord.Interaction):
@@ -1259,36 +1491,59 @@ class TravelCog(commands.Cog):
                 return
                 
             if not char_location[0]:
-                await interaction.response.send_message("You are currently in transit. Use `/travel status` to check your journey progress.", ephemeral=True)
+                await interaction.response.send_message("You are currently in transit. Use `/tqe` to check your journey progress.", ephemeral=True)
                 return
             
             current_location_id = char_location[0]
             
-            # Get current location name with error checking
-            location_name_result = self.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
+            # Get current location name and faction info with error checking
+            location_info_result = self.db.execute_query(
+                "SELECT name, COALESCE(faction, 'Independent'), COALESCE(is_derelict, 0) FROM locations WHERE location_id = ?",
                 (current_location_id,),
                 fetch='one'
             )
             
-            if not location_name_result:
+            if not location_info_result:
                 await interaction.response.send_message("Current location not found!", ephemeral=True)
                 return
                 
-            current_location_name = location_name_result[0]
-            # Use the same query pattern as travel_go (which works)
+            current_location_name, current_faction, current_is_derelict = location_info_result
+            # Get routes with location types, faction info, and system info for proper classification (including bidirectional)
             routes = self.db.execute_query(
                 '''SELECT c.corridor_id,
                           c.name,
-                          l.name AS dest_name,
+                          CASE 
+                              WHEN c.origin_location = ? THEN l_dest.name
+                              ELSE l_orig.name
+                          END AS dest_name,
                           c.travel_time,
                           c.fuel_cost,
-                          l.location_type
+                          CASE 
+                              WHEN c.origin_location = ? THEN l_dest.location_type
+                              ELSE l_orig.location_type
+                          END AS location_type,
+                          lo.location_type AS origin_type,
+                          CASE WHEN lo.system_name = CASE 
+                              WHEN c.origin_location = ? THEN l_dest.system_name
+                              ELSE l_orig.system_name
+                          END THEN 1 ELSE 0 END AS same_system,
+                          c.corridor_type,
+                          CASE 
+                              WHEN c.origin_location = ? THEN COALESCE(l_dest.faction, 'Independent')
+                              ELSE COALESCE(l_orig.faction, 'Independent')
+                          END AS dest_faction,
+                          CASE 
+                              WHEN c.origin_location = ? THEN COALESCE(l_dest.is_derelict, 0)
+                              ELSE COALESCE(l_orig.is_derelict, 0)
+                          END AS dest_is_derelict
                    FROM corridors c
-                   JOIN locations l ON c.destination_location = l.location_id
-                   WHERE c.origin_location = ? AND c.is_active = 1
+                   JOIN locations l_dest ON c.destination_location = l_dest.location_id
+                   JOIN locations l_orig ON c.origin_location = l_orig.location_id
+                   JOIN locations lo ON ? = lo.location_id
+                   WHERE (c.origin_location = ? OR (c.destination_location = ? AND c.is_bidirectional = 1)) 
+                   AND c.is_active = 1
                    ORDER BY c.travel_time''',
-                (current_location_id,),
+                (current_location_id, current_location_id, current_location_id, current_location_id, current_location_id, current_location_id, current_location_id, current_location_id),
                 fetch='all'
             )
             
@@ -1297,8 +1552,77 @@ class TravelCog(commands.Cog):
                 description=f"Routes departing from **{current_location_name}**",
                 color=0x4169E1
             )
+            
+            # Add active location effects
+            effects_manager = LocationEffectsManager(self.db)
+            active_effects = effects_manager.get_active_effect_descriptions(current_location_id)
+            
+            if active_effects:
+                embed.add_field(
+                    name="⚡ Active Location Effects",
+                    value="\n".join(active_effects),
+                    inline=False
+                )
+            
+            # Add special warnings for dangerous destinations
+            if routes:
+                dangerous_destinations = []
+                derelict_destinations = []
+                
+                for route in routes:
+                    corridor_id, corridor_name, dest_name, travel_time, fuel_cost, dest_type, origin_type, same_system, corridor_type, dest_faction, dest_is_derelict = route
+                    if dest_is_derelict and dest_name not in [d[0] for d in derelict_destinations]:
+                        derelict_destinations.append((dest_name, dest_type))
+                    elif dest_faction in ['loyalist', 'outlaw'] and dest_name not in [d[0] for d in dangerous_destinations]:
+                        faction_name = "Federal" if dest_faction == 'loyalist' else "Outlaw"
+                        dangerous_destinations.append((dest_name, faction_name))
+                
+                warnings = []
+                if derelict_destinations:
+                    derelict_list = ", ".join([f"**{name}**" for name, _ in derelict_destinations[:3]])
+                    if len(derelict_destinations) > 3:
+                        derelict_list += f" (+{len(derelict_destinations) - 3} more)"
+                    warnings.append(f"💀 **Derelict Locations:** {derelict_list}")
+                
+                if dangerous_destinations:
+                    # Group by faction type
+                    federal_locs = [name for name, faction in dangerous_destinations if faction == "Federal"]
+                    outlaw_locs = [name for name, faction in dangerous_destinations if faction == "Outlaw"]
+                    
+                    if federal_locs:
+                        federal_list = ", ".join([f"**{name}**" for name in federal_locs[:3]])
+                        if len(federal_locs) > 3:
+                            federal_list += f" (+{len(federal_locs) - 3} more)"
+                        warnings.append(f"🛡️ **Federal Territory:** {federal_list}")
+                    
+                    if outlaw_locs:
+                        outlaw_list = ", ".join([f"**{name}**" for name in outlaw_locs[:3]])
+                        if len(outlaw_locs) > 3:
+                            outlaw_list += f" (+{len(outlaw_locs) - 3} more)"
+                        warnings.append(f"⚔️ **Outlaw Territory:** {outlaw_list}")
+                
+                if warnings:
+                    embed.add_field(
+                        name="⚠️ Special Territories",
+                        value="\n".join(warnings) + "\n*Access may be restricted or dangerous*",
+                        inline=False
+                    )
                 
             if routes:
+                # Deduplicate routes by (destination, corridor_type) to prevent true duplicates
+                # while allowing different route types to the same destination
+                seen_routes = set()
+                unique_routes = []
+                for route in routes:
+                    corridor_id, corridor_name, dest_name, travel_time, fuel_cost, dest_type, origin_type, same_system, corridor_type, dest_faction, dest_is_derelict = route
+                    # Create unique key: destination name + corridor type
+                    route_key = (dest_name, corridor_type)
+                    if route_key not in seen_routes:
+                        seen_routes.add(route_key)
+                        unique_routes.append(route)
+                
+                routes = unique_routes
+                
                 # Get ship efficiency for time estimates
                 ship_efficiency = self.db.execute_query(
                     "SELECT fuel_efficiency FROM ships WHERE owner_id = ?",
@@ -1317,17 +1641,19 @@ class TravelCog(commands.Cog):
                 for chunk_idx, route_chunk in enumerate(route_chunks[:3]):  # Max 3 fields to stay under embed limits
                     route_lines = []
                     
-                    for corridor_id, corridor_name, dest_name, travel_time, fuel_cost, dest_type in route_chunk:
+                    for corridor_id, corridor_name, dest_name, travel_time, fuel_cost, dest_type, origin_type, same_system, corridor_type, dest_faction, dest_is_derelict in route_chunk:
                         # Apply ship efficiency to displayed time
                         actual_time = max(int(travel_time * efficiency_modifier), 60)
                         
-                        # Determine route type emoji
-                        if "Approach" in corridor_name:
-                            route_emoji = "🌌"
-                        elif "Ungated" in corridor_name:
-                            route_emoji = "⭕"
+                        # Determine route type emoji using corridor_type column
+                        if corridor_type == 'local_space':
+                            route_emoji = "🌌"  # Local space routes
+                        elif corridor_type == 'ungated':
+                            route_emoji = "⭕"  # Ungated (risky) routes
+                        elif corridor_type == 'gated':
+                            route_emoji = "🔵"  # Gated (safe) routes
                         else:
-                            route_emoji = "🔵"
+                            route_emoji = "❓"  # Unknown type fallback
                         
                         dest_emoji = {
                             'colony': '🏭',
@@ -1360,7 +1686,7 @@ class TravelCog(commands.Cog):
                 if total_routes > 30:  # 3 fields * 10 routes each
                     embed.add_field(
                         name="📊 Route Summary",
-                        value=f"Showing first 30 of {total_routes} routes.\nUse `/travel go` to see all options.",
+                        value=f"Showing first 30 of {total_routes} routes.\nUse `/tqe` to see all options.",
                         inline=False
                     )
                 else:
@@ -1391,7 +1717,7 @@ class TravelCog(commands.Cog):
             
             embed.add_field(
                 name="💡 Next Step",
-                value="Use `/travel go` to depart",
+                value="Use `/tqe` to depart",
                 inline=True
             )
             
@@ -1551,7 +1877,7 @@ class TravelCog(commands.Cog):
 
         if not login_status or not login_status[0]:
             await interaction.response.send_message(
-                "❌ You must be logged in to plot routes! Use `/character login` first.",
+                "❌ You must be logged in to plot routes! Use the game panel to login first.",
                 ephemeral=True
             )
             return
@@ -1699,7 +2025,7 @@ class TravelCog(commands.Cog):
         )
         if not login_status or not login_status[0]:
             await interaction.response.send_message(
-                "❌ You must be logged in to plot routes! Use `/character login` first.",
+                "❌ You must be logged in to plot routes! Use the game panel to login first.",
                 ephemeral=True
             )
             return
@@ -1791,9 +2117,9 @@ class TravelCog(commands.Cog):
     async def _calculate_shortest_route(self, start_id: int, end_id: int) -> list:
         """Calculate shortest route using BFS pathfinding"""
         
-        # Get all active corridors
+        # Get all active corridors including bidirectional info
         corridors = self.db.execute_query(
-            "SELECT origin_location, destination_location, corridor_id, name, travel_time FROM corridors WHERE is_active = 1",
+            "SELECT origin_location, destination_location, corridor_id, name, travel_time, corridor_type, is_bidirectional FROM corridors WHERE is_active = 1",
             fetch='all'
         )
         
@@ -1801,15 +2127,29 @@ class TravelCog(commands.Cog):
         graph = {}
         corridor_info = {}
         
-        for origin, dest, corridor_id, corridor_name, travel_time in corridors:
+        for origin, dest, corridor_id, corridor_name, travel_time, corridor_type, is_bidirectional in corridors:
+            # Add forward direction
             if origin not in graph:
                 graph[origin] = []
             graph[origin].append(dest)
             corridor_info[(origin, dest)] = {
                 'corridor_id': corridor_id,
                 'name': corridor_name,
-                'travel_time': travel_time
+                'travel_time': travel_time,
+                'corridor_type': corridor_type
             }
+            
+            # Add reverse direction if bidirectional
+            if is_bidirectional:
+                if dest not in graph:
+                    graph[dest] = []
+                graph[dest].append(origin)
+                corridor_info[(dest, origin)] = {
+                    'corridor_id': corridor_id,
+                    'name': corridor_name,
+                    'travel_time': travel_time,
+                    'corridor_type': corridor_type
+                }
         
         # BFS to find shortest path
         from collections import deque
@@ -1850,7 +2190,8 @@ class TravelCog(commands.Cog):
                             'dest_name': dest_info[0],
                             'dest_type': dest_info[1],
                             'corridor_name': corridor['name'],
-                            'travel_time': corridor['travel_time']
+                            'travel_time': corridor['travel_time'],
+                            'corridor_type': corridor['corridor_type']
                         })
                 
                 return detailed_route
@@ -1914,9 +2255,17 @@ class TravelCog(commands.Cog):
             step_secs = step_time % 60
             time_str = f"{step_mins}m {step_secs}s" if step_mins > 0 else f"{step_secs}s"
             
-            # Add corridor
-            corridor_type = "🔵" if "Ungated" not in step['corridor_name'] else "⭕"
-            route_steps.append(f"    ↓ *{step['corridor_name']}* ({time_str}) {corridor_type}")
+            # Add corridor with proper type emoji
+            if step['corridor_type'] == 'local_space':
+                type_emoji = "🌌"  # Local space routes
+            elif step['corridor_type'] == 'ungated':
+                type_emoji = "⭕"  # Ungated (risky) routes
+            elif step['corridor_type'] == 'gated':
+                type_emoji = "🔵"  # Gated (safe) routes
+            else:
+                type_emoji = "❓"  # Unknown type fallback
+            
+            route_steps.append(f"    ↓ *{step['corridor_name']}* ({time_str}) {type_emoji}")
             
             # Add destination
             dest_emoji = step_emojis.get(step['dest_type'], '📍')
@@ -1994,7 +2343,7 @@ class TravelCog(commands.Cog):
             
             embed.add_field(
                 name="💡 Next Steps",
-                value="Use `/travel go` to begin your journey along this route.",
+                value="Use `/tqe` to begin your journey along this route.",
                 inline=False
             )
             
@@ -2054,10 +2403,8 @@ class EmergencyExitView(discord.ui.View):
                 return
 
             # Survived the damage, apply hull damage and relocate
-            self.bot.db.execute_query(
-                "UPDATE ships SET hull_integrity = MAX(1, hull_integrity - ?) WHERE owner_id = ?",
-                (hull_loss, self.user_id)
-            )
+            if char_cog:
+                await char_cog.update_ship_hull(self.user_id, -hull_loss, interaction.guild)
 
             # Relocate to a random, non-gate location
             random_location = self.bot.db.execute_query(
@@ -2211,7 +2558,8 @@ class JobCancellationConfirmView(discord.ui.View):
                    l.name AS dest_name,
                    c.travel_time,
                    c.fuel_cost,
-                   l.location_type
+                   l.location_type,
+                   c.corridor_type
               FROM corridors c
               JOIN locations l ON c.destination_location = l.location_id
              WHERE c.origin_location = ? AND c.is_active = 1
@@ -2234,8 +2582,8 @@ class JobCancellationConfirmView(discord.ui.View):
         # Build the dropdown - reuse existing logic from travel_go
         from discord import ui
         options = []
-        for cid, cname, dest_name, ttime, cost, dest_type in corridors:
-            label = f"{current_location_name} → {dest_name}"
+        for cid, cname, dest_name, ttime, cost, dest_type, corridor_type in corridors:
+            label = f"To {dest_name}"
             hours   = ttime // 3600
             minutes = (ttime % 3600) // 60
             if hours:
@@ -2258,7 +2606,7 @@ class JobCancellationConfirmView(discord.ui.View):
                 value=str(cid)
             ))
 
-        select = ui.Select(placeholder="Choose your corridor", options=options, min_values=1, max_values=1)
+        select = ui.Select(placeholder="Choose your destination", options=options, min_values=1, max_values=1)
         
         # This needs the same callback logic as the original travel_go - simplified version
         async def on_select(inter: discord.Interaction):
@@ -2319,6 +2667,11 @@ class JobCancellationConfirmView(discord.ui.View):
             transit_chan = await travel_cog.channel_mgr.create_transit_channel(
                 inter.guild, inter.user, cname, dest_name
             )
+            
+            if transit_chan is None:
+                print(f"❌ Failed to create transit channel for corridor {cname} to {dest_name}")
+                await inter.response.send_message("❌ Failed to create transit channel. Travel cancelled.", ephemeral=True)
+                return
 
             # Record the session
             start = datetime.utcnow()
@@ -2329,10 +2682,10 @@ class JobCancellationConfirmView(discord.ui.View):
                   (user_id, corridor_id, origin_location, destination_location,
                    start_time, end_time, temp_channel_id, status)
                 VALUES (?, ?, ?, 
-                        (SELECT destination_location FROM corridors WHERE corridor_id = ?),
+                        (SELECT CASE WHEN origin_location = ? THEN destination_location ELSE origin_location END FROM corridors WHERE corridor_id = ?),
                         ?, ?, ?, 'traveling')
                 """,
-                (inter.user.id, cid, origin_id, cid, start.isoformat(), end.isoformat(), transit_chan.id if transit_chan else None)
+                (inter.user.id, cid, origin_id, origin_id, cid, start.isoformat(), end.isoformat(), transit_chan.id if transit_chan else None)
             )
 
             # Confirm departure
@@ -2346,7 +2699,7 @@ class JobCancellationConfirmView(discord.ui.View):
                 time_display = f"{mins}m {secs}s"
             
             await inter.response.edit_message(
-                content=f"🚀 Departure confirmed after job cancellation. ETA: {time_display}",
+                content=f"🚀 Departure confirmed after job cancellation. ETA: {time_display}. Your transit channel is {transit_chan.mention if transit_chan else 'unavailable'}.",
                 view=None
             )
 
@@ -2379,7 +2732,112 @@ class JobCancellationConfirmView(discord.ui.View):
         view = ui.View(timeout=60)
         view.add_item(select)
         await interaction.response.send_message("Jobs cancelled. Select your route to depart:", view=view, ephemeral=True)
+
+    async def _try_award_travel_xp_bonus(self, user_id: int, location_channel: discord.TextChannel):
+        """Award travel completion XP bonus with 15% chance"""
+        import random
         
+        # 15% chance to gain XP
+        if random.random() >= 0.15:
+            return
+        
+        try:
+            # Get the most recent completed travel session for this user
+            travel_session = self.db.execute_query(
+                """SELECT ts.corridor_id, ts.start_time, ts.end_time, c.travel_time, c.danger_level
+                   FROM travel_sessions ts
+                   JOIN corridors c ON ts.corridor_id = c.corridor_id
+                   WHERE ts.user_id = ? AND ts.status = 'arrived'
+                   ORDER BY ts.session_id DESC LIMIT 1""",
+                (user_id,),
+                fetch='one'
+            )
+            
+            if not travel_session:
+                return
+            
+            corridor_id, start_time, end_time, base_travel_time, danger_level = travel_session
+            
+            # Calculate XP bonus
+            base_xp = 15
+            
+            # Time factor: longer journeys give more XP (caps at 3x for 10+ minute journeys)
+            time_factor = min(3.0, base_travel_time / 600)
+            
+            # Danger factor: 10% bonus per danger level
+            danger_factor = 1 + (danger_level * 0.1)
+            
+            # Calculate final XP (cap at 100 XP to keep it reasonable)
+            final_xp = min(100, int(base_xp * time_factor * danger_factor))
+            
+            # Award XP to character
+            self.db.execute_query(
+                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                (final_xp, user_id)
+            )
+            
+            # Check for level up
+            char_cog = self.bot.get_cog('CharacterCog')
+            if char_cog:
+                await char_cog.level_up_check(user_id)
+            
+            # Send ephemeral message to user in their new location
+            try:
+                # Get member to send them a message
+                member = location_channel.guild.get_member(user_id)
+                if member:
+                    await location_channel.send(
+                        f"{member.mention} You feel more experienced in travelling and earned **{final_xp} XP**!",
+                        delete_after=30
+                    )
+            except Exception as e:
+                print(f"❌ Failed to send travel XP bonus message: {e}")
+                
+        except Exception as e:
+            print(f"❌ Error in travel XP bonus: {e}")
+
+    async def _send_arrival_dm_fallback(self, member: discord.Member, dest_location_id: int, location_channel: discord.TextChannel = None):
+        """Send arrival notification via DM as a fallback when transit channel messaging fails."""
+        try:
+            # Get location name
+            location_name = self.db.execute_query(
+                "SELECT name FROM locations WHERE location_id = ?",
+                (dest_location_id,),
+                fetch='one'
+            )
+            location_name = location_name[0] if location_name else 'Unknown Location'
+            
+            # Create embed for DM
+            embed = discord.Embed(
+                title="🚀 Travel Complete",
+                description=f"You have arrived at **{location_name}**!",
+                color=0x00ff00
+            )
+            
+            if location_channel:
+                embed.add_field(
+                    name="Location Channel",
+                    value=f"Access your destination: {location_channel.mention}",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="Channel Issue",
+                    value="There was an issue creating your location channel. Please contact an admin.",
+                    inline=False
+                )
+            
+            embed.set_footer(text="This message was sent because the transit channel was unavailable.")
+            
+            # Send DM
+            await member.send(embed=embed)
+            print(f"✅ Sent arrival notification via DM to {member.name} for location {dest_location_id}")
+            
+        except discord.Forbidden:
+            print(f"❌ Cannot send DM to {member.name} - DMs disabled")
+        except Exception as dm_error:
+            print(f"❌ Failed to send arrival DM fallback: {dm_error}")
+
 async def setup(bot):
     await bot.add_cog(TravelCog(bot))
     
@@ -2417,7 +2875,7 @@ class PaginatedCorridorSelectView(discord.ui.View):
         options = []
         page_corridors = self._get_current_page_corridors()
         
-        for cid, cname, dest_name, ttime, cost, dest_type in page_corridors:
+        for cid, cname, dest_name, ttime, cost, dest_type, origin_type, same_system, corridor_type in page_corridors:
             label = f"{self.current_location_name} → {dest_name}"
             hours = ttime // 3600
             minutes = (ttime % 3600) // 60
@@ -2426,13 +2884,30 @@ class PaginatedCorridorSelectView(discord.ui.View):
             else:
                 time_text = f"{minutes}m"
 
-            # Determine travel type
-            if "Approach" in cname:
+            # Determine travel type based on corridor_type and architectural rules
+            if corridor_type == 'local_space':
                 travel_type = "🌌 LOCAL"
-            elif "Ungated" in cname:
+            elif corridor_type == 'ungated':
                 travel_type = "⭕ UNGATED"
+            elif corridor_type == 'gated':
+                # Validate: gated corridors should NEVER connect gates to their local locations
+                major_types = {'colony', 'space_station', 'outpost'}
+                is_gate_to_local = (origin_type == 'gate' and dest_type in major_types and same_system) or \
+                                   (origin_type in major_types and dest_type == 'gate' and same_system)
+                
+                if is_gate_to_local:
+                    # This should be local space, not gated - flag as error but display as local
+                    travel_type = "🌌 LOCAL"
+                else:
+                    travel_type = "🔵 GATED"
             else:
-                travel_type = "🔵 GATED"
+                # Fallback for legacy corridors without proper corridor_type
+                if "Approach" in cname or "Local Space" in cname:
+                    travel_type = "🌌 LOCAL"
+                elif "Ungated" in cname:
+                    travel_type = "⭕ UNGATED"
+                else:
+                    travel_type = "🔵 GATED"
 
             desc = f"via {cname} · {time_text} · {cost}⚡ fuel · {travel_type}"
             options.append(discord.SelectOption(
@@ -2442,7 +2917,7 @@ class PaginatedCorridorSelectView(discord.ui.View):
             ))
 
         select = discord.ui.Select(
-            placeholder=f"Choose your corridor (Page {self.current_page}/{self.max_page})", 
+            placeholder=f"Choose your destination (Page {self.current_page}/{self.max_page})", 
             options=options,
             min_values=1,
             max_values=1,
@@ -2655,7 +3130,8 @@ class CorridorSearchModal(discord.ui.Modal):
                                    l.name AS dest_name,
                                    c.travel_time,
                                    c.fuel_cost,
-                                   l.location_type
+                                   l.location_type,
+                                   c.corridor_type
                               FROM corridors c
                               JOIN locations l ON c.destination_location = l.location_id
                              WHERE c.origin_location = ? AND c.is_active = 1

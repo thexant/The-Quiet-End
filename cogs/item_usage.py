@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import json
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 import uuid
 import random
@@ -61,7 +61,7 @@ class ItemUsageCog(commands.Cog):
         usage_type = metadata.get("usage_type")
         
         # REPLACE THE EXISTING NARRATIVE ITEM HANDLING WITH THIS
-        if not usage_type or usage_type == "narrative":
+        if (not usage_type or usage_type == "narrative") and usage_type != "radio_beacon":
             if usage_type == "narrative" or not usage_type:
                 # Get uses_remaining for narrative items
                 uses_remaining = metadata.get("uses_remaining")
@@ -194,8 +194,6 @@ class ItemUsageCog(commands.Cog):
     
     def check_active_effects(self, user_id: int, effect_type: str = None) -> dict:
         """Check active effects stored in inventory"""
-        import json
-        from datetime import datetime
         
         # Get all effect items
         query = '''SELECT item_name, metadata FROM inventory 
@@ -397,6 +395,46 @@ class ItemUsageCog(commands.Cog):
                 "embed": embed,
                 "view": view
             }
+        elif usage_type == "radio_beacon":
+            # Radio beacon - deploy with custom message (6 transmissions, 1 hour apart)
+            char_data = self.db.execute_query(
+                "SELECT current_location FROM characters WHERE user_id = ?",
+                (user_id,), fetch='one'
+            )
+            
+            if not char_data or not char_data[0]:
+                return {"success": False, "message": "Cannot deploy beacon while stranded in space!"}
+            
+            location_id = char_data[0]
+            
+            # Create beacon configuration view
+            from cogs.beacon_system import BeaconView
+            view = BeaconView(self.bot, user_id, "radio_beacon", location_id, item_id)
+            
+            embed = discord.Embed(
+                title="📻 Radio Beacon Configuration",
+                description="Configure your radio beacon before deployment.",
+                color=0x0066cc
+            )
+            embed.add_field(
+                name="📡 Beacon Specifications",
+                value="• **Transmissions:** 6 times over 6 hours\n• **Frequency:** Once per hour\n• **Range:** Local galactic radio network",
+                inline=False
+            )
+            embed.add_field(
+                name="⚠️ Important",
+                value="The beacon will continue transmitting even if you leave the area. Choose your message carefully.",
+                inline=False
+            )
+            
+            # This needs to be handled by returning a special response that the calling code can handle
+            return {
+                "success": True, 
+                "message": "Radio beacon ready for configuration",
+                "requires_interaction": True,
+                "embed": embed,
+                "view": view
+            }
         elif usage_type == "add_credits":
             # Unmarked Credits - adds credits directly (WORKS WITH EXISTING characters TABLE)
             self.db.execute_query(
@@ -407,7 +445,6 @@ class ItemUsageCog(commands.Cog):
 
         elif usage_type == "bypass_security":
             # Forged Transit Papers - stores in inventory metadata as active effect
-            import json
             expire_time = (datetime.now() + timedelta(hours=2)).isoformat()
             
             # Add a special inventory item to track the active effect
@@ -456,7 +493,6 @@ class ItemUsageCog(commands.Cog):
 
         elif usage_type == "federal_access":
             # Federal ID Card - stores as permanent item in inventory with special metadata
-            import json
             metadata = json.dumps({"permanent_effect": "federal_access", "acquired": datetime.utcnow().isoformat()})
             
             # Check if already has federal access
@@ -480,7 +516,6 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "comm_access":
             # Federal Comm Codes - adds to inventory as permanent communication access
             if effect_value == "federal_channels":
-                import json
                 metadata = json.dumps({"comm_channels": ["federal", "emergency", "classified"]})
                 
                 existing = self.db.execute_query(
@@ -535,7 +570,6 @@ class ItemUsageCog(commands.Cog):
 
         elif usage_type == "permit_access":
             # Federal Permit - stores as inventory item granting restricted zone access
-            import json
             metadata = json.dumps({"zones": ["restricted", "classified", "military"], "clearance_level": 3})
             
             existing = self.db.execute_query(
@@ -556,7 +590,6 @@ class ItemUsageCog(commands.Cog):
 
         elif usage_type == "search_boost":
             # Scanner Array - temporary effect stored in inventory with expiration
-            import json
             expire_time = (datetime.utcnow() + timedelta(hours=2)).isoformat()
             metadata = json.dumps({
                 "active_until": expire_time, 
@@ -582,7 +615,6 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "security_override":
             # Federal Security Override - temporary federal bypass
             if effect_value == "federal_bypass":
-                import json
                 expire_time = (datetime.utcnow() + timedelta(hours=4)).isoformat()
                 metadata = json.dumps({
                     "active_until": expire_time,
@@ -605,7 +637,6 @@ class ItemUsageCog(commands.Cog):
 
         elif usage_type == "combat_boost":
             # Combat Stim - stores temporary combat boost in inventory
-            import json
             duration = metadata.get("effect_duration", 1800)
             expire_time = (datetime.utcnow() + timedelta(seconds=duration)).isoformat()
             
@@ -724,6 +755,47 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "emergency_signal":
             # Emergency beacon - could trigger admin notification or spawn rescue event
             return {"success": True, "message": "Emergency signal transmitted! Help may be on the way..."}
+        elif usage_type == "stat_modifier":
+            # Handle consumable stat modifier items
+            from utils.stat_system import StatSystem
+            from utils.item_config import ItemConfig
+            
+            stat_system = StatSystem(self.db)
+            
+            # Get stat modifiers and duration from item config
+            stat_modifiers = ItemConfig.get_stat_modifiers(item_name)
+            duration = ItemConfig.get_modifier_duration(item_name)
+            
+            if not stat_modifiers:
+                return {"success": False, "message": "This item has no stat effects configured."}
+            
+            # Add the stat modifiers
+            success = stat_system.add_consumable_modifier(
+                user_id, item_name, stat_modifiers, duration
+            )
+            
+            if not success:
+                return {"success": False, "message": "Failed to apply stat modifiers."}
+            
+            # Format the effect message
+            effects = []
+            for stat, value in stat_modifiers.items():
+                sign = "+" if value > 0 else ""
+                effects.append(f"{stat.title()}: {sign}{value}")
+            
+            duration_text = ""
+            if duration > 0:
+                hours = duration // 3600
+                minutes = (duration % 3600) // 60
+                if hours > 0:
+                    duration_text = f" for {hours}h {minutes}m"
+                else:
+                    duration_text = f" for {minutes}m"
+            
+            effect_text = ", ".join(effects) + duration_text
+            
+            return {"success": True, "message": f"Stat effects applied: {effect_text}"}
+
         elif usage_type == "personal_log":
             # Handle personal log usage
             char_data = self.db.execute_query(

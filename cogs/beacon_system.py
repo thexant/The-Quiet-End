@@ -23,6 +23,8 @@ class BeaconView(discord.ui.View):
 
         if self.beacon_type == "emergency_beacon":
             modal = EmergencyBeaconModal(self)
+        elif self.beacon_type == "radio_beacon":
+            modal = RadioBeaconModal(self)
         else:  # news_beacon
             modal = NewsBeaconModal(self)
         
@@ -76,6 +78,47 @@ class EmergencyBeaconModal(discord.ui.Modal):
                 await interaction.followup.send(embed=embed, ephemeral=True)
             else:
                 await interaction.followup.send("Failed to deploy beacon!", ephemeral=True)
+
+class RadioBeaconModal(discord.ui.Modal):
+    def __init__(self, beacon_view):
+        super().__init__(title="Radio Beacon Configuration")
+        self.beacon_view = beacon_view
+
+    message = discord.ui.TextInput(
+        label="Radio Message",
+        placeholder="Enter your radio broadcast message (max 500 characters)...",
+        style=discord.TextStyle.paragraph,
+        max_length=500,
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Defer the response first
+        await interaction.response.defer(ephemeral=True)
+        
+        beacon_cog = self.beacon_view.bot.get_cog('BeaconSystemCog')
+        if beacon_cog:
+            success = await beacon_cog.deploy_radio_beacon(
+                self.beacon_view.user_id,
+                self.beacon_view.location_id,
+                self.message.value,
+                self.beacon_view.item_id
+            )
+            
+            if success:
+                embed = discord.Embed(
+                    title="📻 Radio Beacon Deployed",
+                    description="Your radio beacon has been activated and is broadcasting your message.",
+                    color=0x0066cc
+                )
+                embed.add_field(name="Message", value=f'"{self.message.value}"', inline=False)
+                embed.add_field(name="Transmissions", value="6 times over 6 hours", inline=True)
+                embed.add_field(name="Range", value="Local galactic radio network", inline=True)
+                embed.set_footer(text="The beacon will continue transmitting even if you leave the area")
+                
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await interaction.followup.send("Failed to deploy radio beacon!", ephemeral=True)
 
 class NewsBeaconModal(discord.ui.Modal):
     def __init__(self, beacon_view):
@@ -142,7 +185,7 @@ class BeaconSystemCog(commands.Cog):
             # Get beacons ready to transmit
             ready_beacons = self.db.execute_query(
                 """SELECT beacon_id, beacon_type, user_id, location_id, message_content, 
-                          transmissions_sent, max_transmissions
+                          transmissions_sent, max_transmissions, interval_minutes
                    FROM active_beacons 
                    WHERE is_active = 1 
                    AND next_transmission <= datetime('now')
@@ -151,10 +194,12 @@ class BeaconSystemCog(commands.Cog):
             )
             
             for beacon_data in ready_beacons:
-                beacon_id, beacon_type, user_id, location_id, message, sent, max_trans = beacon_data
+                beacon_id, beacon_type, user_id, location_id, message, sent, max_trans, interval = beacon_data
                 
                 if beacon_type == "emergency_beacon":
                     await self._transmit_emergency_beacon(beacon_id, user_id, location_id, message)
+                elif beacon_type == "radio_beacon":
+                    await self._transmit_radio_beacon(beacon_id, user_id, location_id, message)
                 
                 # Update beacon transmission count and next transmission time
                 new_sent = sent + 1
@@ -165,8 +210,9 @@ class BeaconSystemCog(commands.Cog):
                         (beacon_id,)
                     )
                 else:
-                    # Schedule next transmission
-                    next_time = datetime.utcnow() + timedelta(minutes=30)
+                    # Schedule next transmission using beacon's interval
+                    interval_minutes = interval or 20  # Default to 20 minutes if not set
+                    next_time = datetime.utcnow() + timedelta(minutes=interval_minutes)
                     self.db.execute_query(
                         """UPDATE active_beacons 
                            SET transmissions_sent = ?, next_transmission = ?
@@ -215,6 +261,43 @@ class BeaconSystemCog(commands.Cog):
             
         except Exception as e:
             print(f"❌ Error deploying emergency beacon: {e}")
+            return False
+
+    async def deploy_radio_beacon(self, user_id: int, location_id: int, message: str, item_id: int) -> bool:
+        """Deploy a radio beacon (6 transmissions, 1 hour apart)"""
+        try:
+            # Remove item from inventory
+            existing_item = self.db.execute_query(
+                "SELECT quantity FROM inventory WHERE item_id = ?",
+                (item_id,), fetch='one'
+            )
+            
+            if not existing_item or existing_item[0] <= 0:
+                return False
+            
+            if existing_item[0] == 1:
+                self.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (item_id,))
+            else:
+                self.db.execute_query(
+                    "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = ?", 
+                    (item_id,)
+                )
+            
+            # Create beacon record - first transmission in 30 seconds, then every 60 minutes, 6 total
+            first_transmission = datetime.utcnow() + timedelta(seconds=30)  # First transmission in 30 seconds
+            
+            self.db.execute_query(
+                """INSERT INTO active_beacons 
+                   (beacon_type, user_id, location_id, message_content, next_transmission, 
+                    max_transmissions, interval_minutes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                ("radio_beacon", user_id, location_id, message, first_transmission.isoformat(), 6, 60)
+            )
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error deploying radio beacon: {e}")
             return False
 
     async def deploy_news_beacon(self, user_id: int, location_id: int, headline: str, content: str, item_id: int) -> bool:
@@ -355,6 +438,72 @@ class BeaconSystemCog(commands.Cog):
         except Exception as e:
             print(f"❌ Error transmitting emergency beacon: {e}")
 
+    async def _transmit_radio_beacon(self, beacon_id: int, user_id: int, location_id: int, message: str):
+        """Transmit radio beacon signal"""
+        try:
+            # Get beacon location info
+            location_info = self.db.execute_query(
+                "SELECT name, x_coord, y_coord, system_name FROM locations WHERE location_id = ?",
+                (location_id,), fetch='one'
+            )
+            
+            if not location_info:
+                return
+            
+            loc_name, x_coord, y_coord, system_name = location_info
+            
+            # Get character info
+            char_info = self.db.execute_query(
+                "SELECT name, callsign FROM characters WHERE user_id = ?",
+                (user_id,), fetch='one'
+            )
+            
+            if not char_info:
+                return
+            
+            char_name, callsign = char_info
+            
+            # Get beacon transmission count
+            transmission_info = self.db.execute_query(
+                "SELECT transmissions_sent FROM active_beacons WHERE beacon_id = ?",
+                (beacon_id,), fetch='one'
+            )
+            
+            transmission_num = transmission_info[0] + 1 if transmission_info else 1
+            
+            # Use radio system for propagation
+            radio_cog = self.bot.get_cog('RadioCog')
+            if radio_cog:
+                recipients = await radio_cog._calculate_radio_propagation(
+                    x_coord, y_coord, system_name, message, 0  # Use 0 as guild_id for system message
+                )
+                
+                if recipients:
+                    # Group recipients by guild
+                    guild_recipients = {}
+                    for recipient in recipients:
+                        member = self.bot.get_user(recipient['user_id'])
+                        if member and member.mutual_guilds:
+                            guild = member.mutual_guilds[0]
+                            if guild.id not in guild_recipients:
+                                guild_recipients[guild.id] = {'guild': guild, 'recipients': []}
+                            guild_recipients[guild.id]['recipients'].append(recipient)
+                    
+                    # Send beacon messages to each guild
+                    for guild_data in guild_recipients.values():
+                        guild = guild_data['guild']
+                        guild_recipients_list = guild_data['recipients']
+                        
+                        await self._send_radio_beacon_transmission(
+                            guild, char_name, callsign, loc_name, system_name, 
+                            message, guild_recipients_list, transmission_num
+                        )
+            
+            print(f"📻 Radio beacon transmission #{transmission_num} from {loc_name}")
+            
+        except Exception as e:
+            print(f"❌ Error transmitting radio beacon: {e}")
+
     async def _send_beacon_transmission(self, guild: discord.Guild, char_name: str, callsign: str,
                                       location_name: str, system_name: str, message: str,
                                       recipients: list, transmission_num: int):
@@ -393,6 +542,17 @@ class BeaconSystemCog(commands.Cog):
         
         if not representative_member:
             return
+        
+        # Get location data for channel creation
+        location_data = self.db.execute_query(
+            "SELECT name, description, wealth_level FROM locations WHERE location_id = ?",
+            (location_id,), fetch='one'
+        )
+        
+        if not location_data:
+            return
+        
+        name, description, wealth = location_data
         
         channel = await channel_manager.get_or_create_location_channel(
             guild, location_id, representative_member, name, description, wealth
@@ -448,6 +608,111 @@ class BeaconSystemCog(commands.Cog):
             await channel.send(embed=embed)
         except Exception as e:
             print(f"❌ Failed to send beacon message to {channel.name}: {e}")
+
+    async def _send_radio_beacon_transmission(self, guild: discord.Guild, char_name: str, callsign: str,
+                                            location_name: str, system_name: str, message: str,
+                                            recipients: list, transmission_num: int):
+        """Send radio beacon transmission to location channels"""
+        
+        # Group recipients by location
+        location_groups = {}
+        for recipient in recipients:
+            location_id = recipient['location_id']
+            if location_id not in location_groups:
+                location_groups[location_id] = []
+            location_groups[location_id].append(recipient)
+        
+        # Send to each location
+        for location_id, location_recipients in location_groups.items():
+            await self._send_location_radio_beacon_message(
+                guild, location_id, char_name, callsign, location_name, 
+                system_name, message, location_recipients, transmission_num
+            )
+
+    async def _send_location_radio_beacon_message(self, guild: discord.Guild, location_id: int,
+                                                char_name: str, callsign: str, beacon_location: str,
+                                                beacon_system: str, message: str, recipients: list, transmission_num: int):
+        """Send radio beacon message to specific location channel"""
+        
+        # Get channel
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        
+        representative_member = None
+        for recipient in recipients:
+            member = guild.get_member(recipient['user_id'])
+            if member:
+                representative_member = member
+                break
+        
+        if not representative_member:
+            return
+        
+        # Get location data for channel creation
+        location_data = self.db.execute_query(
+            "SELECT name, description, wealth_level FROM locations WHERE location_id = ?",
+            (location_id,), fetch='one'
+        )
+        
+        if not location_data:
+            return
+        
+        name, description, wealth = location_data
+        
+        channel = await channel_manager.get_or_create_location_channel(
+            guild, location_id, representative_member, name, description, wealth
+        )
+        
+        if not channel:
+            return
+        
+        # Create radio beacon embed
+        embed = discord.Embed(
+            title="📻 RADIO BEACON TRANSMISSION",
+            color=0x0066cc
+        )
+        
+        embed.add_field(
+            name="📡 Automated Radio Broadcast",
+            value=f"**Transmission #{transmission_num}/6**\nBeacon deployed by: {char_name} [{callsign}]\n📍 Broadcasting from: {beacon_location}, {beacon_system}",
+            inline=False
+        )
+        
+        # Group recipients by signal quality
+        clear_receivers = [r for r in recipients if r['signal_strength'] >= 70]
+        degraded_receivers = [r for r in recipients if r['signal_strength'] < 70]
+        
+        signal_strength = clear_receivers[0]['signal_strength'] if clear_receivers else (degraded_receivers[0]['signal_strength'] if degraded_receivers else 0)
+        signal_indicator = "🟢" if signal_strength >= 70 else ("📶" if signal_strength >= 30 else "📵")
+
+        embed.add_field(
+            name=f"📡 Radio Signal {signal_indicator}",
+            value=f"Radio transmission received at this location\nSignal strength: {signal_strength}%",
+            inline=False
+        )
+        
+        # Show message (use clear version if available, otherwise degraded)
+        display_message = message if clear_receivers else (degraded_receivers[0]['message'] if degraded_receivers else message)
+        
+        embed.add_field(
+            name="📻 Radio Message",
+            value=f'"{display_message}"',
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📡 Beacon Status",
+            value=f"**Transmission {transmission_num} of 6**\nNext transmission: {60 if transmission_num < 6 else 0} minutes\nSource: Automated radio beacon",
+            inline=False
+        )
+        
+        embed.set_footer(text="Radio Beacon Network • Automated Broadcasting System")
+        embed.timestamp = discord.utils.utcnow()
+        
+        try:
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"❌ Failed to send radio beacon message to {channel.name}: {e}")
 
 async def setup(bot):
     await bot.add_cog(BeaconSystemCog(bot))
