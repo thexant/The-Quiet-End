@@ -26,8 +26,8 @@ RUN mkdir -p /app/data
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash botuser && \
+# Create non-root user for security with specific UID/GID
+RUN useradd --create-home --shell /bin/bash --uid 1000 --gid 1000 botuser && \
     chown -R botuser:botuser /app
 USER botuser
 
