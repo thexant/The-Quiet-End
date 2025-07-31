@@ -27,7 +27,8 @@ ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
 # Create non-root user for security with specific UID/GID
-RUN useradd --create-home --shell /bin/bash --uid 1000 --gid 1000 botuser && \
+RUN groupadd --gid 1000 botuser && \
+    useradd --create-home --shell /bin/bash --uid 1000 --gid botuser botuser && \
     chown -R botuser:botuser /app
 USER botuser
 
