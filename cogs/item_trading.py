@@ -256,6 +256,83 @@ class ItemTradingCog(commands.Cog):
         
         await interaction.response.send_message(f"✅ Trade offer sent to {player.mention} in the location channel!", ephemeral=True)
 
+    @item_group.command(name="slot_fix", description="Fix ghost equipment slots (admin only)")
+    async def fix_equipment_slots(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        # Find all ghost equipment entries (equipment pointing to non-existent inventory items)
+        ghost_equipment = self.db.execute_query(
+            '''SELECT ce.equipment_id, ce.user_id, ce.slot_name, ce.item_id,
+                      c.name as character_name
+               FROM character_equipment ce
+               JOIN characters c ON ce.user_id = c.user_id
+               LEFT JOIN inventory i ON ce.item_id = i.item_id
+               WHERE i.item_id IS NULL''',
+            fetch='all'
+        )
+        
+        if not ghost_equipment:
+            embed = discord.Embed(
+                title="✅ No Ghost Equipment Slots Found",
+                description="All equipment slots are properly linked to existing inventory items.",
+                color=0x00ff00
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Group by character for display
+        characters_affected = {}
+        for equipment_id, user_id, slot_name, item_id, character_name in ghost_equipment:
+            if user_id not in characters_affected:
+                characters_affected[user_id] = {
+                    'name': character_name,
+                    'slots': []
+                }
+            characters_affected[user_id]['slots'].append({
+                'equipment_id': equipment_id,
+                'slot_name': slot_name,
+                'item_id': item_id
+            })
+        
+        # Clean up ghost equipment
+        cleaned_count = 0
+        for equipment_id, user_id, slot_name, item_id, character_name in ghost_equipment:
+            self.db.execute_query(
+                "DELETE FROM character_equipment WHERE equipment_id = ?",
+                (equipment_id,)
+            )
+            cleaned_count += 1
+        
+        # Create result embed
+        embed = discord.Embed(
+            title="🔧 Equipment Slots Cleanup Complete",
+            description=f"Removed {cleaned_count} ghost equipment entries from {len(characters_affected)} characters.",
+            color=0x00ff00
+        )
+        
+        # Show affected characters (up to 10)
+        char_list = []
+        for user_id, info in list(characters_affected.items())[:10]:
+            member = interaction.guild.get_member(user_id)
+            member_name = member.display_name if member else f"Unknown ({user_id})"
+            slot_names = [slot['slot_name'] for slot in info['slots']]
+            char_list.append(f"• **{info['name']}** ({member_name}): {', '.join(slot_names)}")
+        
+        if char_list:
+            embed.add_field(
+                name=f"🎭 Characters Fixed ({len(characters_affected)})",
+                value="\n".join(char_list) + (f"\n... and {len(characters_affected)-10} more" if len(characters_affected) > 10 else ""),
+                inline=False
+            )
+        
+        embed.set_footer(text="Players can now properly equip items in previously 'occupied' slots.")
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
 
 class TradeOfferView(discord.ui.View):
     def __init__(self, bot, seller_id: int, buyer_id: int, item_id: int, item_name: str, quantity: int, price: int, seller_name: str, buyer_name: str):

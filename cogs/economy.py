@@ -952,6 +952,20 @@ class EconomyCog(commands.Cog):
         elif status == 'surplus':
             status_message = f"\n📦 Market is saturated with **{actual_name}**."
         
+        # Check if item is equipped and unequip it before selling
+        equipped_check = self.db.execute_query(
+            "SELECT equipment_id FROM character_equipment WHERE item_id = ? AND user_id = ?",
+            (inv_id, interaction.user.id),
+            fetch='all'
+        )
+        
+        if equipped_check:
+            # Item is equipped, remove from equipment slots
+            self.db.execute_query(
+                "DELETE FROM character_equipment WHERE item_id = ? AND user_id = ?",
+                (inv_id, interaction.user.id)
+            )
+        
         # Update inventory
         if current_qty == quantity:
             # Remove item completely
@@ -3561,6 +3575,20 @@ class ShopSellQuantityView(discord.ui.View):
         inv_id, actual_name, current_qty, base_value, item_type, description = inventory_item
         
         total_earnings = self.sell_price * self.quantity
+        
+        # Check if item is equipped and unequip it before selling
+        equipped_check = econ_cog.db.execute_query(
+            "SELECT equipment_id FROM character_equipment WHERE item_id = ? AND user_id = ?",
+            (inv_id, interaction.user.id),
+            fetch='all'
+        )
+        
+        if equipped_check:
+            # Item is equipped, remove from equipment slots
+            econ_cog.db.execute_query(
+                "DELETE FROM character_equipment WHERE item_id = ? AND user_id = ?",
+                (inv_id, interaction.user.id)
+            )
         
         # Update inventory
         if current_qty == self.quantity:
