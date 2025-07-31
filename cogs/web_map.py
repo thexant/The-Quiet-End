@@ -529,7 +529,7 @@ class WebMapCog(commands.Cog):
         """Get the final URL for the map"""
         if self.domain:
             protocol = "https" if (self.port == 443 or self.https_proxy) else "http"
-            port_str = "" if self.port in [80, 443] else f":{self.port}"
+            port_str = "" if (protocol == "https" and self.https_proxy) or self.port in [80, 443] else f":{self.port}"
             return f"{protocol}://{self.domain}{port_str}/map", self.domain
         elif self.external_ip:
             return f"http://{self.external_ip}:{self.port}/map", self.external_ip
