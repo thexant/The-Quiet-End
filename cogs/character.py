@@ -1246,8 +1246,9 @@ class CharacterCog(commands.Cog):
             fetch='one'
         )        
         if not char_result:
+            no_char_msg = "You don't" if target is None else f"{target.display_name} doesn't"
             await interaction.response.send_message(
-                f"{'You don\'t' if target is None else target.display_name + ' doesn\'t'} have a character!",
+                f"{no_char_msg} have a character!",
                 ephemeral=True
             )
             return
