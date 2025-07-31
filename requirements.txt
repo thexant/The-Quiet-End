@@ -6,3 +6,4 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 aiosqlite
 jinja2
+networkx
