@@ -182,11 +182,15 @@ class RPGBot(commands.Bot):
             
             print("🧩 Loading cogs...")
             loaded_cogs = 0
-            for filename in os.listdir('./cogs'):
-                if filename.endswith('.py') and not filename.startswith('_'):
-                    cog_name = filename[:-3]
+            
+            # Priority loading order - load important dependencies first
+            priority_cogs = ['enhanced_events']  # Load enhanced_events before events/travel_micro_events
+            
+            # Load priority cogs first
+            for cog_name in priority_cogs:
+                if os.path.exists(f'./cogs/{cog_name}.py'):
                     try:
-                        print(f"  Loading {cog_name}...")
+                        print(f"  Loading {cog_name} (priority)...")
                         await self.load_extension(f'cogs.{cog_name}')
                         loaded_cogs += 1
                         print(f"  ✅ {cog_name} loaded")
@@ -194,6 +198,21 @@ class RPGBot(commands.Bot):
                         print(f"  ❌ Failed to load {cog_name}: {e}")
                         import traceback
                         traceback.print_exc()
+            
+            # Load remaining cogs
+            for filename in os.listdir('./cogs'):
+                if filename.endswith('.py') and not filename.startswith('_'):
+                    cog_name = filename[:-3]
+                    if cog_name not in priority_cogs:  # Skip already loaded priority cogs
+                        try:
+                            print(f"  Loading {cog_name}...")
+                            await self.load_extension(f'cogs.{cog_name}')
+                            loaded_cogs += 1
+                            print(f"  ✅ {cog_name} loaded")
+                        except Exception as e:
+                            print(f"  ❌ Failed to load {cog_name}: {e}")
+                            import traceback
+                            traceback.print_exc()
             
             print(f"✅ Loaded {loaded_cogs} cogs successfully")
             
