@@ -4309,9 +4309,8 @@ class EquipmentManagementView(discord.ui.View):
                 inline=False
             )
         
-        # Create new equipment management view
-        equipment_view = EquipmentManagementView(self.bot, self.user_id)
-        await interaction.response.edit_message(embed=embed, view=equipment_view)
+        # Update the current view instead of creating a new one
+        await interaction.response.edit_message(embed=embed, view=self)
 
 
 class EquipmentSelect(discord.ui.Select):
