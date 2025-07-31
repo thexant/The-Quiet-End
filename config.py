@@ -147,7 +147,7 @@ DISCORD_CONFIG = {
 
 # Database Settings
 DATABASE_CONFIG = {
-    'db_path': 'rpg_game.db',        # SQLite database file path
+    'db_path': os.getenv('DATABASE_PATH', 'data/THEQUIETEND.db'),  # SQLite database file path, use env var or default
     'connection_timeout': 30.0,      # Database connection timeout
     'backup_interval_hours': 24,     # How often to backup database (if implemented)
     'vacuum_interval_days': 7        # How often to optimize database (if implemented)

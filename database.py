@@ -5,10 +5,11 @@ from datetime import datetime
 from typing import Optional, List, Dict, Tuple, Any
 import atexit
 import time
+from config import DATABASE_CONFIG
 
 class Database:
-    def __init__(self, db_path="THEQUIETEND.db"):
-        self.db_path = db_path
+    def __init__(self, db_path=None):
+        self.db_path = db_path or DATABASE_CONFIG['db_path']
         self.lock = threading.Lock()
         self._shutdown = False
         self._active_connections = set()

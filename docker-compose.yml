@@ -12,7 +12,7 @@ services:
       - COMMAND_PREFIX=${COMMAND_PREFIX:-!}
       - ACTIVITY_NAME=${ACTIVITY_NAME:-Entropy}
       - ALLOWED_GUILD_ID=${ALLOWED_GUILD_ID}
-      - DATABASE_PATH=/app/data/bot.db
+      - DATABASE_PATH=/app/data/THEQUIETEND.db
     
     # Volume mounts for data persistence
     volumes:
