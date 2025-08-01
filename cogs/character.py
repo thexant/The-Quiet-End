@@ -4274,38 +4274,77 @@ class EquipmentManagementView(discord.ui.View):
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        # Refresh the equipment display by editing the current message
+        # Refresh the equipment display by recreating the original detailed embed
         from utils.stat_system import StatSystem
         
-        # Get character equipment
-        equipment = self.bot.db.execute_query(
-            '''SELECT ce.slot_name, ce.item_id, i.item_name 
-               FROM character_equipment ce
-               JOIN inventory i ON ce.item_id = i.item_id
-               WHERE ce.user_id = ?''',
-            (self.user_id,),
-            fetch='all'
-        ) or []
+        stat_system = StatSystem(self.bot.db)
+        equipped_items = stat_system.get_equipped_items(self.user_id)
         
-        # Create embed
+        # Get base and effective stats
+        base_stats, effective_stats = stat_system.calculate_effective_stats(self.user_id)
+        
+        # Create equipment embed (matching original)
         embed = discord.Embed(
-            title="⚔️ Equipment",
-            color=0x00ff00
+            title="⚔️ Equipment & Stat Modifiers",
+            description="Your currently equipped items and their effects",
+            color=0x8B4513
         )
         
-        if equipment:
-            equipment_dict = {item[0]: f"{item[2]} (ID: {item[1]})" for item in equipment}
-            for slot in ['weapon', 'armor', 'shield', 'accessory']:
-                value = equipment_dict.get(slot, "None")
-                embed.add_field(
-                    name=slot.title(),
-                    value=value,
-                    inline=False
-                )
-        else:
+        # Show equipment slots
+        slot_display = {
+            "head": "🎩 Head",
+            "eyes": "👓 Eyes", 
+            "torso": "👕 Torso",
+            "arms_left": "💪 Left Arm",
+            "arms_right": "💪 Right Arm",
+            "hands_left": "🤚 Left Hand",
+            "hands_right": "🤚 Right Hand",
+            "legs_left": "🦵 Left Leg",
+            "legs_right": "🦵 Right Leg",
+            "feet_left": "👟 Left Foot",
+            "feet_right": "👟 Right Foot"
+        }
+        
+        equipment_text = ""
+        for slot, display_name in slot_display.items():
+            if slot in equipped_items:
+                item = equipped_items[slot]
+                modifiers = item['modifiers']
+                mod_text = ""
+                if modifiers:
+                    mod_list = [f"{stat}+{val}" for stat, val in modifiers.items()]
+                    mod_text = f" ({', '.join(mod_list)})"
+                equipment_text += f"{display_name}: **{item['name']}**{mod_text}\n"
+            else:
+                equipment_text += f"{display_name}: *Empty*\n"
+        
+        embed.add_field(
+            name="🎒 Equipment Slots",
+            value=equipment_text[:1024] if equipment_text else "No equipment slots found",
+            inline=False
+        )
+        
+        # Show current stat effects
+        if base_stats and effective_stats:
+            stats_text = ""
+            for stat_name in ['hp', 'max_hp', 'engineering', 'navigation', 'combat', 'medical', 'defense']:
+                if stat_name in base_stats and stat_name in effective_stats:
+                    # Only show defense if > 0
+                    if stat_name == 'defense' and effective_stats[stat_name] <= 0:
+                        continue
+                    
+                    display_text = stat_system.format_stat_display(
+                        base_stats[stat_name], 
+                        effective_stats[stat_name]
+                    )
+                    # Add % for defense
+                    if stat_name == 'defense':
+                        display_text += "%"
+                    stats_text += f"**{stat_name.replace('_', ' ').title()}:** {display_text}\n"
+            
             embed.add_field(
-                name="No Equipment",
-                value="You don't have any equipment equipped yet.",
+                name="📊 Current Stats (Base + Modifiers)",
+                value=stats_text[:1024] if stats_text else "No stats available",
                 inline=False
             )
         
