@@ -97,24 +97,29 @@ class NPCCog(commands.Cog):
                 # Update location data if it changed
                 location_id, location_name, system_name = npc_check
                 
-                # Send radio message
-                message_template = get_random_radio_message()
-                message = message_template.format(
-                    name=name.split()[0],  # First name only
-                    callsign=callsign,
-                    ship=ship_name,
-                    location=location_name or "Unknown",
-                    system=system_name or "Unknown"
-                )
-
-                await self._send_npc_radio_message(name, callsign, location_name or "Deep Space", system_name or "Unknown", message)
-
-                # Update last radio message time
-                self.db.execute_query(
-                    "UPDATE dynamic_npcs SET last_radio_message = ? WHERE npc_id = ?",
-                    (datetime.now().isoformat(), npc_id)
-                )
-
+                # 25% chance to actually send a radio message
+                if random.random() < 0.25:
+                    # Send radio message
+                    message_template = get_random_radio_message()
+                    message = message_template.format(
+                        name=name.split()[0],  # First name only
+                        callsign=callsign,
+                        ship=ship_name,
+                        location=location_name or "Unknown",
+                        system=system_name or "Unknown"
+                    )
+    
+                    await self._send_npc_radio_message(name, callsign, location_name or "Deep Space", system_name or "Unknown", message)
+    
+                    # Update last radio message time
+                    self.db.execute_query(
+                        "UPDATE dynamic_npcs SET last_radio_message = ? WHERE npc_id = ?",
+                        (datetime.now().isoformat(), npc_id)
+                    )
+                else:
+                    # NPC decided not to send a message this cycle
+                    print(f"📡 NPC {name} ({callsign}) skipped radio message (75% skip chance)")
+    
                 # Wait for next message (3-12 hours, truly random per NPC)
                 next_delay = random.uniform(10800, 43200)  # 3-12 hours in seconds
                 await asyncio.sleep(next_delay)
@@ -1344,4 +1349,5 @@ class NPCCog(commands.Cog):
         return npcs
 
 async def setup(bot):
+
     await bot.add_cog(NPCCog(bot))
