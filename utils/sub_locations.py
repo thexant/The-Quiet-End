@@ -948,6 +948,18 @@ class SubLocationServiceView(discord.ui.View):
                 style=discord.ButtonStyle.primary,
                 service_type="navigation_data"
             ))
+            self.add_item(SubLocationButton(
+                label="Telescope Reservation", 
+                emoji="🔭", 
+                style=discord.ButtonStyle.primary,
+                service_type="telescope_reservation"
+            ))
+            self.add_item(SubLocationButton(
+                label="Data Analysis", 
+                emoji="🔬", 
+                style=discord.ButtonStyle.secondary,
+                service_type="data_analysis"
+            ))
             
         elif self.sub_type == 'lounge':
             self.add_item(SubLocationButton(
@@ -963,10 +975,22 @@ class SubLocationServiceView(discord.ui.View):
                 service_type="watch_news"
             ))
             self.add_item(SubLocationButton(
-                label="Get Refreshments", 
-                emoji="☕", 
+                label="Order Drinks", 
+                emoji="🥤", 
                 style=discord.ButtonStyle.primary,
-                service_type="refreshments"
+                service_type="order_drinks"
+            ))
+            self.add_item(SubLocationButton(
+                label="Local Intel", 
+                emoji="💬", 
+                style=discord.ButtonStyle.secondary,
+                service_type="local_intel"
+            ))
+            self.add_item(SubLocationButton(
+                label="Quick Cards", 
+                emoji="🃏", 
+                style=discord.ButtonStyle.success,
+                service_type="quick_cards"
             ))
             
         elif self.sub_type == 'market':
@@ -2032,8 +2056,12 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_relax(interaction, char_name)
         elif service_type == "watch_news":
             await self._handle_watch_news(interaction, char_name)
-        elif service_type == "refreshments":
-            await self._handle_refreshments(interaction, char_name, money)
+        elif service_type == "order_drinks":
+            await self._handle_order_drinks(interaction, char_name, money)
+        elif service_type == "local_intel":
+            await self._handle_local_intel(interaction, char_name, money)
+        elif service_type == "quick_cards":
+            await self._handle_quick_cards(interaction, char_name, money)
         elif service_type == "browse_shops":
             await self._handle_browse_shops(interaction, char_name)
         elif service_type == "apply_permits":
@@ -2076,6 +2104,10 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_deep_space_scan(interaction, char_name)
         elif service_type == "navigation_data":
             await self._handle_navigation_data(interaction, char_name)
+        elif service_type == "telescope_reservation":
+            await self._handle_telescope_reservation(interaction, char_name, money)
+        elif service_type == "data_analysis":
+            await self._handle_data_analysis(interaction, char_name)
         elif service_type == "slot_machine":
             await self._handle_slot_machine(interaction, char_name, money)
         elif service_type == "blackjack":
@@ -2743,7 +2775,7 @@ class SubLocationServiceView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=False)  
         
     async def _handle_stellar_charts(self, interaction: discord.Interaction, char_name: str):
-        """Handle stellar chart viewing (free activity)"""
+        """Handle stellar chart viewing with interactive navigation puzzle"""
         import random
         
         chart_types = [
@@ -2756,31 +2788,65 @@ class SubLocationServiceView(discord.ui.View):
         
         chart_name, description = random.choice(chart_types)
         
-        discoveries = [
-            "You notice an unmarked asteroid field that could contain valuable minerals",
-            "Ancient beacon signals are marked on routes through this sector", 
-            "Trade opportunities between distant systems become apparent",
-            "A previously unknown jump gate appears on the deep range scans",
-            "Navigation warnings highlight recent pirate activity zones"
+        # Create navigation puzzle
+        navigation_puzzles = [
+            {
+                "scenario": "You spot an efficient trade route avoiding pirate zones. Which path would you choose?",
+                "options": ["Direct path through asteroid field", "Longer route via safe systems", "Medium route with escort convoy"],
+                "correct": 1,
+                "success_msg": "Smart choice! You identified the optimal safe route.",
+                "fail_msg": "That route has higher risks. You still gain some insight though."
+            },
+            {
+                "scenario": "A nebula is interfering with navigation. How do you plot around it?",
+                "options": ["Use stellar beacons for triangulation", "Plot course through thinnest section", "Wait for nebula to dissipate"],
+                "correct": 0,
+                "success_msg": "Excellent navigation! The beacon method is most reliable.",
+                "fail_msg": "That could work but isn't the most efficient approach."
+            },
+            {
+                "scenario": "Multiple jump gates are available. Which offers the best fuel efficiency?",
+                "options": ["Newest gate with unknown traffic", "Busy gate with predictable routes", "Old gate with maintenance issues"],
+                "correct": 1,
+                "success_msg": "Perfect! The established route offers predictable fuel costs.",
+                "fail_msg": "That choice has some merit, but there are more efficient options."
+            }
         ]
+        
+        puzzle = random.choice(navigation_puzzles)
+        view = NavigationPuzzleView(self.bot, char_name, puzzle)
         
         embed = discord.Embed(
             title="🗺️ Stellar Navigation Charts",
-            description=f"**{char_name}** studies the comprehensive star charts.",
+            description=f"**{char_name}** studies the comprehensive star charts and notices something interesting...",
             color=0x1e90ff
         )
         embed.add_field(name="📊 Chart Type", value=chart_name, inline=True)
         embed.add_field(name="🔍 Status", value="Access Granted", inline=True)
         embed.add_field(name="📋 Information", value=description, inline=False)
-        embed.add_field(name="✨ Discovery", value=random.choice(discoveries), inline=False)
-        embed.add_field(name="💰 Cost", value="Complimentary service", inline=True)
+        embed.add_field(name="🧩 Navigation Challenge", value=puzzle["scenario"], inline=False)
+        embed.add_field(name="💡 Hint", value="Choose wisely - correct answers reward credits!", inline=False)
         
-        await interaction.response.send_message(embed=embed, ephemeral=False)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
     
     async def _handle_deep_space_scan(self, interaction: discord.Interaction, char_name: str):
-        """Handle deep space scanning (free activity)"""
+        """Handle deep space scanning with navigation skill checks"""
         import random
         
+        # Get character navigation skill
+        char_info = self.bot.db.execute_query(
+            "SELECT navigation, experience FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        navigation_skill, experience = char_info
+        
+        # Base scan results
         scan_results = [
             ("Anomalous Signals", "Long-range sensors detect unusual energy readings"),
             ("Stellar Activity", "Solar flare warnings issued for nearby systems"),
@@ -2791,13 +2857,9 @@ class SubLocationServiceView(discord.ui.View):
         
         result_type, description = random.choice(scan_results)
         
-        technical_details = [
-            "Quantum sensors operating at maximum sensitivity",
-            "Multi-spectrum analysis reveals detailed compositions",
-            "Advanced algorithms filter out background radiation",
-            "Cross-referencing with galactic databases for verification",
-            "Real-time monitoring provides up-to-date information"
-        ]
+        # Navigation skill check (higher skill = better chance for bonus)
+        skill_check = random.randint(1, 20) + navigation_skill
+        success_threshold = 15
         
         embed = discord.Embed(
             title="📡 Deep Space Monitoring",
@@ -2808,15 +2870,60 @@ class SubLocationServiceView(discord.ui.View):
         embed.add_field(name="📊 Status", value="Scan Complete", inline=True)
         embed.add_field(name="🎯 Detection", value=result_type, inline=False)
         embed.add_field(name="📋 Details", value=description, inline=False)
-        embed.add_field(name="⚙️ Technology", value=random.choice(technical_details), inline=False)
+        
+        if skill_check >= success_threshold:
+            # Successful navigation analysis - award XP
+            xp_reward = random.randint(15, 25)
+            self.bot.db.execute_query(
+                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                (xp_reward, interaction.user.id)
+            )
+            
+            advanced_insights = [
+                "Your navigation expertise reveals optimal approach vectors",
+                "You identify potential navigation hazards others would miss",
+                "Advanced pattern recognition reveals hidden stellar mechanics",
+                "Your experience allows for superior data interpretation",
+                "Technical knowledge provides deeper understanding of the readings"
+            ]
+            
+            embed.add_field(name="🎓 Expert Analysis", value=random.choice(advanced_insights), inline=False)
+            embed.add_field(name="✨ Experience Gained", value=f"+{xp_reward} XP", inline=True)
+            embed.color = 0x00ff00  # Green for success
+            
+        else:
+            # Basic scan only
+            basic_details = [
+                "Standard sensor sweep completed",
+                "Basic data analysis algorithms engaged",
+                "Entry-level scanning protocols active",
+                "Standard interpretation filters applied"
+            ]
+            embed.add_field(name="⚙️ Basic Scan", value=random.choice(basic_details), inline=False)
+            embed.add_field(name="💡 Hint", value=f"Higher navigation skill (current: {navigation_skill}) improves analysis quality", inline=True)
+        
         embed.add_field(name="💰 Cost", value="Public access terminal", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_navigation_data(self, interaction: discord.Interaction, char_name: str):
-        """Handle navigation data access (free activity)"""
+        """Handle navigation data access with premium options"""
         import random
         
+        # Get character money for premium options
+        char_info = self.bot.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        money = char_info[0]
+        
+        # Basic free data
         data_types = [
             ("Jump Gate Network", "Current status and routing information for all gates"),
             ("Fuel Station Directory", "Locations and prices of refueling stations"),
@@ -2827,25 +2934,153 @@ class SubLocationServiceView(discord.ui.View):
         
         data_name, info = random.choice(data_types)
         
-        insights = [
-            "Several faster routes are available during off-peak hours",
-            "Fuel prices vary significantly between different sectors",
-            "Emergency beacon frequencies are clearly marked",
-            "Alternative routes can save time during heavy traffic periods",
-            "Station facilities and services are comprehensively catalogued"
-        ]
+        # Create view with premium options
+        view = NavigationDataView(self.bot, char_name, money)
         
         embed = discord.Embed(
             title="🧭 Navigation Database",
             description=f"**{char_name}** accesses the central navigation database.",
             color=0x32cd32
         )
-        embed.add_field(name="📂 Data Category", value=data_name, inline=True)
+        embed.add_field(name="📂 Free Data Available", value=data_name, inline=True)
         embed.add_field(name="📡 Coverage", value="Sector-wide", inline=True)
-        embed.add_field(name="ℹ️ Information", value=info, inline=False)
-        embed.add_field(name="💡 Insight", value=random.choice(insights), inline=False)
-        embed.add_field(name="🕒 Last Updated", value="Real-time data feed", inline=False)
-        embed.add_field(name="💰 Cost", value="Free public service", inline=True)
+        embed.add_field(name="ℹ️ Basic Information", value=info, inline=False)
+        embed.add_field(name="💡 Note", value="Premium data packages available for enhanced navigation", inline=False)
+        embed.add_field(name="💳 Your Balance", value=f"{money:,} credits", inline=True)
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        
+    async def _handle_telescope_reservation(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle private telescope reservation (paid service)"""
+        import random
+        
+        cost = random.randint(250, 400)
+        
+        # Check if user has enough money
+        if money < cost:
+            await interaction.response.send_message(
+                f"Telescope reservation costs {cost:,} credits. You only have {money:,}.",
+                ephemeral=True
+            )
+            return
+        
+        # Deduct cost
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
+        )
+        
+        # Award small XP for the experience
+        xp_reward = random.randint(8, 15)
+        self.bot.db.execute_query(
+            "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+            (xp_reward, interaction.user.id)
+        )
+        
+        telescope_types = [
+            ("Quantum Optics Array", "Ultra-high resolution for detailed planetary surface analysis"),
+            ("Deep Field Spectrometer", "Specialized for analyzing distant stellar compositions"),
+            ("Multi-Spectrum Scanner", "Simultaneous observation across multiple wavelengths"),
+            ("Gravitational Wave Detector", "Advanced sensor array for exotic cosmic phenomena"),
+            ("Temporal Observation Unit", "Cutting-edge technology for observing past stellar events")
+        ]
+        
+        telescope_name, telescope_desc = random.choice(telescope_types)
+        
+        observations = [
+            "Discovered fascinating atmospheric patterns on a distant gas giant",
+            "Observed rare stellar fusion processes in a nearby binary system",
+            "Documented unusual asteroid compositions in an outer system belt",
+            "Captured detailed images of nebula formation in progress",
+            "Recorded unique gravitational effects near a neutron star",
+            "Witnessed the birth of a new star system from cosmic dust",
+            "Analyzed exotic matter signatures from deep space"
+        ]
+        
+        embed = discord.Embed(
+            title="🔭 Private Telescope Session",
+            description=f"**{char_name}** reserves premium observation time.",
+            color=0x9932cc
+        )
+        embed.add_field(name="🎯 Equipment Reserved", value=telescope_name, inline=True)
+        embed.add_field(name="💰 Session Cost", value=f"{cost:,} credits", inline=True)
+        embed.add_field(name="🔬 Capability", value=telescope_desc, inline=False)
+        embed.add_field(name="✨ Observation Result", value=random.choice(observations), inline=False)
+        embed.add_field(name="🎓 Experience Gained", value=f"+{xp_reward} XP", inline=True)
+        embed.add_field(name="💳 New Balance", value=f"{money - cost:,} credits", inline=True)
+        embed.add_field(name="⏰ Session Duration", value="2 hours of dedicated observation time", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+    
+    async def _handle_data_analysis(self, interaction: discord.Interaction, char_name: str):
+        """Handle data analysis using engineering skill"""
+        import random
+        
+        # Get character engineering skill
+        char_info = self.bot.db.execute_query(
+            "SELECT engineering FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        engineering_skill = char_info[0]
+        
+        # Engineering skill check
+        skill_check = random.randint(1, 20) + engineering_skill
+        success_threshold = 12
+        
+        if skill_check >= success_threshold:
+            # Success - award credits and XP
+            credit_reward = random.randint(200, 450)
+            xp_reward = random.randint(12, 20)
+            
+            self.bot.db.execute_query(
+                "UPDATE characters SET money = money + ?, experience = experience + ? WHERE user_id = ?",
+                (credit_reward, xp_reward, interaction.user.id)
+            )
+            
+            analysis_results = [
+                "Identified valuable mineral signatures in asteroid scan data",
+                "Discovered optimal fuel efficiency patterns in stellar wind data",
+                "Decoded ancient navigation beacons buried in background noise",
+                "Found profitable trade route inefficiencies in traffic data",
+                "Analyzed stellar composition data revealing rare element concentrations",
+                "Extracted navigation shortcuts from gravitational field analysis"
+            ]
+            
+            embed = discord.Embed(
+                title="🔬 Data Analysis Success",
+                description=f"**{char_name}** successfully processes complex observational data.",
+                color=0x00ff00
+            )
+            embed.add_field(name="🎯 Analysis Result", value=random.choice(analysis_results), inline=False)
+            embed.add_field(name="💰 Data Value", value=f"{credit_reward:,} credits", inline=True)
+            embed.add_field(name="✨ Experience", value=f"+{xp_reward} XP", inline=True)
+            embed.add_field(name="🔧 Engineering Skill", value=f"Level {engineering_skill} (Success!)", inline=True)
+            
+        else:
+            # Partial success - small consolation reward
+            consolation = random.randint(50, 100)
+            xp_reward = random.randint(5, 10)
+            
+            self.bot.db.execute_query(
+                "UPDATE characters SET money = money + ?, experience = experience + ? WHERE user_id = ?",
+                (consolation, xp_reward, interaction.user.id)
+            )
+            
+            embed = discord.Embed(
+                title="🔧 Data Analysis Attempt",
+                description=f"**{char_name}** struggles with the complex data but learns from the experience.",
+                color=0xff6600
+            )
+            embed.add_field(name="📊 Result", value="Analysis incomplete - data too complex for current skill level", inline=False)
+            embed.add_field(name="💰 Effort Compensation", value=f"{consolation:,} credits", inline=True)
+            embed.add_field(name="✨ Learning Experience", value=f"+{xp_reward} XP", inline=True)
+            embed.add_field(name="💡 Tip", value=f"Higher engineering skill (current: {engineering_skill}) improves success rate", inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
         
@@ -4074,6 +4309,425 @@ class SubLocationServiceView(discord.ui.View):
         embed.add_field(name="🏦 Remaining Credits", value=f"{money - cost}", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_order_drinks(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle ordering drinks with HP restoration"""
+        drink_options = [
+            discord.SelectOption(
+                label="Coffee",
+                description="Hot coffee - 4 credits, +3 HP",
+                emoji="☕",
+                value="coffee"
+            ),
+            discord.SelectOption(
+                label="Fresh Juice",
+                description="Vitamin-rich juice - 6 credits, +6 HP",
+                emoji="🧃",
+                value="juice"
+            ),
+            discord.SelectOption(
+                label="Energy Drink",
+                description="High-caffeine boost - 8 credits, +10 HP",
+                emoji="⚡",
+                value="energy"
+            ),
+            discord.SelectOption(
+                label="Premium Smoothie",
+                description="Nutritious smoothie - 12 credits, +12 HP",
+                emoji="🥤",
+                value="smoothie"
+            )
+        ]
+        
+        select_menu = discord.ui.Select(
+            placeholder="Choose a drink...",
+            options=drink_options
+        )
+        
+        async def drink_callback(select_interaction):
+            if select_interaction.user.id != interaction.user.id:
+                await select_interaction.response.send_message("This isn't your drink order!", ephemeral=True)
+                return
+            
+            drinks = {
+                "coffee": ("Coffee", 4, 3, "A rich, aromatic cup of freshly brewed coffee."),
+                "juice": ("Fresh Juice", 6, 6, "A glass of vitamin-rich fruit juice."),
+                "energy": ("Energy Drink", 8, 10, "A high-caffeine energy drink for that extra boost."),
+                "smoothie": ("Premium Smoothie", 12, 12, "A nutritious smoothie packed with vitamins and minerals.")
+            }
+            
+            drink_key = select_interaction.data['values'][0]
+            drink_name, cost, hp_restore, description = drinks[drink_key]
+            
+            # Get current HP
+            char_info = self.db.execute_query(
+                "SELECT hp, max_hp, money FROM characters WHERE user_id = ?",
+                (select_interaction.user.id,),
+                fetch='one'
+            )
+            
+            if not char_info:
+                await select_interaction.response.send_message("Character not found!", ephemeral=True)
+                return
+            
+            current_hp, max_hp, current_money = char_info
+            
+            if current_money < cost:
+                embed = discord.Embed(
+                    title="❌ Insufficient Credits",
+                    description=f"**{char_name}** cannot afford the {drink_name}.",
+                    color=0xff4500
+                )
+                await select_interaction.response.send_message(embed=embed, ephemeral=False)
+                return
+            
+            # Calculate actual HP restored
+            actual_restore = min(hp_restore, max_hp - current_hp)
+            
+            # Update money and HP
+            self.db.execute_query(
+                "UPDATE characters SET money = money - ?, hp = hp + ? WHERE user_id = ?",
+                (cost, actual_restore, select_interaction.user.id)
+            )
+            
+            embed = discord.Embed(
+                title="🥤 Drink Ordered",
+                description=f"**{char_name}** orders **{drink_name}**\n*{description}*",
+                color=0x4169e1
+            )
+            embed.add_field(name="💚 Health", value=f"+{actual_restore} HP restored", inline=True)
+            embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Remaining", value=f"{current_money - cost} credits", inline=True)
+            
+            await select_interaction.response.send_message(embed=embed, ephemeral=False)
+        
+        select_menu.callback = drink_callback
+        view = discord.ui.View()
+        view.add_item(select_menu)
+        
+        embed = discord.Embed(
+            title="🥤 Drink Menu",
+            description=f"**{char_name}** approaches the drink station.",
+            color=0x4169e1
+        )
+        embed.add_field(name="Available Drinks", value="Select from the menu below:", inline=False)
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    async def _handle_local_intel(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle buying local intelligence"""
+        intel_options = [
+            discord.SelectOption(
+                label="Nearby Events",
+                description="Check for active events - 15 credits",
+                emoji="📡",
+                value="events"
+            ),
+            discord.SelectOption(
+                label="Location Status",
+                description="Wealth & population data - 10 credits",
+                emoji="📊",
+                value="status"
+            ),
+            discord.SelectOption(
+                label="Job Opportunities",
+                description="Available jobs elsewhere - 20 credits",
+                emoji="💼",
+                value="jobs"
+            )
+        ]
+        
+        select_menu = discord.ui.Select(
+            placeholder="Choose intel type...",
+            options=intel_options
+        )
+        
+        async def intel_callback(select_interaction):
+            if select_interaction.user.id != interaction.user.id:
+                await select_interaction.response.send_message("This isn't your intel request!", ephemeral=True)
+                return
+            
+            intel_costs = {"events": 15, "status": 10, "jobs": 20}
+            intel_type = select_interaction.data['values'][0]
+            cost = intel_costs[intel_type]
+            
+            # Check current money
+            current_money = self.db.execute_query(
+                "SELECT money FROM characters WHERE user_id = ?",
+                (select_interaction.user.id,),
+                fetch='one'
+            )[0]
+            
+            if current_money < cost:
+                embed = discord.Embed(
+                    title="❌ Insufficient Credits",
+                    description=f"**{char_name}** cannot afford this intel.",
+                    color=0xff4500
+                )
+                await select_interaction.response.send_message(embed=embed, ephemeral=False)
+                return
+            
+            # Deduct cost
+            self.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (cost, select_interaction.user.id)
+            )
+            
+            # Get current location for nearby checks
+            current_location = self.db.execute_query(
+                "SELECT current_location FROM characters WHERE user_id = ?",
+                (select_interaction.user.id,),
+                fetch='one'
+            )[0]
+            
+            if intel_type == "events":
+                # Check for nearby location events
+                nearby_locations = self.db.execute_query(
+                    """SELECT location_id, name FROM locations 
+                       WHERE location_id != ? 
+                       ORDER BY RANDOM() LIMIT 5""",
+                    (current_location,),
+                    fetch='all'
+                )
+                
+                info = "Recent intelligence suggests:\n"
+                for loc_id, loc_name in nearby_locations[:3]:
+                    activity_level = random.choice(["quiet", "moderate activity", "busy", "heightened security"])
+                    info += f"• **{loc_name}**: {activity_level}\n"
+                
+            elif intel_type == "status":
+                # Get nearby location wealth/population data
+                nearby_locations = self.db.execute_query(
+                    """SELECT name, wealth_level, population FROM locations 
+                       WHERE location_id != ? 
+                       ORDER BY RANDOM() LIMIT 4""",
+                    (current_location,),
+                    fetch='all'
+                )
+                
+                info = "Economic intelligence reports:\n"
+                for name, wealth, population in nearby_locations:
+                    wealth_desc = "wealthy" if wealth >= 7 else "moderate" if wealth >= 4 else "struggling"
+                    pop_desc = "bustling" if population >= 8 else "active" if population >= 5 else "quiet"
+                    info += f"• **{name}**: {wealth_desc}, {pop_desc}\n"
+                
+            else:  # jobs
+                # Check for available jobs at other locations
+                available_jobs = self.db.execute_query(
+                    """SELECT j.title, l.name FROM jobs j 
+                       JOIN locations l ON j.location_id = l.location_id 
+                       WHERE j.is_taken = 0 AND j.location_id != ? 
+                       ORDER BY RANDOM() LIMIT 3""",
+                    (current_location,),
+                    fetch='all'
+                )
+                
+                if available_jobs:
+                    info = "Job opportunities detected:\n"
+                    for title, location in available_jobs:
+                        info += f"• **{title}** at {location}\n"
+                else:
+                    info = "No significant job opportunities detected in nearby systems."
+            
+            embed = discord.Embed(
+                title="💬 Intelligence Briefing",
+                description=f"**{char_name}** receives local intelligence.",
+                color=0x4169e1
+            )
+            embed.add_field(name="📊 Intel Report", value=info, inline=False)
+            embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Remaining", value=f"{current_money - cost} credits", inline=True)
+            
+            await select_interaction.response.send_message(embed=embed, ephemeral=False)
+        
+        select_menu.callback = intel_callback
+        view = discord.ui.View()
+        view.add_item(select_menu)
+        
+        embed = discord.Embed(
+            title="💬 Information Broker",
+            description=f"**{char_name}** approaches the intel terminal.",
+            color=0x4169e1
+        )
+        embed.add_field(name="Available Intel", value="Select what information you need:", inline=False)
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    async def _handle_quick_cards(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle quick card gambling game"""
+        class CardGameView(discord.ui.View):
+            def __init__(self, bot, user_id: int):
+                super().__init__(timeout=300)
+                self.bot = bot
+                self.user_id = user_id
+                self.bet_amount = 5
+                self.update_buttons()
+            
+            def update_buttons(self):
+                self.clear_items()
+                
+                # Bet amount controls
+                decrease_btn = discord.ui.Button(label="-", style=discord.ButtonStyle.secondary, disabled=(self.bet_amount <= 5))
+                decrease_btn.callback = self.decrease_bet
+                self.add_item(decrease_btn)
+                
+                bet_btn = discord.ui.Button(label=f"Bet: {self.bet_amount}", style=discord.ButtonStyle.primary, disabled=True)
+                self.add_item(bet_btn)
+                
+                increase_btn = discord.ui.Button(label="+", style=discord.ButtonStyle.secondary, disabled=(self.bet_amount >= 25))
+                increase_btn.callback = self.increase_bet
+                self.add_item(increase_btn)
+                
+                # Game buttons
+                higher_btn = discord.ui.Button(label="📈 Higher", style=discord.ButtonStyle.success, row=1)
+                higher_btn.callback = self.guess_higher
+                self.add_item(higher_btn)
+                
+                lower_btn = discord.ui.Button(label="📉 Lower", style=discord.ButtonStyle.danger, row=1)
+                lower_btn.callback = self.guess_lower
+                self.add_item(lower_btn)
+                
+                # Exit button
+                exit_btn = discord.ui.Button(label="🚪 Exit", style=discord.ButtonStyle.secondary, row=2)
+                exit_btn.callback = self.exit_game
+                self.add_item(exit_btn)
+            
+            async def decrease_bet(self, interaction):
+                if interaction.user.id != self.user_id:
+                    await interaction.response.send_message("Not your game!", ephemeral=True)
+                    return
+                self.bet_amount = max(5, self.bet_amount - 5)
+                self.update_buttons()
+                await interaction.response.edit_message(view=self)
+            
+            async def increase_bet(self, interaction):
+                if interaction.user.id != self.user_id:
+                    await interaction.response.send_message("Not your game!", ephemeral=True)
+                    return
+                self.bet_amount = min(25, self.bet_amount + 5)
+                self.update_buttons()
+                await interaction.response.edit_message(view=self)
+            
+            async def play_card_game(self, interaction, guess: str):
+                if interaction.user.id != self.user_id:
+                    await interaction.response.send_message("Not your game!", ephemeral=True)
+                    return
+                
+                # Check balance
+                current_money = self.bot.db.execute_query(
+                    "SELECT money FROM characters WHERE user_id = ?",
+                    (interaction.user.id,),
+                    fetch='one'
+                )[0]
+                
+                if current_money < self.bet_amount:
+                    await interaction.response.send_message("❌ Insufficient credits!", ephemeral=True)
+                    return
+                
+                # Draw two cards
+                cards = list(range(2, 15))  # 2-14 (Jack=11, Queen=12, King=13, Ace=14)
+                first_card = random.choice(cards)
+                second_card = random.choice(cards)
+                
+                # Determine win
+                won = False
+                if guess == "higher" and second_card > first_card:
+                    won = True
+                elif guess == "lower" and second_card < first_card:
+                    won = True
+                elif first_card == second_card:  # Push on ties
+                    won = "push"
+                
+                # Card names for display
+                card_names = {11: "Jack", 12: "Queen", 13: "King", 14: "Ace"}
+                first_name = card_names.get(first_card, str(first_card))
+                second_name = card_names.get(second_card, str(second_card))
+                
+                # Calculate winnings
+                if won == "push":
+                    winnings = self.bet_amount  # Return bet
+                    result_text = "🤝 Push! Cards matched!"
+                    color = 0xFFD700
+                elif won:
+                    winnings = int(self.bet_amount * 1.8)  # 1.8x payout
+                    result_text = "🎉 You guessed correctly!"
+                    color = 0x00FF00
+                else:
+                    winnings = 0
+                    result_text = "😔 Wrong guess!"
+                    color = 0xFF0000
+                
+                # Update money
+                if won == "push":
+                    pass  # No change
+                elif won:
+                    self.bot.db.execute_query(
+                        "UPDATE characters SET money = money - ? + ? WHERE user_id = ?",
+                        (self.bet_amount, winnings, interaction.user.id)
+                    )
+                else:
+                    self.bot.db.execute_query(
+                        "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                        (self.bet_amount, interaction.user.id)
+                    )
+                
+                # Create result embed
+                embed = discord.Embed(
+                    title="🃏 Card Game Results",
+                    description=f"**First Card:** {first_name}\n**Second Card:** {second_name}\n**Your Guess:** {guess.title()}\n\n**{result_text}**",
+                    color=color
+                )
+                
+                net_change = winnings - self.bet_amount if won != "push" else 0
+                embed.add_field(name="💰 Bet", value=f"{self.bet_amount} credits", inline=True)
+                embed.add_field(name="🎊 Won", value=f"{winnings} credits", inline=True)
+                embed.add_field(name="📈 Net", value=f"{'+' if net_change >= 0 else ''}{net_change} credits", inline=True)
+                
+                await interaction.response.edit_message(embed=embed, view=self)
+                
+                # Send roleplay message to channel
+                if won == "push":
+                    outcome = "draws even in a tense card game."
+                elif won:
+                    outcome = f"wins {winnings} credits with a lucky card guess!"
+                else:
+                    outcome = f"loses {self.bet_amount} credits on an unlucky draw."
+                
+                roleplay_embed = discord.Embed(
+                    title="🃏 Card Game",
+                    description=f"**{char_name}** {outcome}",
+                    color=color
+                )
+                await interaction.followup.send(embed=roleplay_embed, ephemeral=False)
+            
+            async def guess_higher(self, interaction):
+                await self.play_card_game(interaction, "higher")
+            
+            async def guess_lower(self, interaction):
+                await self.play_card_game(interaction, "lower")
+            
+            async def exit_game(self, interaction):
+                if interaction.user.id != self.user_id:
+                    await interaction.response.send_message("Not your game!", ephemeral=True)
+                    return
+                
+                embed = discord.Embed(
+                    title="🃏 Card Game - Goodbye",
+                    description="Thanks for playing! Good luck out there.",
+                    color=0x888888
+                )
+                await interaction.response.edit_message(embed=embed, view=None)
+        
+        # Create initial game embed and view
+        embed = discord.Embed(
+            title="🃏 Quick Card Game",
+            description=f"**{char_name}** sits down for a quick card game.\n\n**Rules:** Guess if the next card will be higher or lower than the first card.\n**Payout:** 1.8x your bet on correct guess\n**Ties:** Push (return bet)",
+            color=0x4169e1
+        )
+        
+        view = CardGameView(self.bot, interaction.user.id)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
     async def _handle_browse_shops(self, interaction: discord.Interaction, char_name: str):
         """Handle browsing shops"""
         embed = discord.Embed(
@@ -6597,6 +7251,183 @@ class SubLocationServiceView(discord.ui.View):
         )
         embed.set_footer(text="⚠️ Gamble responsibly! The house always has an edge.")
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class NavigationPuzzleView(discord.ui.View):
+    """Interactive view for navigation puzzles in stellar charts"""
+    
+    def __init__(self, bot, char_name: str, puzzle: dict):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.char_name = char_name
+        self.puzzle = puzzle
+        
+        # Add option buttons
+        for i, option in enumerate(puzzle["options"]):
+            button = discord.ui.Button(
+                label=option,
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"nav_option_{i}"
+            )
+            button.callback = self.create_callback(i)
+            self.add_item(button)
+    
+    def create_callback(self, option_index):
+        async def callback(interaction: discord.Interaction):
+            await self.handle_choice(interaction, option_index)
+        return callback
+    
+    async def handle_choice(self, interaction: discord.Interaction, choice: int):
+        """Handle navigation puzzle choice"""
+        import random
+        
+        correct_choice = self.puzzle["correct"]
+        is_correct = choice == correct_choice
+        
+        # Get user's character info
+        char_info = self.bot.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        money = char_info[0]
+        
+        if is_correct:
+            # Award credits for correct answer
+            reward = random.randint(150, 300)
+            self.bot.db.execute_query(
+                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                (reward, interaction.user.id)
+            )
+            
+            embed = discord.Embed(
+                title="✅ Navigation Success!",
+                description=f"**{self.char_name}** {self.puzzle['success_msg']}",
+                color=0x00ff00
+            )
+            embed.add_field(name="💰 Reward", value=f"{reward:,} credits", inline=True)
+            embed.add_field(name="💳 Balance", value=f"{money + reward:,} credits", inline=True)
+            
+        else:
+            # Small consolation reward for participation
+            consolation = random.randint(25, 75)
+            self.bot.db.execute_query(
+                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                (consolation, interaction.user.id)
+            )
+            
+            embed = discord.Embed(
+                title="❌ Navigation Challenge",
+                description=f"**{self.char_name}** {self.puzzle['fail_msg']}",
+                color=0xff6600
+            )
+            embed.add_field(name="💰 Consolation", value=f"{consolation:,} credits", inline=True)
+            embed.add_field(name="💳 Balance", value=f"{money + consolation:,} credits", inline=True)
+        
+        # Disable all buttons after choice
+        for item in self.children:
+            item.disabled = True
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class NavigationDataView(discord.ui.View):
+    """Interactive view for navigation data with premium options"""
+    
+    def __init__(self, bot, char_name: str, money: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.char_name = char_name
+        self.money = money
+    
+    @discord.ui.button(label="Get Basic Data (Free)", style=discord.ButtonStyle.success, emoji="📋")
+    async def basic_data(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Get basic navigation data for free"""
+        import random
+        
+        basic_insights = [
+            "Several faster routes are available during off-peak hours",
+            "Fuel prices vary significantly between different sectors",
+            "Emergency beacon frequencies are clearly marked",
+            "Alternative routes can save time during heavy traffic periods",
+            "Station facilities and services are comprehensively catalogued"
+        ]
+        
+        embed = discord.Embed(
+            title="📋 Basic Navigation Data",
+            description=f"**{self.char_name}** reviews the standard navigation information.",
+            color=0x32cd32
+        )
+        embed.add_field(name="📊 Data Type", value="Public Access Information", inline=True)
+        embed.add_field(name="💰 Cost", value="Free", inline=True)
+        embed.add_field(name="💡 Insight", value=random.choice(basic_insights), inline=False)
+        embed.add_field(name="🕒 Updated", value="Real-time data feed", inline=False)
+        
+        # Disable buttons after use
+        for item in self.children:
+            item.disabled = True
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    @discord.ui.button(label="Premium Package (200 credits)", style=discord.ButtonStyle.primary, emoji="⭐")
+    async def premium_data(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Purchase premium navigation data"""
+        import random
+        
+        cost = 200
+        
+        # Check if user has enough money
+        current_money = self.bot.db.execute_query(
+            "SELECT money FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not current_money or current_money[0] < cost:
+            await interaction.response.send_message(
+                f"Premium package costs {cost:,} credits. You only have {current_money[0] if current_money else 0:,}.",
+                ephemeral=True
+            )
+            return
+        
+        # Deduct cost and provide premium data
+        self.bot.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
+        )
+        
+        premium_data = [
+            ("Optimal Fuel Routes", "AI-calculated most fuel-efficient paths with real-time traffic integration"),
+            ("Trade Arbitrage Data", "Live price differentials between systems for maximum profit margins"),
+            ("Security Risk Assessment", "Detailed piracy probability maps and safe corridor recommendations"),
+            ("VIP Express Lanes", "Access codes for priority jump gate queues and fast-track permissions"),
+            ("Hidden System Maps", "Classified navigation data to unmarked systems and secret installations")
+        ]
+        
+        premium_type, premium_info = random.choice(premium_data)
+        
+        embed = discord.Embed(
+            title="⭐ Premium Navigation Package",
+            description=f"**{self.char_name}** accesses high-tier navigation intelligence.",
+            color=0xffd700
+        )
+        embed.add_field(name="📊 Data Package", value=premium_type, inline=True)
+        embed.add_field(name="💰 Cost", value=f"{cost:,} credits", inline=True)
+        embed.add_field(name="🎯 Intelligence", value=premium_info, inline=False)
+        embed.add_field(name="✨ Benefit", value="Enhanced navigation efficiency for next 24 hours", inline=False)
+        embed.add_field(name="💳 New Balance", value=f"{current_money[0] - cost:,} credits", inline=True)
+        
+        # Disable buttons after use
+        for item in self.children:
+            item.disabled = True
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+
 
 class SubLocationButton(discord.ui.Button):
     """Individual service button for sub-locations"""
