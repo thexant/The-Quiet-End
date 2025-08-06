@@ -1093,30 +1093,42 @@ class SubLocationServiceView(discord.ui.View):
             
         elif self.sub_type == 'truck_stop':
             self.add_item(SubLocationButton(
-                label="Rest & Recuperate", 
-                emoji="😴", 
-                style=discord.ButtonStyle.success,
-                service_type="rest_recuperate"
+                label="Trucker's Diner", 
+                emoji="🍽️", 
+                style=discord.ButtonStyle.primary,
+                service_type="truckers_diner"
             ))
             self.add_item(SubLocationButton(
-                label="Traveler Info", 
-                emoji="🗺️", 
+                label="Supply Station", 
+                emoji="🛒", 
                 style=discord.ButtonStyle.secondary,
-                service_type="travel_info"
+                service_type="supply_station"
+            ))
+            self.add_item(SubLocationButton(
+                label="Rest Pod Rental", 
+                emoji="🛏️", 
+                style=discord.ButtonStyle.success,
+                service_type="rest_pod_rental"
             ))
             
         elif self.sub_type == 'checkpoint':
             self.add_item(SubLocationButton(
-                label="Security Scan", 
-                emoji="🔍", 
+                label="Security Screening", 
+                emoji="🛡️", 
                 style=discord.ButtonStyle.primary,
-                service_type="security_scan"
+                service_type="security_screening"
             ))
             self.add_item(SubLocationButton(
-                label="Transit Papers", 
-                emoji="📄", 
+                label="Express Processing", 
+                emoji="⚡", 
+                style=discord.ButtonStyle.success,
+                service_type="express_processing"
+            ))
+            self.add_item(SubLocationButton(
+                label="Security Consultation", 
+                emoji="📋", 
                 style=discord.ButtonStyle.secondary,
-                service_type="transit_papers"
+                service_type="security_consultation"
             ))
             
         elif self.sub_type == 'fuel_depot':
@@ -1862,22 +1874,22 @@ class SubLocationServiceView(discord.ui.View):
             
         elif self.sub_type == 'entertainment_lounge':
             self.add_item(SubLocationButton(
-                label="Holo-Games", 
-                emoji="🎮", 
+                label="Arcade Games", 
+                emoji="🕹️", 
                 style=discord.ButtonStyle.primary,
-                service_type="holo_games"
+                service_type="arcade_games"
             ))
             self.add_item(SubLocationButton(
-                label="Virtual Reality", 
-                emoji="🥽", 
-                style=discord.ButtonStyle.secondary,
-                service_type="virtual_reality"
-            ))
-            self.add_item(SubLocationButton(
-                label="Music & Media", 
+                label="Music Lounge", 
                 emoji="🎵", 
+                style=discord.ButtonStyle.secondary,
+                service_type="music_lounge"
+            ))
+            self.add_item(SubLocationButton(
+                label="VR Experiences", 
+                emoji="🥽", 
                 style=discord.ButtonStyle.success,
-                service_type="music_media"
+                service_type="vr_experiences"
             ))
             
         elif self.sub_type == 'travel_services':
@@ -2074,16 +2086,20 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_check_traffic(interaction, char_name)
         elif service_type == "corridor_status":
             await self._handle_corridor_status(interaction, char_name)
-        elif service_type == "rest_recuperate":
-            await self._handle_rest_recuperate(interaction, char_name)
-        elif service_type == "travel_info":
-            await self._handle_traveler_info(interaction, char_name)
-        elif service_type == "security_scan":
-            await self._handle_security_scan(interaction, char_name)
+        elif service_type == "truckers_diner":
+            await self._handle_truckers_diner(interaction, char_name, money)
+        elif service_type == "supply_station":
+            await self._handle_supply_station(interaction, char_name, money)
+        elif service_type == "rest_pod_rental":
+            await self._handle_rest_pod_rental(interaction, char_name, money)
+        elif service_type == "security_screening":
+            await self._handle_security_screening(interaction, char_name, money)
+        elif service_type == "express_processing":
+            await self._handle_express_processing(interaction, char_name, money)
+        elif service_type == "security_consultation":
+            await self._handle_security_consultation(interaction, char_name, money)
         elif service_type == "report_incident":
             await self._handle_report_incident(interaction, char_name)
-        elif service_type == "transit_papers":
-            await self._handle_transit_papers(interaction, char_name, money)
         elif service_type == "priority_refuel":
             await self._handle_priority_refuel(interaction, char_name, money)
         elif service_type == "fuel_quality":
@@ -2417,12 +2433,12 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_pod_services(interaction, char_name)
         
         # Entertainment Hub services
-        elif service_type == "holo_games":
-            await self._handle_holo_games(interaction, char_name)
-        elif service_type == "virtual_reality":
-            await self._handle_virtual_reality(interaction, char_name)
-        elif service_type == "music_media":
-            await self._handle_music_media(interaction, char_name)
+        elif service_type == "arcade_games":
+            await self._handle_arcade_games(interaction, char_name, money)
+        elif service_type == "music_lounge":
+            await self._handle_music_lounge(interaction, char_name, money)
+        elif service_type == "vr_experiences":
+            await self._handle_vr_experiences(interaction, char_name, money)
         
         else:
             # Generic flavor response for unimplemented services
@@ -2520,34 +2536,222 @@ class SubLocationServiceView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
         
-    async def _handle_security_scan(self, interaction: discord.Interaction, char_name: str):
-        """Handle security scanning at checkpoint"""
+    async def _handle_security_screening(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle advanced security screening with consequences"""
         import random
         
-        scan_results = [
-            "All clear - no prohibited items detected",
-            "Standard scan complete - you're cleared for transit",
-            "Routine inspection passed - proceed to gate",
-            "Security clearance confirmed - safe travels",
-            "Biometric verification successful - transit approved"
+        # 80% chance of routine screening, 20% chance of complications
+        if random.random() < 0.8:
+            # Routine screening - positive outcomes
+            outcomes = [
+                ("Clean Scan", "All systems show green - you're a model traveler.", "standard", 0),
+                ("Quick Process", "Your credentials check out perfectly. Express lane activated.", "positive", 0),
+                ("Commendation", "Security notes your exemplary travel history.", "positive", random.randint(2, 5)),
+                ("Background Clear", "Biometric and background verification completed without issues.", "standard", 0),
+                ("Priority Status", "Your clean record grants you priority processing privileges.", "positive", 0)
+            ]
+            
+            result_title, description, outcome_type, bonus = random.choice(outcomes)
+            
+            if bonus > 0:
+                self.db.execute_query(
+                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    (bonus, interaction.user.id)
+                )
+            
+            color = 0x00ff00 if outcome_type == "positive" else 0x4682b4
+            embed = discord.Embed(
+                title=f"🛡️ {result_title}",
+                description=f"**{char_name}** {description}",
+                color=color
+            )
+            
+            if bonus > 0:
+                embed.add_field(name="💰 Bonus", value=f"+{bonus} credits (exemplary traveler reward)", inline=True)
+            embed.add_field(name="✅ Status", value="Cleared for transit - proceed to gate", inline=True)
+            
+        else:
+            # Complications - player must make choices
+            complications = [
+                {
+                    "title": "Contraband Alert",
+                    "description": "Scanner detects suspicious energy signatures in your cargo.",
+                    "choice1": "Cooperate fully with inspection",
+                    "choice2": "Claim equipment malfunction",
+                    "outcome1": ("Inspection reveals scanning error. Apologies issued.", 0, 0x00ff00),
+                    "outcome2": ("Security unconvinced. Additional screening required.", -random.randint(3, 7), 0xff6600)
+                },
+                {
+                    "title": "Identity Verification Issue",
+                    "description": "Biometric scanners show anomalous readings requiring secondary authentication.",
+                    "choice1": "Submit to additional biometric scans",
+                    "choice2": "Request manual verification process", 
+                    "outcome1": ("Enhanced scans confirm identity. Rare medical condition noted in file.", 0, 0x00ff00),
+                    "outcome2": ("Manual process takes time but succeeds. Small processing fee charged.", -random.randint(2, 5), 0xff6600)
+                },
+                {
+                    "title": "Travel Authorization Query",
+                    "description": "Your transit permit shows irregular route patterns triggering algorithmic flags.",
+                    "choice1": "Explain your travel history honestly",
+                    "choice2": "Request to speak with supervisor",
+                    "outcome1": ("Your explanation satisfies security. Travel patterns updated as legitimate.", 0, 0x00ff00),
+                    "outcome2": ("Supervisor review takes time. Administrative fee applies for expedited processing.", -random.randint(4, 8), 0xff6600)
+                }
+            ]
+            
+            complication = random.choice(complications)
+            
+            # For simplicity, randomly choose an outcome instead of waiting for user input
+            chosen_outcome = random.choice([complication["outcome1"], complication["outcome2"]])
+            outcome_desc, cost_change, color = chosen_outcome
+            
+            if cost_change < 0 and money >= abs(cost_change):
+                self.db.execute_query(
+                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    (cost_change, interaction.user.id)
+                )
+                cost_text = f"Cost: {abs(cost_change)} credits"
+            elif cost_change < 0:
+                # Not enough money for fees, but still process
+                cost_text = f"Fee waived due to insufficient credits"
+                color = 0x4682b4
+            else:
+                cost_text = "No additional charges"
+            
+            embed = discord.Embed(
+                title=f"⚠️ {complication['title']}",
+                description=f"**{char_name}** encounters: {complication['description']}\n\n**Resolution**: {outcome_desc}",
+                color=color
+            )
+            embed.add_field(name="💸 Processing", value=cost_text, inline=True)
+            embed.add_field(name="✅ Final Status", value="Cleared for transit after additional screening", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+    
+    async def _handle_express_processing(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle premium express processing service"""
+        import random
+        
+        cost = random.randint(15, 25)  # Premium service cost
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="⚡ Express Processing",
+                description=f"**{char_name}** inquires about express processing but doesn't have enough credits. Need {cost} credits for premium service.",
+                color=0xff0000
+            )
+            embed.add_field(name="💰 Available", value=f"{money} credits", inline=True)
+            embed.add_field(name="🚫 Alternative", value="Standard screening is available at no cost", inline=True)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Deduct cost
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
+        )
+        
+        # Express processing always has positive outcomes
+        vip_experiences = [
+            ("Executive Lane", "Priority biometric scanners complete your screening in under 60 seconds.", "Fast-tracked through executive checkpoint"),
+            ("Diplomat Protocol", "Advanced AI systems pre-validate your credentials during approach.", "VIP treatment with personal security escort"),
+            ("Premium Clearance", "Quantum-encrypted verification bypasses standard queue entirely.", "Direct access to priority boarding area"),
+            ("Express Verification", "Neural-link authentication confirms identity instantaneously.", "Seamless processing with complimentary refreshments"),
+            ("Priority Status", "Your premium service activates dedicated high-speed scanners.", "Expedited clearance with travel convenience perks")
         ]
         
-        scan_details = [
-            "The scanner hums as it analyzes your belongings",
-            "Biometric sensors confirm your identity",
-            "X-ray scanners examine your equipment thoroughly",
-            "Chemical detectors find no contraband",
-            "The security AI processes your travel authorization"
-        ]
+        service_name, process_desc, vip_treatment = random.choice(vip_experiences)
+        
+        # 25% chance for bonus credits from frequent traveler rewards
+        bonus = 0
+        if random.random() < 0.25:
+            bonus = random.randint(5, 12)
+            self.db.execute_query(
+                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                (bonus, interaction.user.id)
+            )
         
         embed = discord.Embed(
-            title="🔍 Security Scan",
-            description=f"**{char_name}** undergoes mandatory security screening.",
-            color=0x4682b4
+            title=f"⚡ {service_name}",
+            description=f"**{char_name}** receives premium express processing: {process_desc}",
+            color=0xffd700
         )
-        embed.add_field(name="📋 Scan Result", value=random.choice(scan_results), inline=False)
-        embed.add_field(name="🔬 Process", value=random.choice(scan_details), inline=False)
-        embed.add_field(name="✅ Status", value="You are cleared to proceed through the checkpoint.", inline=False)
+        embed.add_field(name="🎆 VIP Treatment", value=vip_treatment, inline=False)
+        embed.add_field(name="💸 Service Fee", value=f"-{cost} credits", inline=True)
+        if bonus > 0:
+            embed.add_field(name="🏆 Loyalty Bonus", value=f"+{bonus} credits (frequent traveler reward)", inline=True)
+        embed.add_field(name="✅ Priority Status", value="Express clearance complete - immediate gate access", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+    
+    async def _handle_security_consultation(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle security consultation and travel safety briefing"""
+        import random
+        
+        cost = 10  # Fixed cost for consultation
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="📋 Security Consultation",
+                description=f"**{char_name}** requests security consultation but doesn't have enough credits. Need {cost} credits for professional briefing.",
+                color=0xff0000
+            )
+            embed.add_field(name="💰 Available", value=f"{money} credits", inline=True)
+            embed.add_field(name="🔒 Free Advice", value="Basic travel safety reminders available at no cost", inline=True)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Deduct cost
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
+        )
+        
+        # Random security consultation topics
+        consultations = [
+            {
+                "title": "Corridor Threat Assessment",
+                "briefing": "Current intelligence reports elevated pirate activity in sectors 7-12. Recommend traveling in groups or avoiding high-risk corridors during peak hours.",
+                "equipment": "Encrypted communicators and emergency beacons",
+                "rating": "Moderate Risk"
+            },
+            {
+                "title": "Identity Protection Briefing",
+                "briefing": "Recent data breaches at outer rim stations. Advise using secondary credentials for non-essential transactions and enabling enhanced biometric locks.",
+                "equipment": "Identity scramblers and secure data pods",
+                "rating": "Low Risk"
+            },
+            {
+                "title": "Emergency Protocol Review",
+                "briefing": "Updated evacuation procedures for station lockdowns. New emergency frequencies and backup communication protocols distributed to registered travelers.",
+                "equipment": "Emergency life support kits and beacon transmitters",
+                "rating": "Preparedness"
+            },
+            {
+                "title": "Contraband Awareness Update",
+                "briefing": "New restricted materials list includes quantum processors and bio-neural components. Carrying permits required for scientific equipment in several systems.",
+                "equipment": "Legal documentation scanners and permit trackers",
+                "rating": "Regulatory"
+            },
+            {
+                "title": "Medical Security Advisory",
+                "briefing": "Quarantine protocols updated for three systems due to biological containment breaches. Medical clearance certificates may be required for transit.",
+                "equipment": "Medical scanners and decontamination supplies",
+                "rating": "Health Advisory"
+            }
+        ]
+        
+        consultation = random.choice(consultations)
+        
+        embed = discord.Embed(
+            title=f"📋 {consultation['title']}",
+            description=f"**{char_name}** receives professional security briefing: {consultation['briefing']}",
+            color=0x4169E1
+        )
+        embed.add_field(name="⚠️ Risk Level", value=consultation['rating'], inline=True)
+        embed.add_field(name="💸 Consultation Fee", value=f"-{cost} credits", inline=True)
+        embed.add_field(name="🔧 Recommended Equipment", value=consultation['equipment'], inline=False)
+        embed.add_field(name="🛡️ Security Status", value="You are now better informed about current travel risks", inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
@@ -5891,15 +6095,61 @@ class SubLocationServiceView(discord.ui.View):
         embed.add_field(name="🌟 Experience", value="Fully immersive", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def _handle_holo_games(self, interaction: discord.Interaction, char_name: str):
-        """Handle entertainment hub - holo games"""
-        embed = discord.Embed(
-            title="🎮 Holographic Games",
-            description=f"**{char_name}** accesses the holographic game system. Advanced entertainment technology provides immersive experiences.",
-            color=0x4169E1
+    async def _handle_arcade_games(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle entertainment hub - arcade games"""
+        import random
+        
+        cost = random.choice([5, 8, 10, 12, 15])  # Random cost per game
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="🕹️ Arcade Games",
+                description=f"**{char_name}** approaches the arcade machines but doesn't have enough credits. Need {cost} credits to play.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Deduct cost
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
         )
-        embed.add_field(name="🎯 Available Games", value="Strategy, adventure, simulation", inline=True)
-        embed.add_field(name="🌟 Features", value="Full sensory immersion", inline=True)
+        
+        # Random game outcomes
+        games = [
+            ("Stellar Fighter", "space combat", 0.4),
+            ("Gravity Runner", "physics platformer", 0.35), 
+            ("Neural Hacker", "puzzle game", 0.45),
+            ("Asteroid Miner", "resource management", 0.3),
+            ("Colony Defense", "tower defense", 0.4)
+        ]
+        
+        game_name, game_type, win_chance = random.choice(games)
+        won = random.random() < win_chance
+        
+        if won:
+            winnings = random.randint(cost + 5, cost * 3)  # Win 5+ to 3x the cost
+            self.db.execute_query(
+                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                (winnings, interaction.user.id)
+            )
+            
+            embed = discord.Embed(
+                title=f"🏆 {game_name} - Victory!",
+                description=f"**{char_name}** dominates the {game_type} and wins {winnings} credits! (Spent {cost} credits)",
+                color=0x00ff00
+            )
+            embed.add_field(name="💰 Net Gain", value=f"+{winnings - cost} credits", inline=True)
+        else:
+            embed = discord.Embed(
+                title=f"💥 {game_name} - Game Over",
+                description=f"**{char_name}** gives the {game_type} a valiant effort but loses. Better luck next time! (Lost {cost} credits)",
+                color=0xff6600
+            )
+            embed.add_field(name="💸 Cost", value=f"-{cost} credits", inline=True)
+        
+        embed.add_field(name="🎮 Game Type", value=game_type.title(), inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_vr_experience(self, interaction: discord.Interaction, char_name: str):
@@ -5913,26 +6163,286 @@ class SubLocationServiceView(discord.ui.View):
         embed.add_field(name="✨ Reality", value="Breathtaking visuals", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def _handle_virtual_reality(self, interaction: discord.Interaction, char_name: str):
-        """Handle entertainment hub - virtual reality"""
-        embed = discord.Embed(
-            title="🥽 Virtual Reality",
-            description=f"**{char_name}** enters an advanced virtual reality chamber. Next-generation immersion technology awaits.",
-            color=0x4169E1
+    async def _handle_vr_experiences(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle entertainment hub - VR experiences"""
+        import random
+        
+        cost = 12  # Fixed cost for VR sessions
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="🥽 VR Experiences",
+                description=f"**{char_name}** approaches the VR pods but doesn't have enough credits. Need {cost} credits for a session.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Deduct cost
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
         )
-        embed.add_field(name="🌍 Virtual Worlds", value="Limitless exploration", inline=True)
-        embed.add_field(name="🎮 Experiences", value="Interactive adventures", inline=True)
+        
+        # Random VR experiences
+        experiences = [
+            ("Ancient Earth", "Walk through pre-apocalypse cities and pristine forests of humanity's homeworld.", "nostalgic"),
+            ("Deep Ocean World", "Explore alien coral reefs and swim alongside bioluminescent creatures.", "peaceful"),
+            ("Zero-G Construction", "Build massive space stations in the void with perfect precision.", "satisfying"),
+            ("Temporal Battlefield", "Witness historic space battles from multiple perspectives simultaneously.", "thrilling"),
+            ("Crystal Caves of Vega", "Navigate stunning underground caverns filled with singing crystals.", "mystical"),
+            ("Gravity Storm Racing", "Pilot ships through chaotic gravitational anomalies at breakneck speeds.", "adrenaline-pumping"),
+            ("Memory Palace", "Explore someone else's reconstructed childhood memories in vivid detail.", "emotional"),
+            ("Quantum Garden", "Tend to plants that exist in multiple dimensions simultaneously.", "mind-bending")
+        ]
+        
+        experience_name, description, mood = random.choice(experiences)
+        
+        # Small chance for bonus credits from "finding hidden treasures"
+        bonus = 0
+        if random.random() < 0.15:  # 15% chance
+            bonus = random.randint(3, 8)
+            self.db.execute_query(
+                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                (bonus, interaction.user.id)
+            )
+        
+        embed = discord.Embed(
+            title=f"🥽 {experience_name}",
+            description=f"**{char_name}** enters the VR pod and experiences: {description}",
+            color=0x9932cc
+        )
+        embed.add_field(name="🎨 Experience", value=mood.title(), inline=True)
+        embed.add_field(name="💸 Cost", value=f"-{cost} credits", inline=True)
+        if bonus > 0:
+            embed.add_field(name="💎 Bonus", value=f"Found hidden treasure: +{bonus} credits!", inline=True)
+        
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def _handle_music_media(self, interaction: discord.Interaction, char_name: str):
-        """Handle entertainment hub - music and media"""
-        embed = discord.Embed(
-            title="🎵 Music & Media",
-            description=f"**{char_name}** accesses the multimedia entertainment system. High-quality audio and visual content from across the galaxy.",
-            color=0x4169E1
+    async def _handle_music_lounge(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle entertainment hub - music lounge"""
+        import random
+        
+        cost = 8  # Fixed cost for music lounge entry
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="🎵 Music Lounge",
+                description=f"**{char_name}** approaches the music lounge but doesn't have enough credits. Need {cost} credits for entry.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Deduct cost
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
         )
-        embed.add_field(name="🎶 Music Library", value="Galactic collection", inline=True)
-        embed.add_field(name="📺 Media Center", value="Movies, shows, documentaries", inline=True)
+        
+        # Random music genres and experiences
+        music_experiences = [
+            ("Martian Jazz Fusion", "Smooth saxophone melodies blend with synthetic harmonies from the red planet.", "relaxed"),
+            ("Asteroid Belt Electronica", "Pulsing beats that match the rhythm of mining equipment in the void.", "energized"),
+            ("Venusian Opera", "Haunting vocals that tell tales of love lost in the cloud cities.", "melancholy"),
+            ("Ganymede Folk Revival", "Traditional songs passed down from the first Jupiter colonists.", "nostalgic"),
+            ("Neural Sync Symphonies", "AI-composed orchestral pieces that resonate with human brainwaves.", "transcendent"),
+            ("Solar Wind Ambience", "Calming soundscapes recorded from actual stellar phenomena.", "peaceful"),
+            ("Corridor Trucker Blues", "Gritty songs about life hauling cargo between the stars.", "authentic"),
+            ("Zero-G Dance Beats", "High-energy rhythms designed for low-gravity nightclubs.", "invigorating")
+        ]
+        
+        genre, description, mood = random.choice(music_experiences)
+        
+        # Random social encounters
+        social_encounters = [
+            "You overhear fascinating stories from other travelers.",
+            "A fellow music lover shares recommendations for new artists.",
+            "You join a small group discussing the cultural significance of the music.",
+            "An elderly patron tells you about how this genre originated.",
+            "You make casual conversation with someone from a distant system.",
+            "The atmosphere is perfect for quiet contemplation."
+        ]
+        
+        social_element = random.choice(social_encounters)
+        
+        embed = discord.Embed(
+            title=f"🎵 {genre}",
+            description=f"**{char_name}** settles into the music lounge and enjoys: {description}",
+            color=0x9932cc
+        )
+        embed.add_field(name="🎧 Mood", value=mood.title(), inline=True)
+        embed.add_field(name="💸 Cost", value=f"-{cost} credits", inline=True)
+        embed.add_field(name="👥 Social", value=social_element, inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_truckers_diner(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle trucker's diner at traveler services"""
+        import random
+        
+        cost = random.randint(15, 25)  # Random cost for diner meal
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="🍽️ Trucker's Diner",
+                description=f"**{char_name}** approaches the diner but doesn't have enough credits. Need {cost} credits for a meal.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Deduct cost
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
+        )
+        
+        # Random meal experiences
+        meals = [
+            ("Corridor Trucker's Special", "A hearty platter of synthetic protein, dehydrated vegetables, and authentic coffee.", "filling"),
+            ("Deep Space Stew", "Slow-cooked for hours during the long haul, rich with flavors from across the galaxy.", "warming"),
+            ("Asteroid Miner's Breakfast", "Double portions of everything - designed to fuel a 12-hour shift.", "energizing"),
+            ("Gate Runner's Combo", "Quick but satisfying meal for pilots on tight schedules.", "efficient"),
+            ("Hauler's Feast", "Traditional trucker fare with extra helpings and strong black coffee.", "satisfying"),
+            ("Nomad's Delight", "A mix of preserved foods from different worlds, surprisingly good.", "exotic")
+        ]
+        
+        meal_name, description, quality = random.choice(meals)
+        
+        # Random atmosphere and social elements
+        diner_atmosphere = [
+            "The diner buzzes with conversation from veteran haulers sharing route tips.",
+            "Old space truckers swap stories about the dangerous corridors they've traveled.",
+            "The smell of real coffee fills the air - a luxury in most gate stations.",
+            "Weathered pilots discuss cargo manifests and fuel prices over their meals.",
+            "The diner's worn booth seats have supported countless travelers over the years.",
+            "Local news feeds play on old screens while truckers eat and plan their next runs."
+        ]
+        
+        atmosphere = random.choice(diner_atmosphere)
+        
+        embed = discord.Embed(
+            title=f"🍽️ {meal_name}",
+            description=f"**{char_name}** enjoys a meal at the trucker's diner: {description}",
+            color=0x8b4513
+        )
+        embed.add_field(name="🍴 Quality", value=quality.title(), inline=True)
+        embed.add_field(name="💸 Cost", value=f"-{cost} credits", inline=True)
+        embed.add_field(name="🏢 Atmosphere", value=atmosphere, inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_supply_station(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle supply station at traveler services"""
+        import random
+        
+        cost = random.randint(10, 20)  # Random cost for supplies
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="🛒 Supply Station",
+                description=f"**{char_name}** browses the supply station but doesn't have enough credits. Need {cost} credits for supplies.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Deduct cost
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
+        )
+        
+        # Random supply purchases
+        supplies = [
+            ("Emergency Rations", "Vacuum-sealed meals that last indefinitely - essential for long corridor runs.", "practical"),
+            ("Traveler's Kit", "Basic tools, spare parts, and emergency equipment every pilot should carry.", "essential"),
+            ("Corridor Maps", "Updated navigation charts showing recent corridor shifts and hazards.", "valuable"),
+            ("Comfort Pack", "Personal hygiene items, entertainment media, and small luxuries for the journey.", "appreciated"),
+            ("Emergency Beacon", "Personal distress transmitter for emergency situations in deep space.", "critical"),
+            ("Filter Cartridges", "Replacement air and water filters - you can never have too many spares.", "necessary")
+        ]
+        
+        supply_name, description, value = random.choice(supplies)
+        
+        # Random vendor interactions
+        vendor_interactions = [
+            "The supply clerk recommends additional items based on your travel route.",
+            "An experienced hauler overhears and suggests which brands are most reliable.",
+            "The vendor shares tips about where to find better prices on your next stop.",
+            "You notice other travelers stocking up on similar emergency supplies.",
+            "The station's inventory reflects the harsh realities of corridor travel.",
+            "The vendor warns you about recent supply shortages at distant stations."
+        ]
+        
+        interaction_note = random.choice(vendor_interactions)
+        
+        embed = discord.Embed(
+            title=f"🛒 {supply_name}",
+            description=f"**{char_name}** purchases supplies from the station: {description}",
+            color=0x4682b4
+        )
+        embed.add_field(name="📦 Value", value=value.title(), inline=True)
+        embed.add_field(name="💸 Cost", value=f"-{cost} credits", inline=True)
+        embed.add_field(name="🤝 Vendor Note", value=interaction_note, inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_rest_pod_rental(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle rest pod rental at traveler services"""
+        import random
+        
+        cost = random.randint(30, 45)  # Higher cost for premium service
+        
+        if money < cost:
+            embed = discord.Embed(
+                title="🛏️ Rest Pod Rental",
+                description=f"**{char_name}** inquires about pod rental but doesn't have enough credits. Need {cost} credits for premium rest.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Deduct cost
+        self.db.execute_query(
+            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            (cost, interaction.user.id)
+        )
+        
+        # Random rest experiences
+        rest_experiences = [
+            ("Deluxe Sleep Pod", "Individual climate-controlled chambers with white noise generators and ergonomic bedding.", "luxurious"),
+            ("Privacy Cabin", "Small but comfortable quarters with entertainment console and personal hygiene facilities.", "comfortable"),
+            ("Executive Suite", "Premium accommodations with viewport, minibar, and priority wake-up service.", "indulgent"),
+            ("Trucker's Bunk", "No-frills private sleeping quarters designed for long-haul drivers needing real rest.", "practical"),
+            ("Recovery Pod", "Specialized chambers with therapeutic lighting and air purification systems.", "rejuvenating"),
+            ("Quiet Zone Room", "Sound-dampened quarters away from the main station noise and activity.", "peaceful")
+        ]
+        
+        pod_type, amenities, quality = random.choice(rest_experiences)
+        
+        # Random rest outcomes and experiences
+        rest_outcomes = [
+            "You enjoy the first real privacy you've had in weeks of corridor travel.",
+            "The genuine quiet allows you to truly relax for the first time in days.",
+            "Clean sheets and climate control make this worth every credit spent.",
+            "You catch up on personal messages and entertainment in complete comfort.",
+            "The pod's isolation provides a welcome break from the constant station noise.",
+            "You appreciate the luxury after sleeping in cramped ship quarters for so long."
+        ]
+        
+        experience = random.choice(rest_outcomes)
+        
+        embed = discord.Embed(
+            title=f"🛏️ {pod_type}",
+            description=f"**{char_name}** rents premium rest accommodations: {amenities}",
+            color=0x9932cc
+        )
+        embed.add_field(name="🌟 Quality", value=quality.title(), inline=True)
+        embed.add_field(name="💸 Cost", value=f"-{cost} credits", inline=True)
+        embed.add_field(name="😌 Experience", value=experience, inline=False)
+        
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_social_activities(self, interaction: discord.Interaction, char_name: str):
