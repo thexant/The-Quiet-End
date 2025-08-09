@@ -7204,6 +7204,7 @@ class EmergencySupplyPurchaseView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
+
     # Outpost service handlers
     async def _handle_review_samples(self, interaction: discord.Interaction, char_name: str):
         """Handle survey lab - review samples"""
