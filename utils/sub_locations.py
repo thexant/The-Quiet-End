@@ -1906,20 +1906,20 @@ class SubLocationServiceView(discord.ui.View):
             
         elif self.sub_type == 'travel_services':
             self.add_item(SubLocationButton(
-                label="Book Passage", 
-                emoji="🎫", 
+                label="Navigation Challenge", 
+                emoji="🎯", 
                 style=discord.ButtonStyle.primary,
                 service_type="book_passage"
             ))
             self.add_item(SubLocationButton(
-                label="Route Planning", 
-                emoji="🗺️", 
+                label="Traffic Analysis", 
+                emoji="📊", 
                 style=discord.ButtonStyle.secondary,
                 service_type="route_planning"
             ))
             self.add_item(SubLocationButton(
-                label="Travel Insurance", 
-                emoji="🛡️", 
+                label="Risk Assessment", 
+                emoji="⚠️", 
                 style=discord.ButtonStyle.success,
                 service_type="travel_insurance"
             ))
@@ -6961,36 +6961,247 @@ class EmergencySupplyPurchaseView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_route_planning(self, interaction: discord.Interaction, char_name: str):
-        """Handle travel services - route planning"""
-        embed = discord.Embed(
-            title="🗺️ Route Planning",
-            description=f"**{char_name}** plans optimal travel routes. Expert guidance for efficient journeys.",
-            color=0x4169E1
+        """Handle travel services - traffic analysis consultation"""
+        import random
+        
+        # Get character's engineering skill
+        char_info = self.db.execute_query(
+            "SELECT engineering FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
         )
-        embed.add_field(name="📍 Routes", value="Optimized paths", inline=True)
-        embed.add_field(name="⏱️ Efficiency", value="Time-saving routes", inline=True)
+        
+        if not char_info:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        engineering_skill = char_info[0]
+        
+        # Engineering skill check
+        skill_check = random.randint(1, 20) + engineering_skill
+        success_threshold = 12
+        
+        if skill_check >= success_threshold:
+            # Success - award credits and XP
+            credit_reward = random.randint(100, 300)
+            xp_reward = random.randint(10, 20)
+            
+            self.db.execute_query(
+                "UPDATE characters SET money = money + ?, experience = experience + ? WHERE user_id = ?",
+                (credit_reward, xp_reward, interaction.user.id)
+            )
+            
+            traffic_analyses = [
+                "Corridor bottlenecks identified, alternate routes calculated",
+                "Peak traffic periods analyzed, optimal departure times determined", 
+                "Ship class efficiency ratings compiled for different route types",
+                "Fuel consumption patterns mapped across high-traffic corridors",
+                "Emergency bypass routes discovered through data mining",
+                "Trade convoy schedules analyzed for travel timing optimization"
+            ]
+            
+            embed = discord.Embed(
+                title="📊 Traffic Analysis Consultation - Expert Analysis",
+                description=f"**{char_name}** provides professional traffic analysis using advanced data processing skills.",
+                color=0x00ff00
+            )
+            embed.add_field(name="🧠 Skill Check", value=f"Engineering: {skill_check} (Success!)", inline=True)
+            embed.add_field(name="📈 Analysis Result", value=random.choice(traffic_analyses), inline=False)
+            embed.add_field(name="💰 Consultation Fee", value=f"+{credit_reward} credits", inline=True)
+            embed.add_field(name="📚 Experience", value=f"+{xp_reward} XP", inline=True)
+            embed.add_field(name="💼 Status", value="Professional analysis completed, client satisfied", inline=False)
+        else:
+            # Failure - basic outcome with small XP
+            xp_reward = random.randint(5, 12)
+            
+            self.db.execute_query(
+                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                (xp_reward, interaction.user.id)
+            )
+            
+            basic_analyses = [
+                "Standard traffic patterns reviewed from public databases",
+                "Basic corridor usage statistics compiled from available data",
+                "Simple route comparisons made using standard algorithms",
+                "General travel advisories collected from public sources",
+                "Basic timing recommendations provided from routine analysis"
+            ]
+            
+            embed = discord.Embed(
+                title="📋 Traffic Analysis Consultation",
+                description=f"**{char_name}** attempts data analysis but struggles with the complex traffic datasets.",
+                color=0x4169E1
+            )
+            embed.add_field(name="🧠 Skill Check", value=f"Engineering: {skill_check} (Limited Results)", inline=True)
+            embed.add_field(name="📊 Analysis Result", value=random.choice(basic_analyses), inline=False)
+            embed.add_field(name="📚 Experience", value=f"+{xp_reward} XP (practical learning)", inline=True)
+            embed.add_field(name="💼 Status", value="Basic analysis provided, room for improvement", inline=False)
+        
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_book_passage(self, interaction: discord.Interaction, char_name: str):
-        """Handle travel services - book passage"""
-        embed = discord.Embed(
-            title="🎫 Book Passage",
-            description=f"**{char_name}** books travel arrangements. Secure your journey to distant destinations.",
-            color=0x4169E1
+        """Handle travel services - route navigation challenge"""
+        import random
+        
+        # Get character's navigation skill
+        char_info = self.db.execute_query(
+            "SELECT navigation FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
         )
-        embed.add_field(name="✈️ Transport", value="Passage confirmed", inline=True)
-        embed.add_field(name="📋 Details", value="All arrangements set", inline=True)
+        
+        if not char_info:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        navigation_skill = char_info[0]
+        
+        # Navigation skill check
+        skill_check = random.randint(1, 20) + navigation_skill
+        success_threshold = 14
+        
+        if skill_check >= success_threshold:
+            # Success - award credits and XP
+            credit_reward = random.randint(50, 150)
+            xp_reward = random.randint(15, 25)
+            
+            self.db.execute_query(
+                "UPDATE characters SET money = money + ?, experience = experience + ? WHERE user_id = ?",
+                (credit_reward, xp_reward, interaction.user.id)
+            )
+            
+            advanced_routes = [
+                "Optimal fuel-efficient corridor sequence identified",
+                "High-traffic avoidance route calculated successfully",
+                "Express lane permissions secured through connections",
+                "Hazard-free path mapped using updated sensor data",
+                "Priority routing discovered through trade network analysis"
+            ]
+            
+            embed = discord.Embed(
+                title="🎯 Route Navigation Challenge - Success!",
+                description=f"**{char_name}** demonstrates exceptional navigation expertise during route planning.",
+                color=0x00ff00
+            )
+            embed.add_field(name="🧠 Skill Check", value=f"Navigation: {skill_check} (Success!)", inline=True)
+            embed.add_field(name="✨ Achievement", value=random.choice(advanced_routes), inline=False)
+            embed.add_field(name="💰 Navigation Fee", value=f"+{credit_reward} credits", inline=True)
+            embed.add_field(name="📚 Experience", value=f"+{xp_reward} XP", inline=True)
+        else:
+            # Failure - basic outcome with small XP
+            xp_reward = random.randint(5, 10)
+            
+            self.db.execute_query(
+                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                (xp_reward, interaction.user.id)
+            )
+            
+            basic_outcomes = [
+                "Standard route information provided from public databases",
+                "Basic corridor maps accessed, but nothing special found",
+                "Routine travel advisory received with standard warnings",
+                "Common knowledge routes documented for reference",
+                "Public transit schedules reviewed without insights"
+            ]
+            
+            embed = discord.Embed(
+                title="🗺️ Route Navigation Challenge",
+                description=f"**{char_name}** attempts navigation planning but struggles with complex route optimization.",
+                color=0x4169E1
+            )
+            embed.add_field(name="🧠 Skill Check", value=f"Navigation: {skill_check} (Basic Result)", inline=True)
+            embed.add_field(name="📋 Outcome", value=random.choice(basic_outcomes), inline=False)
+            embed.add_field(name="📚 Experience", value=f"+{xp_reward} XP (learning experience)", inline=True)
+        
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_travel_insurance(self, interaction: discord.Interaction, char_name: str):
-        """Handle travel services - travel insurance"""
+        """Handle travel services - risk assessment protocol"""
+        import random
+        
+        # Present risk assessment scenarios
+        scenarios = [
+            {
+                "title": "Derelict Sector Transit",
+                "description": "A traveler plans to cross through a derelict sector with scattered debris and potential pirate activity.",
+                "high_risk_outcome": ("Correctly identified extreme danger - avoid at all costs", 150, 20),
+                "low_risk_outcome": ("Underestimated hazards - dangerous recommendation made", -50, 5)
+            },
+            {
+                "title": "Peak Traffic Corridor",
+                "description": "A merchant convoy wants to use a busy trade corridor during peak shipping season.",
+                "high_risk_outcome": ("Identified traffic congestion risks and delays", 100, 15),
+                "low_risk_outcome": ("Missed traffic complications - poor timing advice given", -25, 8)
+            },
+            {
+                "title": "New Colony Route",
+                "description": "A family wishes to travel to a recently established colony with limited infrastructure.",
+                "high_risk_outcome": ("Recognized supply chain and safety risks", 125, 18),
+                "low_risk_outcome": ("Overlooked infrastructure limitations", -40, 6)
+            },
+            {
+                "title": "Faction Border Crossing",
+                "description": "A trader needs to cross contested territory between two rival factions.",
+                "high_risk_outcome": ("Correctly assessed political tensions and patrol risks", 175, 22),
+                "low_risk_outcome": ("Underestimated diplomatic complications", -60, 7)
+            },
+            {
+                "title": "Emergency Medical Transport",
+                "description": "A medical transport requires the fastest possible route, time is critical.",
+                "high_risk_outcome": ("Properly balanced speed vs safety for medical emergency", 140, 19),
+                "low_risk_outcome": ("Poor risk-benefit analysis for critical transport", -45, 9)
+            }
+        ]
+        
+        scenario = random.choice(scenarios)
+        
+        # Determine if player makes good assessment (70% chance for basic success)
+        assessment_success = random.random() < 0.7
+        
+        if assessment_success:
+            outcome_text, credit_change, xp_reward = scenario["high_risk_outcome"]
+            color = 0x00ff00
+            status_icon = "✅"
+            result_type = "Accurate Assessment"
+        else:
+            outcome_text, credit_change, xp_reward = scenario["low_risk_outcome"]
+            color = 0xff8c00 if credit_change < 0 else 0x4169E1
+            status_icon = "⚠️" if credit_change < 0 else "📋"
+            result_type = "Missed Risks" if credit_change < 0 else "Basic Assessment"
+        
+        # Apply changes
+        if credit_change != 0:
+            self.db.execute_query(
+                "UPDATE characters SET money = money + ?, experience = experience + ? WHERE user_id = ?",
+                (credit_change, xp_reward, interaction.user.id)
+            )
+        else:
+            self.db.execute_query(
+                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                (xp_reward, interaction.user.id)
+            )
+        
         embed = discord.Embed(
-            title="🛡️ Travel Insurance",
-            description=f"**{char_name}** reviews insurance options. Protect yourself against the unexpected.",
-            color=0x4169E1
+            title=f"{status_icon} Risk Assessment Protocol - {result_type}",
+            description=f"**{char_name}** analyzes a travel risk scenario for insurance evaluation.",
+            color=color
         )
-        embed.add_field(name="🔒 Coverage", value="Comprehensive protection", inline=True)
-        embed.add_field(name="💰 Value", value="Affordable peace of mind", inline=True)
+        embed.add_field(name="📋 Scenario", value=f"**{scenario['title']}**", inline=False)
+        embed.add_field(name="📖 Details", value=scenario['description'], inline=False)
+        embed.add_field(name="🎯 Assessment Result", value=outcome_text, inline=False)
+        
+        if credit_change > 0:
+            embed.add_field(name="💰 Consultation Fee", value=f"+{credit_change} credits", inline=True)
+        elif credit_change < 0:
+            embed.add_field(name="💸 Assessment Error", value=f"{credit_change} credits", inline=True)
+        
+        embed.add_field(name="📚 Experience", value=f"+{xp_reward} XP", inline=True)
+        
+        if assessment_success:
+            embed.add_field(name="💼 Professional Status", value="Risk analysis expertise demonstrated", inline=False)
+        else:
+            embed.add_field(name="💼 Learning Experience", value="Valuable lessons learned from challenging scenario", inline=False)
+        
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     # Outpost service handlers
