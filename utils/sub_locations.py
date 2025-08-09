@@ -6692,17 +6692,42 @@ class SubLocationServiceView(discord.ui.View):
             ("Painkillers", 25, "Standard pain relief medication")
         ]
         
-        item_name, cost, description = random.choice(emergency_items)
+        item_name, base_cost, description = random.choice(emergency_items)
         
-        if money < cost:
+        # Get current location for economic modifiers
+        current_location = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        # Apply location wealth modifiers (convenience pricing)
+        wealth_level = self.db.execute_query(
+            "SELECT wealth_level FROM locations WHERE location_id = ?",
+            (current_location,),
+            fetch='one'
+        )[0] if current_location else 1
+        
+        # Emergency cache has convenience markup (10-25% higher based on location)
+        markup_multiplier = 1.1 + (wealth_level * 0.05)  # 10% to 35% markup
+        final_cost = max(1, int(base_cost * markup_multiplier))
+        
+        if money < final_cost:
             embed = discord.Embed(
                 title="📦 Emergency Supply Cache",
                 description=f"**{char_name}** browses the automated supply cache but doesn't have enough credits for {item_name}.",
                 color=0xff0000
             )
-            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
+            embed.add_field(name="💰 Required", value=f"{final_cost} credits", inline=True)
             embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
         else:
+            # Check if item already exists in inventory
+            existing_item = self.db.execute_query(
+                "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+                (interaction.user.id, item_name),
+                fetch='one'
+            )
+            
             # Add item to inventory using actual game system
             from utils.item_config import ItemConfig
             item_data = ItemConfig.get_item_definition(item_name)
@@ -6717,16 +6742,24 @@ class SubLocationServiceView(discord.ui.View):
                 metadata = '{"single_use": true, "rarity": "common"}'
                 actual_description = description
             
-            self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (interaction.user.id, item_name, item_type, 1, actual_description, cost, metadata)
-            )
+            if existing_item:
+                # Update existing stack
+                self.db.execute_query(
+                    "UPDATE inventory SET quantity = quantity + 1 WHERE item_id = ?",
+                    (existing_item[0],)
+                )
+            else:
+                # Create new inventory entry
+                self.db.execute_query(
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                    (interaction.user.id, item_name, item_type, 1, actual_description, final_cost, metadata)
+                )
             
             # Deduct money
             self.db.execute_query(
                 "UPDATE characters SET money = money - ? WHERE user_id = ?",
-                (cost, interaction.user.id)
+                (final_cost, interaction.user.id)
             )
             
             # Random cache interactions
@@ -6747,8 +6780,8 @@ class SubLocationServiceView(discord.ui.View):
                 color=0x4682b4
             )
             embed.add_field(name="📋 Item", value=actual_description, inline=False)
-            embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
-            embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
+            embed.add_field(name="💰 Cost", value=f"{final_cost} credits", inline=True)
+            embed.add_field(name="🏦 Remaining", value=f"{money - final_cost} credits", inline=True)
             embed.add_field(name="🤖 Cache Note", value=interaction_note, inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
