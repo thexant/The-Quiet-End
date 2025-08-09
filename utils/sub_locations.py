@@ -1093,22 +1093,34 @@ class SubLocationServiceView(discord.ui.View):
             
         elif self.sub_type == 'truck_stop':
             self.add_item(SubLocationButton(
-                label="Trucker's Diner", 
+                label="Spacer's Cantina", 
                 emoji="🍽️", 
                 style=discord.ButtonStyle.primary,
-                service_type="truckers_diner"
+                service_type="spacers_cantina"
             ))
             self.add_item(SubLocationButton(
-                label="Supply Station", 
-                emoji="🛒", 
+                label="Emergency Supply Cache", 
+                emoji="📦", 
                 style=discord.ButtonStyle.secondary,
-                service_type="supply_station"
+                service_type="emergency_cache"
             ))
             self.add_item(SubLocationButton(
-                label="Rest Pod Rental", 
+                label="Hygiene & Rest Facilities", 
                 emoji="🛏️", 
                 style=discord.ButtonStyle.success,
-                service_type="rest_pod_rental"
+                service_type="hygiene_rest"
+            ))
+            self.add_item(SubLocationButton(
+                label="Spacer's Bulletin Network", 
+                emoji="📡", 
+                style=discord.ButtonStyle.secondary,
+                service_type="spacer_bulletin"
+            ))
+            self.add_item(SubLocationButton(
+                label="Fuel Performance Station", 
+                emoji="⚡", 
+                style=discord.ButtonStyle.primary,
+                service_type="fuel_performance"
             ))
             
         elif self.sub_type == 'checkpoint':
@@ -2086,12 +2098,16 @@ class SubLocationServiceView(discord.ui.View):
             await self._handle_check_traffic(interaction, char_name)
         elif service_type == "corridor_status":
             await self._handle_corridor_status(interaction, char_name)
-        elif service_type == "truckers_diner":
-            await self._handle_truckers_diner(interaction, char_name, money)
-        elif service_type == "supply_station":
-            await self._handle_supply_station(interaction, char_name, money)
-        elif service_type == "rest_pod_rental":
-            await self._handle_rest_pod_rental(interaction, char_name, money)
+        elif service_type == "spacers_cantina":
+            await self._handle_spacers_cantina(interaction, char_name, money)
+        elif service_type == "emergency_cache":
+            await self._handle_emergency_cache(interaction, char_name, money)
+        elif service_type == "hygiene_rest":
+            await self._handle_hygiene_rest(interaction, char_name, money)
+        elif service_type == "spacer_bulletin":
+            await self._handle_spacer_bulletin(interaction, char_name)
+        elif service_type == "fuel_performance":
+            await self._handle_fuel_performance(interaction, char_name, money)
         elif service_type == "security_screening":
             await self._handle_security_screening(interaction, char_name, money)
         elif service_type == "express_processing":
@@ -6277,16 +6293,29 @@ class SubLocationServiceView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def _handle_truckers_diner(self, interaction: discord.Interaction, char_name: str, money: int):
-        """Handle trucker's diner at traveler services"""
+    async def _handle_spacers_cantina(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle spacer's cantina at traveler services"""
         import random
         
-        cost = random.randint(15, 25)  # Random cost for diner meal
+        cost = random.randint(15, 30)  # Random cost for cantina meal
+        
+        # Get current HP for healing calculation
+        char_info = self.db.execute_query(
+            "SELECT hp, max_hp FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message("Character data not found.", ephemeral=False)
+            return
+            
+        current_hp, max_hp = char_info
         
         if money < cost:
             embed = discord.Embed(
-                title="🍽️ Trucker's Diner",
-                description=f"**{char_name}** approaches the diner but doesn't have enough credits. Need {cost} credits for a meal.",
+                title="🍽️ Spacer's Cantina",
+                description=f"**{char_name}** approaches the cantina but doesn't have enough credits. Need {cost} credits for a meal.",
                 color=0xff0000
             )
             await interaction.response.send_message(embed=embed, ephemeral=False)
@@ -6298,51 +6327,77 @@ class SubLocationServiceView(discord.ui.View):
             (cost, interaction.user.id)
         )
         
-        # Random meal experiences
+        # Random meal experiences with spacefarer terminology
         meals = [
-            ("Corridor Trucker's Special", "A hearty platter of synthetic protein, dehydrated vegetables, and authentic coffee.", "filling"),
-            ("Deep Space Stew", "Slow-cooked for hours during the long haul, rich with flavors from across the galaxy.", "warming"),
-            ("Asteroid Miner's Breakfast", "Double portions of everything - designed to fuel a 12-hour shift.", "energizing"),
-            ("Gate Runner's Combo", "Quick but satisfying meal for pilots on tight schedules.", "efficient"),
-            ("Hauler's Feast", "Traditional trucker fare with extra helpings and strong black coffee.", "satisfying"),
-            ("Nomad's Delight", "A mix of preserved foods from different worlds, surprisingly good.", "exotic")
+            ("Spacer's Special", "A hearty platter of cultured protein, hydroponic vegetables, and real coffee.", "filling", 8),
+            ("Deep Void Stew", "Slow-cooked during long corridor runs, rich with flavors from across the galaxy.", "warming", 10),
+            ("Explorer's Breakfast", "Double portions designed to fuel extended survey missions.", "energizing", 12),
+            ("Runner's Quick Combo", "Fast but satisfying meal for pilots on tight schedules.", "efficient", 6),
+            ("Hauler's Feast", "Traditional spacefarer fare with extra helpings and strong brew.", "satisfying", 9),
+            ("Nomad's Delight", "A fusion of preserved foods from different worlds, surprisingly delicious.", "exotic", 7)
         ]
         
-        meal_name, description, quality = random.choice(meals)
+        meal_name, description, quality, hp_restore = random.choice(meals)
         
-        # Random atmosphere and social elements
-        diner_atmosphere = [
-            "The diner buzzes with conversation from veteran haulers sharing route tips.",
-            "Old space truckers swap stories about the dangerous corridors they've traveled.",
-            "The smell of real coffee fills the air - a luxury in most gate stations.",
+        # Apply HP restoration (but don't exceed max HP)
+        new_hp = min(current_hp + hp_restore, max_hp)
+        hp_gained = new_hp - current_hp
+        
+        if hp_gained > 0:
+            self.db.execute_query(
+                "UPDATE characters SET hp = ? WHERE user_id = ?",
+                (new_hp, interaction.user.id)
+            )
+        
+        # Random atmosphere and social elements with spacefarer terminology
+        cantina_atmosphere = [
+            "The cantina buzzes with conversation from veteran spacefarers sharing route tips.",
+            "Experienced explorers swap stories about dangerous sectors they've navigated.",
+            "The aroma of real coffee fills the air - a luxury at most corridor stops.",
             "Weathered pilots discuss cargo manifests and fuel prices over their meals.",
-            "The diner's worn booth seats have supported countless travelers over the years.",
-            "Local news feeds play on old screens while truckers eat and plan their next runs."
+            "The cantina's worn booth seats have supported countless travelers over the years.",
+            "Local news feeds play on holographic displays while spacefarers plan their next runs."
         ]
         
-        atmosphere = random.choice(diner_atmosphere)
+        atmosphere = random.choice(cantina_atmosphere)
         
         embed = discord.Embed(
             title=f"🍽️ {meal_name}",
-            description=f"**{char_name}** enjoys a meal at the trucker's diner: {description}",
+            description=f"**{char_name}** enjoys a meal at the spacer's cantina: {description}",
             color=0x8b4513
         )
         embed.add_field(name="🍴 Quality", value=quality.title(), inline=True)
         embed.add_field(name="💸 Cost", value=f"-{cost} credits", inline=True)
+        if hp_gained > 0:
+            embed.add_field(name="❤️ Nourishment", value=f"+{hp_gained} HP", inline=True)
+            embed.add_field(name="💊 Current HP", value=f"{new_hp}/{max_hp}", inline=True)
         embed.add_field(name="🏢 Atmosphere", value=atmosphere, inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def _handle_supply_station(self, interaction: discord.Interaction, char_name: str, money: int):
-        """Handle supply station at traveler services"""
+    async def _handle_hygiene_rest(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle hygiene & rest facilities at traveler services"""
         import random
         
-        cost = random.randint(10, 20)  # Random cost for supplies
+        cost = random.randint(25, 40)  # Random cost for facility usage
+        
+        # Get current HP and check for negative effects
+        char_info = self.db.execute_query(
+            "SELECT hp, max_hp FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message("Character data not found.", ephemeral=False)
+            return
+            
+        current_hp, max_hp = char_info
         
         if money < cost:
             embed = discord.Embed(
-                title="🛒 Supply Station",
-                description=f"**{char_name}** browses the supply station but doesn't have enough credits. Need {cost} credits for supplies.",
+                title="🛏️ Hygiene & Rest Facilities",
+                description=f"**{char_name}** approaches the facilities but doesn't have enough credits. Need {cost} credits for access.",
                 color=0xff0000
             )
             await interaction.response.send_message(embed=embed, ephemeral=False)
@@ -6354,55 +6409,183 @@ class SubLocationServiceView(discord.ui.View):
             (cost, interaction.user.id)
         )
         
-        # Random supply purchases
-        supplies = [
-            ("Emergency Rations", "Vacuum-sealed meals that last indefinitely - essential for long corridor runs.", "practical"),
-            ("Traveler's Kit", "Basic tools, spare parts, and emergency equipment every pilot should carry.", "essential"),
-            ("Corridor Maps", "Updated navigation charts showing recent corridor shifts and hazards.", "valuable"),
-            ("Comfort Pack", "Personal hygiene items, entertainment media, and small luxuries for the journey.", "appreciated"),
-            ("Emergency Beacon", "Personal distress transmitter for emergency situations in deep space.", "critical"),
-            ("Filter Cartridges", "Replacement air and water filters - you can never have too many spares.", "necessary")
+        # Significant HP restoration (15-25 HP)
+        hp_restore = random.randint(15, 25)
+        new_hp = min(current_hp + hp_restore, max_hp)
+        hp_gained = new_hp - current_hp
+        
+        if hp_gained > 0:
+            self.db.execute_query(
+                "UPDATE characters SET hp = ? WHERE user_id = ?",
+                (new_hp, interaction.user.id)
+            )
+        
+        # Clear any negative temporary effects (simplified - remove items starting with "Active:" that are negative)
+        negative_effects_cleared = False
+        negative_effects = self.db.execute_query(
+            """SELECT item_id FROM inventory 
+               WHERE owner_id = ? AND item_name LIKE 'Active:%' 
+               AND (item_name LIKE '%Hangover%' OR item_name LIKE '%Fatigue%' OR item_name LIKE '%Poison%')""",
+            (interaction.user.id,),
+            fetch='all'
+        )
+        
+        if negative_effects:
+            for effect in negative_effects:
+                self.db.execute_query(
+                    "DELETE FROM inventory WHERE item_id = ?",
+                    (effect[0],)
+                )
+            negative_effects_cleared = True
+        
+        # Random facility experiences
+        facility_experiences = [
+            ("Sonic Shower & Climate Pod", "You enjoy a refreshing sonic shower followed by rest in a temperature-controlled pod.", "rejuvenating"),
+            ("Hygiene Suite & Rest Bay", "Clean facilities and a comfortable sleeping pod restore your energy completely.", "restorative"),
+            ("Sanitization & Recovery Unit", "Advanced cleaning systems and a premium rest pod leave you feeling renewed.", "premium"),
+            ("Traveler's Refresh Station", "Basic but clean facilities provide the hygiene and rest you need.", "adequate"),
+            ("Spacer's Wellness Pod", "Comprehensive hygiene and rest services designed for long-haul travelers.", "comprehensive")
         ]
         
-        supply_name, description, value = random.choice(supplies)
+        facility_name, description, quality = random.choice(facility_experiences)
         
-        # Random vendor interactions
-        vendor_interactions = [
-            "The supply clerk recommends additional items based on your travel route.",
-            "An experienced hauler overhears and suggests which brands are most reliable.",
-            "The vendor shares tips about where to find better prices on your next stop.",
-            "You notice other travelers stocking up on similar emergency supplies.",
-            "The station's inventory reflects the harsh realities of corridor travel.",
-            "The vendor warns you about recent supply shortages at distant stations."
+        # Random facility atmosphere
+        facility_atmosphere = [
+            "The facilities are well-maintained and clearly designed with spacefarers in mind.",
+            "Other travelers nod appreciatively as they exit the facilities, looking refreshed.",
+            "The automated systems ensure privacy and cleanliness for all users.",
+            "Soft ambient lighting and climate control create a peaceful atmosphere.",
+            "You notice the facilities are frequently cleaned by maintenance drones.",
+            "The sound of running water and gentle ventilation creates a soothing environment."
         ]
         
-        interaction_note = random.choice(vendor_interactions)
+        atmosphere = random.choice(facility_atmosphere)
         
         embed = discord.Embed(
-            title=f"🛒 {supply_name}",
-            description=f"**{char_name}** purchases supplies from the station: {description}",
-            color=0x4682b4
+            title=f"🛏️ {facility_name}",
+            description=f"**{char_name}** uses the hygiene and rest facilities: {description}",
+            color=0x4169e1
         )
-        embed.add_field(name="📦 Value", value=value.title(), inline=True)
+        embed.add_field(name="✨ Quality", value=quality.title(), inline=True)
         embed.add_field(name="💸 Cost", value=f"-{cost} credits", inline=True)
-        embed.add_field(name="🤝 Vendor Note", value=interaction_note, inline=False)
+        if hp_gained > 0:
+            embed.add_field(name="❤️ Recovery", value=f"+{hp_gained} HP", inline=True)
+            embed.add_field(name="💊 Current HP", value=f"{new_hp}/{max_hp}", inline=True)
+        if negative_effects_cleared:
+            embed.add_field(name="🧹 Cleansing", value="Negative effects removed", inline=True)
+        embed.add_field(name="🏢 Experience", value=atmosphere, inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def _handle_rest_pod_rental(self, interaction: discord.Interaction, char_name: str, money: int):
-        """Handle rest pod rental at traveler services"""
+    async def _handle_spacer_bulletin(self, interaction: discord.Interaction, char_name: str):
+        """Handle spacer's bulletin network at traveler services (free with cooldown)"""
         import random
         
-        cost = random.randint(30, 45)  # Higher cost for premium service
+        # Check cooldown - once per location visit  
+        # Simple approach: check if user has used this service recently at this location
+        recent_usage = self.db.execute_query(
+            """SELECT last_used FROM service_cooldowns 
+               WHERE user_id = ? AND service_type = 'spacer_bulletin' AND location_id = ?
+               AND datetime(last_used, '+6 hours') > datetime('now')""",
+            (interaction.user.id, self.location_id),
+            fetch='one'
+        )
+        
+        if recent_usage:
+            embed = discord.Embed(
+                title="📡 Spacer's Bulletin Network",
+                description=f"**{char_name}** has already checked the bulletin network recently. Try again later.",
+                color=0xff8c00
+            )
+            embed.add_field(name="⏰ Cooldown", value="Available again in a few hours", inline=True)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        # Update cooldown
+        self.db.execute_query(
+            """INSERT OR REPLACE INTO service_cooldowns (user_id, service_type, location_id, last_used)
+               VALUES (?, 'spacer_bulletin', ?, datetime('now'))""",
+            (interaction.user.id, self.location_id)
+        )
+        
+        # Random bulletin content focused on travel intel
+        bulletin_reports = [
+            ("Route Safety Alert", "Spacers report increased pirate activity along the Terminus-Nexus corridor"),
+            ("Fuel Price Surge", "Multiple gate stations experiencing fuel shortages, prices up 40% sector-wide"),
+            ("New Trade Route", "Explorers discovered profitable run between frontier colonies and core systems"),
+            ("Corridor Hazard Warning", "Solar flare activity causing navigation interference in the Outer Rim"),
+            ("Supply Shortage Notice", "Medical supplies in high demand at mining outposts, premium prices offered"),
+            ("Navigation Update", "Gate technicians report timing delays on the Central Commerce Route")
+        ]
+        
+        report_type, main_info = random.choice(bulletin_reports)
+        
+        # Additional travel insights
+        travel_insights = [
+            "Independent haulers are pooling resources for convoy runs through dangerous sectors",
+            "Gate maintenance schedules suggest avoid peak travel times for faster transit",
+            "Veteran spacefarers recommend extra fuel reserves for outer system runs",
+            "New rest stops opening along previously underserved trade routes",
+            "Corporate shipping monopolies leaving gaps that independent traders can exploit",
+            "Recent stellar cartography updates show promising unexplored system access points"
+        ]
+        
+        # Spacer tips and rumors
+        spacer_tips = [
+            "Always keep emergency beacon charged - deep space rescue is expensive but worth it",
+            "Gate station prices vary wildly, shop around before major supply purchases",
+            "Build relationships with local mechanics, they know which parts fail first",
+            "Fresh coffee is worth paying extra for after weeks of recycled ship rations",
+            "Keep paper backups of critical navigation data, electronics can fail",
+            "Rest when you can - fatigue kills more spacefarers than pirates ever will"
+        ]
+        
+        embed = discord.Embed(
+            title="📡 Spacer's Bulletin Network",
+            description=f"**{char_name}** accesses the interstellar bulletin network for current travel intel.",
+            color=0x4169e1
+        )
+        embed.add_field(name="🚨 Current Alert", value=report_type, inline=True)
+        embed.add_field(name="📡 Network Status", value="Active Connection", inline=True)
+        embed.add_field(name="📋 Details", value=main_info, inline=False)
+        embed.add_field(name="💡 Spacer Insight", value=random.choice(travel_insights), inline=False)
+        embed.add_field(name="🛠️ Veteran's Tip", value=random.choice(spacer_tips), inline=False)
+        embed.add_field(name="💰 Service Cost", value="Free for registered spacefarers", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_fuel_performance(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle fuel performance station at traveler services"""
+        import random
+        
+        cost = random.randint(50, 75)  # Random cost for fuel performance service
         
         if money < cost:
             embed = discord.Embed(
-                title="🛏️ Rest Pod Rental",
-                description=f"**{char_name}** inquires about pod rental but doesn't have enough credits. Need {cost} credits for premium rest.",
+                title="⚡ Fuel Performance Station",
+                description=f"**{char_name}** approaches the fuel performance station but doesn't have enough credits. Need {cost} credits for service.",
                 color=0xff0000
             )
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
+        
+        # Check if user has a ship
+        ship_info = self.db.execute_query(
+            "SELECT ship_id, fuel, fuel_capacity FROM ships WHERE owner_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not ship_info:
+            embed = discord.Embed(
+                title="⚡ Fuel Performance Station",
+                description=f"**{char_name}** needs a registered ship to use fuel performance services.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+        
+        ship_id, current_fuel, fuel_capacity = ship_info
         
         # Deduct cost
         self.db.execute_query(
@@ -6410,38 +6593,163 @@ class SubLocationServiceView(discord.ui.View):
             (cost, interaction.user.id)
         )
         
-        # Random rest experiences
-        rest_experiences = [
-            ("Deluxe Sleep Pod", "Individual climate-controlled chambers with white noise generators and ergonomic bedding.", "luxurious"),
-            ("Privacy Cabin", "Small but comfortable quarters with entertainment console and personal hygiene facilities.", "comfortable"),
-            ("Executive Suite", "Premium accommodations with viewport, minibar, and priority wake-up service.", "indulgent"),
-            ("Trucker's Bunk", "No-frills private sleeping quarters designed for long-haul drivers needing real rest.", "practical"),
-            ("Recovery Pod", "Specialized chambers with therapeutic lighting and air purification systems.", "rejuvenating"),
-            ("Quiet Zone Room", "Sound-dampened quarters away from the main station noise and activity.", "peaceful")
+        # Two possible outcomes: temporary fuel efficiency boost OR chance for permanent upgrade item
+        outcome_type = random.choices(['temp_boost', 'upgrade_item'], weights=[0.85, 0.15])[0]
+        
+        if outcome_type == 'upgrade_item':
+            # Small chance to find fuel efficiency upgrade
+            from utils.item_config import ItemConfig
+            item_name = "Engine Booster"
+            item_data = ItemConfig.get_item_definition(item_name)
+            
+            if item_data:
+                item_type = item_data.get("type", "upgrade")
+                metadata = ItemConfig.create_item_metadata(item_name) 
+                description = item_data.get("description", "Permanently improves ship fuel efficiency")
+                value = item_data.get("base_value", 800)
+                
+                self.db.execute_query(
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                    (interaction.user.id, item_name, item_type, 1, description, value, metadata)
+                )
+                
+                embed = discord.Embed(
+                    title="⚡ Performance Enhancement - Rare Discovery!",
+                    description=f"**{char_name}** receives specialized fuel system optimization at the performance station.",
+                    color=0xffd700
+                )
+                embed.add_field(name="🎁 Bonus Discovery", value=f"Found: {item_name}", inline=True)
+                embed.add_field(name="📋 Description", value=description, inline=False)
+                embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
+                embed.add_field(name="✨ Rarity", value="Lucky find!", inline=True)
+            else:
+                # Fallback if item doesn't exist
+                outcome_type = 'temp_boost'
+        
+        if outcome_type == 'temp_boost':
+            # Add temporary fuel efficiency boost (implemented as inventory item with timer)
+            boost_duration_hours = random.randint(3, 5)  # 3-5 jumps worth
+            
+            # Create temporary effect item
+            from datetime import datetime, timedelta
+            expire_time = datetime.now() + timedelta(hours=boost_duration_hours)
+            effect_metadata = f'{{"active_until": "{expire_time.isoformat()}", "boost_value": 1, "single_use": false}}'
+            
+            self.db.execute_query(
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, "Active: Fuel Efficiency Boost", "effect", 1, 
+                 f"Temporary +1 fuel efficiency for next {boost_duration_hours} travel hours", 0, effect_metadata)
+            )
+            
+            # Random performance service experiences
+            performance_services = [
+                ("Catalytic Fuel Additive", "Advanced fuel catalyst injected into your ship's fuel system.", "enhanced"),
+                ("Drive Resonance Tuning", "Precise calibration of your ship's drive harmonics for optimal efficiency.", "precise"),
+                ("Fuel System Purification", "Complete fuel line cleaning and performance-grade additives applied.", "purified"),
+                ("Engine Optimization Protocol", "Comprehensive engine parameter adjustment for maximum fuel economy.", "optimized"),
+                ("Performance Fuel Blend", "Custom fuel mixture tailored to your ship's specific drive signature.", "customized")
+            ]
+            
+            service_name, service_description, quality = random.choice(performance_services)
+            
+            # Random technical explanations
+            tech_explanations = [
+                "The fuel additives will improve combustion efficiency in your drive chambers.",
+                "Harmonic resonance adjustments reduce energy waste during corridor transitions.",
+                "Cleaned fuel injectors allow for more precise fuel delivery to the drive core.",
+                "Engine parameter optimization reduces fuel consumption during normal operations.",
+                "The custom fuel blend is formulated based on your ship's drive specifications."
+            ]
+            
+            tech_note = random.choice(tech_explanations)
+            
+            embed = discord.Embed(
+                title=f"⚡ {service_name}",
+                description=f"**{char_name}** receives fuel performance enhancement: {service_description}",
+                color=0x32cd32
+            )
+            embed.add_field(name="⚙️ Quality", value=quality.title(), inline=True)
+            embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
+            embed.add_field(name="⚡ Effect", value=f"+1 Fuel Efficiency ({boost_duration_hours}h)", inline=True)
+            embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
+            embed.add_field(name="🔧 Technical Note", value=tech_note, inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_emergency_cache(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle emergency supply cache at traveler services"""
+        import random
+        
+        # Emergency supplies available at convenience prices (slightly higher than normal)
+        emergency_items = [
+            ("Emergency Rations", 12, "Vacuum-sealed survival food for extended journeys"),
+            ("Basic Med Kit", 85, "Basic medical supplies for treating injuries"),
+            ("Fuel Cell", 50, "Portable fuel container for ship refueling"),
+            ("Hull Patch", 95, "Emergency patch for minor hull breaches"),
+            ("Filtered Water", 8, "Clean water for consumption during long trips"),
+            ("Painkillers", 25, "Standard pain relief medication")
         ]
         
-        pod_type, amenities, quality = random.choice(rest_experiences)
+        item_name, cost, description = random.choice(emergency_items)
         
-        # Random rest outcomes and experiences
-        rest_outcomes = [
-            "You enjoy the first real privacy you've had in weeks of corridor travel.",
-            "The genuine quiet allows you to truly relax for the first time in days.",
-            "Clean sheets and climate control make this worth every credit spent.",
-            "You catch up on personal messages and entertainment in complete comfort.",
-            "The pod's isolation provides a welcome break from the constant station noise.",
-            "You appreciate the luxury after sleeping in cramped ship quarters for so long."
-        ]
-        
-        experience = random.choice(rest_outcomes)
-        
-        embed = discord.Embed(
-            title=f"🛏️ {pod_type}",
-            description=f"**{char_name}** rents premium rest accommodations: {amenities}",
-            color=0x9932cc
-        )
-        embed.add_field(name="🌟 Quality", value=quality.title(), inline=True)
-        embed.add_field(name="💸 Cost", value=f"-{cost} credits", inline=True)
-        embed.add_field(name="😌 Experience", value=experience, inline=False)
+        if money < cost:
+            embed = discord.Embed(
+                title="📦 Emergency Supply Cache",
+                description=f"**{char_name}** browses the automated supply cache but doesn't have enough credits for {item_name}.",
+                color=0xff0000
+            )
+            embed.add_field(name="💰 Required", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
+        else:
+            # Add item to inventory using actual game system
+            from utils.item_config import ItemConfig
+            item_data = ItemConfig.get_item_definition(item_name)
+            
+            # If item exists in config, use its data; otherwise use fallback
+            if item_data:
+                item_type = item_data.get("type", "consumable")
+                metadata = ItemConfig.create_item_metadata(item_name)
+                actual_description = item_data.get("description", description)
+            else:
+                item_type = "consumable"
+                metadata = '{"single_use": true, "rarity": "common"}'
+                actual_description = description
+            
+            self.db.execute_query(
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (interaction.user.id, item_name, item_type, 1, actual_description, cost, metadata)
+            )
+            
+            # Deduct money
+            self.db.execute_query(
+                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                (cost, interaction.user.id)
+            )
+            
+            # Random cache interactions
+            cache_interactions = [
+                "The automated dispenser processes your payment and delivers the item.",
+                "Other spacefarers have recently restocked this cache with essentials.",
+                "The supply cache's inventory reflects what travelers need most.",
+                "A holographic notice warns about supply shortages at distant stations.",
+                "The cache's pricing reflects the convenience of this remote location.",
+                "Emergency supplies are always in demand at corridor rest stops."
+            ]
+            
+            interaction_note = random.choice(cache_interactions)
+            
+            embed = discord.Embed(
+                title=f"📦 {item_name} Acquired",
+                description=f"**{char_name}** purchases emergency supplies from the automated cache.",
+                color=0x4682b4
+            )
+            embed.add_field(name="📋 Item", value=actual_description, inline=False)
+            embed.add_field(name="💰 Cost", value=f"{cost} credits", inline=True)
+            embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
+            embed.add_field(name="🤖 Cache Note", value=interaction_note, inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 

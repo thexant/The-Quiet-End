@@ -1655,6 +1655,16 @@ class Database:
                 is_available BOOLEAN DEFAULT 1,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
+            # Service cooldowns for sub-location services
+            '''CREATE TABLE IF NOT EXISTS service_cooldowns (
+                user_id INTEGER NOT NULL,
+                service_type TEXT NOT NULL,
+                location_id INTEGER NOT NULL,
+                last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, service_type, location_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
             # Travel micro-events tracking
             '''CREATE TABLE IF NOT EXISTS travel_micro_events (
                 event_id INTEGER PRIMARY KEY AUTOINCREMENT,
