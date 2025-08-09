@@ -7051,16 +7051,6 @@ class SubLocationServiceView(discord.ui.View):
         embed.add_field(name="🚚 Delivery", value="Scheduled arrival", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def _handle_emergency_cache(self, interaction: discord.Interaction, char_name: str):
-        """Handle supply depot - emergency cache"""
-        embed = discord.Embed(
-            title="🆘 Emergency Cache",
-            description=f"**{char_name}** inspects emergency supplies. Critical resources secured and accessible.",
-            color=0x9932CC
-        )
-        embed.add_field(name="🆘 Emergency", value="Supplies ready", inline=True)
-        embed.add_field(name="🔐 Security", value="Access verified", inline=True)
-        await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_launch_drone(self, interaction: discord.Interaction, char_name: str):
         """Handle drone bay - launch drone"""
