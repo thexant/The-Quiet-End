@@ -6678,167 +6678,6 @@ class SubLocationServiceView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-class EmergencySupplySelectView(discord.ui.View):
-    def __init__(self, db, user_id: int, money: int, emergency_items: list):
-        super().__init__(timeout=180)
-        self.db = db
-        self.user_id = user_id
-        self.money = money
-        
-        if emergency_items:
-            options = []
-            for item_name, base_cost, description, final_cost in emergency_items[:25]:
-                can_afford = "✅" if money >= final_cost else "❌"
-                options.append(
-                    discord.SelectOption(
-                        label=f"{item_name} - {final_cost:,} credits",
-                        description=f"{can_afford} {description[:65]}{'...' if len(description) > 65 else ''}",
-                        value=item_name,
-                        emoji="📦"
-                    )
-                )
-            
-            if options:
-                select = discord.ui.Select(placeholder="Choose emergency supplies to purchase...", options=options)
-                select.callback = self.item_selected
-                self.add_item(select)
-    
-    async def item_selected(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This is not your supply cache interface!", ephemeral=True)
-            return
-        
-        item_name = interaction.data['values'][0]
-        
-        # Find the selected item with its pricing
-        emergency_items = [
-            ("Emergency Rations", 12, "Vacuum-sealed survival food for extended journeys"),
-            ("Basic Med Kit", 85, "Basic medical supplies for treating injuries"),
-            ("Fuel Cell", 50, "Portable fuel container for ship refueling"),
-            ("Hull Patch", 95, "Emergency patch for minor hull breaches"),
-            ("Filtered Water", 8, "Clean water for consumption during long trips"),
-            ("Painkillers", 25, "Standard pain relief medication")
-        ]
-        
-        selected_item = None
-        for name, base_cost, desc in emergency_items:
-            if name == item_name:
-                selected_item = (name, base_cost, desc)
-                break
-        
-        if not selected_item:
-            await interaction.response.send_message("Item not found!", ephemeral=True)
-            return
-        
-        # Calculate final price with location modifiers
-        current_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
-            (interaction.user.id,),
-            fetch='one'
-        )[0]
-        
-        wealth_level = self.db.execute_query(
-            "SELECT wealth_level FROM locations WHERE location_id = ?",
-            (current_location,),
-            fetch='one'
-        )[0] if current_location else 1
-        
-        markup_multiplier = 1.1 + (wealth_level * 0.05)
-        final_cost = max(1, int(selected_item[1] * markup_multiplier))
-        
-        # Create purchase confirmation view
-        view = EmergencySupplyPurchaseView(self.db, self.user_id, selected_item, final_cost)
-        
-        embed = discord.Embed(
-            title="📦 Confirm Purchase",
-            description=f"Purchase **{selected_item[0]}** from the emergency supply cache?",
-            color=0x4682b4
-        )
-        embed.add_field(name="📋 Item", value=selected_item[2], inline=False)
-        embed.add_field(name="💰 Cost", value=f"{final_cost:,} credits", inline=True)
-        embed.add_field(name="🏦 Your Money", value=f"{self.money:,} credits", inline=True)
-        
-        if self.money < final_cost:
-            embed.add_field(name="❌ Insufficient Funds", value=f"You need {final_cost - self.money:,} more credits", inline=False)
-            view = None  # Disable purchase buttons
-        
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-    async def _handle_emergency_cache(self, interaction: discord.Interaction, char_name: str, money: int):
-        """Handle emergency supply cache at traveler services - user selection interface"""
-        
-        # Emergency supplies available at convenience prices (slightly higher than normal)
-        emergency_items_base = [
-            ("Emergency Rations", 12, "Vacuum-sealed survival food for extended journeys"),
-            ("Basic Med Kit", 85, "Basic medical supplies for treating injuries"),
-            ("Fuel Cell", 50, "Portable fuel container for ship refueling"),
-            ("Hull Patch", 95, "Emergency patch for minor hull breaches"),
-            ("Filtered Water", 8, "Clean water for consumption during long trips"),
-            ("Painkillers", 25, "Standard pain relief medication")
-        ]
-        
-        # Get current location for economic modifiers
-        current_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
-            (interaction.user.id,),
-            fetch='one'
-        )[0]
-        
-        # Apply location wealth modifiers (convenience pricing)
-        wealth_level = self.db.execute_query(
-            "SELECT wealth_level FROM locations WHERE location_id = ?",
-            (current_location,),
-            fetch='one'
-        )[0] if current_location else 1
-        
-        # Emergency cache has convenience markup (10-35% higher based on location)
-        markup_multiplier = 1.1 + (wealth_level * 0.05)
-        
-        # Calculate final prices for all items
-        emergency_items_with_prices = []
-        for item_name, base_cost, description in emergency_items_base:
-            final_cost = max(1, int(base_cost * markup_multiplier))
-            emergency_items_with_prices.append((item_name, base_cost, description, final_cost))
-        
-        # Create selection view
-        view = EmergencySupplySelectView(self.db, interaction.user.id, money, emergency_items_with_prices)
-        
-        embed = discord.Embed(
-            title="📦 Emergency Supply Cache",
-            description=f"**{char_name}** accesses the automated emergency supply dispenser.\nSelect items to purchase from the dropdown below.",
-            color=0x4682b4
-        )
-        
-        # Add available items as embed fields
-        item_list = []
-        for item_name, base_cost, description, final_cost in emergency_items_with_prices:
-            can_afford = "✅" if money >= final_cost else "❌"
-            item_list.append(f"{can_afford} **{item_name}** - {final_cost:,} credits")
-        
-        embed.add_field(
-            name="🛒 Available Supplies",
-            value="\n".join(item_list),
-            inline=False
-        )
-        
-        embed.add_field(name="💰 Your Credits", value=f"{money:,}", inline=True)
-        embed.add_field(name="💡 Convenience Markup", value=f"+{int((markup_multiplier - 1) * 100)}%", inline=True)
-        
-        embed.set_footer(text="Use the dropdown menu below to select and purchase items.")
-        
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-    async def _handle_social_activities(self, interaction: discord.Interaction, char_name: str):
-        """Handle entertainment lounge - social activities"""
-        embed = discord.Embed(
-            title="👥 Social Activities",
-            description=f"**{char_name}** joins other travelers. Meet fellow explorers and share stories.",
-            color=0x4169E1
-        )
-        embed.add_field(name="🤝 Community", value="Fellow travelers", inline=True)
-        embed.add_field(name="💬 Stories", value="Shared experiences", inline=True)
-        await interaction.response.send_message(embed=embed, ephemeral=False)
-
     async def _handle_route_planning(self, interaction: discord.Interaction, char_name: str):
         """Handle travel services - traffic analysis consultation"""
         import random
@@ -7082,6 +6921,168 @@ class EmergencySupplySelectView(discord.ui.View):
             embed.add_field(name="💼 Learning Experience", value="Valuable lessons learned from challenging scenario", inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
+
+class EmergencySupplySelectView(discord.ui.View):
+    def __init__(self, db, user_id: int, money: int, emergency_items: list):
+        super().__init__(timeout=180)
+        self.db = db
+        self.user_id = user_id
+        self.money = money
+        
+        if emergency_items:
+            options = []
+            for item_name, base_cost, description, final_cost in emergency_items[:25]:
+                can_afford = "✅" if money >= final_cost else "❌"
+                options.append(
+                    discord.SelectOption(
+                        label=f"{item_name} - {final_cost:,} credits",
+                        description=f"{can_afford} {description[:65]}{'...' if len(description) > 65 else ''}",
+                        value=item_name,
+                        emoji="📦"
+                    )
+                )
+            
+            if options:
+                select = discord.ui.Select(placeholder="Choose emergency supplies to purchase...", options=options)
+                select.callback = self.item_selected
+                self.add_item(select)
+    
+    async def item_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your supply cache interface!", ephemeral=True)
+            return
+        
+        item_name = interaction.data['values'][0]
+        
+        # Find the selected item with its pricing
+        emergency_items = [
+            ("Emergency Rations", 12, "Vacuum-sealed survival food for extended journeys"),
+            ("Basic Med Kit", 85, "Basic medical supplies for treating injuries"),
+            ("Fuel Cell", 50, "Portable fuel container for ship refueling"),
+            ("Hull Patch", 95, "Emergency patch for minor hull breaches"),
+            ("Filtered Water", 8, "Clean water for consumption during long trips"),
+            ("Painkillers", 25, "Standard pain relief medication")
+        ]
+        
+        selected_item = None
+        for name, base_cost, desc in emergency_items:
+            if name == item_name:
+                selected_item = (name, base_cost, desc)
+                break
+        
+        if not selected_item:
+            await interaction.response.send_message("Item not found!", ephemeral=True)
+            return
+        
+        # Calculate final price with location modifiers
+        current_location = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        wealth_level = self.db.execute_query(
+            "SELECT wealth_level FROM locations WHERE location_id = ?",
+            (current_location,),
+            fetch='one'
+        )[0] if current_location else 1
+        
+        markup_multiplier = 1.1 + (wealth_level * 0.05)
+        final_cost = max(1, int(selected_item[1] * markup_multiplier))
+        
+        # Create purchase confirmation view
+        view = EmergencySupplyPurchaseView(self.db, self.user_id, selected_item, final_cost)
+        
+        embed = discord.Embed(
+            title="📦 Confirm Purchase",
+            description=f"Purchase **{selected_item[0]}** from the emergency supply cache?",
+            color=0x4682b4
+        )
+        embed.add_field(name="📋 Item", value=selected_item[2], inline=False)
+        embed.add_field(name="💰 Cost", value=f"{final_cost:,} credits", inline=True)
+        embed.add_field(name="🏦 Your Money", value=f"{self.money:,} credits", inline=True)
+        
+        if self.money < final_cost:
+            embed.add_field(name="❌ Insufficient Funds", value=f"You need {final_cost - self.money:,} more credits", inline=False)
+            view = None  # Disable purchase buttons
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    async def _handle_emergency_cache(self, interaction: discord.Interaction, char_name: str, money: int):
+        """Handle emergency supply cache at traveler services - user selection interface"""
+        
+        # Emergency supplies available at convenience prices (slightly higher than normal)
+        emergency_items_base = [
+            ("Emergency Rations", 12, "Vacuum-sealed survival food for extended journeys"),
+            ("Basic Med Kit", 85, "Basic medical supplies for treating injuries"),
+            ("Fuel Cell", 50, "Portable fuel container for ship refueling"),
+            ("Hull Patch", 95, "Emergency patch for minor hull breaches"),
+            ("Filtered Water", 8, "Clean water for consumption during long trips"),
+            ("Painkillers", 25, "Standard pain relief medication")
+        ]
+        
+        # Get current location for economic modifiers
+        current_location = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = ?",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        # Apply location wealth modifiers (convenience pricing)
+        wealth_level = self.db.execute_query(
+            "SELECT wealth_level FROM locations WHERE location_id = ?",
+            (current_location,),
+            fetch='one'
+        )[0] if current_location else 1
+        
+        # Emergency cache has convenience markup (10-35% higher based on location)
+        markup_multiplier = 1.1 + (wealth_level * 0.05)
+        
+        # Calculate final prices for all items
+        emergency_items_with_prices = []
+        for item_name, base_cost, description in emergency_items_base:
+            final_cost = max(1, int(base_cost * markup_multiplier))
+            emergency_items_with_prices.append((item_name, base_cost, description, final_cost))
+        
+        # Create selection view
+        view = EmergencySupplySelectView(self.db, interaction.user.id, money, emergency_items_with_prices)
+        
+        embed = discord.Embed(
+            title="📦 Emergency Supply Cache",
+            description=f"**{char_name}** accesses the automated emergency supply dispenser.\nSelect items to purchase from the dropdown below.",
+            color=0x4682b4
+        )
+        
+        # Add available items as embed fields
+        item_list = []
+        for item_name, base_cost, description, final_cost in emergency_items_with_prices:
+            can_afford = "✅" if money >= final_cost else "❌"
+            item_list.append(f"{can_afford} **{item_name}** - {final_cost:,} credits")
+        
+        embed.add_field(
+            name="🛒 Available Supplies",
+            value="\n".join(item_list),
+            inline=False
+        )
+        
+        embed.add_field(name="💰 Your Credits", value=f"{money:,}", inline=True)
+        embed.add_field(name="💡 Convenience Markup", value=f"+{int((markup_multiplier - 1) * 100)}%", inline=True)
+        
+        embed.set_footer(text="Use the dropdown menu below to select and purchase items.")
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    async def _handle_social_activities(self, interaction: discord.Interaction, char_name: str):
+        """Handle entertainment lounge - social activities"""
+        embed = discord.Embed(
+            title="👥 Social Activities",
+            description=f"**{char_name}** joins other travelers. Meet fellow explorers and share stories.",
+            color=0x4169E1
+        )
+        embed.add_field(name="🤝 Community", value="Fellow travelers", inline=True)
+        embed.add_field(name="💬 Stories", value="Shared experiences", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
 
 
     # Outpost service handlers
