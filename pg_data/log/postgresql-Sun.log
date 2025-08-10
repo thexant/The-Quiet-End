@@ -631,3 +631,5 @@
 2025-08-10 13:09:56.146 MDT [23293] LOG:  checkpoint complete: wrote 37 buffers (0.2%); 0 WAL file(s) added, 0 removed, 0 recycled; write=3.607 s, sync=0.041 s, total=3.658 s; sync files=23, longest=0.003 s, average=0.002 s; distance=228 kB, estimate=709 kB; lsn=0/2EAB888, redo lsn=0/2EAB850
 2025-08-10 13:14:52.242 MDT [23293] LOG:  checkpoint starting: time
 2025-08-10 13:14:52.868 MDT [23293] LOG:  checkpoint complete: wrote 7 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.602 s, sync=0.014 s, total=0.626 s; sync files=7, longest=0.003 s, average=0.002 s; distance=17 kB, estimate=640 kB; lsn=0/2EAFDF0, redo lsn=0/2EAFDB8
+2025-08-10 16:01:15.473 MDT [102107] ERROR:  column "inventory_id" does not exist at character 8
+2025-08-10 16:01:15.473 MDT [102107] STATEMENT:  SELECT inventory_id, item_name, quantity, price_credits, trade_for_item, trade_quantity_required, rarity, description FROM npc_trade_inventory WHERE npc_id = 3 AND npc_type = 'static' AND is_available = true AND quantity > 0

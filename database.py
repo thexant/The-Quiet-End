@@ -147,7 +147,7 @@ class Database:
                 name TEXT NOT NULL,
                 ship_type TEXT DEFAULT 'Basic Hauler',
                 fuel_capacity INTEGER DEFAULT 100,
-                fuel_level INTEGER DEFAULT 100,
+                current_fuel INTEGER DEFAULT 100,
                 max_cargo INTEGER DEFAULT 50,
                 armor INTEGER DEFAULT 100,
                 max_armor INTEGER DEFAULT 100,

@@ -1356,7 +1356,7 @@ class NPCActionView(discord.ui.View):
         
         # Get NPC's trade inventory
         trade_items = self.bot.db.execute_query(
-            '''SELECT inventory_id, item_name, quantity, price_credits, trade_for_item,
+            '''SELECT trade_item_id, item_name, quantity, price_credits, trade_for_item,
                       trade_quantity_required, rarity, description
                FROM npc_trade_inventory 
                WHERE npc_id = %s AND npc_type = %s AND is_available = true 
@@ -1379,7 +1379,7 @@ class NPCActionView(discord.ui.View):
                     await npc_cog.generate_npc_trade_inventory(self.npc_id, self.npc_type, specialty)
                     
                     trade_items = self.bot.db.execute_query(
-                        '''SELECT inventory_id, item_name, quantity, price_credits, trade_for_item,
+                        '''SELECT trade_item_id, item_name, quantity, price_credits, trade_for_item,
                                   trade_quantity_required, rarity, description
                            FROM npc_trade_inventory 
                            WHERE npc_id = %s AND npc_type = %s AND is_available = true 
