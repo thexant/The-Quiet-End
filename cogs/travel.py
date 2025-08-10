@@ -102,26 +102,30 @@ class TravelCog(commands.Cog):
         return None
     
     async def _trigger_corridor_events(self, transit_channel, user_id, corridor_id, travel_time):
-        """Trigger corridor events during travel based on danger level"""
+        """Trigger corridor events during travel based on danger level and corridor type"""
         if not transit_channel:
             return
         
-        # Get corridor danger level first
-        danger_info = self.db.execute_query(
-            "SELECT danger_level, name, is_active FROM corridors WHERE corridor_id = %s",
+        # Get corridor info including type
+        corridor_info = self.db.execute_query(
+            "SELECT danger_level, name, is_active, corridor_type FROM corridors WHERE corridor_id = %s",
             (corridor_id,),
             fetch='one'
         )
         
-        if not danger_info:
+        if not corridor_info:
             return
         
-        danger_level, corridor_name, is_active = danger_info
+        danger_level, corridor_name, is_active, corridor_type = corridor_info
         
         # Check if corridor is still active
         if not is_active:
             # Corridor has collapsed during travel - this is handled by the travel completion logic
             return
+        
+        # IMPORTANT: No events in local space!
+        if corridor_type == 'local_space':
+            return  # Local space travel should not have corridor events
         
         # Calculate number of potential events based on travel time and danger
         base_events = max(1, travel_time // 300)  # One potential event per 5 minutes
@@ -129,8 +133,16 @@ class TravelCog(commands.Cog):
         
         # Schedule events at random intervals
         for i in range(max_events):
-            # Random chance based on danger level
-            event_chance = danger_level * 0.15  # 15% per danger level
+            # Event chance based on corridor type and danger level
+            if corridor_type == 'ungated':
+                # Higher chance for ungated corridors (dangerous space)
+                event_chance = danger_level * 0.20  # 20% per danger level
+            elif corridor_type == 'gated':
+                # Lower chance for gated corridors (more stable)
+                event_chance = danger_level * 0.10  # 10% per danger level
+            else:
+                # Fallback for any undefined types (shouldn't happen)
+                event_chance = danger_level * 0.15  # 15% per danger level
             
             if random.random() < event_chance:
                 # Random time during travel (but not too early or late)
@@ -199,7 +211,7 @@ class TravelCog(commands.Cog):
             return
         
         # Extract session data
-        session_id, group_id, user_id, origin_loc, dest_loc, corridor_id, temp_channel_id, start_time, end_time, status = session[:10]
+        session_id, _, user_id, origin_loc, dest_loc, corridor_id, temp_channel_id, start_time, end_time, status = session[:10]  # group_id removed
         corridor_name = session[10]
         dest_name = session[11]
         
@@ -432,12 +444,8 @@ class TravelCog(commands.Cog):
         proceed = await self._check_active_jobs(interaction.user.id, interaction)
         if not proceed:
             return  # User needs to confirm job cancellation first    
-        # Check if user is in a group
-        group_check = self.db.execute_query(
-            "SELECT group_id FROM characters WHERE user_id = %s AND group_id IS NOT NULL",
-            (interaction.user.id,),
-            fetch='one'
-        )
+        # Group functionality removed
+        group_check = None
         if group_check:
             await interaction.response.send_message(
                 "❌ You're in a group! Group travel must be initiated by the leader using `/group travel_vote`.",
@@ -842,7 +850,7 @@ class TravelCog(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         return False  # Don't proceed yet, wait for user confirmation
 
-    async def _start_travel_progress_tracking(self, transit_channel, user_or_group_id, corridor_id, travel_time, start_time, end_time, dest_name, is_group=False):
+    async def _start_travel_progress_tracking(self, transit_channel, user_id, corridor_id, travel_time, start_time, end_time, dest_name, is_group=False):
         """Start auto-refreshing progress tracking in transit channel for solo or group travel"""
         try:
             # Ensure timestamps are timezone-aware
@@ -856,30 +864,17 @@ class TravelCog(commands.Cog):
             progress_message = await transit_channel.send(embed=embed)
 
             # Track this message for auto-updates
-            if is_group:
-                session_key = f"group_{user_or_group_id}_{corridor_id}"
-                session_data = {
-                    'message': progress_message,
-                    'channel': transit_channel,
-                    'start_time': start_time,
-                    'end_time': end_time,
-                    'travel_time': travel_time,
-                    'dest_name': dest_name,
-                    'group_id': user_or_group_id,
-                    'corridor_id': corridor_id
-                }
-            else:
-                session_key = f"{user_or_group_id}_{corridor_id}"
-                session_data = {
-                    'message': progress_message,
-                    'channel': transit_channel,
-                    'start_time': start_time,
-                    'end_time': end_time,
-                    'travel_time': travel_time,
-                    'dest_name': dest_name,
-                    'user_id': user_or_group_id,
-                    'corridor_id': corridor_id
-                }
+            session_key = f"{user_id}_{corridor_id}"
+            session_data = {
+                'message': progress_message,
+                'channel': transit_channel,
+                'start_time': start_time,
+                'end_time': end_time,
+                'travel_time': travel_time,
+                'dest_name': dest_name,
+                'user_id': user_id,
+                'corridor_id': corridor_id
+            }
 
             self.active_status_messages[session_key] = session_data
 
@@ -901,19 +896,12 @@ class TravelCog(commands.Cog):
                 
                 session_data = self.active_status_messages[session_key]
                 
-                # Check if travel is still active for solo or group
-                if 'group_id' in session_data:
-                    active_session = self.db.execute_query(
-                        "SELECT status FROM travel_sessions WHERE group_id = %s AND corridor_id = %s AND status = 'traveling' LIMIT 1",
-                        (session_data['group_id'], session_data['corridor_id']),
-                        fetch='one'
-                    )
-                else:
-                    active_session = self.db.execute_query(
-                        "SELECT status FROM travel_sessions WHERE user_id = %s AND corridor_id = %s AND status = 'traveling'",
-                        (session_data['user_id'], session_data['corridor_id']),
-                        fetch='one'
-                    )
+                # Check if travel is still active
+                active_session = self.db.execute_query(
+                    "SELECT status FROM travel_sessions WHERE user_id = %s AND corridor_id = %s AND status = 'traveling'",
+                    (session_data['user_id'], session_data['corridor_id']),
+                    fetch='one'
+                )
                 
                 if not active_session:
                     # Travel completed or cancelled, stop refreshing

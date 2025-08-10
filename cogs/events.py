@@ -20,6 +20,9 @@ class EventsCog(commands.Cog):
             # Wait a bit before starting tasks to ensure everything is ready
             await asyncio.sleep(2)
             
+            # Check if we need to seed initial jobs
+            await self._check_and_seed_startup_jobs()
+            
             try:
                 # Start all the background tasks with error handling
                 print("🎲 Starting cleanup tasks...")
@@ -1751,6 +1754,76 @@ class EventsCog(commands.Cog):
                VALUES (%s, %s, %s, %s, NULL, 0, %s, %s, %s, false, 'available', %s)''',
             (location_id, title, desc, reward, danger, duration, expire_str, None)
         )
+    
+    async def _check_and_seed_startup_jobs(self):
+        """Check if jobs exist and seed initial jobs if needed"""
+        try:
+            # Check how many jobs currently exist
+            total_jobs = self.db.execute_query(
+                "SELECT COUNT(*) FROM jobs WHERE is_taken = false AND expires_at > NOW()",
+                fetch='one'
+            )[0]
+            
+            # Check how many locations exist
+            total_locations = self.db.execute_query(
+                "SELECT COUNT(*) FROM locations WHERE has_jobs = true",
+                fetch='one'
+            )[0]
+            
+            print(f"🔍 Startup check: {total_jobs} active jobs, {total_locations} job-enabled locations")
+            
+            # If we have very few jobs compared to locations, seed some initial ones
+            if total_locations > 0 and total_jobs < (total_locations * 0.3):  # Less than 30% job coverage
+                print(f"📋 Low job availability detected - seeding initial jobs...")
+                
+                # Get locations with no or few jobs
+                locations_needing_jobs = self.db.execute_query(
+                    """SELECT l.location_id, l.wealth_level, l.location_type, l.name,
+                              COALESCE(j.job_count, 0) as current_jobs
+                       FROM locations l
+                       LEFT JOIN (
+                           SELECT location_id, COUNT(*) as job_count
+                           FROM jobs 
+                           WHERE is_taken = false AND expires_at > NOW()
+                           GROUP BY location_id
+                       ) j ON l.location_id = j.location_id
+                       WHERE l.has_jobs = true 
+                       AND COALESCE(j.job_count, 0) < 2
+                       ORDER BY COALESCE(j.job_count, 0) ASC
+                       LIMIT 30""",  # Limit to prevent overwhelming on very large galaxies
+                    fetch='all'
+                )
+                
+                jobs_seeded = 0
+                for location_data in locations_needing_jobs:
+                    location_id, wealth, location_type, name, current_jobs = location_data
+                    
+                    # Seed 1-2 jobs per location that needs them
+                    jobs_to_seed = 2 - current_jobs if current_jobs < 2 else 1
+                    
+                    for _ in range(jobs_to_seed):
+                        try:
+                            await self._generate_location_job(location_id, wealth, location_type)
+                            jobs_seeded += 1
+                            await asyncio.sleep(0.01)  # Small delay
+                        except Exception as e:
+                            print(f"⚠️ Error seeding startup job at {name}: {e}")
+                            continue
+                    
+                    # Yield control periodically
+                    if jobs_seeded % 20 == 0:
+                        await asyncio.sleep(0.1)
+                
+                if jobs_seeded > 0:
+                    print(f"✅ Startup job seeding complete: {jobs_seeded} jobs created")
+                else:
+                    print("⚠️ No startup jobs were created")
+            else:
+                print(f"✅ Job availability looks good - no startup seeding needed")
+                
+        except Exception as e:
+            print(f"❌ Error in startup job check: {e}")
+            # Don't raise - allow cog loading to continue
         
 async def setup(bot):
     await bot.add_cog(EventsCog(bot))

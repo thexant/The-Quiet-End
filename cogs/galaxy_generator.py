@@ -1111,6 +1111,17 @@ class GalaxyGeneratorCog(commands.Cog):
                     total_history_events = 0
                     # Don't raise - allow galaxy generation to complete without history
 
+            # Seed initial jobs at all locations
+            print("🔧 Starting initial job seeding...")
+            await progress_msg.edit(content="🌌 **Galaxy Generation**\n📋 Seeding initial jobs...")
+            
+            try:
+                jobs_seeded = await self._seed_initial_jobs()
+                print(f"✅ Job seeding completed: {jobs_seeded} jobs created")
+            except Exception as job_error:
+                print(f"⚠️ Initial job seeding failed: {job_error}")
+                # Don't raise - allow galaxy generation to complete without initial jobs
+
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n✅ **Generation Complete!**")
 
         except Exception as e:
@@ -10553,6 +10564,109 @@ class GalaxyGeneratorCog(commands.Cog):
             print(f"⚠️ Database readiness check failed: {e}")
             # Don't raise - let history generation attempt to proceed
             # The history generator has its own error handling
+    
+    async def _seed_initial_jobs(self) -> int:
+        """Seed initial jobs at all locations after galaxy generation"""
+        try:
+            # Get all locations that can have jobs
+            locations = self.db.execute_query(
+                """SELECT location_id, wealth_level, location_type, name 
+                   FROM locations 
+                   WHERE has_jobs = true 
+                   AND is_generated = true""",
+                fetch='all'
+            )
+            
+            if not locations:
+                print("⚠️ No locations found for initial job seeding")
+                return 0
+            
+            print(f"📋 Seeding jobs for {len(locations)} locations...")
+            jobs_created = 0
+            
+            # Get the events cog to use its job generation method
+            events_cog = self.bot.get_cog('EventsCog')
+            if not events_cog:
+                print("⚠️ EventsCog not found - using fallback job seeding")
+                return await self._fallback_job_seeding(locations)
+            
+            # Seed 1-3 jobs per location initially
+            for location_data in locations:
+                location_id, wealth, location_type, name = location_data
+                
+                # Determine how many jobs to seed based on location type and wealth
+                if location_type == 'colony':
+                    jobs_to_seed = min(3, max(1, wealth // 2))
+                elif location_type == 'space_station':
+                    jobs_to_seed = min(4, max(2, wealth // 2))
+                elif location_type == 'outpost':
+                    jobs_to_seed = min(2, max(1, wealth // 3))
+                else:  # gates
+                    jobs_to_seed = 1
+                
+                # Create the jobs using EventsCog's method
+                for _ in range(jobs_to_seed):
+                    try:
+                        await events_cog._generate_location_job(location_id, wealth, location_type)
+                        jobs_created += 1
+                        await asyncio.sleep(0.01)  # Small delay to prevent overwhelming the database
+                    except Exception as job_error:
+                        print(f"⚠️ Error creating job at location {name}: {job_error}")
+                        continue
+                
+                # Yield control periodically
+                if jobs_created % 50 == 0:
+                    await asyncio.sleep(0.1)
+            
+            print(f"✅ Initial job seeding complete: {jobs_created} jobs created across {len(locations)} locations")
+            return jobs_created
+            
+        except Exception as e:
+            print(f"❌ Error in initial job seeding: {e}")
+            return 0
+    
+    async def _fallback_job_seeding(self, locations) -> int:
+        """Fallback job seeding if EventsCog is not available"""
+        jobs_created = 0
+        
+        try:
+            from datetime import datetime, timedelta
+            
+            for location_data in locations:
+                location_id, wealth, location_type, name = location_data
+                
+                # Simple job templates for fallback
+                job_templates = [
+                    ("Cargo Transport", "Transport goods to nearby systems.", 100 + wealth * 20, 15),
+                    ("System Patrol", "Patrol local space for security threats.", 80 + wealth * 15, 20),
+                    ("Supply Run", "Deliver essential supplies to remote outposts.", 120 + wealth * 25, 25),
+                    ("Equipment Maintenance", "Perform routine maintenance on station systems.", 60 + wealth * 10, 10)
+                ]
+                
+                # Create 1-2 fallback jobs per location
+                jobs_to_create = 1 if location_type == 'gate' else 2
+                
+                for _ in range(jobs_to_create):
+                    title, desc, base_reward, duration = random.choice(job_templates)
+                    reward = base_reward + random.randint(-20, 40)
+                    expire_time = datetime.now() + timedelta(hours=random.randint(4, 8))
+                    
+                    self.db.execute_query(
+                        """INSERT INTO jobs 
+                           (location_id, title, description, reward_money, danger_level, 
+                            duration_minutes, expires_at, is_taken, job_status, karma_change)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, false, 'available', 0)""",
+                        (location_id, title, desc, reward, 1, duration, expire_time)
+                    )
+                    jobs_created += 1
+                    
+                await asyncio.sleep(0.01)
+            
+            return jobs_created
+            
+        except Exception as e:
+            print(f"❌ Error in fallback job seeding: {e}")
+            return 0
 
 async def setup(bot):
     await bot.add_cog(GalaxyGeneratorCog(bot))

@@ -2088,7 +2088,6 @@ class CharacterCog(commands.Cog):
             "UPDATE travel_sessions SET status = 'character_death' WHERE user_id = %s AND status = 'traveling'",
             (user_id,)
         )
-        self.db.execute_query("UPDATE characters SET group_id = NULL WHERE user_id = %s", (user_id,))
         self.db.execute_query(
             "UPDATE jobs SET is_taken = false, taken_by = NULL, taken_at = NULL WHERE taken_by = %s",
             (user_id,)
@@ -2271,7 +2270,7 @@ class CharacterCog(commands.Cog):
     @character_group.command(name="login", description="Log into the game and restore your character")
     async def login_character(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(
-            "SELECT name, current_location, is_logged_in, group_id, current_ship_id FROM characters WHERE user_id = %s",
+            "SELECT name, current_location, is_logged_in, current_ship_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2283,7 +2282,7 @@ class CharacterCog(commands.Cog):
             )
             return
         
-        char_name, current_location, is_logged_in, group_id, current_ship_id = char_data
+        char_name, current_location, is_logged_in, current_ship_id = char_data
         
         if is_logged_in:
             await interaction.response.send_message(
@@ -2353,49 +2352,8 @@ class CharacterCog(commands.Cog):
             else:
                 location_name = "Deep Space (No colonies available)"
         
-        # Handle group rejoining
+        # Group functionality removed
         group_status = ""
-        if group_id:
-            # Check if other group members are online
-            online_members = self.db.execute_query(
-                "SELECT COUNT(*) FROM characters WHERE group_id = %s AND is_logged_in = true",
-                (group_id,),
-                fetch='one'
-            )[0]
-            
-            group_info = self.db.execute_query(
-                "SELECT name, leader_id FROM groups WHERE group_id = %s",
-                (group_id,),
-                fetch='one'
-            )
-            
-            if group_info:
-                group_name, leader_id = group_info
-                
-                # Check if this user is the leader
-                is_leader = (leader_id == interaction.user.id)
-                
-                if online_members > 0:
-                    group_status = f"\n🎯 Rejoined group **{group_name}** ({online_members} members online)"
-                    if is_leader:
-                        group_status += " - You are the leader"
-                else:
-                    group_status = f"\n🎯 First member online in group **{group_name}**"
-                    if is_leader:
-                        group_status += " - You are the leader"
-                
-                # Notify other online group members
-                other_members = self.db.execute_query(
-                    "SELECT user_id, name FROM characters WHERE group_id = %s AND user_id != %s AND is_logged_in = true",
-                    (group_id, interaction.user.id),
-                    fetch='all'
-                )
-                
-                for member_id, member_name in other_members:
-                    member = self.bot.get_user(member_id)
-                    if member:
-                        try:
-                            await member.send(f"📢 **{char_name}** from your group **{group_name}** has come online!")
                         except:
                             pass
             async def check_faction_payouts(self, interaction: discord.Interaction, user_id: int):
@@ -2481,7 +2439,7 @@ class CharacterCog(commands.Cog):
     @character_group.command(name="logout", description="Log out of the game (saves your progress)")
     async def logout_character(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(
-            "SELECT name, is_logged_in, group_id FROM characters WHERE user_id = %s",
+            "SELECT name, is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2493,7 +2451,7 @@ class CharacterCog(commands.Cog):
             )
             return
         
-        char_name, is_logged_in, group_id = char_data
+        char_name, is_logged_in = char_data
         
         if not is_logged_in:
             await interaction.response.send_message(
@@ -2553,37 +2511,7 @@ class CharacterCog(commands.Cog):
             "UPDATE jobs SET is_taken = false, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE taken_by = %s",
             (user_id,)
         )
-        # Handle group notifications and management
-        group_info = self.db.execute_query(
-            "SELECT g.group_id, g.name FROM characters c JOIN groups g ON c.group_id = g.group_id WHERE c.user_id = %s",
-            (user_id,),
-            fetch='one'
-        )
-
-        if group_info:
-            group_id, group_name = group_info
-            
-            # Notify other online group members
-            other_members = self.db.execute_query(
-                "SELECT user_id, name FROM characters WHERE group_id = %s AND user_id != %s AND is_logged_in = true",
-                (group_id, user_id),
-                fetch='all'
-            )
-            
-            for member_id, member_name in other_members:
-                member = self.bot.get_user(member_id)
-                if member:
-                    try:
-                        await member.send(f"📢 **{char_name}** from your group **{group_name}** has gone offline.")
-                    except:
-                        pass
-            
-            # Check if this was the last online member and handle group state
-            remaining_online = self.db.execute_query(
-                "SELECT COUNT(*) FROM characters WHERE group_id = %s AND is_logged_in = true AND user_id != %s",
-                (group_id, user_id),
-                fetch='one'
-            )[0]
+        # Group functionality removed
             
             if remaining_online == 0:
                 # Last member logging out - could add special handling here
@@ -2682,29 +2610,7 @@ class CharacterCog(commands.Cog):
             "DELETE FROM job_tracking WHERE user_id = %s",
             (user_id,)
         )
-        # Handle group notifications - SAME AS ABOVE
-        group_info = self.db.execute_query(
-            "SELECT c.group_id, g.name FROM characters c JOIN groups g ON c.group_id = g.group_id WHERE c.user_id = %s",            (user_id,),
-            fetch='one'
-        )
-
-        if group_info:
-            group_id, group_name = group_info
-            
-            # Notify other online group members about AFK logout
-            other_members = self.db.execute_query(
-                "SELECT user_id, name FROM characters WHERE group_id = %s AND user_id != %s AND is_logged_in = true",
-                (group_id, user_id),
-                fetch='all'
-            )
-            
-            for member_id, member_name in other_members:
-                member = self.bot.get_user(member_id)
-                if member:
-                    try:
-                        await member.send(f"📢 **{char_name}** from your group **{group_name}** was automatically logged out due to inactivity.")
-                    except:
-                        pass
+        # Group functionality removed
         # Log out the character
         self.db.execute_query(
             "UPDATE characters SET is_logged_in = false WHERE user_id = %s",

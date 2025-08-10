@@ -279,7 +279,7 @@ class EconomyCog(commands.Cog):
         """Check if user needs to pay a fee to access this location"""
         # Check if location is owned and has access controls
         ownership = self.db.execute_query(
-            '''SELECT lo.owner_id, lo.group_id
+            '''SELECT lo.owner_id
                FROM location_ownership lo
                WHERE lo.location_id = %s''',
             (location_id,),
@@ -289,21 +289,12 @@ class EconomyCog(commands.Cog):
         if not ownership:
             return True, 0  # Not owned, free access
         
-        owner_id, owner_group_id = ownership
+        owner_id = ownership[0]
         
         # Owner and owner's group get free access
         if user_id == owner_id:
             return True, 0
         
-        # Check if user is in owner's group
-        if owner_group_id:
-            user_group = self.db.execute_query(
-                "SELECT group_id FROM characters WHERE user_id = %s",
-                (user_id,),
-                fetch='one'
-            )
-            if user_group and user_group[0] == owner_group_id:
-                return True, 0
         
         # Check access control settings
         access_control = self.db.execute_query(
@@ -1567,32 +1558,9 @@ class EconomyCog(commands.Cog):
             else:
                 print(f"Job success check - Target: ≤{success_chance}, Rolled: {roll} ✗ FAILED by {roll - success_chance} (Base: {base_success}% + Skill: {skill_bonus}%)")
 
-            # Check if this is a group job
-            group_id = self.db.execute_query(
-                "SELECT group_id FROM characters WHERE user_id = %s",
-                (interaction.user.id,),
-                fetch='one'
-            )
-
-            if group_id and group_id[0]:
-                # Check if the job was taken by the group
-                job_taken_by_group = self.db.execute_query(
-                    "SELECT 1 FROM jobs WHERE job_id = %s AND taken_by = %s",
-                    (job_id, group_id[0]),
-                    fetch='one'
-                )
+            # Group functionality removed
                 
-                if job_taken_by_group:
-                    # Group job
-                    await self._complete_group_job(interaction, job_id, title, reward, roll, success_chance, success)
-                else:
-                    # Solo job while in a group
-                    if success:
-                        await self._complete_job_immediately(interaction, job_id, title, reward, roll, success_chance, "stationary")
-                    else:
-                        await self._complete_job_failed(interaction, job_id, title, reward, roll, success_chance)
-            else:
-                # Solo job
+                # Group functionality removed - handle as solo job
                 if success:
                     await self._complete_job_immediately(interaction, job_id, title, reward, roll, success_chance, "stationary")
                 else:
@@ -2133,82 +2101,11 @@ class EconomyCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
     
     async def _complete_group_job(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int, success: bool):
-        """Complete a job for all group members"""
-        # Get the user's group ID first
-        group_id = self.db.execute_query(
-            "SELECT group_id FROM characters WHERE user_id = %s",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not group_id or not group_id[0]:
-            # Not in a group, handle as solo
-            if success:
-                await self._complete_job_immediately(interaction, job_id, title, reward, roll, success_chance, "stationary")
-            else:
-                await self._complete_job_failed(interaction, job_id, title, reward, roll, success_chance)
-            return
-        
-        # Get all group members
-        group_members = self.db.execute_query(
-            '''SELECT c.user_id, c.name
-               FROM characters c
-               WHERE c.group_id = %s''',
-            (group_id[0],),
-            fetch='all'
-        )
-        
-        if not group_members:
-            group_members = [(interaction.user.id, "Unknown")]
-        
-        # Award each member based on success/failure
-        for member_id, member_name in group_members:
-            if success:
-                # Full reward for each member on success
-                self.db.execute_query(
-                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
-                    (reward, member_id)
-                )
-                
-                # Experience gain
-                exp_gain = random.randint(25, 50)
-                self.db.execute_query(
-                    "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
-                    (exp_gain, member_id)
-                )
-                
-                # 15% chance for skill improvement per member
-                if random.random() < 0.15:
-                    skill = random.choice(['engineering', 'navigation', 'combat', 'medical'])
-                    self.db.execute_query(
-                        f"UPDATE characters SET {skill} = {skill} + 1 WHERE user_id = %s",
-                        (member_id,)
-                    )
-                    
-                    # Don't notify via DM - we'll announce in location channel instead
-            else:
-                # Partial reward for failure (same for all members)
-                partial = reward // 3
-                self.db.execute_query(
-                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
-                    (partial, member_id)
-                )
-                
-                # Small experience consolation
-                exp_gain = random.randint(5, 15)
-                self.db.execute_query(
-                    "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
-                    (exp_gain, member_id)
-                )
-            
-            # Check for level up for each member
-            char_cog = self.bot.get_cog('CharacterCog')
-            if char_cog:
-                await char_cog.level_up_check(member_id)
-        
-        # Clean up job - ONLY ONCE (this was already correct)
-        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
-        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s", (job_id,))
+        """Group functionality has been removed - handle as solo job"""
+        if success:
+            await self._complete_job_immediately(interaction, job_id, title, reward, roll, success_chance, "stationary")
+        else:
+            await self._complete_job_failed(interaction, job_id, title, reward, roll, success_chance)
         self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         if success:
@@ -2523,7 +2420,7 @@ class EconomyCog(commands.Cog):
     async def job_accept(self, interaction: discord.Interaction, job_identifier: str):
         # Check if player has a character and is not in transit
         char_info = self.db.execute_query(
-            "SELECT current_location, hp, money, group_id FROM characters WHERE user_id = %s",
+            "SELECT current_location, hp, money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2532,17 +2429,12 @@ class EconomyCog(commands.Cog):
             await interaction.response.send_message("You need to create a character first!", ephemeral=True)
             return
         
-        current_location, health, money, group_id = char_info
+        current_location, health, money = char_info
         
         if not current_location:
             await interaction.response.send_message("You cannot accept jobs while in transit!", ephemeral=True)
             return
         
-        # Check if in a group
-        if group_id:
-            # Handle group job acceptance
-            await self._handle_group_job_acceptance(interaction, job_id, group_id, current_location)
-            return
         # 1) Ensure no other active job
         has_job = self.db.execute_query(
             "SELECT job_id FROM jobs WHERE taken_by = %s AND is_taken = true",
@@ -2601,98 +2493,9 @@ class EconomyCog(commands.Cog):
         await self._accept_solo_job(interaction, job[0], job)
 
     async def _handle_group_job_acceptance(self, interaction: discord.Interaction, job_id: int, group_id: int, current_location: int):
-        """Handle job acceptance for group members"""
-        # Get job details
-        job_info = self.db.execute_query(
-            '''SELECT j.job_id, j.title, j.description, j.reward_money, j.danger_level, 
-                      j.duration_minutes, j.is_taken, l.name as location_name
-               FROM jobs j
-               JOIN locations l ON j.location_id = l.location_id
-               WHERE j.job_id = %s AND j.location_id = %s AND j.is_taken = false''',
-            (job_id, current_location),
-            fetch='one'
-        )
-        
-        if not job_info:
-            await interaction.response.send_message("This job is not available or already taken.", ephemeral=True)
-            return
-        
-        job_id, title, description, reward, danger, duration, is_taken, location_name = job_info
-        
-        # Get group info
-        group_info = self.db.execute_query(
-            "SELECT name, leader_id FROM groups WHERE group_id = %s",
-            (group_id,),
-            fetch='one'
-        )
-        
-        if not group_info:
-            await interaction.response.send_message("Group not found!", ephemeral=True)
-            return
-        
-        group_name, leader_id = group_info
-        
-        # Check for existing active job vote
-        existing_vote = self.db.execute_query(
-            '''SELECT session_id FROM group_vote_sessions 
-               WHERE group_id = %s AND vote_type = 'job' AND expires_at > NOW()''',
-            (group_id,),
-            fetch='one'
-        )
-        
-        if existing_vote:
-            await interaction.response.send_message("Your group already has an active job vote.", ephemeral=True)
-            return
-        
-        # Create vote data
-        vote_data = {
-            'type': 'job',
-            'job_id': job_id,
-            'title': title,
-            'reward_money': reward,
-            'danger_level': danger,
-            'duration_minutes': duration,
-            'location_name': location_name
-        }
-        
-        import json
-        expire_time = datetime.now() + timedelta(minutes=5)
-        
-        # Create vote session
-        self.db.execute_query(
-            '''INSERT INTO group_vote_sessions (group_id, vote_type, vote_data, channel_id, expires_at) 
-               VALUES (%s, %s, %s, %s, %s)''',
-            (group_id, 'job', json.dumps(vote_data), interaction.channel.id, expire_time.isoformat())
-        )
-        
-        # Get group members
-        members = self.db.execute_query(
-            "SELECT user_id, name FROM characters WHERE group_id = %s",
-            (group_id,),
-            fetch='all'
-        )
-        
-        # Create vote embed
-        embed = discord.Embed(
-            title="🗳️ Group Job Vote",
-            description=f"**{group_name}** - Vote to accept this job",
-            color=0x4169E1
-        )
-        
-        embed.add_field(name="Job", value=title, inline=False)
-        embed.add_field(name="Description", value=description[:200] + "..." if len(description) > 200 else description, inline=False)
-        embed.add_field(name="Total Reward", value=f"{reward:,} credits", inline=True)
-        embed.add_field(name="Per Member", value=f"{reward//len(members):,} credits", inline=True)
-        embed.add_field(name="Duration", value=f"{duration} minutes", inline=True)
-        embed.add_field(name="Danger Level", value="⚠️" * danger if danger else "Safe", inline=True)
-        
-        embed.add_field(
-            name="📋 How to Vote",
-            value="All group members must use `/group vote yes` or `/group vote no` to participate.\nVote expires in 5 minutes.",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed)
+        """Group functionality has been removed"""
+        await interaction.response.send_message("Group functionality has been removed. Please accept jobs individually.", ephemeral=True)
+        return
     async def _accept_solo_job(self, interaction: discord.Interaction, job_id: int, job_info: tuple):
         """Handle solo job acceptance (original logic)"""
         job_id, title, desc, reward, skill, min_level, danger, duration = job_info
@@ -3829,7 +3632,7 @@ class JobDetailView(discord.ui.View):
         
         # Get character info
         char = econ_cog.db.execute_query(
-            "SELECT current_location, group_id FROM characters WHERE user_id = %s",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3838,7 +3641,7 @@ class JobDetailView(discord.ui.View):
             await interaction.followup.send("Character not found!", ephemeral=True)
             return
         
-        current_location, group_id = char
+        current_location = char[0]
         
         # Get job details again to ensure it's still available
         job = econ_cog.db.execute_query(

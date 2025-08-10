@@ -745,7 +745,6 @@ class LocationView(discord.ui.View):
                       c.name as owner_name, g.name as group_name
                FROM location_ownership lo
                LEFT JOIN characters c ON lo.owner_id = c.user_id
-               LEFT JOIN groups g ON lo.group_id = g.group_id
                WHERE lo.location_id = %s''',
             (location_id,),
             fetch='one'
@@ -1198,7 +1197,7 @@ class TravelSelectView(discord.ui.View):
         )
         
         ship_info = self.db.execute_query(
-            '''SELECT s.current_fuel, s.fuel_capacity, c.group_id
+            '''SELECT s.current_fuel, s.fuel_capacity
                FROM characters c
                JOIN ships s ON c.ship_id = s.ship_id
                WHERE c.user_id = %s''',
@@ -1389,18 +1388,11 @@ class TravelConfirmView(discord.ui.View):
         user_id = char_info[0]
         current_location = char_info[1]
         current_fuel = char_info[2]
-        group_id = char_info[3]
         
         channel_manager = ChannelManager(self.bot)
         
-        # Determine travelers (solo or group)
+        # Group functionality removed - solo travel only
         travelers = [user_id]
-        if group_id:
-            group_members = self.bot.db.execute_query(
-                "SELECT user_id FROM characters WHERE group_id = %s AND current_location = %s",
-                (group_id, current_location),
-                fetch='all'
-            )
             travelers = [member[0] for member in group_members]
         
         # Create transit channel
@@ -1449,10 +1441,10 @@ class TravelConfirmView(discord.ui.View):
         for traveler_id in travelers:
             self.bot.db.execute_query(
                 '''INSERT INTO travel_sessions 
-                   (user_id, group_id, origin_location, destination_location, corridor_id, 
+                   (user_id, origin_location, destination_location, corridor_id, 
                     temp_channel_id, end_time, status)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, 'traveling')''',
-                (traveler_id, group_id, origin_location, destination_location, 
+                   VALUES (%s, %s, %s, %s, %s, %s, 'traveling')''',
+                (traveler_id, origin_location, destination_location, 
                  corridor_id, transit_channel.id, end_time)
             )
         

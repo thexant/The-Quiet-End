@@ -637,3 +637,7 @@
 2025-08-10 16:09:56.918 MDT [23293] LOG:  checkpoint complete: wrote 14 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.403 s, sync=0.016 s, total=1.430 s; sync files=9, longest=0.003 s, average=0.002 s; distance=16 kB, estimate=577 kB; lsn=0/2EB3E70, redo lsn=0/2EB3E38
 2025-08-10 16:44:56.481 MDT [23293] LOG:  checkpoint starting: time
 2025-08-10 16:45:01.957 MDT [23293] LOG:  checkpoint complete: wrote 55 buffers (0.3%); 0 WAL file(s) added, 0 removed, 0 recycled; write=5.411 s, sync=0.055 s, total=5.476 s; sync files=32, longest=0.003 s, average=0.002 s; distance=353 kB, estimate=555 kB; lsn=0/2F0C3B8, redo lsn=0/2F0C380
+2025-08-10 17:14:42.201 MDT [117012] ERROR:  relation "location_channels" does not exist at character 47
+2025-08-10 17:14:42.201 MDT [117012] STATEMENT:  SELECT channel_id, location_id, guild_id FROM location_channels LIMIT 10
+2025-08-10 17:14:57.167 MDT [23293] LOG:  checkpoint starting: time
+2025-08-10 17:14:57.281 MDT [23293] LOG:  checkpoint complete: wrote 1 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.101 s, sync=0.004 s, total=0.114 s; sync files=1, longest=0.004 s, average=0.004 s; distance=7 kB, estimate=500 kB; lsn=0/2F0E1F8, redo lsn=0/2F0E1C0

@@ -418,7 +418,7 @@ class AdminCog(commands.Cog):
                         "• ALL bot-created channels and categories\n"
                         "• ALL player characters and ships\n"
                         "• ALL locations and corridors\n"
-                        "• ALL jobs, inventory, and groups\n"
+                        "• ALL jobs and inventory\n"
                         "• ALL server configuration\n"
                         "• The entire galaxy and its history\n\n"
                         "**The server will be returned to a fresh install state!**",
@@ -909,12 +909,21 @@ class AdminCog(commands.Cog):
         
         current_location_id, char_name = char_info
         
-        # Find destination location
+        # Find destination location - prioritize exact matches
+        # First try exact match
         dest_location = self.db.execute_query(
-            "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
-            (f"%{destination}%",),
+            "SELECT location_id, name FROM locations WHERE LOWER(name) = LOWER(%s)",
+            (destination,),
             fetch='one'
         )
+        
+        # If no exact match, try partial match as fallback
+        if not dest_location:
+            dest_location = self.db.execute_query(
+                "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
+                (f"%{destination}%",),
+                fetch='one'
+            )
         
         if not dest_location:
             await interaction.response.send_message(f"Location '{destination}' not found.", ephemeral=True)
@@ -1741,7 +1750,6 @@ class AdminCog(commands.Cog):
         app_commands.Choice(name="Characters Only", value="characters"),
         app_commands.Choice(name="Economy (Jobs, Shop Items, Inventory)", value="economy"),
         app_commands.Choice(name="Travel Sessions", value="travel"),
-        app_commands.Choice(name="Groups", value="groups")
     ])
     async def reset_data(self, interaction: discord.Interaction, reset_type: str, confirm: str = ""):
         
@@ -1822,7 +1830,7 @@ class AdminCog(commands.Cog):
         
         embed.add_field(
             name="Will Delete:",
-            value="• All characters and ships\n• All locations and corridors\n• All location channels\n• All jobs, inventory, groups\n• All travel sessions\n• All shop data",
+            value="• All characters and ships\n• All locations and corridors\n• All location channels\n• All jobs and inventory\n• All travel sessions\n• All shop data",
             inline=False
         )
         
@@ -1837,13 +1845,12 @@ class AdminCog(commands.Cog):
     def _get_reset_details(self, reset_type: str) -> str:
         """Get detailed description of what each reset type will delete"""
         details = {
-            "full": "• All player characters and ships\n• All locations and corridors\n• All location channels\n• All jobs and shop items\n• All player inventory\n• All groups and travel sessions",
+            "full": "• All player characters and ships\n• All locations and corridors\n• All location channels\n• All jobs and shop items\n• All player inventory\n• All travel sessions",
             "galaxy_with_logout": "• All locations (colonies, stations, outposts, gates)\n• All corridors between locations\n• All location channels\n• All jobs and economy data\n• All homes and properties (with credit refunds)\n• All NPCs and travel sessions\n• Auto-logout all users\n\n✅ **PRESERVES:** Characters, ships, inventory, XP, reputation",
             "galaxy": "• All locations (colonies, stations, outposts, gates)\n• All corridors between locations\n• All location channels\n• All jobs at locations\n• All shop items",
-            "characters": "• All player characters\n• All player ships\n• All player inventory\n• All groups (crews)",
+            "characters": "• All player characters\n• All player ships\n• All player inventory",
             "economy": "• All jobs at all locations\n• All shop items and stock\n• All player inventory items",
             "travel": "• All active travel sessions\n• All temporary transit channels",
-            "groups": "• All player groups/crews\n• Group leadership data"
         }
         return details.get(reset_type, "Unknown reset type")
     
@@ -1856,7 +1863,6 @@ class AdminCog(commands.Cog):
             "characters": "• Players can `/character create` to make new characters\n• Galaxy and economy remain intact",
             "economy": "• Jobs and shop items will regenerate automatically\n• Players keep characters but lose inventory",
             "travel": "• All active journeys have been cancelled\n• Players may need to relocate manually",
-            "groups": "• Players can create new groups with `/group create`"
         }
         return steps.get(reset_type, "Reset complete.")
     
@@ -1889,7 +1895,6 @@ class AdminCog(commands.Cog):
                 "jobs", "job_tracking", "shop_items", "inventory", "black_markets", "black_market_items",
                 
                 # Group related
-                "groups", "group_invites", "group_vote_sessions", "group_votes", "group_ships",
                 
                 # Combat related
                 "combat_states", "combat_encounters", "pvp_opt_outs", "pvp_combat_states", 
@@ -1944,7 +1949,7 @@ class AdminCog(commands.Cog):
                 "black_market_items", "black_markets", "sub_locations",
                 "job_tracking", "jobs", "shop_items", "inventory",
                 "corridor_events", "travel_sessions", "repeaters",
-                "logbook_entries", "groups", "ships", "characters",
+                "logbook_entries", "ships", "characters",
                 "galactic_history", "corridors", "locations",
                 "news_queue", "game_panels",
                 "endgame_evacuations", "endgame_config",
@@ -2217,18 +2222,6 @@ class AdminCog(commands.Cog):
 
                 reset_counts["Temporary Channels Deleted"] = temp_deleted
 
-            # ————— Group data —————
-            if reset_type in ["groups"]:
-                reset_counts["Groups"] = self.db.execute_query(
-                    "SELECT COUNT(*) FROM groups", fetch='one'
-                )[0]
-                
-                self.db.execute_query("DELETE FROM group_votes")
-                self.db.execute_query("DELETE FROM group_vote_sessions")
-                self.db.execute_query("DELETE FROM group_invites")
-                self.db.execute_query("DELETE FROM group_ships")
-                self.db.execute_query("DELETE FROM groups")
-                self.db.execute_query("UPDATE characters SET group_id = NULL")
 
         # Ensure all tables exist after reset
         print("🔧 Recreating database tables after reset...")
@@ -2384,7 +2377,7 @@ class AdminCog(commands.Cog):
         
         # Check if player has a character and is logged in
         char_data = self.db.execute_query(
-            "SELECT name, is_logged_in, current_location, current_ship_id, group_id, current_home_id FROM characters WHERE user_id = %s",
+            "SELECT name, is_logged_in, current_location, current_ship_id, current_home_id FROM characters WHERE user_id = %s",
             (player.id,),
             fetch='one'
         )
@@ -2393,7 +2386,7 @@ class AdminCog(commands.Cog):
             await interaction.response.send_message(f"{player.mention} doesn't have a character.", ephemeral=True)
             return
         
-        char_name, is_logged_in, current_location, current_ship_id, group_id, current_home_id = char_data
+        char_name, is_logged_in, current_location, current_ship_id, current_home_id = char_data
         
         if not is_logged_in:
             await interaction.response.send_message(f"**{char_name}** is not currently logged in.", ephemeral=True)
@@ -2564,7 +2557,7 @@ class AdminCog(commands.Cog):
             
             # Get database stats
             stats = {}
-            tables = ["characters", "locations", "corridors", "jobs", "groups", "ships", "inventory"]
+            tables = ["characters", "locations", "corridors", "jobs", "ships", "inventory"]
             for table in tables:
                 try:
                     count = self.db.execute_query(f"SELECT COUNT(*) FROM {table}", fetch='one')[0]

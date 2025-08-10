@@ -56,7 +56,6 @@ class Database:
                 medical BIGINT DEFAULT 5,
                 current_location BIGINT,
                 ship_id BIGINT,
-                group_id BIGINT,
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -280,7 +279,6 @@ class Database:
             # Travel sessions
             '''CREATE TABLE IF NOT EXISTS travel_sessions (
                 session_id SERIAL PRIMARY KEY,
-                group_id INTEGER,
                 user_id BIGINT,
                 origin_location INTEGER NOT NULL,
                 destination_location INTEGER NOT NULL,
@@ -313,21 +311,6 @@ class Database:
                 FOREIGN KEY (location_id) REFERENCES locations (location_id),
                 FOREIGN KEY (owner_id) REFERENCES characters (user_id),
                 FOREIGN KEY (installed_by) REFERENCES characters (user_id)
-            )''',
-            
-            # Groups table
-            '''CREATE TABLE IF NOT EXISTS groups (
-                group_id SERIAL PRIMARY KEY,
-                name TEXT,
-                leader_id BIGINT NOT NULL,
-                current_location INTEGER,
-                status TEXT DEFAULT 'active',
-                created_at TIMESTAMP DEFAULT NOW(),
-                group_type TEXT DEFAULT 'temporary',
-                max_members INTEGER DEFAULT 8,
-                invite_code TEXT UNIQUE,
-                FOREIGN KEY (leader_id) REFERENCES characters (user_id),
-                FOREIGN KEY (current_location) REFERENCES locations (location_id)
             )''',
             
             # PvP opt-outs
@@ -740,7 +723,6 @@ class Database:
                 ownership_id SERIAL PRIMARY KEY,
                 location_id INTEGER NOT NULL UNIQUE,
                 owner_id BIGINT,
-                group_id INTEGER,
                 faction_id INTEGER,
                 purchase_price INTEGER DEFAULT 0,
                 ownership_type TEXT DEFAULT 'individual',
@@ -1224,53 +1206,6 @@ class Database:
                 FOREIGN KEY (user_id) REFERENCES characters (user_id)
             )''',
             
-            # Group ships table
-            '''CREATE TABLE IF NOT EXISTS group_ships (
-                group_id INTEGER PRIMARY KEY,
-                ship_id INTEGER NOT NULL,
-                captain_id BIGINT,
-                crew_positions TEXT,
-                FOREIGN KEY (group_id) REFERENCES groups (group_id),
-                FOREIGN KEY (ship_id) REFERENCES ships (ship_id),
-                FOREIGN KEY (captain_id) REFERENCES characters (user_id)
-            )''',
-            
-            # Group invites table
-            '''CREATE TABLE IF NOT EXISTS group_invites (
-                invite_id SERIAL PRIMARY KEY,
-                group_id INTEGER NOT NULL,
-                inviter_id BIGINT NOT NULL,
-                invitee_id BIGINT NOT NULL,
-                expires_at TIMESTAMP NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (group_id) REFERENCES groups (group_id),
-                FOREIGN KEY (inviter_id) REFERENCES characters (user_id),
-                FOREIGN KEY (invitee_id) REFERENCES characters (user_id)
-            )''',
-            
-            # Group vote sessions table
-            '''CREATE TABLE IF NOT EXISTS group_vote_sessions (
-                session_id SERIAL PRIMARY KEY,
-                group_id INTEGER NOT NULL,
-                vote_type TEXT NOT NULL,
-                vote_data TEXT NOT NULL,
-                channel_id BIGINT NOT NULL,
-                expires_at TIMESTAMP NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (group_id) REFERENCES groups (group_id)
-            )''',
-            
-            # Group votes table
-            '''CREATE TABLE IF NOT EXISTS group_votes (
-                vote_id SERIAL PRIMARY KEY,
-                session_id INTEGER NOT NULL,
-                user_id BIGINT NOT NULL,
-                vote_value TEXT NOT NULL,
-                voted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES group_vote_sessions (session_id),
-                FOREIGN KEY (user_id) REFERENCES characters (user_id)
-            )''',
-            
             # User location panels table
             '''CREATE TABLE IF NOT EXISTS user_location_panels (
                 user_id BIGINT NOT NULL,
@@ -1337,7 +1272,6 @@ class Database:
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_location INTEGER',
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_home_id BIGINT',
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS ship_id BIGINT',
-            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS group_id BIGINT',
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS status TEXT DEFAULT \'active\'',
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS alignment TEXT DEFAULT \'neutral\'',

@@ -2654,8 +2654,6 @@ class CharacterDeleteConfirmView(discord.ui.View):
             (self.user_id,)
         )
         
-        # Remove from any group
-        self.bot.db.execute_query("UPDATE characters SET group_id = NULL WHERE user_id = %s", (self.user_id,))
         
         # Cancel any jobs
         self.bot.db.execute_query(
