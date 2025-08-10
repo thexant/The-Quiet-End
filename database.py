@@ -44,6 +44,7 @@ class Database:
             # Characters table
             '''CREATE TABLE IF NOT EXISTS characters (
                 user_id BIGINT PRIMARY KEY,
+                discord_id BIGINT,
                 name TEXT NOT NULL,
                 callsign TEXT,
                 appearance TEXT,
@@ -282,14 +283,18 @@ class Database:
             '''CREATE TABLE IF NOT EXISTS repeaters (
                 repeater_id SERIAL PRIMARY KEY,
                 location_id INTEGER NOT NULL,
+                owner_id BIGINT,
+                repeater_type TEXT DEFAULT 'standard',
                 receive_range INTEGER DEFAULT 3,
                 transmit_range INTEGER DEFAULT 3,
                 is_active BOOLEAN DEFAULT TRUE,
+                deployed_at TIMESTAMP DEFAULT NOW(),
                 installed_by BIGINT,
                 installed_at TIMESTAMP DEFAULT NOW(),
                 last_maintenance TIMESTAMP DEFAULT NOW(),
                 power_level INTEGER DEFAULT 100,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                FOREIGN KEY (owner_id) REFERENCES characters (user_id),
                 FOREIGN KEY (installed_by) REFERENCES characters (user_id)
             )''',
             
@@ -1124,6 +1129,7 @@ class Database:
         
         # Add missing columns for existing databases
         column_migrations = [
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS discord_id BIGINT',
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS location_status TEXT DEFAULT \'docked\'',
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_ship_id INTEGER',
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_location INTEGER',
@@ -1185,6 +1191,11 @@ class Database:
             'ALTER TABLE black_markets ALTER COLUMN reputation_required TYPE INTEGER USING reputation_required::INTEGER',
             'ALTER TABLE black_market_items ALTER COLUMN market_id TYPE INTEGER USING market_id::INTEGER',
             'ALTER TABLE black_market_items ALTER COLUMN price TYPE INTEGER USING price::INTEGER',
+            
+            # Add missing columns to repeaters table
+            'ALTER TABLE repeaters ADD COLUMN IF NOT EXISTS owner_id BIGINT',
+            'ALTER TABLE repeaters ADD COLUMN IF NOT EXISTS repeater_type TEXT DEFAULT \'standard\'',
+            'ALTER TABLE repeaters ADD COLUMN IF NOT EXISTS deployed_at TIMESTAMP DEFAULT NOW()',
         ]
         
         for migration_sql in column_migrations:

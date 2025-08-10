@@ -620,3 +620,5 @@
 2025-08-10 11:59:53.310 MDT [23293] LOG:  checkpoint complete: wrote 13 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.204 s, sync=0.325 s, total=1.539 s; sync files=12, longest=0.288 s, average=0.028 s; distance=78 kB, estimate=314 kB; lsn=0/2CEA248, redo lsn=0/2CEA210
 2025-08-10 12:09:51.459 MDT [23293] LOG:  checkpoint starting: time
 2025-08-10 12:10:06.087 MDT [23293] LOG:  checkpoint complete: wrote 146 buffers (0.9%); 0 WAL file(s) added, 0 removed, 0 recycled; write=14.527 s, sync=0.090 s, total=14.628 s; sync files=66, longest=0.003 s, average=0.002 s; distance=859 kB, estimate=859 kB; lsn=0/2DC11C8, redo lsn=0/2DC1190
+2025-08-10 12:14:51.164 MDT [23293] LOG:  checkpoint starting: time
+2025-08-10 12:15:00.232 MDT [23293] LOG:  checkpoint complete: wrote 91 buffers (0.6%); 0 WAL file(s) added, 0 removed, 0 recycled; write=9.015 s, sync=0.043 s, total=9.068 s; sync files=25, longest=0.003 s, average=0.002 s; distance=463 kB, estimate=820 kB; lsn=0/2E35080, redo lsn=0/2E35048
