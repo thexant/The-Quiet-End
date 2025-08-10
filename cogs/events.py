@@ -5,6 +5,7 @@ import random
 import asyncio
 from datetime import datetime, timedelta
 from typing import List, Tuple
+from utils.datetime_utils import safe_datetime_parse
 
 class EventsCog(commands.Cog):
     def __init__(self, bot):
@@ -115,8 +116,8 @@ class EventsCog(commands.Cog):
         """Get the next scheduled corridor shift time from database"""
         try:
             next_shift_str = self.db.get_galaxy_setting("next_corridor_shift_time", None)
-            if next_shift_str:
-                return datetime.fromisoformat(next_shift_str)
+            if next_shift_str and isinstance(next_shift_str, str) and next_shift_str.strip():
+                return safe_datetime_parse(next_shift_str)
             return None
         except Exception as e:
             print(f"❌ Error getting next corridor shift time: {e}")
@@ -173,7 +174,7 @@ class EventsCog(commands.Cog):
             
             # Determine shift intensity based on time since last shift and random factors
             recent_shifts = self.db.execute_query(
-                "SELECT COUNT(*) FROM corridors WHERE last_shift > datetime('now', '-24 hours')",
+                "SELECT COUNT(*) FROM corridors WHERE last_shift > NOW() - INTERVAL '24 hours'",
                 fetch='one'
             )[0]
             
@@ -220,8 +221,8 @@ class EventsCog(commands.Cog):
             unstable_corridors = self.db.execute_query(
                 '''SELECT c.corridor_id, c.name, c.last_shift
                    FROM corridors c 
-                   WHERE c.is_active = 1 AND c.corridor_type = 'ungated'
-                   AND c.last_shift > datetime('now', '-6 hours')''',
+                   WHERE c.is_active = true AND c.corridor_type = 'ungated'
+                   AND c.last_shift > NOW() - INTERVAL '6 hours' ''',
                 fetch='all'
             )
             
@@ -229,9 +230,12 @@ class EventsCog(commands.Cog):
             
             for corridor_id, name, last_shift in unstable_corridors:
                 # Calculate time since last shift
-                if last_shift:
-                    last_shift_time = datetime.fromisoformat(last_shift)
-                    hours_since_shift = (datetime.now() - last_shift_time).total_seconds() / 3600
+                if last_shift and isinstance(last_shift, str) and last_shift.strip():
+                    try:
+                        last_shift_time = safe_datetime_parse(last_shift)
+                        hours_since_shift = (datetime.now() - last_shift_time).total_seconds() / 3600
+                    except (ValueError, TypeError):
+                        continue
                 else:
                     continue
                 
@@ -254,7 +258,7 @@ class EventsCog(commands.Cog):
                 if npc_cog:
                     # Handle NPC deaths for each collapsed corridor
                     collapsed_corridors = self.db.execute_query(
-                        "SELECT corridor_id FROM corridors WHERE is_active = 0 AND last_shift >= ?",
+                        "SELECT corridor_id FROM corridors WHERE is_active = false AND last_shift >= %s",
                         (current_time.isoformat()[:19],),  # Remove microseconds for comparison
                         fetch='all'
                     )
@@ -277,7 +281,7 @@ class EventsCog(commands.Cog):
         try:
             # Get all locations with shops
             locations = self.db.execute_query(
-                "SELECT location_id, name, wealth_level, location_type FROM locations WHERE has_shops = 1",
+                "SELECT location_id, name, wealth_level, location_type FROM locations WHERE has_shops = true",
                 fetch='all'
             )
             
@@ -306,13 +310,13 @@ class EventsCog(commands.Cog):
         
         # Clear expired economic statuses
         self.db.execute_query(
-            "DELETE FROM location_economy WHERE location_id = ? AND expires_at <= datetime('now')",
+            "DELETE FROM location_economy WHERE location_id = %s AND expires_at <= NOW()",
             (location_id,)
         )
         
         # Check current economic events
         current_events = self.db.execute_query(
-            "SELECT COUNT(*) FROM location_economy WHERE location_id = ? AND expires_at > datetime('now')",
+            "SELECT COUNT(*) FROM location_economy WHERE location_id = %s AND expires_at > NOW()",
             (location_id,),
             fetch='one'
         )[0]
@@ -365,19 +369,19 @@ class EventsCog(commands.Cog):
         self.db.execute_query(
             '''INSERT INTO location_economy 
                (location_id, item_category, item_name, status, price_modifier, stock_modifier, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s, %s, %s)''',
             (location_id, target_category, target_item, status, price_modifier, stock_modifier, expire_time.isoformat())
         )
         
         # Clear existing shop items for this location to force regeneration
         if target_category:
             self.db.execute_query(
-                "DELETE FROM shop_items WHERE location_id = ? AND item_type = ?",
+                "DELETE FROM shop_items WHERE location_id = %s AND item_type = %s",
                 (location_id, target_category)
             )
         elif target_item:
             self.db.execute_query(
-                "DELETE FROM shop_items WHERE location_id = ? AND item_name = ?",
+                "DELETE FROM shop_items WHERE location_id = %s AND item_name = %s",
                 (location_id, target_item)
             )
         
@@ -495,7 +499,7 @@ class EventsCog(commands.Cog):
                 '''SELECT c.destination_location, l.name, l.location_type
                    FROM corridors c
                    JOIN locations l ON c.destination_location = l.location_id
-                   WHERE c.origin_location = ? AND c.is_active = 1''',
+                   WHERE c.origin_location = %s AND c.is_active = true''',
                 (current_loc,),
                 fetch='all'
             )
@@ -536,7 +540,7 @@ class EventsCog(commands.Cog):
             # Get connections
             connections = self.db.execute_query(
                 '''SELECT destination_location FROM corridors 
-                   WHERE origin_location = ? AND is_active = 1''',
+                   WHERE origin_location = %s AND is_active = true''',
                 (current_loc,),
                 fetch='all'
             )
@@ -583,7 +587,7 @@ class EventsCog(commands.Cog):
                 '''SELECT c.destination_location, l.name
                    FROM corridors c
                    JOIN locations l ON c.destination_location = l.location_id
-                   WHERE c.origin_location = ? AND c.is_active = 1''',
+                   WHERE c.origin_location = %s AND c.is_active = true''',
                 (current_loc,),
                 fetch='all'
             )
@@ -603,7 +607,7 @@ class EventsCog(commands.Cog):
                 # Job burst event
                 if random.random() < 0.4:
                     locations = self.db.execute_query(
-                        "SELECT location_id, wealth_level, location_type FROM locations WHERE has_jobs = 1",
+                        "SELECT location_id, wealth_level, location_type FROM locations WHERE has_jobs = true",
                         fetch='all'
                     )
                     if locations:
@@ -614,14 +618,14 @@ class EventsCog(commands.Cog):
                 # Corridor micro-shift
                 elif random.random() < 0.3:
                     corridors = self.db.execute_query(
-                        "SELECT corridor_id, name FROM corridors WHERE is_active = 1",
+                        "SELECT corridor_id, name FROM corridors WHERE is_active = true",
                         fetch='all'
                     )
                     if corridors:
                         corridor = random.choice(corridors)
                         # Just update the last_shift time for now
                         self.db.execute_query(
-                            "UPDATE corridors SET last_shift = datetime('now') WHERE corridor_id = ?",
+                            "UPDATE corridors SET last_shift = NOW() WHERE corridor_id = %s",
                             (corridor[0],)
                         )
                         print(f"🎲 Micro-event: Minor fluctuation in {corridor[1]}")
@@ -634,12 +638,12 @@ class EventsCog(commands.Cog):
         try:
             # Cleanup expired jobs
             expired_jobs = self.db.execute_query(
-                "DELETE FROM jobs WHERE expires_at < datetime('now')"
+                "DELETE FROM jobs WHERE expires_at < NOW()"
             )
             
             # Cleanup old travel sessions
             self.db.execute_query(
-                "DELETE FROM travel_sessions WHERE status IN ('completed', 'failed_exit') AND start_time < datetime('now', '-1 day')"
+                "DELETE FROM travel_sessions WHERE status IN ('completed', 'failed_exit') AND start_time < NOW() - INTERVAL '1 day'"
             )
             
             # Cleanup shop items with 0 stock (non-unlimited)
@@ -706,7 +710,7 @@ class EventsCog(commands.Cog):
         try:
             # Get locations that can have jobs
             locations = self.db.execute_query(
-                "SELECT location_id, wealth_level, location_type FROM locations WHERE has_jobs = 1",
+                "SELECT location_id, wealth_level, location_type FROM locations WHERE has_jobs = true",
                 fetch='all'
             )
             
@@ -717,10 +721,14 @@ class EventsCog(commands.Cog):
             
             jobs_generated = 0
             
-            for location_id, wealth, location_type in locations:
+            for location_data in locations:
+                # Database returns tuples (location_id, wealth_level, location_type)
+                location_id = int(location_data[0])
+                wealth = location_data[1]
+                location_type = location_data[2]
                 # Check current job count
                 current_jobs = self.db.execute_query(
-                    "SELECT COUNT(*) FROM jobs WHERE location_id = ? AND is_taken = 0",
+                    "SELECT COUNT(*) FROM jobs WHERE location_id = %s AND is_taken = false",
                     (location_id,),
                     fetch='one'
                 )[0]
@@ -848,7 +856,7 @@ class EventsCog(commands.Cog):
         if location_name:
             # Generate jobs for specific location
             location = self.db.execute_query(
-                "SELECT location_id, wealth_level, location_type FROM locations WHERE LOWER(name) LIKE LOWER(?)",
+                "SELECT location_id, wealth_level, location_type FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
                 (f"%{location_name}%",),
                 fetch='one'
             )
@@ -874,13 +882,13 @@ class EventsCog(commands.Cog):
             return
         
         # Get various statistics
-        total_jobs = self.db.execute_query("SELECT COUNT(*) FROM jobs WHERE is_taken = 0", fetch='one')[0]
-        total_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1", fetch='one')[0]
-        gated_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1 AND corridor_type = 'gated'", fetch='one')[0]
+        total_jobs = self.db.execute_query("SELECT COUNT(*) FROM jobs WHERE is_taken = false", fetch='one')[0]
+        total_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = true", fetch='one')[0]
+        gated_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = true AND corridor_type = 'gated'", fetch='one')[0]
         ungated_corridors = total_corridors - gated_corridors
         
         recent_shifts = self.db.execute_query(
-            "SELECT COUNT(*) FROM corridors WHERE last_shift > datetime('now', '-24 hours')",
+            "SELECT COUNT(*) FROM corridors WHERE last_shift > NOW() - INTERVAL '24 hours'",
             fetch='one'
         )[0]
         
@@ -996,7 +1004,7 @@ class EventsCog(commands.Cog):
             return
         
         corridor = self.db.execute_query(
-            "SELECT corridor_id, name FROM corridors WHERE LOWER(name) LIKE LOWER(?) AND is_active = 1",
+            "SELECT corridor_id, name FROM corridors WHERE LOWER(name) LIKE LOWER(%s) AND is_active = true",
             (f"%{corridor_name}%",),
             fetch='one'
         )
@@ -1022,7 +1030,7 @@ class EventsCog(commands.Cog):
             return
         
         locations = self.db.execute_query(
-            "SELECT location_id, wealth_level, location_type FROM locations WHERE has_jobs = 1",
+            "SELECT location_id, wealth_level, location_type FROM locations WHERE has_jobs = true",
             fetch='all'
         )
         
@@ -1096,7 +1104,7 @@ class EventsCog(commands.Cog):
                FROM corridors c
                JOIN locations ol ON c.origin_location = ol.location_id
                JOIN locations dl ON c.destination_location = dl.location_id
-               WHERE c.corridor_id = ?''',
+               WHERE c.corridor_id = %s''',
             (corridor_id,),
             fetch='one'
         )
@@ -1111,7 +1119,7 @@ class EventsCog(commands.Cog):
             '''SELECT ts.user_id, ts.temp_channel_id, c.name
                FROM travel_sessions ts
                JOIN characters c ON ts.user_id = c.user_id
-               WHERE ts.corridor_id = ? AND ts.status = 'traveling' ''',
+               WHERE ts.corridor_id = %s AND ts.status = 'traveling' ''',
             (corridor_id,),
             fetch='all'
         )
@@ -1122,7 +1130,7 @@ class EventsCog(commands.Cog):
         
         # Mark corridor as inactive
         self.db.execute_query(
-            "UPDATE corridors SET is_active = 0 WHERE corridor_id = ?",
+            "UPDATE corridors SET is_active = false WHERE corridor_id = %s",
             (corridor_id,)
         )
         
@@ -1138,7 +1146,7 @@ class EventsCog(commands.Cog):
         """Handle a corridor shift event"""
         # Update last shift time
         self.db.execute_query(
-            "UPDATE corridors SET last_shift = datetime('now') WHERE corridor_id = ?",
+            "UPDATE corridors SET last_shift = NOW() WHERE corridor_id = %s",
             (corridor_id,)
         )
         
@@ -1232,8 +1240,8 @@ class EventsCog(commands.Cog):
                    FROM characters c 
                    JOIN locations l ON c.current_location = l.location_id
                    WHERE c.current_location IS NOT NULL
-                     AND c.is_logged_in = 1
-                   GROUP BY c.current_location''',
+                     AND c.is_logged_in = true
+                   GROUP BY c.current_location, l.location_type, l.wealth_level, l.population''',
                 fetch='all'
             )
             
@@ -1242,13 +1250,20 @@ class EventsCog(commands.Cog):
                 print("❌ EnhancedEventsCog not found!")
                 return
             
-            for location_id, player_count, location_type, wealth, population in active_locations:
+            for location_data in active_locations:
+                # Database returns tuples for backwards compatibility
+                location_id = int(location_data[0])  # current_location
+                player_count = location_data[1]      # player_count
+                location_type = location_data[2]     # location_type
+                wealth = location_data[3]            # wealth_level
+                population = location_data[4]        # population
+                
                 # Small chance for enhanced events
                 if random.random() < 0.30:  # 35% chance per 15mins per active location
                     
                     # Get players at this location
                     players = self.db.execute_query(
-                        "SELECT user_id FROM characters WHERE current_location = ? AND is_logged_in = 1",
+                        "SELECT user_id FROM characters WHERE current_location = %s AND is_logged_in = true",
                         (location_id,),
                         fetch='all'
                     )
@@ -1307,8 +1322,8 @@ class EventsCog(commands.Cog):
             
             # If survived, apply other damage
             self.db.execute_query(
-                '''UPDATE ships SET current_fuel = MAX(0, current_fuel - ?)
-                   WHERE owner_id = ?''',
+                '''UPDATE ships SET fuel_level = GREATEST(0, fuel_level - %s)
+                   WHERE owner_id = %s''',
                 (fuel_loss, user_id)
             )
             if guild and char_cog:
@@ -1317,7 +1332,7 @@ class EventsCog(commands.Cog):
             # Return to random nearby location (or origin)
             # For now, just clear current location (stranded)
             self.db.execute_query(
-                "UPDATE characters SET current_location = NULL WHERE user_id = ?",
+                "UPDATE characters SET current_location = NULL WHERE user_id = %s",
                 (user_id,)
             )
             
@@ -1354,7 +1369,7 @@ class EventsCog(commands.Cog):
         
         # Update travel session
         self.db.execute_query(
-            "UPDATE travel_sessions SET status = 'corridor_collapse' WHERE user_id = ? AND status = 'traveling'",
+            "UPDATE travel_sessions SET status = 'corridor_collapse' WHERE user_id = %s AND status = 'traveling'",
             (user_id,)
         )
         
@@ -1377,17 +1392,11 @@ class EventsCog(commands.Cog):
     
     async def _notify_location_of_corridor_loss(self, location_id: int, corridor_name: str, destination: str):
         """Notify players at a location that a corridor has been lost"""
-        location_channel = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
         
-        if not location_channel or not location_channel[0]:
-            return
-        
-        channel = self.bot.get_channel(location_channel[0])
-        if not channel:
+        if not cross_guild_channels:
             return
         
         embed = discord.Embed(
@@ -1401,10 +1410,11 @@ class EventsCog(commands.Cog):
             inline=False
         )
         
-        try:
-            await channel.send(embed=embed)
-        except:
-            pass  # Failed to send to channel
+        for guild_channel, channel in cross_guild_channels:
+            try:
+                await channel.send(embed=embed)
+            except:
+                pass  # Skip if can't send to this guild
     
     async def _notify_admins_of_collapses(self, collapse_count: int):
         """Notify administrators of corridor collapses"""
@@ -1416,7 +1426,7 @@ class EventsCog(commands.Cog):
             """Generate a random event at a location using enhanced events system"""
             # Get players at location
             players_present = self.db.execute_query(
-                "SELECT user_id FROM characters WHERE current_location = ? AND is_logged_in = 1",
+                "SELECT user_id FROM characters WHERE current_location = %s AND is_logged_in = true",
                 (location_id,),
                 fetch='all'
             )
@@ -1454,12 +1464,12 @@ class EventsCog(commands.Cog):
             
             duration = random.randint(5, 15)
             expire_time = datetime.now() + timedelta(hours=random.randint(2, 6))
-            expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
+            expire_str = expire_time.isoformat()
 
             self.db.execute_query(
                 '''INSERT INTO jobs
                    (location_id, title, description, reward_money, danger_level, duration_minutes, expires_at, is_taken, job_status, karma_change)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'available', ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, false, 'available', %s)''',
                 (location_id, title, desc, reward, danger, duration, expire_str, karma)
             )
             print(f"🩸 Generated Desperation Job at location {location_id}: {title}")
@@ -1481,12 +1491,12 @@ class EventsCog(commands.Cog):
             
             duration = random.randint(6, 15)
             expire_time = datetime.now() + timedelta(hours=random.randint(3, 8))
-            expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
+            expire_str = expire_time.isoformat()
 
             self.db.execute_query(
                 '''INSERT INTO jobs
                    (location_id, title, description, reward_money, danger_level, duration_minutes, expires_at, is_taken, job_status, karma_change)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'available', ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, false, 'available', %s)''',
                 (location_id, title, desc, reward, danger, duration, expire_str, karma)
             )
             print(f"😇 Generated Good Deeds Job at location {location_id}: {title}")
@@ -1505,7 +1515,7 @@ class EventsCog(commands.Cog):
         
         # Get this location's info
         loc_info = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -1516,11 +1526,11 @@ class EventsCog(commands.Cog):
         
         # Get both direct and multi-jump destinations
         direct_destinations = self.db.execute_query(
-            """SELECT DISTINCT l.location_id, l.name, l.x_coord, l.y_coord, l.location_type, l.wealth_level,
+            """SELECT DISTINCT l.location_id, l.name, l.x_coordinate, l.y_coordinate, l.location_type, l.wealth_level,
                       c.travel_time, c.fuel_cost, c.danger_level
                FROM corridors c 
                JOIN locations l ON c.destination_location = l.location_id
-               WHERE c.origin_location = ? AND c.is_active = 1""",
+               WHERE c.origin_location = %s AND c.is_active = true""",
             (location_id,),
             fetch='all'
         )
@@ -1563,7 +1573,7 @@ class EventsCog(commands.Cog):
                 # Validate route still exists
                 if await self._validate_route_exists(location_id, dest_id):
                     dest_info = self.db.execute_query(
-                        "SELECT location_type, wealth_level FROM locations WHERE location_id = ?",
+                        "SELECT location_type, wealth_level FROM locations WHERE location_id = %s",
                         (dest_id,),
                         fetch='one'
                     )
@@ -1653,13 +1663,13 @@ class EventsCog(commands.Cog):
             title = f"HIGH RISK: {title}"
         
         expire_time = datetime.now() + timedelta(hours=random.randint(4, 12))
-        expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
+        expire_str = expire_time.isoformat()
         
         self.db.execute_query(
             '''INSERT INTO jobs
                (location_id, title, description, reward_money, required_skill, min_skill_level,
                 danger_level, duration_minutes, expires_at, is_taken, job_status, destination_location_id)
-               VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0, 'available', ?)''', # ADD destination_location_id and its placeholder
+               VALUES (%s, %s, %s, %s, NULL, 0, %s, %s, %s, false, 'available', %s)''', # ADD destination_location_id and its placeholder
             (location_id, title, desc, final_reward, dest_info['danger'], total_duration, expire_str, dest_info['dest_id']) # ADD dest_info['dest_id']
         )
         
@@ -1668,7 +1678,7 @@ class EventsCog(commands.Cog):
         """Generate a stationary job at this location"""
         
         loc_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -1732,13 +1742,13 @@ class EventsCog(commands.Cog):
         danger = random.randint(0, 2)  # Low danger for stationary work
         
         expire_time = datetime.now() + timedelta(hours=random.randint(4, 12))
-        expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
+        expire_str = expire_time.isoformat()
         
         self.db.execute_query(
             '''INSERT INTO jobs
                (location_id, title, description, reward_money, required_skill, min_skill_level,
-                danger_level, duration_minutes, expires_at, is_taken, destination_location_id)
-               VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, 0, ?)''',
+                danger_level, duration_minutes, expires_at, is_taken, job_status, destination_location_id)
+               VALUES (%s, %s, %s, %s, NULL, 0, %s, %s, %s, false, 'available', %s)''',
             (location_id, title, desc, reward, danger, duration, expire_str, None)
         )
         

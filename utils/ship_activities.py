@@ -141,7 +141,7 @@ class ShipActivityManager:
             activity_data = self.activity_types[activity_type]
             self.db.execute_query(
                 '''INSERT INTO ship_activities (ship_id, activity_type, activity_name)
-                   VALUES (?, ?, ?)''',
+                   VALUES (%s, %s, %s)''',
                 (ship_id, activity_type, activity_data['name'])
             )
         
@@ -151,7 +151,7 @@ class ShipActivityManager:
         """Get all activities for a ship"""
         activities = self.db.execute_query(
             '''SELECT activity_type, activity_name FROM ship_activities
-               WHERE ship_id = ? AND is_active = 1''',
+               WHERE ship_id = %s AND is_active = true''',
             (ship_id,),
             fetch='all'
         )
@@ -333,7 +333,7 @@ class ShipActivityView(discord.ui.View):
         if random.random() < 0.3:
             hp_restored = random.randint(1, 5)
             char_hp = self.db.execute_query(
-                "SELECT hp, max_hp FROM characters WHERE name = ?",
+                "SELECT hp, max_hp FROM characters WHERE name = %s",
                 (self.char_name,),
                 fetch='one'
             )
@@ -341,7 +341,7 @@ class ShipActivityView(discord.ui.View):
             if char_hp and char_hp[0] < char_hp[1]:
                 actual_restored = min(hp_restored, char_hp[1] - char_hp[0])
                 self.db.execute_query(
-                    "UPDATE characters SET hp = hp + ? WHERE name = ?",
+                    "UPDATE characters SET hp = hp + %s WHERE name = %s",
                     (actual_restored, self.char_name)
                 )
                 embed.add_field(

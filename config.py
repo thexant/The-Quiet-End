@@ -11,11 +11,12 @@ BOT_CONFIG = {
     'token': os.getenv('DISCORD_TOKEN', 'YOUR_BOT_TOKEN'),  # Use environment variable for security
     'command_prefix': os.getenv('COMMAND_PREFIX', '!'),     # Prefix for text commands (slash commands don't use this)
     'description': 'A 27th century sci-fi RPG',
-    'activity_name': os.getenv('ACTIVITY_NAME', 'Entropy'), # Bot status message
+    'activity_name': 'With Physics',
 }
 
-# Use environment variable for guild ID, fallback to default if not set
-ALLOWED_GUILD_ID = int(os.getenv('ALLOWED_GUILD_ID', '1391985652001800333'))
+# Optional guild restriction - set to None to allow all guilds
+# Use environment variable for guild ID if you want to restrict to a single guild
+ALLOWED_GUILD_ID = int(os.getenv('ALLOWED_GUILD_ID')) if os.getenv('ALLOWED_GUILD_ID') else None
 
 
 # Galaxy Generation Settings
@@ -147,7 +148,7 @@ DISCORD_CONFIG = {
 
 # Database Settings
 DATABASE_CONFIG = {
-    'db_path': os.getenv('DATABASE_PATH', 'data/THEQUIETEND.db'),  # SQLite database file path, use env var or default
+    'database_url': os.getenv('DATABASE_URL', 'postgresql://thequietend_user:thequietend_pass@localhost/thequietend_db?host=/tmp'),  # PostgreSQL connection URL
     'connection_timeout': 30.0,      # Database connection timeout
     'backup_interval_hours': 24,     # How often to backup database (if implemented)
     'vacuum_interval_days': 7        # How often to optimize database (if implemented)

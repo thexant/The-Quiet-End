@@ -25,23 +25,23 @@ class GroupsCog(commands.Cog):
                 # Clean up expired invites using Unix timestamp
                 current_timestamp = int(datetime.now().timestamp())
                 self.db.execute_query(
-                    "DELETE FROM group_invites WHERE expires_at < ?",
+                    "DELETE FROM group_invites WHERE expires_at < %s",
                     (current_timestamp,)
                 )
                 
                 # Clean up expired vote sessions
                 expired_sessions = self.db.execute_query(
-                    "SELECT session_id FROM group_vote_sessions WHERE expires_at < datetime('now')",
+                    "SELECT session_id FROM group_vote_sessions WHERE expires_at < NOW()",
                     fetch='all'
                 )
                 
                 for session_id, in expired_sessions:
                     self.db.execute_query(
-                        "DELETE FROM group_votes WHERE session_id = ?",
+                        "DELETE FROM group_votes WHERE session_id = %s",
                         (session_id,)
                     )
                     self.db.execute_query(
-                        "DELETE FROM group_vote_sessions WHERE session_id = ?",
+                        "DELETE FROM group_vote_sessions WHERE session_id = %s",
                         (session_id,)
                     )
                 
@@ -56,7 +56,7 @@ class GroupsCog(commands.Cog):
     async def create_group(self, interaction: discord.Interaction, name: str = None):
         # Check if user already in a group
         existing = self.db.execute_query(
-            "SELECT group_id FROM characters WHERE user_id = ? AND group_id IS NOT NULL",
+            "SELECT group_id FROM characters WHERE user_id = %s AND group_id IS NOT NULL",
             (interaction.user.id,),
             fetch='one'
         )
@@ -67,7 +67,7 @@ class GroupsCog(commands.Cog):
         
         # Get current location and character name
         char_info = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -84,19 +84,19 @@ class GroupsCog(commands.Cog):
         
         # Create group
         self.db.execute_query(
-            "INSERT INTO groups (name, leader_id, current_location) VALUES (?, ?, ?)",
+            "INSERT INTO groups (name, leader_id, current_location) VALUES (%s, %s, %s)",
             (name, interaction.user.id, current_location)
         )
         
         group_id = self.db.execute_query(
-            "SELECT group_id FROM groups WHERE leader_id = ? ORDER BY group_id DESC LIMIT 1",
+            "SELECT group_id FROM groups WHERE leader_id = %s ORDER BY group_id DESC LIMIT 1",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
         # Add user to group
         self.db.execute_query(
-            "UPDATE characters SET group_id = ? WHERE user_id = ?",
+            "UPDATE characters SET group_id = %s WHERE user_id = %s",
             (group_id, interaction.user.id)
         )
         
@@ -123,7 +123,7 @@ class GroupsCog(commands.Cog):
             '''SELECT g.group_id, g.name, g.leader_id, g.current_location
                FROM characters c
                JOIN groups g ON c.group_id = g.group_id
-               WHERE c.user_id = ? AND g.status = 'active' ''',
+               WHERE c.user_id = %s AND g.status = 'active' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -139,7 +139,7 @@ class GroupsCog(commands.Cog):
         
         # Check if target user has a character
         target_char = self.db.execute_query(
-            "SELECT name, group_id, current_location FROM characters WHERE user_id = ?",
+            "SELECT name, group_id, current_location FROM characters WHERE user_id = %s",
             (user.id,),
             fetch='one'
         )
@@ -161,7 +161,7 @@ class GroupsCog(commands.Cog):
         # Check if already invited - using Unix timestamp
         current_timestamp = int(datetime.now().timestamp())
         existing_invite = self.db.execute_query(
-            "SELECT invite_id FROM group_invites WHERE group_id = ? AND invitee_id = ? AND expires_at > ?",
+            "SELECT invite_id FROM group_invites WHERE group_id = %s AND invitee_id = %s AND expires_at > %s",
             (group_id, user.id, current_timestamp),
             fetch='one'
         )
@@ -174,7 +174,7 @@ class GroupsCog(commands.Cog):
         expire_datetime = datetime.now() + timedelta(minutes=10)
         expire_timestamp = int(expire_datetime.timestamp())
         self.db.execute_query(
-            "INSERT INTO group_invites (group_id, inviter_id, invitee_id, expires_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO group_invites (group_id, inviter_id, invitee_id, expires_at) VALUES (%s, %s, %s, %s)",
             (group_id, interaction.user.id, user.id, expire_timestamp)
         )
         
@@ -193,7 +193,7 @@ class GroupsCog(commands.Cog):
         location_info = self.db.execute_query(
             '''SELECT l.channel_id 
                FROM locations l 
-               WHERE l.location_id = ?''',
+               WHERE l.location_id = %s''',
             (current_location,),
             fetch='one'
         )
@@ -214,14 +214,14 @@ class GroupsCog(commands.Cog):
                 )
                 invite_embed.add_field(name="Expires", value=f"<t:{expire_timestamp}:R>", inline=True)
                 
-                await location_channel.send(embed=invite_embed)
+                await self.bot.send_with_cross_guild_broadcast(location_channel, embed=invite_embed)
     
     @group_group.command(name="join", description="Join a group (requires invitation)")
     @app_commands.describe(group_name="Name of the group to join")
     async def join_group(self, interaction: discord.Interaction, group_name: str):
         # Check if user already in a group
         existing = self.db.execute_query(
-            "SELECT group_id FROM characters WHERE user_id = ? AND group_id IS NOT NULL",
+            "SELECT group_id FROM characters WHERE user_id = %s AND group_id IS NOT NULL",
             (interaction.user.id,),
             fetch='one'
         )
@@ -232,7 +232,7 @@ class GroupsCog(commands.Cog):
         
         # Check if user has a character
         char_check = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -248,10 +248,10 @@ class GroupsCog(commands.Cog):
                FROM groups g
                JOIN characters c ON g.leader_id = c.user_id
                JOIN group_invites gi ON g.group_id = gi.group_id
-               WHERE LOWER(g.name) = LOWER(?) 
+               WHERE LOWER(g.name) = LOWER(%s) 
                      AND g.status = 'active' 
-                     AND gi.invitee_id = ? 
-                     AND gi.expires_at > ?''',
+                     AND gi.invitee_id = %s 
+                     AND gi.expires_at > %s''',
             (group_name, interaction.user.id, current_timestamp),
             fetch='one'
         )
@@ -267,13 +267,13 @@ class GroupsCog(commands.Cog):
         
         # Add to group
         self.db.execute_query(
-            "UPDATE characters SET group_id = ? WHERE user_id = ?",
+            "UPDATE characters SET group_id = %s WHERE user_id = %s",
             (group_id, interaction.user.id)
         )
         
         # Remove the used invitation
         self.db.execute_query(
-            "DELETE FROM group_invites WHERE invite_id = ?",
+            "DELETE FROM group_invites WHERE invite_id = %s",
             (invite_id,)
         )
         
@@ -292,7 +292,7 @@ class GroupsCog(commands.Cog):
             '''SELECT g.current_location, l.channel_id 
                FROM groups g 
                JOIN locations l ON g.current_location = l.location_id 
-               WHERE g.group_id = ?''',
+               WHERE g.group_id = %s''',
             (group_id,),
             fetch='one'
         )
@@ -310,21 +310,21 @@ class GroupsCog(commands.Cog):
 
                 # ✅ Get how many members now
                 member_count = self.db.execute_query(
-                    "SELECT COUNT(*) FROM characters WHERE group_id = ?",
+                    "SELECT COUNT(*) FROM characters WHERE group_id = %s",
                     (group_id,),
                     fetch='one'
                 )[0]
 
                 notification_embed.set_footer(text=f"Group Size: {member_count} members")
 
-                await location_channel.send(embed=notification_embed)    
+                await self.bot.send_with_cross_guild_broadcast(location_channel, embed=notification_embed)    
     @group_group.command(name="leave", description="Leave your current group")
     async def leave_group(self, interaction: discord.Interaction):
         group_info = self.db.execute_query(
             '''SELECT g.group_id, g.name, g.leader_id, c.name as char_name
                FROM characters c
                JOIN groups g ON c.group_id = g.group_id
-               WHERE c.user_id = ? AND g.status = 'active' ''',
+               WHERE c.user_id = %s AND g.status = 'active' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -341,7 +341,7 @@ class GroupsCog(commands.Cog):
         
         # Remove from group
         self.db.execute_query(
-            "UPDATE characters SET group_id = NULL WHERE user_id = ?",
+            "UPDATE characters SET group_id = NULL WHERE user_id = %s",
             (interaction.user.id,)
         )
         
@@ -358,7 +358,7 @@ class GroupsCog(commands.Cog):
             '''SELECT g.current_location, l.channel_id 
                FROM groups g 
                JOIN locations l ON g.current_location = l.location_id 
-               WHERE g.group_id = ?''',
+               WHERE g.group_id = %s''',
             (group_id,),
             fetch='one'
         )
@@ -368,7 +368,7 @@ class GroupsCog(commands.Cog):
             if location_channel:
                 # Get remaining members count
                 remaining_members = self.db.execute_query(
-                    "SELECT COUNT(*) FROM characters WHERE group_id = ?",
+                    "SELECT COUNT(*) FROM characters WHERE group_id = %s",
                     (group_id,),
                     fetch='one'
                 )[0]
@@ -385,7 +385,7 @@ class GroupsCog(commands.Cog):
                 else:
                     notification_embed.set_footer(text="Group has been automatically disbanded (no members remaining)")
                 
-                await location_channel.send(embed=notification_embed)
+                await self.bot.send_with_cross_guild_broadcast(location_channel, embed=notification_embed)
     
     @group_group.command(name="disband", description="Dissolve your group (leader only)")
     async def disband_group(self, interaction: discord.Interaction):
@@ -394,7 +394,7 @@ class GroupsCog(commands.Cog):
             '''SELECT g.group_id, g.name, g.leader_id, g.current_location
                FROM characters c
                JOIN groups g ON c.group_id = g.group_id
-               WHERE c.user_id = ? AND g.status = 'active' ''',
+               WHERE c.user_id = %s AND g.status = 'active' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -411,30 +411,30 @@ class GroupsCog(commands.Cog):
         
         # Get all members to notify them
         members = self.db.execute_query(
-            "SELECT user_id, name FROM characters WHERE group_id = ?",
+            "SELECT user_id, name FROM characters WHERE group_id = %s",
             (group_id,),
             fetch='all'
         )
         
         # Remove all members from group
         self.db.execute_query(
-            "UPDATE characters SET group_id = NULL WHERE group_id = ?",
+            "UPDATE characters SET group_id = NULL WHERE group_id = %s",
             (group_id,)
         )
         
         # Mark group as dissolved
         self.db.execute_query(
-            "UPDATE groups SET status = 'dissolved' WHERE group_id = ?",
+            "UPDATE groups SET status = 'dissolved' WHERE group_id = %s",
             (group_id,)
         )
         
         # Clean up any active votes
         self.db.execute_query(
-            "DELETE FROM group_votes WHERE session_id IN (SELECT session_id FROM group_vote_sessions WHERE group_id = ?)",
+            "DELETE FROM group_votes WHERE session_id IN (SELECT session_id FROM group_vote_sessions WHERE group_id = %s)",
             (group_id,)
         )
         self.db.execute_query(
-            "DELETE FROM group_vote_sessions WHERE group_id = ?",
+            "DELETE FROM group_vote_sessions WHERE group_id = %s",
             (group_id,)
         )
         
@@ -450,7 +450,7 @@ class GroupsCog(commands.Cog):
         location_info = self.db.execute_query(
             '''SELECT l.channel_id 
                FROM locations l 
-               WHERE l.location_id = ?''',
+               WHERE l.location_id = %s''',
             (current_location,),
             fetch='one'
         )
@@ -470,7 +470,7 @@ class GroupsCog(commands.Cog):
                     inline=False
                 )
                 
-                await location_channel.send(embed=notification_embed)
+                await self.bot.send_with_cross_guild_broadcast(location_channel, embed=notification_embed)
     
     @group_group.command(name="info", description="View information about your group")
     async def group_info(self, interaction: discord.Interaction):
@@ -481,7 +481,7 @@ class GroupsCog(commands.Cog):
                JOIN groups g ON ch.group_id = g.group_id
                LEFT JOIN locations l ON g.current_location = l.location_id
                LEFT JOIN characters c ON g.leader_id = c.user_id
-               WHERE ch.user_id = ? AND g.status = 'active' ''',
+               WHERE ch.user_id = %s AND g.status = 'active' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -497,8 +497,8 @@ class GroupsCog(commands.Cog):
             '''SELECT c.name, c.user_id, s.ship_type, s.current_fuel, s.fuel_capacity
                FROM characters c
                LEFT JOIN ships s ON c.ship_id = s.ship_id
-               WHERE c.group_id = ?
-               ORDER BY c.user_id = ? DESC''',  # Leader first
+               WHERE c.group_id = %s
+               ORDER BY c.user_id = %s DESC''',  # Leader first
             (group_id, leader_id),
             fetch='all'
         )
@@ -524,7 +524,7 @@ class GroupsCog(commands.Cog):
             
             # Check if member is logged in
             is_online = self.db.execute_query(
-                "SELECT is_logged_in FROM characters WHERE user_id = ?",
+                "SELECT is_logged_in FROM characters WHERE user_id = %s",
                 (member_id,),
                 fetch='one'
             )[0]
@@ -577,7 +577,7 @@ class GroupsCog(commands.Cog):
         # Check for pending invites
         pending_invites = self.db.execute_query(
             '''SELECT COUNT(*) FROM group_invites gi
-               WHERE gi.group_id = ? AND gi.expires_at > datetime('now')''',
+               WHERE gi.group_id = %s AND gi.expires_at > NOW()''',
             (group_id,),
             fetch='one'
         )[0]
@@ -607,7 +607,7 @@ class GroupsCog(commands.Cog):
             '''SELECT g.group_id, g.name, g.leader_id
                FROM characters c
                JOIN groups g ON c.group_id = g.group_id
-               WHERE c.user_id = ? AND g.status = 'active' ''',
+               WHERE c.user_id = %s AND g.status = 'active' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -624,7 +624,7 @@ class GroupsCog(commands.Cog):
         
         # Check if target user is in the group
         target_in_group = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ? AND group_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s AND group_id = %s",
             (user.id, group_id),
             fetch='one'
         )
@@ -639,7 +639,7 @@ class GroupsCog(commands.Cog):
         
         # Remove from group
         self.db.execute_query(
-            "UPDATE characters SET group_id = NULL WHERE user_id = ?",
+            "UPDATE characters SET group_id = NULL WHERE user_id = %s",
             (user.id,)
         )
         
@@ -657,7 +657,7 @@ class GroupsCog(commands.Cog):
         location_info = self.db.execute_query(
             '''SELECT l.channel_id 
                FROM locations l 
-               WHERE l.location_id = ?''',
+               WHERE l.location_id = %s''',
             (current_location,),
             fetch='one'
         )
@@ -667,7 +667,7 @@ class GroupsCog(commands.Cog):
             if location_channel:
                 # Get remaining members count
                 remaining_members = self.db.execute_query(
-                    "SELECT COUNT(*) FROM characters WHERE group_id = ?",
+                    "SELECT COUNT(*) FROM characters WHERE group_id = %s",
                     (group_id,),
                     fetch='one'
                 )[0]
@@ -680,7 +680,7 @@ class GroupsCog(commands.Cog):
                 )
                 notification_embed.set_footer(text=f"Group Size: {remaining_members} members remaining")
                 
-                await location_channel.send(embed=notification_embed)
+                await self.bot.send_with_cross_guild_broadcast(location_channel, embed=notification_embed)
     
     @group_group.command(name="travel_vote", description="Start a vote for group travel (leader only)")
     async def travel_vote(self, interaction: discord.Interaction):
@@ -689,7 +689,7 @@ class GroupsCog(commands.Cog):
             '''SELECT g.group_id, g.name, g.leader_id, g.current_location
                FROM characters c
                JOIN groups g ON c.group_id = g.group_id
-               WHERE c.user_id = ? AND g.status = 'active' ''',
+               WHERE c.user_id = %s AND g.status = 'active' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -714,7 +714,7 @@ class GroupsCog(commands.Cog):
         # Check for an existing active vote
         current_timestamp = int(datetime.now().timestamp())
         existing_vote = self.db.execute_query(
-            "SELECT session_id FROM group_vote_sessions WHERE group_id = ? AND expires_at > ?",
+            "SELECT session_id FROM group_vote_sessions WHERE group_id = %s AND expires_at > %s",
             (group_id, current_timestamp),
             fetch='one'
         )
@@ -728,13 +728,13 @@ class GroupsCog(commands.Cog):
             '''SELECT c.corridor_id, c.name, l.name AS dest_name, c.travel_time, c.fuel_cost, c.danger_level
                FROM corridors c
                JOIN locations l ON c.destination_location = l.location_id
-               WHERE c.origin_location = ? AND c.is_active = 1''',
+               WHERE c.origin_location = %s AND c.is_active = true''',
             (current_location,),
             fetch='all'
         )
 
         if not corridors:
-            location_name = self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (current_location,), fetch='one')[0]
+            location_name = self.db.execute_query("SELECT name FROM locations WHERE location_id = %s", (current_location,), fetch='one')[0]
             await interaction.response.send_message(f"There are no available travel routes from the group's current location: **{location_name}**.", ephemeral=True)
             return
 
@@ -767,7 +767,7 @@ class GroupsCog(commands.Cog):
             corridor_id, corridor_name, dest_name, travel_time, fuel_cost, danger = corridor
 
             members = self.db.execute_query(
-                "SELECT user_id, name FROM characters WHERE group_id = ?",
+                "SELECT user_id, name FROM characters WHERE group_id = %s",
                 (group_id,),
                 fetch='all'
             )
@@ -786,12 +786,12 @@ class GroupsCog(commands.Cog):
 
             self.db.execute_query(
                 '''INSERT INTO group_vote_sessions (group_id, vote_type, vote_data, channel_id, expires_at)
-                   VALUES (?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s)''',
                 (group_id, 'travel', json.dumps(vote_data), inter.channel.id, expire_datetime.isoformat())
             )
 
             session_id = self.db.execute_query(
-                "SELECT session_id FROM group_vote_sessions WHERE group_id = ? ORDER BY session_id DESC LIMIT 1",
+                "SELECT session_id FROM group_vote_sessions WHERE group_id = %s ORDER BY session_id DESC LIMIT 1",
                 (group_id,), fetch='one'
             )[0]
 
@@ -832,7 +832,7 @@ class GroupsCog(commands.Cog):
         """
         # Get the leader's current location from the characters table
         leader_location_data = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (leader_id,),
             fetch='one'
         )
@@ -841,7 +841,7 @@ class GroupsCog(commands.Cog):
             leader_location_id = leader_location_data[0]
             # Update the groups table with the correct location
             self.db.execute_query(
-                "UPDATE groups SET current_location = ? WHERE group_id = ?",
+                "UPDATE groups SET current_location = %s WHERE group_id = %s",
                 (leader_location_id, group_id)
             )
             return leader_location_id
@@ -860,7 +860,7 @@ class GroupsCog(commands.Cog):
             '''SELECT g.group_id, g.name, c.name as char_name
                FROM characters c
                JOIN groups g ON c.group_id = g.group_id
-               WHERE c.user_id = ? AND g.status = 'active' ''',
+               WHERE c.user_id = %s AND g.status = 'active' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -875,7 +875,7 @@ class GroupsCog(commands.Cog):
 
         vote_session = self.db.execute_query(
             '''SELECT session_id, vote_type, vote_data FROM group_vote_sessions
-               WHERE group_id = ? AND channel_id = ? AND expires_at > ?''',
+               WHERE group_id = %s AND channel_id = %s AND expires_at > %s''',
             (group_id, interaction.channel.id, current_timestamp),
             fetch='one'
         )
@@ -888,7 +888,7 @@ class GroupsCog(commands.Cog):
         
         # Check if user already voted
         existing_vote = self.db.execute_query(
-            "SELECT vote_id FROM group_votes WHERE session_id = ? AND user_id = ?",
+            "SELECT vote_id FROM group_votes WHERE session_id = %s AND user_id = %s",
             (session_id, interaction.user.id),
             fetch='one'
         )
@@ -896,21 +896,21 @@ class GroupsCog(commands.Cog):
         if existing_vote:
             # Update existing vote
             self.db.execute_query(
-                "UPDATE group_votes SET vote_value = ?, voted_at = datetime('now') WHERE vote_id = ?",
+                "UPDATE group_votes SET vote_value = %s, voted_at = NOW() WHERE vote_id = %s",
                 (choice, existing_vote[0])
             )
             action = "updated"
         else:
             # Create new vote
             self.db.execute_query(
-                "INSERT INTO group_votes (session_id, user_id, vote_value) VALUES (?, ?, ?)",
+                "INSERT INTO group_votes (session_id, user_id, vote_value) VALUES (%s, %s, %s)",
                 (session_id, interaction.user.id, choice)
             )
             action = "cast"
         
         # Get current vote counts
         votes = self.db.execute_query(
-            "SELECT vote_value, COUNT(*) FROM group_votes WHERE session_id = ? GROUP BY vote_value",
+            "SELECT vote_value, COUNT(*) FROM group_votes WHERE session_id = %s GROUP BY vote_value",
             (session_id,),
             fetch='all'
         )
@@ -921,7 +921,7 @@ class GroupsCog(commands.Cog):
         
         # Get total members
         total_members = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE group_id = ?",
+            "SELECT COUNT(*) FROM characters WHERE group_id = %s",
             (group_id,),
             fetch='one'
         )[0]
@@ -953,7 +953,7 @@ class GroupsCog(commands.Cog):
                 initiator = self.db.execute_query(
                     '''SELECT c.user_id FROM group_votes gv
                        JOIN characters c ON gv.user_id = c.user_id
-                       WHERE gv.session_id = ? ORDER BY gv.voted_at ASC LIMIT 1''',
+                       WHERE gv.session_id = %s ORDER BY gv.voted_at ASC LIMIT 1''',
                     (session_id,),
                     fetch='one'
                 )
@@ -970,8 +970,8 @@ class GroupsCog(commands.Cog):
                             pass
             
             # Clean up vote
-            self.db.execute_query("DELETE FROM group_votes WHERE session_id = ?", (session_id,))
-            self.db.execute_query("DELETE FROM group_vote_sessions WHERE session_id = ?", (session_id,))
+            self.db.execute_query("DELETE FROM group_votes WHERE session_id = %s", (session_id,))
+            self.db.execute_query("DELETE FROM group_vote_sessions WHERE session_id = %s", (session_id,))
         
         await interaction.response.send_message(embed=embed)
     
@@ -991,7 +991,7 @@ class GroupsCog(commands.Cog):
             
             # Double-check job is still available
             job_available = self.db.execute_query(
-                "SELECT is_taken FROM jobs WHERE job_id = ?",
+                "SELECT is_taken FROM jobs WHERE job_id = %s",
                 (job_id,),
                 fetch='one'
             )
@@ -1007,19 +1007,19 @@ class GroupsCog(commands.Cog):
             
             # Assign job to group leader (for tracking purposes)
             self.db.execute_query(
-                "UPDATE jobs SET is_taken = 1, taken_by = ?, taken_at = datetime('now'), job_status = 'active' WHERE job_id = ?",
+                "UPDATE jobs SET is_taken = true, taken_by = %s, taken_at = NOW(), job_status = 'active' WHERE job_id = %s",
                 (group_id, job_id)  # Store group_id in taken_by for group jobs
             )
             
             # Create job tracking for all members
             members = self.db.execute_query(
-                "SELECT user_id, name FROM characters WHERE group_id = ?",
+                "SELECT user_id, name FROM characters WHERE group_id = %s",
                 (group_id,),
                 fetch='all'
             )
             
             current_location = self.db.execute_query(
-                "SELECT current_location FROM groups WHERE group_id = ?",
+                "SELECT current_location FROM groups WHERE group_id = %s",
                 (group_id,),
                 fetch='one'
             )[0]
@@ -1027,7 +1027,13 @@ class GroupsCog(commands.Cog):
             for member_id, member_name in members:
                 # Set job tracking for each member
                 self.db.execute_query(
-                    "INSERT OR REPLACE INTO job_tracking (job_id, user_id, start_location, required_duration) VALUES (?, ?, ?, ?)",
+                    """INSERT INTO job_tracking (job_id, user_id, start_location, required_duration) 
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (job_id, user_id) DO UPDATE SET
+                       start_location = EXCLUDED.start_location,
+                       required_duration = EXCLUDED.required_duration,
+                       time_at_location = 0.0,
+                       last_location_check = NOW()""",
                     (job_id, member_id, current_location, vote_data['duration_minutes'])
                 )
             
@@ -1050,7 +1056,7 @@ class GroupsCog(commands.Cog):
         
         # Get all group members
         members = self.db.execute_query(
-            "SELECT user_id, name FROM characters WHERE group_id = ?",
+            "SELECT user_id, name FROM characters WHERE group_id = %s",
             (group_id,),
             fetch='all'
         )
@@ -1066,7 +1072,7 @@ class GroupsCog(commands.Cog):
                FROM corridors c
                JOIN locations ol ON c.origin_location = ol.location_id
                JOIN locations dl ON c.destination_location = dl.location_id
-               WHERE c.corridor_id = ?''',
+               WHERE c.corridor_id = %s''',
             (corridor_id,),
             fetch='one'
         )
@@ -1082,7 +1088,7 @@ class GroupsCog(commands.Cog):
         for member_id, member_name in members:
             # Check fuel
             fuel_info = self.db.execute_query(
-                "SELECT s.current_fuel FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = ?",
+                "SELECT s.current_fuel FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = %s",
                 (member_id,),
                 fetch='one'
             )
@@ -1092,7 +1098,7 @@ class GroupsCog(commands.Cog):
             else:
                 # Deduct fuel
                 self.db.execute_query(
-                    "UPDATE ships SET current_fuel = current_fuel - ? WHERE owner_id = ?",
+                    "UPDATE ships SET current_fuel = current_fuel - %s WHERE owner_id = %s",
                     (fuel_cost, member_id)
                 )
         
@@ -1129,13 +1135,13 @@ class GroupsCog(commands.Cog):
                 
                 # Update character location to None (in transit)
                 self.db.execute_query(
-                    "UPDATE characters SET current_location = NULL WHERE user_id = ?",
+                    "UPDATE characters SET current_location = NULL WHERE user_id = %s",
                     (member_id,)
                 )
         
         # Calculate travel time with ship efficiency (use leader's ship as base)
         leader_efficiency = self.db.execute_query(
-            "SELECT s.fuel_efficiency FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = ?",
+            "SELECT s.fuel_efficiency FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = %s",
             (members[0][0],),  # Use first member (leader) as base
             fetch='one'
         )
@@ -1153,7 +1159,7 @@ class GroupsCog(commands.Cog):
                 '''INSERT INTO travel_sessions 
                    (user_id, group_id, origin_location, destination_location, corridor_id, 
                     temp_channel_id, start_time, end_time, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'traveling')''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'traveling')''',
                 (member_id, group_id, origin_location, destination_location, 
                  corridor_id, transit_channel.id if transit_channel else None, 
                  start_time.isoformat(), end_time.isoformat())
@@ -1218,7 +1224,7 @@ class GroupsCog(commands.Cog):
             for member_id, member_name in members:
                 # Get this member's session info to check status and get origin
                 session_info = self.db.execute_query(
-                    "SELECT origin_location, status FROM travel_sessions WHERE user_id=? AND group_id=? ORDER BY session_id DESC LIMIT 1",
+                    "SELECT origin_location, status FROM travel_sessions WHERE user_id=%s AND group_id=%s ORDER BY session_id DESC LIMIT 1",
                     (member_id, group_id), fetch='one'
                 )
 
@@ -1230,7 +1236,7 @@ class GroupsCog(commands.Cog):
 
                 # Mark as 'arrived' to signal the arrival handler this session is ready for processing
                 self.db.execute_query(
-                    "UPDATE travel_sessions SET status='arrived' WHERE user_id=? AND group_id=? AND status='traveling'",
+                    "UPDATE travel_sessions SET status='arrived' WHERE user_id=%s AND group_id=%s AND status='traveling'",
                     (member_id, group_id)
                 )
 
@@ -1238,14 +1244,14 @@ class GroupsCog(commands.Cog):
                 await travel_cog._handle_arrival_access(member_id, destination_location, origin_location_id, guild, transit_channel)
 
                 # Check the final outcome for the summary message
-                final_loc_id = self.db.execute_query("SELECT current_location FROM characters WHERE user_id = ?", (member_id,), fetch='one')[0]
+                final_loc_id = self.db.execute_query("SELECT current_location FROM characters WHERE user_id = %s", (member_id,), fetch='one')[0]
                 if final_loc_id == destination_location:
                     arrival_statuses.append(f"✅ **{member_name}** has arrived at {dest_name}.")
                 else:
                     # This case handles retreats or diversions
                     final_loc_name = "an unknown location"
                     if final_loc_id:
-                         final_loc_name_res = self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (final_loc_id,), fetch='one')
+                         final_loc_name_res = self.db.execute_query("SELECT name FROM locations WHERE location_id = %s", (final_loc_id,), fetch='one')
                          if final_loc_name_res:
                             final_loc_name = f"**{final_loc_name_res[0]}**"
 
@@ -1253,7 +1259,7 @@ class GroupsCog(commands.Cog):
 
             # Update group's location in DB if anyone made it
             if any("✅" in s for s in arrival_statuses):
-                self.db.execute_query("UPDATE groups SET current_location=? WHERE group_id=?", (destination_location, group_id))
+                self.db.execute_query("UPDATE groups SET current_location=%s WHERE group_id=%s", (destination_location, group_id))
 
             # Post a final summary in the transit channel
             if transit_channel and arrival_statuses:
@@ -1275,18 +1281,18 @@ class GroupsCog(commands.Cog):
         current_timestamp = int(datetime.now().timestamp())
 
         vote_exists = self.db.execute_query(
-            "SELECT group_id FROM group_vote_sessions WHERE session_id = ? AND expires_at > ?",
+            "SELECT group_id FROM group_vote_sessions WHERE session_id = %s AND expires_at > %s",
             (session_id, current_timestamp),
             fetch='one'
         )
         if vote_exists:
             # Vote timed out - clean up
-            self.db.execute_query("DELETE FROM group_votes WHERE session_id = ?", (session_id,))
-            self.db.execute_query("DELETE FROM group_vote_sessions WHERE session_id = ?", (session_id,))
+            self.db.execute_query("DELETE FROM group_votes WHERE session_id = %s", (session_id,))
+            self.db.execute_query("DELETE FROM group_vote_sessions WHERE session_id = %s", (session_id,))
             
             # Optionally notify in channel about timeout
             channel_id = self.db.execute_query(
-                "SELECT channel_id FROM group_vote_sessions WHERE session_id = ?",
+                "SELECT channel_id FROM group_vote_sessions WHERE session_id = %s",
                 (session_id,),
                 fetch='one'
             )
@@ -1307,7 +1313,7 @@ class GroupsCog(commands.Cog):
         # Check for existing active vote
         current_timestamp = int(datetime.now().timestamp())
         existing_vote = self.db.execute_query(
-            "SELECT session_id FROM group_vote_sessions WHERE group_id = ? AND expires_at > ?",
+            "SELECT session_id FROM group_vote_sessions WHERE group_id = %s AND expires_at > %s",
             (group_id, current_timestamp),
             fetch='one'
         )
@@ -1318,12 +1324,12 @@ class GroupsCog(commands.Cog):
         # Create vote session
         expire_timestamp = datetime.now() + timedelta(minutes=10)
         self.db.execute_query(
-            "INSERT INTO group_vote_sessions (group_id, vote_type, vote_data, channel_id, expires_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO group_vote_sessions (group_id, vote_type, vote_data, channel_id, expires_at) VALUES (%s, %s, %s, %s, %s)",
             (group_id, 'job', json.dumps(job_data), channel_id, expire_timestamp)
         )
         
         session_id = self.db.execute_query(
-            "SELECT session_id FROM group_vote_sessions WHERE group_id = ? ORDER BY session_id DESC LIMIT 1",
+            "SELECT session_id FROM group_vote_sessions WHERE group_id = %s ORDER BY session_id DESC LIMIT 1",
             (group_id,),
             fetch='one'
         )[0]

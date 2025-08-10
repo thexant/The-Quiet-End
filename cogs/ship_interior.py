@@ -33,7 +33,7 @@ class ShipInteriorCog(commands.Cog):
             try:
                 # Remove expired invitations
                 deleted = self.db.execute_query(
-                    "DELETE FROM ship_invitations WHERE expires_at <= datetime('now')",
+                    "DELETE FROM ship_invitations WHERE expires_at <= NOW()",
                     fetch='rowcount'
                 )
                 
@@ -58,7 +58,7 @@ class ShipInteriorCog(commands.Cog):
         
         # Check if already in a ship
         current_ship = self.db.execute_query(
-            "SELECT current_ship_id FROM characters WHERE user_id = ?",
+            "SELECT current_ship_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -69,7 +69,7 @@ class ShipInteriorCog(commands.Cog):
         
         # Get character location and status
         char_info = self.db.execute_query(
-            "SELECT current_location, location_status, active_ship_id FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, active_ship_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -87,7 +87,7 @@ class ShipInteriorCog(commands.Cog):
         # Get ship info
         ship_info = self.db.execute_query(
             '''SELECT ship_id, name, ship_type, interior_description, channel_id
-               FROM ships WHERE ship_id = ?''',
+               FROM ships WHERE ship_id = %s''',
             (active_ship_id,),
             fetch='one'
         )
@@ -109,7 +109,7 @@ class ShipInteriorCog(commands.Cog):
         if ship_channel:
             # Send area movement embed to location channel BEFORE removing access
             char_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )[0]
@@ -126,13 +126,13 @@ class ShipInteriorCog(commands.Cog):
                     color=0x7289DA
                 )
                 try:
-                    await location_channel.send(embed=embed)
+                    await self.bot.send_with_cross_guild_broadcast(location_channel, embed=embed)
                 except Exception as e:
                     print(f"❌ Failed to send ship entry embed: {e}")
             
             # Update character to be inside ship
             self.db.execute_query(
-                "UPDATE characters SET current_ship_id = ? WHERE user_id = ?",
+                "UPDATE characters SET current_ship_id = %s WHERE user_id = %s",
                 (active_ship_id, interaction.user.id)
             )
             
@@ -161,7 +161,7 @@ class ShipInteriorCog(commands.Cog):
             '''SELECT c.current_ship_id, s.name, c.current_location
                FROM characters c
                LEFT JOIN ships s ON c.current_ship_id = s.ship_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -174,14 +174,14 @@ class ShipInteriorCog(commands.Cog):
         
         # Check if anyone else is in the ship
         others_in_ship = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE current_ship_id = ? AND user_id != ?",
+            "SELECT user_id FROM characters WHERE current_ship_id = %s AND user_id != %s",
             (ship_id, interaction.user.id),
             fetch='all'
         )
         
         # Update character location
         self.db.execute_query(
-            "UPDATE characters SET current_ship_id = NULL WHERE user_id = ?",
+            "UPDATE characters SET current_ship_id = NULL WHERE user_id = %s",
             (interaction.user.id,)
         )
         
@@ -195,7 +195,7 @@ class ShipInteriorCog(commands.Cog):
         
         # Send area movement embed to location channel
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -212,13 +212,13 @@ class ShipInteriorCog(commands.Cog):
                 color=0xFF6600
             )
             try:
-                await location_channel.send(embed=embed)
+                await self.bot.send_with_cross_guild_broadcast(location_channel, embed=embed)
             except Exception as e:
                 print(f"❌ Failed to send ship exit embed: {e}")
         
         # Check if this was the owner and others are inside
         owner_id = self.db.execute_query(
-            "SELECT owner_id FROM ships WHERE ship_id = ?",
+            "SELECT owner_id FROM ships WHERE ship_id = %s",
             (ship_id,),
             fetch='one'
         )[0]
@@ -231,7 +231,7 @@ class ShipInteriorCog(commands.Cog):
                     try:
                         # Send warning with location link
                         location_info = self.db.execute_query(
-                            "SELECT name, channel_id FROM locations WHERE location_id = ?",
+                            "SELECT name, channel_id FROM locations WHERE location_id = %s",
                             (location_id,),
                             fetch='one'
                         )
@@ -251,7 +251,7 @@ class ShipInteriorCog(commands.Cog):
             
             # Move all remaining users out
             remaining_users = self.db.execute_query(
-                "SELECT user_id FROM characters WHERE current_ship_id = ? AND user_id != ?",
+                "SELECT user_id FROM characters WHERE current_ship_id = %s AND user_id != %s",
                 (ship_id, interaction.user.id),
                 fetch='all'
             )
@@ -261,7 +261,7 @@ class ShipInteriorCog(commands.Cog):
                 if member:
                     # Update their location
                     self.db.execute_query(
-                        "UPDATE characters SET current_ship_id = NULL WHERE user_id = ?",
+                        "UPDATE characters SET current_ship_id = NULL WHERE user_id = %s",
                         (other_user_id,)
                     )
                     
@@ -273,7 +273,7 @@ class ShipInteriorCog(commands.Cog):
                     
                     # Send area movement embed for forced exit
                     other_char_name = self.db.execute_query(
-                        "SELECT name FROM characters WHERE user_id = ?",
+                        "SELECT name FROM characters WHERE user_id = %s",
                         (other_user_id,),
                         fetch='one'
                     )[0]
@@ -290,13 +290,13 @@ class ShipInteriorCog(commands.Cog):
                             color=0xFF6600
                         )
                         try:
-                            await location_channel.send(embed=embed)
+                            await self.bot.send_with_cross_guild_broadcast(location_channel, embed=embed)
                         except Exception as e:
                             print(f"❌ Failed to send forced exit embed: {e}")
         
         # Clean up ship channel if empty
         remaining_users = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE current_ship_id = ?",
+            "SELECT COUNT(*) FROM characters WHERE current_ship_id = %s",
             (ship_id,),
             fetch='one'
         )[0]
@@ -304,7 +304,7 @@ class ShipInteriorCog(commands.Cog):
         if remaining_users == 0:
             # Get ship channel info and clean up
             ship_channel = self.db.execute_query(
-                "SELECT channel_id FROM ships WHERE ship_id = ?",
+                "SELECT channel_id FROM ships WHERE ship_id = %s",
                 (ship_id,),
                 fetch='one'
             )
@@ -315,7 +315,7 @@ class ShipInteriorCog(commands.Cog):
                     try:
                         await ship_channel_obj.delete(reason="Ship interior cleanup - no users aboard")
                         self.db.execute_query(
-                            "UPDATE ships SET channel_id = NULL WHERE ship_id = ?",
+                            "UPDATE ships SET channel_id = NULL WHERE ship_id = %s",
                             (ship_id,)
                         )
                     except:
@@ -335,7 +335,7 @@ class ShipInteriorCog(commands.Cog):
             '''SELECT s.ship_id, s.name, c.current_location
                FROM characters c
                JOIN ships s ON c.current_ship_id = s.ship_id
-               WHERE c.user_id = ? AND s.owner_id = ?''',
+               WHERE c.user_id = %s AND s.owner_id = %s''',
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -348,7 +348,7 @@ class ShipInteriorCog(commands.Cog):
         
         # Check if target player is at the same location and docked
         target_info = self.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status FROM characters WHERE user_id = %s",
             (player.id,),
             fetch='one'
         )
@@ -362,7 +362,7 @@ class ShipInteriorCog(commands.Cog):
         
         self.db.execute_query(
             '''INSERT INTO ship_invitations (ship_id, inviter_id, invitee_id, location_id, expires_at)
-               VALUES (?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s)''',
             (ship_id, interaction.user.id, player.id, location_id, expires_at)
         )
         
@@ -386,7 +386,7 @@ class ShipInteriorCog(commands.Cog):
             '''SELECT i.invitation_id, i.ship_id, i.inviter_id, s.name, s.interior_description
                FROM ship_invitations i
                JOIN ships s ON i.ship_id = s.ship_id
-               WHERE i.invitee_id = ? AND i.expires_at > datetime('now')
+               WHERE i.invitee_id = %s AND i.expires_at > NOW()
                ORDER BY i.created_at DESC
                LIMIT 1''',
             (interaction.user.id,),
@@ -401,7 +401,7 @@ class ShipInteriorCog(commands.Cog):
         
         # Check if already in a ship
         current_ship = self.db.execute_query(
-            "SELECT current_ship_id FROM characters WHERE user_id = ?",
+            "SELECT current_ship_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -412,7 +412,7 @@ class ShipInteriorCog(commands.Cog):
         
         # Get ship channel
         ship_channel_id = self.db.execute_query(
-            "SELECT channel_id FROM ships WHERE ship_id = ?",
+            "SELECT channel_id FROM ships WHERE ship_id = %s",
             (ship_id,),
             fetch='one'
         )
@@ -432,14 +432,14 @@ class ShipInteriorCog(commands.Cog):
         
         # Send area movement embed to location channel BEFORE updating character location
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
         # Get current location to send embed
         current_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -457,13 +457,13 @@ class ShipInteriorCog(commands.Cog):
                     color=0x7289DA
                 )
                 try:
-                    await location_channel.send(embed=embed)
+                    await self.bot.send_with_cross_guild_broadcast(location_channel, embed=embed)
                 except Exception as e:
                     print(f"❌ Failed to send ship boarding embed: {e}")
         
         # Update character location
         self.db.execute_query(
-            "UPDATE characters SET current_ship_id = ? WHERE user_id = ?",
+            "UPDATE characters SET current_ship_id = %s WHERE user_id = %s",
             (ship_id, interaction.user.id)
         )
         
@@ -475,7 +475,7 @@ class ShipInteriorCog(commands.Cog):
         if success:
             # Delete the invitation
             self.db.execute_query(
-                "DELETE FROM ship_invitations WHERE invitation_id = ?",
+                "DELETE FROM ship_invitations WHERE invitation_id = %s",
                 (invitation_id,)
             )
             
@@ -486,7 +486,7 @@ class ShipInteriorCog(commands.Cog):
             
             # Send area movement embed to location channel
             char_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )[0]
@@ -503,7 +503,7 @@ class ShipInteriorCog(commands.Cog):
                     color=0x7289DA
                 )
                 try:
-                    await location_channel.send(embed=embed)
+                    await self.bot.send_with_cross_guild_broadcast(location_channel, embed=embed)
                 except Exception as e:
                     print(f"❌ Failed to send invitation acceptance embed: {e}")
             

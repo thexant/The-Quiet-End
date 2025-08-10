@@ -5,6 +5,7 @@ from discord import app_commands
 import random
 from datetime import datetime, timedelta
 from utils.npc_data import generate_npc_name, get_occupation
+from utils.datetime_utils import safe_datetime_parse
 
 class LocationLogsCog(commands.Cog):
     def __init__(self, bot):
@@ -20,7 +21,7 @@ class LocationLogsCog(commands.Cog):
             '''SELECT c.current_location, l.name, l.location_type, l.is_derelict
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -40,7 +41,7 @@ class LocationLogsCog(commands.Cog):
             return
         # Check if this location has a log (25% chance if none exists)
         has_log = self.db.execute_query(
-            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )[0] > 0
@@ -62,7 +63,7 @@ class LocationLogsCog(commands.Cog):
         entries = self.db.execute_query(
             '''SELECT author_name, message, posted_at, is_generated
                FROM location_logs
-               WHERE location_id = ?
+               WHERE location_id = %s
                ORDER BY posted_at DESC
                LIMIT 10''',
             (location_id,),
@@ -79,7 +80,7 @@ class LocationLogsCog(commands.Cog):
             log_text = []
             for author, message, posted_at, is_generated in entries:
                 # Format timestamp
-                posted_time = datetime.fromisoformat(posted_at)
+                posted_time = safe_datetime_parse(posted_at)
                 time_str = posted_time.strftime("%Y-%m-%d")
                 
                 # Different formatting for generated vs player entries
@@ -134,7 +135,7 @@ class LocationLogsCog(commands.Cog):
             '''SELECT c.name, c.current_location, l.name as location_name
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -147,7 +148,7 @@ class LocationLogsCog(commands.Cog):
         
         # Check if location has a log
         has_log = self.db.execute_query(
-            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )[0] > 0
@@ -162,7 +163,7 @@ class LocationLogsCog(commands.Cog):
         # Add entry
         self.db.execute_query(
             '''INSERT INTO location_logs (location_id, author_id, author_name, message)
-               VALUES (?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s)''',
             (location_id, interaction.user.id, char_name, message)
         )
         
@@ -702,8 +703,8 @@ class LocationLogsCog(commands.Cog):
             self.db.execute_query(
                 '''INSERT INTO location_logs 
                    (location_id, author_id, author_name, message, posted_at, is_generated)
-                   VALUES (?, ?, ?, ?, ?, 1)''',
-                (location_id, 0, name_format, message, entry_time.isoformat())
+                   VALUES (%s, %s, %s, %s, %s, %s)''',
+                (location_id, 0, name_format, message, entry_time, True)
             )
 
 async def setup(bot):

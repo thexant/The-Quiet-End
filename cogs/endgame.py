@@ -7,6 +7,7 @@ import random
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import json
+from utils.datetime_utils import safe_datetime_parse
 
 class EndgameCog(commands.Cog):
     def __init__(self, bot):
@@ -126,8 +127,8 @@ class EndgameCog(commands.Cog):
         self.db.execute_query(
             """INSERT INTO endgame_config 
                (start_time, length_minutes, created_at, is_active) 
-               VALUES (?, ?, ?, 1)""",
-            (start_time.isoformat(), length_minutes, datetime.now().isoformat())
+               VALUES (%s, %s, %s, %s)""",
+            (start_time, length_minutes, datetime.now(), True)
         )
         
         # Schedule endgame
@@ -186,7 +187,7 @@ class EndgameCog(commands.Cog):
             return
         
         config_id, start_time_str, length_minutes, created_at, is_active = config
-        start_time = datetime.fromisoformat(start_time_str)
+        start_time = safe_datetime_parse(start_time_str)
         current_time = datetime.now()
         end_time = start_time + timedelta(minutes=length_minutes)
         
@@ -358,7 +359,7 @@ class EndgameCog(commands.Cog):
         corridor_id, corridor_name, origin_id, dest_id = corridors[0]
         
         # Delete the corridor
-        self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+        self.db.execute_query("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,))
         
         # Kill NPCs traveling through this corridor
         npc_cog = self.bot.get_cog('NPCCog')
@@ -366,8 +367,8 @@ class EndgameCog(commands.Cog):
             await npc_cog.handle_corridor_collapse(corridor_id)
         
         # Get location names for news
-        origin_name = self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (origin_id,), fetch='one')
-        dest_name = self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (dest_id,), fetch='one')
+        origin_name = self.db.execute_query("SELECT name FROM locations WHERE location_id = %s", (origin_id,), fetch='one')
+        dest_name = self.db.execute_query("SELECT name FROM locations WHERE location_id = %s", (dest_id,), fetch='one')
         
         origin_name = origin_name[0] if origin_name else "Unknown"
         dest_name = dest_name[0] if dest_name else "Unknown"
@@ -423,7 +424,7 @@ class EndgameCog(commands.Cog):
         
         # Check who's still in the location and kill them
         remaining_players = self.db.execute_query(
-            "SELECT user_id, name FROM characters WHERE current_location = ?",
+            "SELECT user_id, name FROM characters WHERE current_location = %s",
             (location_id,),
             fetch='all'
         )
@@ -434,39 +435,39 @@ class EndgameCog(commands.Cog):
         
         # Kill any dynamic NPCs at this location
         dynamic_npcs = self.db.execute_query(
-            "SELECT npc_id, name, callsign FROM dynamic_npcs WHERE current_location = ? AND is_alive = 1",
+            "SELECT npc_id, name, callsign FROM dynamic_npcs WHERE current_location = %s AND is_alive = true",
             (location_id,),
             fetch='all'
         )
         
         for npc_id, npc_name, callsign in dynamic_npcs:
-            self.db.execute_query("UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = ?", (npc_id,))
+            self.db.execute_query("UPDATE dynamic_npcs SET is_alive = false WHERE npc_id = %s", (npc_id,))
             print(f"💀 NPC {npc_name} ({callsign}) died in location collapse")
         
         # Delete all related data with error handling
         try:
-            self.db.execute_query("DELETE FROM corridors WHERE origin_location = ? OR destination_location = ?", 
+            self.db.execute_query("DELETE FROM corridors WHERE origin_location = %s OR destination_location = %s", 
                                  (location_id, location_id))
         except Exception as e:
             print(f"⚠️ Warning deleting corridors for location {location_id}: {e}")
 
         try:
-            self.db.execute_query("DELETE FROM static_npcs WHERE location_id = ?", (location_id,))
+            self.db.execute_query("DELETE FROM static_npcs WHERE location_id = %s", (location_id,))
         except Exception as e:
             print(f"⚠️ Warning deleting static NPCs for location {location_id}: {e}")
 
         try:
-            self.db.execute_query("DELETE FROM shop_items WHERE location_id = ?", (location_id,))
+            self.db.execute_query("DELETE FROM shop_items WHERE location_id = %s", (location_id,))
         except Exception as e:
             print(f"⚠️ Warning deleting shop items for location {location_id}: {e}")
 
         try:
-            self.db.execute_query("DELETE FROM jobs WHERE location_id = ?", (location_id,))
+            self.db.execute_query("DELETE FROM jobs WHERE location_id = %s", (location_id,))
         except Exception as e:
             print(f"⚠️ Warning deleting jobs for location {location_id}: {e}")
 
         try:
-            self.db.execute_query("DELETE FROM locations WHERE location_id = ?", (location_id,))
+            self.db.execute_query("DELETE FROM locations WHERE location_id = %s", (location_id,))
         except Exception as e:
             print(f"⚠️ Warning deleting location {location_id}: {e}")
         
@@ -499,7 +500,7 @@ class EndgameCog(commands.Cog):
         """Issue evacuation warning to all players in a location"""
         # Get all players in this location
         players = self.db.execute_query(
-            "SELECT user_id, name FROM characters WHERE current_location = ?",
+            "SELECT user_id, name FROM characters WHERE current_location = %s",
             (location_id,),
             fetch='all'
         )
@@ -510,10 +511,13 @@ class EndgameCog(commands.Cog):
         # Store evacuation warning
         evacuation_time = datetime.now() + timedelta(minutes=5)
         self.db.execute_query(
-            """INSERT OR REPLACE INTO endgame_evacuations 
+            """INSERT INTO endgame_evacuations 
                (location_id, evacuation_deadline, warned_at) 
-               VALUES (?, ?, ?)""",
-            (location_id, evacuation_time.isoformat(), datetime.now().isoformat())
+               VALUES (%s, %s, %s)
+               ON CONFLICT (location_id) DO UPDATE SET
+               evacuation_deadline = EXCLUDED.evacuation_deadline,
+               warned_at = EXCLUDED.warned_at""",
+            (location_id, evacuation_time, datetime.now())
         )
         
         # Send warning to galactic news
@@ -527,27 +531,27 @@ class EndgameCog(commands.Cog):
                 location_id
             )
         
-        # Send direct warnings to players in the location channel
-        guild = self.bot.guilds[0]
-        location_info = self.db.execute_query("SELECT channel_id FROM locations WHERE location_id = ?", (location_id,), fetch='one')
+        # Send direct warnings to players in the location channels via cross-guild broadcast
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
         
-        if location_info and location_info[0]:
-            channel = guild.get_channel(location_info[0])
-            if channel:
-                embed = discord.Embed(
-                    title="🚨 IMMEDIATE EVACUATION REQUIRED",
-                    description=f"**{location_name.upper()}** - CRITICAL SYSTEM FAILURE IMMINENT",
-                    color=0xFF0000
-                )
-                embed.add_field(name="⏰ Time to Evacuation", value="**5 MINUTES**", inline=True)
-                embed.add_field(name="☠️ Threat Level", value="**FATAL**", inline=True)
-                embed.add_field(name="🚀 Action Required", value="Use `/tqe` and travel NOW", inline=False)
-                embed.set_footer(text="Failure to evacuate will result in character death")
-                
+        if cross_guild_channels:
+            embed = discord.Embed(
+                title="🚨 IMMEDIATE EVACUATION REQUIRED",
+                description=f"**{location_name.upper()}** - CRITICAL SYSTEM FAILURE IMMINENT",
+                color=0xFF0000
+            )
+            embed.add_field(name="⏰ Time to Evacuation", value="**5 MINUTES**", inline=True)
+            embed.add_field(name="☠️ Threat Level", value="**FATAL**", inline=True)
+            embed.add_field(name="🚀 Action Required", value="Use `/tqe` and travel NOW", inline=False)
+            embed.set_footer(text="Failure to evacuate will result in character death")
+            
+            for guild_channel, channel in cross_guild_channels:
                 try:
                     await channel.send("@everyone", embed=embed)
                 except:
-                    pass
+                    pass  # Skip if can't send to this guild
         
         print(f"🚨 Issued evacuation warning for {location_name} ({len(players)} players)")
     
@@ -555,7 +559,7 @@ class EndgameCog(commands.Cog):
         """Kill a character due to endgame event"""
         # Mark character as dead
         self.db.execute_query(
-            "UPDATE characters SET hp = 0, status = 'dead', current_location = NULL WHERE user_id = ?",
+            "UPDATE characters SET hp = 0, status = 'dead', current_location = NULL WHERE user_id = %s",
             (user_id,)
         )
         
@@ -620,7 +624,7 @@ class EndgameCog(commands.Cog):
             
             # Kill anyone still there
             remaining_players = self.db.execute_query(
-                "SELECT user_id, name FROM characters WHERE current_location = ?",
+                "SELECT user_id, name FROM characters WHERE current_location = %s",
                 (location_id,),
                 fetch='all'
             )
@@ -629,7 +633,7 @@ class EndgameCog(commands.Cog):
                 await self._kill_character(user_id, char_name, "final cosmic collapse")
             
             # Delete the final location
-            self.db.execute_query("DELETE FROM locations WHERE location_id = ?", (location_id,))
+            self.db.execute_query("DELETE FROM locations WHERE location_id = %s", (location_id,))
             
             # Delete the channel
             if channel_id:
@@ -646,7 +650,7 @@ class EndgameCog(commands.Cog):
         if news_cog:
             # Get galactic news channel
             config = self.db.execute_query(
-                "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = ?",
+                "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = %s",
                 (self.bot.guilds[0].id,),
                 fetch='one'
             )
@@ -666,7 +670,7 @@ class EndgameCog(commands.Cog):
                     )
                     embed.add_field(
                         name="🎮 Play Again",
-                        value="Ready for a new beginning?\nUse `/galaxy generate` to create a new universe.",
+                        value="Ready for a new beginning%s\nUse `/galaxy generate` to create a new universe.",
                         inline=True
                     )
                     embed.set_footer(text="In the end, we are all stardust...")

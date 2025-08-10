@@ -9,6 +9,7 @@ import math
 import asyncio
 from utils.item_effects import ItemEffectChecker
 from utils.location_effects import LocationEffectsManager
+from utils.datetime_utils import safe_datetime_parse
 
 class EconomyCog(commands.Cog):
     def __init__(self, bot):
@@ -88,7 +89,7 @@ class EconomyCog(commands.Cog):
                       j.description
                     FROM job_tracking jt
                     JOIN jobs j ON jt.job_id = j.job_id
-                    WHERE j.is_taken = 1
+                    WHERE j.is_taken = true
                     ''',
                     fetch='all'
                 )
@@ -107,7 +108,7 @@ class EconomyCog(commands.Cog):
                         
                         # Check if user is still at the required location
                         current_location_result = self.db.execute_query(
-                            "SELECT current_location FROM characters WHERE user_id = ?",
+                            "SELECT current_location FROM characters WHERE user_id = %s",
                             (user_id,),
                             fetch='one'
                         )
@@ -126,9 +127,9 @@ class EconomyCog(commands.Cog):
                             # Update the tracking record
                             self.db.execute_query(
                                 '''UPDATE job_tracking
-                                   SET time_at_location = ?, 
-                                       last_location_check = datetime('now')
-                                   WHERE tracking_id = ?''',
+                                   SET time_at_location = %s, 
+                                       last_location_check = NOW()
+                                   WHERE tracking_id = %s''',
                                 (new_time_at_location, tracking_id)
                             )
                             
@@ -158,7 +159,7 @@ class EconomyCog(commands.Cog):
                         else:
                             # User not at location, just update timestamp
                             self.db.execute_query(
-                                "UPDATE job_tracking SET last_location_check = datetime('now') WHERE tracking_id = ?",
+                                "UPDATE job_tracking SET last_location_check = NOW() WHERE tracking_id = %s",
                                 (tracking_id,)
                             )
                             
@@ -192,7 +193,7 @@ class EconomyCog(commands.Cog):
                 FROM locations l
                 LEFT JOIN shop_refresh sr ON l.location_id = sr.location_id
                 WHERE sr.last_refreshed IS NULL 
-                   OR sr.last_refreshed < ?
+                   OR sr.last_refreshed < %s
                 ORDER BY 
                     CASE WHEN sr.last_refreshed IS NULL THEN 0 ELSE 1 END,
                     sr.last_refreshed ASC
@@ -210,7 +211,7 @@ class EconomyCog(commands.Cog):
                 try:
                     # Clear existing auto-generated shop items for this location (preserve player-sold items)
                     self.db.execute_query(
-                        'DELETE FROM shop_items WHERE location_id = ? AND sold_by_player = FALSE',
+                        'DELETE FROM shop_items WHERE location_id = %s AND sold_by_player = FALSE',
                         (location_id,)
                     )
                     
@@ -219,8 +220,9 @@ class EconomyCog(commands.Cog):
                     
                     # Update refresh tracking
                     self.db.execute_query(
-                        '''INSERT OR REPLACE INTO shop_refresh (location_id, last_refreshed) 
-                           VALUES (?, CURRENT_TIMESTAMP)''',
+                        '''INSERT INTO shop_refresh (location_id, last_refreshed) 
+                           VALUES (%s, CURRENT_TIMESTAMP)
+                           ON CONFLICT (location_id) DO UPDATE SET last_refreshed = EXCLUDED.last_refreshed''',
                         (location_id,)
                     )
                     
@@ -252,7 +254,7 @@ class EconomyCog(commands.Cog):
         ownership = self.db.execute_query(
             '''SELECT lo.owner_id, lo.group_id
                FROM location_ownership lo
-               WHERE lo.location_id = ?''',
+               WHERE lo.location_id = %s''',
             (location_id,),
             fetch='one'
         )
@@ -269,7 +271,7 @@ class EconomyCog(commands.Cog):
         # Check if user is in owner's group
         if owner_group_id:
             user_group = self.db.execute_query(
-                "SELECT group_id FROM characters WHERE user_id = ?",
+                "SELECT group_id FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -279,7 +281,7 @@ class EconomyCog(commands.Cog):
         # Check access control settings
         access_control = self.db.execute_query(
             '''SELECT access_type, fee_amount FROM location_access_control
-               WHERE location_id = ? AND (user_id = ? OR user_id IS NULL)
+               WHERE location_id = %s AND (user_id = %s OR user_id IS NULL)
                ORDER BY user_id IS NULL ASC''',  # Specific user rules first
             (location_id, user_id),
             fetch='one'
@@ -386,7 +388,7 @@ class EconomyCog(commands.Cog):
             
             self.db.execute_query(
                 '''INSERT INTO shop_items (location_id, item_name, item_type, price, stock, description, metadata, sold_by_player)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
                 (location_id, item_name, item_def["type"], final_price, final_stock, 
                  item_def["description"], metadata, False)
             )
@@ -394,7 +396,7 @@ class EconomyCog(commands.Cog):
     @shop_group.command(name="list", description="View items available for purchase")
     async def shop_list(self, interaction: discord.Interaction):
         char_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -405,7 +407,7 @@ class EconomyCog(commands.Cog):
         
         # Check if location has shops
         location_info = self.db.execute_query(
-            "SELECT has_shops, name, wealth_level, location_type FROM locations WHERE location_id = ?",
+            "SELECT has_shops, name, wealth_level, location_type FROM locations WHERE location_id = %s",
             (char_location[0],),
             fetch='one'
         )
@@ -418,7 +420,7 @@ class EconomyCog(commands.Cog):
         items = self.db.execute_query(
             '''SELECT item_name, item_type, price, stock, description
                FROM shop_items 
-               WHERE location_id = ? AND (stock > 0 OR stock = -1)
+               WHERE location_id = %s AND (stock > 0 OR stock = -1)
                ORDER BY item_type, price''',
             (char_location[0],),
             fetch='all'
@@ -430,7 +432,7 @@ class EconomyCog(commands.Cog):
             items = self.db.execute_query(
                 '''SELECT item_name, item_type, price, stock, description
                    FROM shop_items 
-                   WHERE location_id = ? AND (stock > 0 OR stock = -1)
+                   WHERE location_id = %s AND (stock > 0 OR stock = -1)
                    ORDER BY item_type, price''',
                 (char_location[0],),
                 fetch='all'
@@ -498,7 +500,7 @@ class EconomyCog(commands.Cog):
             # Check for economic events
             economic_status = self.db.execute_query(
                 '''SELECT item_category, item_name, status FROM location_economy 
-                   WHERE location_id = ? AND expires_at > datetime('now')''',
+                   WHERE location_id = %s AND expires_at > NOW()''',
                 (char_location[0],),
                 fetch='all'
             )
@@ -541,7 +543,7 @@ class EconomyCog(commands.Cog):
     @shop_group.command(name="depot", description="Access Federal Supply Depot interactive interface")
     async def federal_depot_interface(self, interaction: discord.Interaction):
         char_info = self.db.execute_query(
-            "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT current_location, is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -554,7 +556,7 @@ class EconomyCog(commands.Cog):
 
         # Check if the location has federal supplies
         location_info = self.db.execute_query(
-            "SELECT has_federal_supplies, name FROM locations WHERE location_id = ?",
+            "SELECT has_federal_supplies, name FROM locations WHERE location_id = %s",
             (current_location_id,),
             fetch='one'
         )
@@ -565,7 +567,7 @@ class EconomyCog(commands.Cog):
 
         # Get the character's reputation at this location
         reputation_data = self.db.execute_query(
-            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            "SELECT reputation FROM character_reputation WHERE user_id = %s AND location_id = %s",
             (interaction.user.id, current_location_id),
             fetch='one'
         )
@@ -575,7 +577,7 @@ class EconomyCog(commands.Cog):
         items = self.db.execute_query(
             '''SELECT item_name, item_type, price, stock, description, clearance_level
                FROM federal_supply_items 
-               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= clearance_level
+               WHERE location_id = %s AND (stock > 0 OR stock = -1) AND %s >= clearance_level
                ORDER BY clearance_level ASC, price ASC''',
             (current_location_id, current_reputation),
             fetch='all'
@@ -628,7 +630,7 @@ class EconomyCog(commands.Cog):
     @shop_group.command(name="black_market", description="Access Black Market interactive interface")
     async def black_market_interface(self, interaction: discord.Interaction):
         char_info = self.db.execute_query(
-            "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT current_location, is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -641,7 +643,7 @@ class EconomyCog(commands.Cog):
 
         # Check if the location has black market
         location_info = self.db.execute_query(
-            "SELECT has_black_market, name FROM locations WHERE location_id = ?",
+            "SELECT has_black_market, name FROM locations WHERE location_id = %s",
             (current_location_id,),
             fetch='one'
         )
@@ -656,7 +658,7 @@ class EconomyCog(commands.Cog):
             '''SELECT bmi.item_name, bmi.item_type, bmi.price, bmi.stock, bmi.description
                FROM black_market_items bmi
                JOIN black_markets bm ON bmi.market_id = bm.market_id
-               WHERE bm.location_id = ? AND (bmi.stock > 0 OR bmi.stock = -1)
+               WHERE bm.location_id = %s AND (bmi.stock > 0 OR bmi.stock = -1)
                ORDER BY bmi.item_type, bmi.price''',
             (current_location_id,),
             fetch='all'
@@ -719,7 +721,7 @@ class EconomyCog(commands.Cog):
             return
         
         char_info = self.db.execute_query(
-            "SELECT current_location, money FROM characters WHERE user_id = ?",
+            "SELECT current_location, money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -734,7 +736,7 @@ class EconomyCog(commands.Cog):
         item = self.db.execute_query(
             '''SELECT item_id, item_name, price, stock, description, item_type, metadata
                FROM shop_items 
-               WHERE location_id = ? AND LOWER(item_name) = LOWER(?)''',
+               WHERE location_id = %s AND LOWER(item_name) = LOWER(%s)''',
             (current_location, item_name),
             fetch='one'
         )
@@ -762,7 +764,7 @@ class EconomyCog(commands.Cog):
             '''SELECT fst.tax_percentage, f.faction_id, f.name
                FROM faction_sales_tax fst
                JOIN factions f ON fst.faction_id = f.faction_id
-               WHERE fst.location_id = ?''',
+               WHERE fst.location_id = %s''',
             (current_location,),
             fetch='one'
         )
@@ -776,7 +778,7 @@ class EconomyCog(commands.Cog):
         # When processing purchase (after deducting money), ADD:
         if tax_amount > 0:
             self.db.execute_query(
-                "UPDATE factions SET bank_balance = bank_balance + ? WHERE faction_id = ?",
+                "UPDATE factions SET bank_balance = bank_balance + %s WHERE faction_id = %s",
                 (tax_amount, tax_data[1])
             )
 
@@ -790,33 +792,33 @@ class EconomyCog(commands.Cog):
         
         # Process purchase
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (total_cost, interaction.user.id)
         )
         
         # Update shop stock
         if stock != -1:  # Not unlimited
             self.db.execute_query(
-                "UPDATE shop_items SET stock = stock - ? WHERE item_id = ?",
+                "UPDATE shop_items SET stock = stock - %s WHERE item_id = %s",
                 (quantity, item_id)
             )
         
         # Add to inventory
         existing_item = self.db.execute_query(
-            "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+            "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
             (interaction.user.id, actual_name),
             fetch='one'
         )
         
         if existing_item:
             self.db.execute_query(
-                "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity + %s WHERE item_id = %s",
                 (quantity, existing_item[0])
             )
         else:
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, actual_name, item_type, quantity, description, price, metadata)
             )
         embed = discord.Embed(
@@ -864,7 +866,7 @@ class EconomyCog(commands.Cog):
             return
         
         char_info = self.db.execute_query(
-            "SELECT current_location, money FROM characters WHERE user_id = ?",
+            "SELECT current_location, money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -877,7 +879,7 @@ class EconomyCog(commands.Cog):
         
         # Check if location has shops
         has_shops = self.db.execute_query(
-            "SELECT has_shops, wealth_level FROM locations WHERE location_id = ?",
+            "SELECT has_shops, wealth_level FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )
@@ -890,7 +892,7 @@ class EconomyCog(commands.Cog):
         inventory_item = self.db.execute_query(
             '''SELECT item_id, item_name, quantity, value, item_type, description
                FROM inventory 
-               WHERE owner_id = ? AND LOWER(item_name) LIKE LOWER(?) AND quantity >= ?''',
+               WHERE owner_id = %s AND LOWER(item_name) LIKE LOWER(%s) AND quantity >= %s''',
             (interaction.user.id, f"%{item_name}%", quantity),
             fetch='one'
         )
@@ -927,8 +929,8 @@ class EconomyCog(commands.Cog):
                       CASE WHEN lo.faction_id = fm.faction_id THEN 1 ELSE 0 END as is_faction_location
                FROM faction_members fm
                JOIN factions f ON fm.faction_id = f.faction_id
-               LEFT JOIN location_ownership lo ON lo.location_id = ?
-               WHERE fm.user_id = ?''',
+               LEFT JOIN location_ownership lo ON lo.location_id = %s
+               WHERE fm.user_id = %s''',
             (current_location, interaction.user.id),
             fetch='one'
         )
@@ -937,7 +939,7 @@ class EconomyCog(commands.Cog):
             # 3% bonus to faction bank for external trade
             trade_bonus = int(total_earnings * 0.03)
             self.db.execute_query(
-                "UPDATE factions SET bank_balance = bank_balance + ? WHERE faction_id = ?",
+                "UPDATE factions SET bank_balance = bank_balance + %s WHERE faction_id = %s",
                 (trade_bonus, seller_faction[0])
             )
             embed.add_field(
@@ -954,7 +956,7 @@ class EconomyCog(commands.Cog):
         
         # Check if item is equipped and unequip it before selling
         equipped_check = self.db.execute_query(
-            "SELECT equipment_id FROM character_equipment WHERE item_id = ? AND user_id = ?",
+            "SELECT equipment_id FROM character_equipment WHERE item_id = %s AND user_id = %s",
             (inv_id, interaction.user.id),
             fetch='all'
         )
@@ -962,7 +964,7 @@ class EconomyCog(commands.Cog):
         if equipped_check:
             # Item is equipped, remove from equipment slots
             self.db.execute_query(
-                "DELETE FROM character_equipment WHERE item_id = ? AND user_id = ?",
+                "DELETE FROM character_equipment WHERE item_id = %s AND user_id = %s",
                 (inv_id, interaction.user.id)
             )
         
@@ -970,19 +972,19 @@ class EconomyCog(commands.Cog):
         if current_qty == quantity:
             # Remove item completely
             self.db.execute_query(
-                "DELETE FROM inventory WHERE item_id = ?",
+                "DELETE FROM inventory WHERE item_id = %s",
                 (inv_id,)
             )
         else:
             # Reduce quantity
             self.db.execute_query(
-                "UPDATE inventory SET quantity = quantity - ? WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity - %s WHERE item_id = %s",
                 (quantity, inv_id)
             )
         
         # Add money to character
         self.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (total_earnings, interaction.user.id)
         )
                 # ─── Put sold items into the shop at a 20% markup ───
@@ -991,7 +993,7 @@ class EconomyCog(commands.Cog):
 
         # Check if this item already exists in the local shop
         existing = self.db.execute_query(
-            "SELECT item_id, stock, price FROM shop_items WHERE location_id = ? AND LOWER(item_name) = LOWER(?)",
+            "SELECT item_id, stock, price FROM shop_items WHERE location_id = %s AND LOWER(item_name) = LOWER(%s)",
             (current_location, actual_name),
             fetch='one'
         )
@@ -1003,7 +1005,7 @@ class EconomyCog(commands.Cog):
             # never lower the price once set
             new_price = max(shop_price, markup_price)
             self.db.execute_query(
-                "UPDATE shop_items SET stock = ?, price = ? WHERE item_id = ?",
+                "UPDATE shop_items SET stock = %s, price = %s WHERE item_id = %s",
                 (new_stock, new_price, shop_id)
             )
         else:
@@ -1013,7 +1015,7 @@ class EconomyCog(commands.Cog):
             self.db.execute_query(
                 '''INSERT INTO shop_items
                    (location_id, item_name, item_type, price, stock, description, metadata, sold_by_player)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
                 (current_location, actual_name, item_type, markup_price, quantity, description, metadata, True)
             )
         embed = discord.Embed(
@@ -1053,7 +1055,7 @@ class EconomyCog(commands.Cog):
         
         # Get admin's current location
         char_info = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1066,7 +1068,7 @@ class EconomyCog(commands.Cog):
         
         # Get location info
         location_data = self.db.execute_query(
-            "SELECT name, wealth_level, location_type FROM locations WHERE location_id = ?",
+            "SELECT name, wealth_level, location_type FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -1084,7 +1086,7 @@ class EconomyCog(commands.Cog):
         # Admin-created items will have metadata containing "admin_created": true
         admin_created_items = self.db.execute_query(
             '''SELECT item_id FROM shop_items 
-               WHERE location_id = ? AND metadata LIKE '%"admin_created": true%' ''',
+               WHERE location_id = %s AND metadata LIKE '%"admin_created": true%' ''',
             (location_id,),
             fetch='all'
         )
@@ -1092,10 +1094,10 @@ class EconomyCog(commands.Cog):
         admin_item_ids = [str(item[0]) for item in admin_created_items] if admin_created_items else []
         
         if admin_item_ids:
-            placeholders = ', '.join(['?' for _ in admin_item_ids])
+            placeholders = ', '.join(['%s' for _ in admin_item_ids])
             self.db.execute_query(
                 f'''DELETE FROM shop_items 
-                   WHERE location_id = ? 
+                   WHERE location_id = %s 
                    AND sold_by_player = FALSE 
                    AND item_id NOT IN ({placeholders})''',
                 [location_id] + admin_item_ids
@@ -1103,7 +1105,7 @@ class EconomyCog(commands.Cog):
         else:
             self.db.execute_query(
                 '''DELETE FROM shop_items 
-                   WHERE location_id = ? 
+                   WHERE location_id = %s 
                    AND sold_by_player = FALSE''',
                 (location_id,)
             )
@@ -1113,15 +1115,16 @@ class EconomyCog(commands.Cog):
         
         # Update refresh tracking
         self.db.execute_query(
-            '''INSERT OR REPLACE INTO shop_refresh (location_id, last_refreshed) 
-               VALUES (?, CURRENT_TIMESTAMP)''',
+            '''INSERT INTO shop_refresh (location_id, last_refreshed) 
+               VALUES (%s, CURRENT_TIMESTAMP)
+               ON CONFLICT (location_id) DO UPDATE SET last_refreshed = EXCLUDED.last_refreshed''',
             (location_id,)
         )
         
         # Get sample of generated items
         new_items = self.db.execute_query(
             '''SELECT item_name, item_type, price, stock FROM shop_items 
-               WHERE location_id = ? AND sold_by_player = FALSE 
+               WHERE location_id = %s AND sold_by_player = FALSE 
                ORDER BY price DESC LIMIT 5''',
             (location_id,),
             fetch='all'
@@ -1152,7 +1155,7 @@ class EconomyCog(commands.Cog):
         )
         
         total_items = self.db.execute_query(
-            "SELECT COUNT(*) FROM shop_items WHERE location_id = ? AND sold_by_player = FALSE",
+            "SELECT COUNT(*) FROM shop_items WHERE location_id = %s AND sold_by_player = FALSE",
             (location_id,),
             fetch='one'
         )[0]
@@ -1189,7 +1192,7 @@ class EconomyCog(commands.Cog):
 
         # Fetch character location
         char_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1199,7 +1202,7 @@ class EconomyCog(commands.Cog):
 
         # Check for jobs at that location
         location_info = self.db.execute_query(
-            "SELECT has_jobs, name, wealth_level FROM locations WHERE location_id = ?",
+            "SELECT has_jobs, name, wealth_level FROM locations WHERE location_id = %s",
             (char_location[0],),
             fetch='one'
         )
@@ -1212,7 +1215,7 @@ class EconomyCog(commands.Cog):
             '''SELECT job_id, title, description, reward_money, required_skill,
                       min_skill_level, danger_level, duration_minutes
                FROM jobs
-               WHERE location_id = ? AND is_taken = 0 AND expires_at > datetime('now')
+               WHERE location_id = %s AND is_taken = false AND expires_at > NOW()
                ORDER BY reward_money DESC''',
             (char_location[0],),
             fetch='all'
@@ -1325,7 +1328,7 @@ class EconomyCog(commands.Cog):
                       j.destination_location_id
                FROM jobs j
                JOIN locations l ON j.location_id = l.location_id
-               WHERE j.taken_by = ? AND j.is_taken = 1''',
+               WHERE j.taken_by = %s AND j.is_taken = true''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -1366,7 +1369,7 @@ class EconomyCog(commands.Cog):
 
         # Get player's current location and docking status
         player_info = self.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1400,7 +1403,7 @@ class EconomyCog(commands.Cog):
             # For NPC jobs without destination, allow completion at any location after elapsed time
             if not destination_location_id:
                 # Check elapsed time for NPC transport jobs
-                taken_time = datetime.fromisoformat(taken_at)
+                taken_time = safe_datetime_parse(taken_at)
                 now = datetime.now()
                 elapsed_minutes = (now - taken_time).total_seconds() / 60
                 
@@ -1422,7 +1425,7 @@ class EconomyCog(commands.Cog):
                 correct_dest_name = "an unknown location"
                 if destination_location_id:
                     dest_name_result = self.db.execute_query(
-                        "SELECT name FROM locations WHERE location_id = ?",
+                        "SELECT name FROM locations WHERE location_id = %s",
                         (destination_location_id,),
                         fetch='one'
                     )
@@ -1431,7 +1434,7 @@ class EconomyCog(commands.Cog):
                 
                 # Get player's current location name for a more accurate error message
                 current_location_name_result = self.db.execute_query(
-                    "SELECT name FROM locations WHERE location_id = ?",
+                    "SELECT name FROM locations WHERE location_id = %s",
                     (current_location,),
                     fetch='one'
                 )
@@ -1450,13 +1453,13 @@ class EconomyCog(commands.Cog):
             # STATIONARY JOB LOGIC - Use existing time-based completion
             
             # Parse the time the job was taken
-            taken_time = datetime.fromisoformat(taken_at)
+            taken_time = safe_datetime_parse(taken_at)
             now = datetime.now()
             elapsed_minutes = (now - taken_time).total_seconds() / 60
 
             # Check location-based tracking for stationary jobs only
             tracking = self.db.execute_query(
-                "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
+                "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = %s AND user_id = %s",
                 (job_id, interaction.user.id),
                 fetch='one'
             )
@@ -1499,7 +1502,7 @@ class EconomyCog(commands.Cog):
 
             # Get character skills
             char_skills = self.db.execute_query(
-                "SELECT engineering, navigation, combat, medical FROM characters WHERE user_id = ?",
+                "SELECT engineering, navigation, combat, medical FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -1539,7 +1542,7 @@ class EconomyCog(commands.Cog):
 
             # Check if this is a group job
             group_id = self.db.execute_query(
-                "SELECT group_id FROM characters WHERE user_id = ?",
+                "SELECT group_id FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -1547,7 +1550,7 @@ class EconomyCog(commands.Cog):
             if group_id and group_id[0]:
                 # Check if the job was taken by the group
                 job_taken_by_group = self.db.execute_query(
-                    "SELECT 1 FROM jobs WHERE job_id = ? AND taken_by = ?",
+                    "SELECT 1 FROM jobs WHERE job_id = %s AND taken_by = %s",
                     (job_id, group_id[0]),
                     fetch='one'
                 )
@@ -1573,7 +1576,7 @@ class EconomyCog(commands.Cog):
         # Check for specific item demand/surplus
         specific_modifier = self.db.execute_query(
             '''SELECT status, price_modifier, stock_modifier FROM location_economy 
-               WHERE location_id = ? AND item_name = ? AND expires_at > datetime('now')''',
+               WHERE location_id = %s AND item_name = %s AND expires_at > NOW()''',
             (location_id, item_name),
             fetch='one'
         )
@@ -1584,7 +1587,7 @@ class EconomyCog(commands.Cog):
         # Check for category demand/surplus
         category_modifier = self.db.execute_query(
             '''SELECT status, price_modifier, stock_modifier FROM location_economy 
-               WHERE location_id = ? AND item_category = ? AND expires_at > datetime('now')''',
+               WHERE location_id = %s AND item_category = %s AND expires_at > NOW()''',
             (location_id, item_type),
             fetch='one'
         )
@@ -1627,7 +1630,7 @@ class EconomyCog(commands.Cog):
         
         # Check if job still exists and is in finalization
         job_check = self.db.execute_query(
-            "SELECT job_status FROM jobs WHERE job_id = ? AND taken_by = ?",
+            "SELECT job_status FROM jobs WHERE job_id = %s AND taken_by = %s",
             (job_id, user_id),
             fetch='one'
         )
@@ -1635,20 +1638,20 @@ class EconomyCog(commands.Cog):
         if job_check and job_check[0] == 'awaiting_finalization':
             # Complete the job automatically - TRANSPORT JOBS ALWAYS SUCCEED
             self.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, user_id)
             )
             
             # Add experience for transport jobs
             exp_gain = random.randint(20, 40)
             self.db.execute_query(
-                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                 (exp_gain, user_id)
             )
             
             # Clean up job
-            self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-            self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, user_id))
+            self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+            self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, user_id))
             self.notified_jobs.discard(job_id)  # Clean up notification tracking
             
             # Try to notify user
@@ -1664,21 +1667,25 @@ class EconomyCog(commands.Cog):
                     embed.add_field(name="⭐ Experience Gained", value=f"+{exp_gain} EXP", inline=True)
                     embed.add_field(name="📦 Status", value="Cargo delivered successfully", inline=True)
                     
-                    # Get the current location channel and send there instead of DM
+                    # Get the current location and send via cross-guild broadcast
                     # Assuming the user is at the destination location when this auto-completes
                     current_location_id = self.db.execute_query(
-                        "SELECT current_location FROM characters WHERE user_id = ?", (user_id,), fetch='one'
-                    )[0]
-                    location_channel_id = self.db.execute_query(
-                        "SELECT channel_id FROM locations WHERE location_id = ?", (current_location_id,), fetch='one'
+                        "SELECT current_location FROM characters WHERE user_id = %s", (user_id,), fetch='one'
                     )[0]
                     
-                    if location_channel_id:
-                        channel = self.bot.get_channel(location_channel_id)
-                        if channel:
-                            await channel.send(embed=embed) # Public message in location channel
+                    # Use cross-guild broadcasting for transport job completion
+                    from utils.channel_manager import ChannelManager
+                    channel_manager = ChannelManager(self.bot)
+                    cross_guild_channels = await channel_manager.get_cross_guild_location_channels(current_location_id)
+                    
+                    if cross_guild_channels:
+                        for guild_channel, channel in cross_guild_channels:
+                            try:
+                                await channel.send(embed=embed) # Public message in location channel
+                            except:
+                                pass  # Skip if can't send to this guild
                     else:
-                        await user.send(embed=embed) # Fallback to DM if no channel
+                        await user.send(embed=embed) # Fallback to DM if no channels
                 except Exception as e:
                     print(f"❌ Failed to send transport job auto-completion message to user {user_id}: {e}")
                     pass  # Failed to send DM or channel message
@@ -1692,20 +1699,20 @@ class EconomyCog(commands.Cog):
         """Immediately finalize a transport job that's awaiting finalization"""
         # Complete the job - TRANSPORT JOBS ALWAYS SUCCEED
         self.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (reward, interaction.user.id)
         )
         
         # Add experience for transport jobs
         exp_gain = random.randint(20, 40)
         self.db.execute_query(
-            "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+            "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
             (exp_gain, interaction.user.id)
         )
         
         # Clean up
-        self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, interaction.user.id))
+        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, interaction.user.id))
         self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         embed = discord.Embed(
@@ -1732,8 +1739,8 @@ class EconomyCog(commands.Cog):
         # Mark job as awaiting finalization with timestamp
         current_time = datetime.now()
         self.db.execute_query(
-            "UPDATE jobs SET job_status = 'awaiting_finalization', unloading_started_at = ? WHERE job_id = ?",
-            (current_time.strftime("%Y-%m-%d %H:%M:%S"), job_id)
+            "UPDATE jobs SET job_status = 'awaiting_finalization', unloading_started_at = %s WHERE job_id = %s",
+            (current_time, job_id)
         )
         
         # Fixed 2-minute unloading time
@@ -1783,7 +1790,7 @@ class EconomyCog(commands.Cog):
         for i in range(3):  # Updates at 10s, 40s, 70s
             # Check if job still exists and is awaiting finalization
             job_check = self.db.execute_query(
-                "SELECT job_status, unloading_started_at FROM jobs WHERE job_id = ? AND taken_by = ?",
+                "SELECT job_status, unloading_started_at FROM jobs WHERE job_id = %s AND taken_by = %s",
                 (job_id, user_id),
                 fetch='one'
             )
@@ -1792,7 +1799,7 @@ class EconomyCog(commands.Cog):
                 return  # Job was completed manually or deleted
             
             # Calculate progress
-            unloading_start = datetime.fromisoformat(job_check[1])
+            unloading_start = safe_datetime_parse(job_check[1])
             elapsed = (datetime.now() - unloading_start).total_seconds()
             progress_pct = min(100, (elapsed / 120) * 100)
             
@@ -1824,7 +1831,7 @@ class EconomyCog(commands.Cog):
         
         # Final completion (same as before)
         job_check = self.db.execute_query(
-            "SELECT job_status FROM jobs WHERE job_id = ? AND taken_by = ?",
+            "SELECT job_status FROM jobs WHERE job_id = %s AND taken_by = %s",
             (job_id, user_id),
             fetch='one'
         )
@@ -1832,19 +1839,19 @@ class EconomyCog(commands.Cog):
         if job_check and job_check[0] == 'awaiting_finalization':
             # Complete the job
             self.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, user_id)
             )
             
             exp_gain = random.randint(20, 40)
             self.db.execute_query(
-                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                 (exp_gain, user_id)
             )
             
             # Clean up job
-            self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-            self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, user_id))
+            self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+            self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, user_id))
             self.notified_jobs.discard(job_id)  # Clean up notification tracking
             
             # Send completion notification
@@ -1859,21 +1866,21 @@ class EconomyCog(commands.Cog):
                 embed.add_field(name="⭐ Experience Gained", value=f"+{exp_gain} EXP", inline=True)
                 embed.add_field(name="📦 Status", value="Cargo unloading completed", inline=True)
                 
-                await channel.send(f"{user.mention}", embed=embed)
+                await self.bot.send_with_cross_guild_broadcast(channel, f"{user.mention}", embed=embed)
                 
     async def _finalize_transport_job(self, interaction: discord.Interaction, job_id: int, title: str, reward: int):
         """Finalize a transport job that's in the unloading phase"""
         
         # Check how long they've been unloading
         unloading_info = self.db.execute_query(
-            "SELECT unloading_started_at FROM jobs WHERE job_id = ?",
+            "SELECT unloading_started_at FROM jobs WHERE job_id = %s",
             (job_id,),
             fetch='one'
         )
         
         penalty = 0
         if unloading_info and unloading_info[0]:
-            unloading_start = datetime.fromisoformat(unloading_info[0])
+            unloading_start = safe_datetime_parse(unloading_info[0])
             elapsed = (datetime.now() - unloading_start).total_seconds()
             
             if elapsed < 120:  # Less than 2 minutes
@@ -1883,19 +1890,19 @@ class EconomyCog(commands.Cog):
         
         # Give reward
         self.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (reward, interaction.user.id)
         )
         
         exp_gain = random.randint(20, 40)
         self.db.execute_query(
-            "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+            "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
             (exp_gain, interaction.user.id)
         )
         
         # Clean up
-        self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, interaction.user.id))
+        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, interaction.user.id))
         self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         embed = discord.Embed(
@@ -1917,7 +1924,7 @@ class EconomyCog(commands.Cog):
         try:
             # Get location channel info
             location_info = self.db.execute_query(
-                "SELECT name, channel_id FROM locations WHERE location_id = ?",
+                "SELECT name, channel_id FROM locations WHERE location_id = %s",
                 (location_id,),
                 fetch='one'
             )
@@ -1952,7 +1959,7 @@ class EconomyCog(commands.Cog):
             )
             embed.add_field(name="📍 Location", value=location_name, inline=True)
             
-            await channel.send(f"{user.mention}, your job is ready for completion!", embed=embed, delete_after=60)
+            await self.bot.send_with_cross_guild_broadcast(channel, f"{user.mention}, your job is ready for completion!", embed=embed, delete_after=60)
             print(f"✅ Sent job completion notification for job {job_id} to {user.name} in {location_name}")
             
         except Exception as e:
@@ -1962,21 +1969,21 @@ class EconomyCog(commands.Cog):
         """Complete a job immediately with full reward, experience, skill, and karma effects."""
         # Give full reward
         self.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (reward, interaction.user.id)
         )
         
         # Experience gain
         exp_gain = random.randint(25, 50)
         self.db.execute_query(
-            "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+            "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
             (exp_gain, interaction.user.id)
         )
         faction_data = self.db.execute_query(
             '''SELECT f.faction_id, f.name, f.emoji
                FROM faction_members fm
                JOIN factions f ON fm.faction_id = f.faction_id
-               WHERE fm.user_id = ?''',
+               WHERE fm.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -1985,7 +1992,7 @@ class EconomyCog(commands.Cog):
             # 5% bonus goes to faction bank
             faction_bonus = int(reward * 0.05)
             self.db.execute_query(
-                "UPDATE factions SET bank_balance = bank_balance + ? WHERE faction_id = ?",
+                "UPDATE factions SET bank_balance = bank_balance + %s WHERE faction_id = %s",
                 (faction_bonus, faction_data[0])
             )
             embed.add_field(
@@ -2019,14 +2026,14 @@ class EconomyCog(commands.Cog):
         if random.random() < 0.15:
             skill_to_improve = random.choice(['engineering', 'navigation', 'combat', 'medical'])
             self.db.execute_query(
-                f"UPDATE characters SET {skill_to_improve} = {skill_to_improve} + 1 WHERE user_id = ?",
+                f"UPDATE characters SET {skill_to_improve} = {skill_to_improve} + 1 WHERE user_id = %s",
                 (interaction.user.id,)
             )
             embed.add_field(name="🎯 Skill Bonus", value=f"**{skill_to_improve.title()}** skill increased by 1!", inline=True)
 
         # Handle karma/reputation change
         job_details = self.db.execute_query(
-            "SELECT karma_change, location_id FROM jobs WHERE job_id = ?",
+            "SELECT karma_change, location_id FROM jobs WHERE job_id = %s",
             (job_id,),
             fetch='one'
         )
@@ -2041,8 +2048,8 @@ class EconomyCog(commands.Cog):
                     embed.add_field(name="⚖️ Reputation Change", value=f"**{karma_text}** with local faction", inline=True)
         
         # Clean up job from the database
-        self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, interaction.user.id))
+        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, interaction.user.id))
         
         # Check for level up
         char_cog = self.bot.get_cog('CharacterCog')
@@ -2056,20 +2063,20 @@ class EconomyCog(commands.Cog):
         """Complete a failed job with partial reward"""
         partial = reward // 3
         self.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (partial, interaction.user.id)
         )
         
         # Small experience consolation
         exp_gain = random.randint(5, 15)
         self.db.execute_query(
-            "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+            "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
             (exp_gain, interaction.user.id)
         )
         
         # Clean up
-        self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?", (job_id, interaction.user.id))
+        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, interaction.user.id))
         self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         embed = discord.Embed(
@@ -2102,7 +2109,7 @@ class EconomyCog(commands.Cog):
         """Complete a job for all group members"""
         # Get the user's group ID first
         group_id = self.db.execute_query(
-            "SELECT group_id FROM characters WHERE user_id = ?",
+            "SELECT group_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2119,7 +2126,7 @@ class EconomyCog(commands.Cog):
         group_members = self.db.execute_query(
             '''SELECT c.user_id, c.name
                FROM characters c
-               WHERE c.group_id = ?''',
+               WHERE c.group_id = %s''',
             (group_id[0],),
             fetch='all'
         )
@@ -2132,14 +2139,14 @@ class EconomyCog(commands.Cog):
             if success:
                 # Full reward for each member on success
                 self.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, member_id)
                 )
                 
                 # Experience gain
                 exp_gain = random.randint(25, 50)
                 self.db.execute_query(
-                    "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                    "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                     (exp_gain, member_id)
                 )
                 
@@ -2147,7 +2154,7 @@ class EconomyCog(commands.Cog):
                 if random.random() < 0.15:
                     skill = random.choice(['engineering', 'navigation', 'combat', 'medical'])
                     self.db.execute_query(
-                        f"UPDATE characters SET {skill} = {skill} + 1 WHERE user_id = ?",
+                        f"UPDATE characters SET {skill} = {skill} + 1 WHERE user_id = %s",
                         (member_id,)
                     )
                     
@@ -2156,14 +2163,14 @@ class EconomyCog(commands.Cog):
                 # Partial reward for failure (same for all members)
                 partial = reward // 3
                 self.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (partial, member_id)
                 )
                 
                 # Small experience consolation
                 exp_gain = random.randint(5, 15)
                 self.db.execute_query(
-                    "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                    "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                     (exp_gain, member_id)
                 )
             
@@ -2173,8 +2180,8 @@ class EconomyCog(commands.Cog):
                 await char_cog.level_up_check(member_id)
         
         # Clean up job - ONLY ONCE (this was already correct)
-        self.db.execute_query("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = ?", (job_id,))
+        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
+        self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s", (job_id,))
         self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         if success:
@@ -2231,7 +2238,7 @@ class EconomyCog(commands.Cog):
     async def federal_supply_list(self, interaction: discord.Interaction):
         # First, get the character's current location
         char_info = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2243,7 +2250,7 @@ class EconomyCog(commands.Cog):
 
         # Check if the location has a Federal Supply
         location_info = self.db.execute_query(
-            "SELECT has_federal_supply, name, faction FROM locations WHERE location_id = ?",
+            "SELECT has_federal_supply, name, faction FROM locations WHERE location_id = %s",
             (current_location_id,),
             fetch='one'
         )
@@ -2254,7 +2261,7 @@ class EconomyCog(commands.Cog):
 
         # Get the character's reputation at this specific location
         reputation_data = self.db.execute_query(
-            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            "SELECT reputation FROM character_reputation WHERE user_id = %s AND location_id = %s",
             (interaction.user.id, current_location_id),
             fetch='one'
         )
@@ -2264,7 +2271,7 @@ class EconomyCog(commands.Cog):
         items = self.bot.db.execute_query(
             '''SELECT item_name, item_type, price, stock, description, clearance_level
                FROM federal_supply_items 
-               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= clearance_level
+               WHERE location_id = %s AND (stock > 0 OR stock = -1) AND %s >= clearance_level
                ORDER BY clearance_level ASC, price ASC''',
             (self.location_id, current_reputation),
             fetch='all'
@@ -2310,7 +2317,7 @@ class EconomyCog(commands.Cog):
                 '''SELECT c.destination_location, l.name, l.location_type, l.wealth_level, l.x_coord, l.y_coord
                    FROM corridors c
                    JOIN locations l ON c.destination_location = l.location_id
-                   WHERE c.origin_location = ? AND c.is_active = 1''',
+                   WHERE c.origin_location = %s AND c.is_active = true''',
                 (current_loc,),
                 fetch='all'
             )
@@ -2329,13 +2336,13 @@ class EconomyCog(commands.Cog):
         """Create jobs with heavy emphasis on travel between locations and shift-aware generation."""
         # 1) Remove all untaken jobs here
         self.db.execute_query(
-            "DELETE FROM jobs WHERE location_id = ? AND is_taken = 0",
+            "DELETE FROM jobs WHERE location_id = %s AND is_taken = false",
             (location_id,)
         )
 
         # 2) Get this location's info
         row = self.db.execute_query(
-            "SELECT name, x_coord, y_coord, wealth_level, location_type FROM locations WHERE location_id = ?",
+            "SELECT name, x_coord, y_coord, wealth_level, location_type FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -2348,7 +2355,7 @@ class EconomyCog(commands.Cog):
             """SELECT DISTINCT l.location_id, l.name, l.x_coord, l.y_coord, l.location_type, l.wealth_level
                FROM corridors c 
                JOIN locations l ON c.destination_location = l.location_id
-               WHERE c.origin_location = ? AND c.is_active = 1""",
+               WHERE c.origin_location = %s AND c.is_active = true""",
             (location_id,),
             fetch='all'
         )
@@ -2363,7 +2370,6 @@ class EconomyCog(commands.Cog):
         shift_multiplier = self.get_shift_job_multiplier()
         
         expire_time = datetime.now() + timedelta(hours=random.randint(3, 8))
-        expire_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
 
         # 4) Generate travel jobs with shift-aware counts
         base_travel_jobs = random.randint(8, 14)
@@ -2446,8 +2452,8 @@ class EconomyCog(commands.Cog):
                 '''INSERT INTO jobs
                    (location_id, title, description, reward_money, required_skill, min_skill_level,
                     danger_level, duration_minutes, expires_at, is_taken, destination_location_id)
-                   VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, ?)''',
-                (location_id, title, desc, final_reward, min_skill_level, danger, duration, expire_str, dest_id)
+                   VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, 0, %s)''',
+                (location_id, title, desc, final_reward, min_skill_level, danger, duration, expire_time, dest_id)
             )
 
         # 5) Add fewer stationary jobs with shift multiplier
@@ -2481,8 +2487,8 @@ class EconomyCog(commands.Cog):
                     '''INSERT INTO jobs
                        (location_id, title, description, reward_money, required_skill, min_skill_level,
                         danger_level, duration_minutes, expires_at, is_taken)
-                       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, 0)''',
-                    (location_id, title, desc, reward, min_skill_level, danger, duration, expire_str)
+                       VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, 0)''',
+                    (location_id, title, desc, reward, min_skill_level, danger, duration, expire_time)
                 )
 
     @job_group.command(name="accept", description="Accept a job by title or ID number")
@@ -2490,7 +2496,7 @@ class EconomyCog(commands.Cog):
     async def job_accept(self, interaction: discord.Interaction, job_identifier: str):
         # Check if player has a character and is not in transit
         char_info = self.db.execute_query(
-            "SELECT current_location, hp, money, group_id FROM characters WHERE user_id = ?",
+            "SELECT current_location, hp, money, group_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2512,7 +2518,7 @@ class EconomyCog(commands.Cog):
             return
         # 1) Ensure no other active job
         has_job = self.db.execute_query(
-            "SELECT job_id FROM jobs WHERE taken_by = ? AND is_taken = 1",
+            "SELECT job_id FROM jobs WHERE taken_by = %s AND is_taken = true",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2524,7 +2530,7 @@ class EconomyCog(commands.Cog):
 
         # 2) Get character info
         char = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2540,7 +2546,7 @@ class EconomyCog(commands.Cog):
             job = self.db.execute_query(
                 '''SELECT job_id, title, description, reward_money, required_skill, min_skill_level, danger_level, duration_minutes
                    FROM jobs
-                   WHERE location_id = ? AND job_id = ? AND is_taken = 0 AND expires_at > datetime('now')''',
+                   WHERE location_id = %s AND job_id = %s AND is_taken = false AND expires_at > NOW()''',
                 (current_location, int(job_identifier)),
                 fetch='one'
             )
@@ -2550,8 +2556,8 @@ class EconomyCog(commands.Cog):
             job = self.db.execute_query(
                 '''SELECT job_id, title, description, reward_money, required_skill, min_skill_level, danger_level, duration_minutes
                    FROM jobs
-                   WHERE location_id = ? AND LOWER(title) LIKE LOWER(?) 
-                         AND is_taken = 0 AND expires_at > datetime('now')
+                   WHERE location_id = %s AND LOWER(title) LIKE LOWER(%s) 
+                         AND is_taken = false AND expires_at > NOW()
                    ORDER BY reward_money DESC
                    LIMIT 1''',
                 (current_location, f"%{job_identifier}%"),
@@ -2575,7 +2581,7 @@ class EconomyCog(commands.Cog):
                       j.duration_minutes, j.is_taken, l.name as location_name
                FROM jobs j
                JOIN locations l ON j.location_id = l.location_id
-               WHERE j.job_id = ? AND j.location_id = ? AND j.is_taken = 0''',
+               WHERE j.job_id = %s AND j.location_id = %s AND j.is_taken = false''',
             (job_id, current_location),
             fetch='one'
         )
@@ -2588,7 +2594,7 @@ class EconomyCog(commands.Cog):
         
         # Get group info
         group_info = self.db.execute_query(
-            "SELECT name, leader_id FROM groups WHERE group_id = ?",
+            "SELECT name, leader_id FROM groups WHERE group_id = %s",
             (group_id,),
             fetch='one'
         )
@@ -2602,7 +2608,7 @@ class EconomyCog(commands.Cog):
         # Check for existing active job vote
         existing_vote = self.db.execute_query(
             '''SELECT session_id FROM group_vote_sessions 
-               WHERE group_id = ? AND vote_type = 'job' AND expires_at > datetime('now')''',
+               WHERE group_id = %s AND vote_type = 'job' AND expires_at > NOW()''',
             (group_id,),
             fetch='one'
         )
@@ -2628,13 +2634,13 @@ class EconomyCog(commands.Cog):
         # Create vote session
         self.db.execute_query(
             '''INSERT INTO group_vote_sessions (group_id, vote_type, vote_data, channel_id, expires_at) 
-               VALUES (?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s)''',
             (group_id, 'job', json.dumps(vote_data), interaction.channel.id, expire_time.isoformat())
         )
         
         # Get group members
         members = self.db.execute_query(
-            "SELECT user_id, name FROM characters WHERE group_id = ?",
+            "SELECT user_id, name FROM characters WHERE group_id = %s",
             (group_id,),
             fetch='all'
         )
@@ -2667,8 +2673,8 @@ class EconomyCog(commands.Cog):
         # Accept the job
         self.db.execute_query(
             '''UPDATE jobs
-               SET is_taken = 1, taken_by = ?, taken_at = datetime('now')
-               WHERE job_id = ?''',
+               SET is_taken = true, taken_by = %s, taken_at = NOW()
+               WHERE job_id = %s''',
             (interaction.user.id, job_id)
         )
 
@@ -2678,7 +2684,7 @@ class EconomyCog(commands.Cog):
 
         # Get destination_location_id from the job info
         job_destination = self.db.execute_query(
-            "SELECT destination_location_id, location_id FROM jobs WHERE job_id = ?",
+            "SELECT destination_location_id, location_id FROM jobs WHERE job_id = %s",
             (job_id,),
             fetch='one'
         )
@@ -2704,7 +2710,7 @@ class EconomyCog(commands.Cog):
         
         # Create job tracking record - all jobs get one for consistency
         current_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -2715,7 +2721,7 @@ class EconomyCog(commands.Cog):
         self.db.execute_query(
             '''INSERT INTO job_tracking
                (job_id, user_id, start_location, required_duration, time_at_location, last_location_check)
-               VALUES (?, ?, ?, ?, 0.0, datetime('now'))''',
+               VALUES (%s, %s, %s, %s, 0.0, NOW())''',
             (job_id, interaction.user.id, current_location, tracking_duration)
         )
         embed = discord.Embed(
@@ -2740,7 +2746,7 @@ class EconomyCog(commands.Cog):
     @job_group.command(name="abandon", description="Abandon your current job")
     async def job_abandon(self, interaction: discord.Interaction):
         job_info = self.db.execute_query(
-            "SELECT job_id, title FROM jobs WHERE taken_by = ? AND is_taken = 1",
+            "SELECT job_id, title FROM jobs WHERE taken_by = %s AND is_taken = true",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2753,7 +2759,7 @@ class EconomyCog(commands.Cog):
         
         # Remove the job assignment (make it available again)
         self.db.execute_query(
-            "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL WHERE job_id = ?",
+            "UPDATE jobs SET is_taken = false, taken_by = NULL, taken_at = NULL WHERE job_id = %s",
             (job_id,)
         )
         
@@ -2782,7 +2788,7 @@ class EconomyCog(commands.Cog):
                       j.destination_location_id, j.unloading_started_at
                FROM jobs j
                JOIN locations l ON j.location_id = l.location_id
-               WHERE j.taken_by = ? AND j.is_taken = 1''',
+               WHERE j.taken_by = %s AND j.is_taken = true''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -2811,7 +2817,7 @@ class EconomyCog(commands.Cog):
             # destination_location_id == job_location_id = stationary job, regardless of keywords
             is_transport_job = False
 
-        taken_time = datetime.fromisoformat(taken_at)
+        taken_time = safe_datetime_parse(taken_at)
         current_time = datetime.utcnow()
         elapsed_minutes = (current_time - taken_time).total_seconds() / 60
 
@@ -2828,7 +2834,7 @@ class EconomyCog(commands.Cog):
         if job_status == 'awaiting_finalization':
             # Enhanced unloading phase display
             if unloading_started_at:
-                unloading_time = datetime.fromisoformat(unloading_started_at)
+                unloading_time = safe_datetime_parse(unloading_started_at)
                 unloading_elapsed = (current_time - unloading_time).total_seconds()
                 unloading_duration = 120  # 2 minutes in seconds
                 unloading_remaining = max(0, unloading_duration - unloading_elapsed)
@@ -2851,7 +2857,7 @@ class EconomyCog(commands.Cog):
             if destination_location_id:
                 # Get destination name
                 dest_name = self.db.execute_query(
-                    "SELECT name FROM locations WHERE location_id = ?",
+                    "SELECT name FROM locations WHERE location_id = %s",
                     (destination_location_id,),
                     fetch='one'
                 )
@@ -2859,7 +2865,7 @@ class EconomyCog(commands.Cog):
                 
                 # Check if player is at destination
                 player_location = self.db.execute_query(
-                    "SELECT current_location FROM characters WHERE user_id = ?",
+                    "SELECT current_location FROM characters WHERE user_id = %s",
                     (interaction.user.id,),
                     fetch='one'
                 )[0]
@@ -2904,7 +2910,7 @@ class EconomyCog(commands.Cog):
         else:
             # Stationary job - check tracking
             tracking = self.db.execute_query(
-                "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
+                "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = %s AND user_id = %s",
                 (job_id, interaction.user.id),
                 fetch='one'
             )
@@ -2945,7 +2951,7 @@ class EconomyCog(commands.Cog):
                           jt.time_at_location, jt.last_location_check
                    FROM job_tracking jt
                    JOIN jobs j ON jt.job_id = j.job_id
-                   WHERE jt.user_id = ? AND j.is_taken = 1''',
+                   WHERE jt.user_id = %s AND j.is_taken = true''',
                 (user_id,),
                 fetch='one'
             )
@@ -2955,7 +2961,7 @@ class EconomyCog(commands.Cog):
                 
                 # Check current location
                 current_location = self.db.execute_query(
-                    "SELECT current_location FROM characters WHERE user_id = ?",
+                    "SELECT current_location FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -2965,8 +2971,8 @@ class EconomyCog(commands.Cog):
                     new_time = float(time_at_location or 0) + 1.0
                     self.db.execute_query(
                         '''UPDATE job_tracking
-                           SET time_at_location = ?, last_location_check = datetime('now')
-                           WHERE tracking_id = ?''',
+                           SET time_at_location = %s, last_location_check = NOW()
+                           WHERE tracking_id = %s''',
                         (new_time, tracking_id)
                     )
                     print(f"🔄 Manual update: User {user_id} +1.0 minutes (total: {new_time})")
@@ -2999,7 +3005,7 @@ class EconomyCog(commands.Cog):
             FROM job_tracking jt
             JOIN jobs j ON jt.job_id = j.job_id
             JOIN characters c ON jt.user_id = c.user_id
-            WHERE j.is_taken = 1
+            WHERE j.is_taken = true
             ''',
             fetch='all'
         )
@@ -3058,7 +3064,7 @@ class InteractiveShopView(discord.ui.View):
         items = self.bot.db.execute_query(
             '''SELECT item_name, item_type, price, stock, description
                FROM shop_items 
-               WHERE location_id = ? AND (stock > 0 OR stock = -1)
+               WHERE location_id = %s AND (stock > 0 OR stock = -1)
                ORDER BY item_type, price''',
             (self.location_id,),
             fetch='all'
@@ -3088,7 +3094,7 @@ class InteractiveShopView(discord.ui.View):
         inventory_items = self.bot.db.execute_query(
             '''SELECT item_id, item_name, quantity, value, item_type, description
                FROM inventory 
-               WHERE owner_id = ? AND quantity > 0
+               WHERE owner_id = %s AND quantity > 0
                ORDER BY item_type, item_name''',
             (self.user_id,),
             fetch='all'
@@ -3165,7 +3171,7 @@ class ShopBuySelectView(discord.ui.View):
         item_info = self.bot.db.execute_query(
             '''SELECT item_name, price, stock, description, item_type
                FROM shop_items 
-               WHERE location_id = ? AND item_name = ?''',
+               WHERE location_id = %s AND item_name = %s''',
             (self.location_id, item_name),
             fetch='one'
         )
@@ -3263,7 +3269,7 @@ class ShopBuyQuantityView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         
         char_info = econ_cog.db.execute_query(
-            "SELECT current_location, money FROM characters WHERE user_id = ?",
+            "SELECT current_location, money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3278,8 +3284,8 @@ class ShopBuyQuantityView(discord.ui.View):
         item = econ_cog.db.execute_query(
             '''SELECT item_id, item_name, price, stock, description, item_type, metadata
                FROM shop_items 
-               WHERE location_id = ? AND item_name = ?
-               AND (stock >= ? OR stock = -1)''',
+               WHERE location_id = %s AND item_name = %s
+               AND (stock >= %s OR stock = -1)''',
             (current_location, self.item_name, self.quantity),
             fetch='one'
         )
@@ -3305,33 +3311,33 @@ class ShopBuyQuantityView(discord.ui.View):
         
         # Process purchase (same logic as shop_buy)
         econ_cog.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (total_cost, interaction.user.id)
         )
         
         # Update shop stock
         if stock != -1:
             econ_cog.db.execute_query(
-                "UPDATE shop_items SET stock = stock - ? WHERE item_id = ?",
+                "UPDATE shop_items SET stock = stock - %s WHERE item_id = %s",
                 (self.quantity, item_id)
             )
         
         # Add to inventory
         existing_item = econ_cog.db.execute_query(
-            "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+            "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
             (interaction.user.id, actual_name),
             fetch='one'
         )
         
         if existing_item:
             econ_cog.db.execute_query(
-                "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity + %s WHERE item_id = %s",
                 (self.quantity, existing_item[0])
             )
         else:
             econ_cog.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, actual_name, item_type, self.quantity, description, price, metadata)
             )
         
@@ -3390,7 +3396,7 @@ class ShopSellSelectView(discord.ui.View):
         item_info = self.bot.db.execute_query(
             '''SELECT item_name, quantity, value, item_type, description
                FROM inventory 
-               WHERE owner_id = ? AND item_id = ?''',
+               WHERE owner_id = %s AND item_id = %s''',
             (self.user_id, item_id),
             fetch='one'
         )
@@ -3406,7 +3412,7 @@ class ShopSellSelectView(discord.ui.View):
         if econ_cog:
             # Get location wealth for sell price calculation
             wealth_level = self.bot.db.execute_query(
-                "SELECT wealth_level FROM locations WHERE location_id = ?",
+                "SELECT wealth_level FROM locations WHERE location_id = %s",
                 (self.location_id,),
                 fetch='one'
             )[0]
@@ -3450,7 +3456,7 @@ class ShopSellQuantityView(discord.ui.View):
         econ_cog = self.bot.get_cog('EconomyCog')
         if econ_cog:
             wealth_level = self.bot.db.execute_query(
-                "SELECT wealth_level FROM locations WHERE location_id = ?",
+                "SELECT wealth_level FROM locations WHERE location_id = %s",
                 (self.location_id,),
                 fetch='one'
             )[0]
@@ -3537,7 +3543,7 @@ class ShopSellQuantityView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         
         char_info = econ_cog.db.execute_query(
-            "SELECT current_location, money FROM characters WHERE user_id = ?",
+            "SELECT current_location, money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3550,7 +3556,7 @@ class ShopSellQuantityView(discord.ui.View):
         
         # Check if location has shops
         has_shops = econ_cog.db.execute_query(
-            "SELECT has_shops, wealth_level FROM locations WHERE location_id = ?",
+            "SELECT has_shops, wealth_level FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )
@@ -3563,7 +3569,7 @@ class ShopSellQuantityView(discord.ui.View):
         inventory_item = econ_cog.db.execute_query(
             '''SELECT item_id, item_name, quantity, value, item_type, description
                FROM inventory 
-               WHERE owner_id = ? AND item_name = ? AND quantity >= ?''',
+               WHERE owner_id = %s AND item_name = %s AND quantity >= %s''',
             (interaction.user.id, self.item_name, self.quantity),
             fetch='one'
         )
@@ -3578,7 +3584,7 @@ class ShopSellQuantityView(discord.ui.View):
         
         # Check if item is equipped and unequip it before selling
         equipped_check = econ_cog.db.execute_query(
-            "SELECT equipment_id FROM character_equipment WHERE item_id = ? AND user_id = ?",
+            "SELECT equipment_id FROM character_equipment WHERE item_id = %s AND user_id = %s",
             (inv_id, interaction.user.id),
             fetch='all'
         )
@@ -3586,22 +3592,22 @@ class ShopSellQuantityView(discord.ui.View):
         if equipped_check:
             # Item is equipped, remove from equipment slots
             econ_cog.db.execute_query(
-                "DELETE FROM character_equipment WHERE item_id = ? AND user_id = ?",
+                "DELETE FROM character_equipment WHERE item_id = %s AND user_id = %s",
                 (inv_id, interaction.user.id)
             )
         
         # Update inventory
         if current_qty == self.quantity:
-            econ_cog.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (inv_id,))
+            econ_cog.db.execute_query("DELETE FROM inventory WHERE item_id = %s", (inv_id,))
         else:
             econ_cog.db.execute_query(
-                "UPDATE inventory SET quantity = quantity - ? WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity - %s WHERE item_id = %s",
                 (self.quantity, inv_id)
             )
         
         # Add money to character
         econ_cog.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (total_earnings, interaction.user.id)
         )
         
@@ -3609,7 +3615,7 @@ class ShopSellQuantityView(discord.ui.View):
         markup_price = max(self.sell_price + 1, int(self.sell_price * 1.2))
         
         existing = econ_cog.db.execute_query(
-            "SELECT item_id, stock, price FROM shop_items WHERE location_id = ? AND LOWER(item_name) = LOWER(?)",
+            "SELECT item_id, stock, price FROM shop_items WHERE location_id = %s AND LOWER(item_name) = LOWER(%s)",
             (current_location, actual_name),
             fetch='one'
         )
@@ -3619,7 +3625,7 @@ class ShopSellQuantityView(discord.ui.View):
             new_stock = shop_stock + self.quantity if shop_stock != -1 else -1
             new_price = max(shop_price, markup_price)
             econ_cog.db.execute_query(
-                "UPDATE shop_items SET stock = ?, price = ? WHERE item_id = ?",
+                "UPDATE shop_items SET stock = %s, price = %s WHERE item_id = %s",
                 (new_stock, new_price, shop_id)
             )
         else:
@@ -3628,7 +3634,7 @@ class ShopSellQuantityView(discord.ui.View):
             econ_cog.db.execute_query(
                 '''INSERT INTO shop_items
                    (location_id, item_name, item_type, price, stock, description, metadata, sold_by_player)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
                 (current_location, actual_name, item_type, markup_price, self.quantity, description, metadata, True)
             )
         
@@ -3691,7 +3697,7 @@ class InteractiveJobListView(discord.ui.View):
             quest_info = self.bot.db.execute_query(
                 '''SELECT quest_id, title, description, reward_money, danger_level, 
                           estimated_duration, required_level
-                   FROM quests WHERE quest_id = ?''',
+                   FROM quests WHERE quest_id = %s''',
                 (job_id,),
                 fetch='one'
             )
@@ -3707,7 +3713,7 @@ class InteractiveJobListView(discord.ui.View):
         job_info = self.bot.db.execute_query(
             '''SELECT job_id, title, description, reward_money, required_skill, min_skill_level, 
                       danger_level, duration_minutes, destination_location_id
-               FROM jobs WHERE job_id = ?''',
+               FROM jobs WHERE job_id = %s''',
             (job_id,),
             fetch='one'
         )
@@ -3736,7 +3742,7 @@ class InteractiveJobListView(discord.ui.View):
         # Determine job type
         if dest_location_id:
             dest_name = self.bot.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (dest_location_id,),
                 fetch='one'
             )
@@ -3785,7 +3791,7 @@ class JobDetailView(discord.ui.View):
         
         # Check if user already has a job
         has_job = econ_cog.db.execute_query(
-            "SELECT job_id FROM jobs WHERE taken_by = ? AND is_taken = 1",
+            "SELECT job_id FROM jobs WHERE taken_by = %s AND is_taken = true",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3796,7 +3802,7 @@ class JobDetailView(discord.ui.View):
         
         # Get character info
         char = econ_cog.db.execute_query(
-            "SELECT current_location, group_id FROM characters WHERE user_id = ?",
+            "SELECT current_location, group_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3811,7 +3817,7 @@ class JobDetailView(discord.ui.View):
         job = econ_cog.db.execute_query(
             '''SELECT job_id, title, description, reward_money, required_skill, min_skill_level, danger_level, duration_minutes
                FROM jobs
-               WHERE location_id = ? AND job_id = ? AND is_taken = 0 AND expires_at > datetime('now')''',
+               WHERE location_id = %s AND job_id = %s AND is_taken = false AND expires_at > NOW()''',
             (current_location, job_id),
             fetch='one'
         )
@@ -3831,7 +3837,7 @@ class JobDetailView(discord.ui.View):
         # Check skill requirements
         if skill:
             char_skills = econ_cog.db.execute_query(
-                f"SELECT {skill} FROM characters WHERE user_id = ?",
+                f"SELECT {skill} FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -3846,8 +3852,8 @@ class JobDetailView(discord.ui.View):
         # Accept the job (using the same logic as _accept_solo_job but without sending response)
         econ_cog.db.execute_query(
             '''UPDATE jobs
-               SET is_taken = 1, taken_by = ?, taken_at = datetime('now')
-               WHERE job_id = ?''',
+               SET is_taken = true, taken_by = %s, taken_at = NOW()
+               WHERE job_id = %s''',
             (interaction.user.id, job_id)
         )
 
@@ -3857,7 +3863,7 @@ class JobDetailView(discord.ui.View):
 
         # Get destination_location_id from the job info
         job_destination = econ_cog.db.execute_query(
-            "SELECT destination_location_id, location_id FROM jobs WHERE job_id = ?",
+            "SELECT destination_location_id, location_id FROM jobs WHERE job_id = %s",
             (job_id,),
             fetch='one'
         )
@@ -3883,7 +3889,7 @@ class JobDetailView(discord.ui.View):
         
         # Create job tracking record - all jobs get one for consistency
         current_location = econ_cog.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3894,7 +3900,7 @@ class JobDetailView(discord.ui.View):
         econ_cog.db.execute_query(
             '''INSERT INTO job_tracking
                (job_id, user_id, start_location, required_duration, time_at_location, last_location_check)
-               VALUES (?, ?, ?, ?, 0.0, datetime('now'))''',
+               VALUES (%s, %s, %s, %s, 0.0, NOW())''',
             (job_id, interaction.user.id, current_location, tracking_duration)
         )
         
@@ -3944,7 +3950,7 @@ class QuestDetailView(discord.ui.View):
             '''SELECT objective_order, objective_type, description, target_location_id, 
                       target_item, target_quantity
                FROM quest_objectives
-               WHERE quest_id = ?
+               WHERE quest_id = %s
                ORDER BY objective_order''',
             (quest_id,),
             fetch='all'
@@ -3969,7 +3975,7 @@ class QuestDetailView(discord.ui.View):
             for order, obj_type, desc, location_id, item, quantity in objectives:
                 if obj_type == 'travel':
                     location_name = self.bot.db.execute_query(
-                        "SELECT name FROM locations WHERE location_id = ?",
+                        "SELECT name FROM locations WHERE location_id = %s",
                         (location_id,), fetch='one'
                     )
                     location_name = location_name[0] if location_name else f"Location {location_id}"
@@ -3978,7 +3984,7 @@ class QuestDetailView(discord.ui.View):
                     obj_text.append(f"{order}. Obtain {quantity}x {item}")
                 elif obj_type == 'deliver_item':
                     location_name = self.bot.db.execute_query(
-                        "SELECT name FROM locations WHERE location_id = ?",
+                        "SELECT name FROM locations WHERE location_id = %s",
                         (location_id,), fetch='one'
                     )
                     location_name = location_name[0] if location_name else f"Location {location_id}"
@@ -4060,7 +4066,7 @@ class InteractiveFederalDepotView(discord.ui.View):
         
         # Get character reputation
         reputation_data = self.bot.db.execute_query(
-            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            "SELECT reputation FROM character_reputation WHERE user_id = %s AND location_id = %s",
             (self.user_id, self.location_id),
             fetch='one'
         )
@@ -4070,7 +4076,7 @@ class InteractiveFederalDepotView(discord.ui.View):
         items = self.bot.db.execute_query(
             '''SELECT item_name, item_type, price, stock, description, clearance_level
                FROM federal_supply_items 
-               WHERE location_id = ? AND (stock > 0 OR stock = -1) AND ? >= clearance_level
+               WHERE location_id = %s AND (stock > 0 OR stock = -1) AND %s >= clearance_level
                ORDER BY clearance_level ASC, price ASC''',
             (self.location_id, current_reputation),
             fetch='all'
@@ -4109,7 +4115,7 @@ class InteractiveBlackMarketView(discord.ui.View):
             '''SELECT bmi.item_name, bmi.item_type, bmi.price, bmi.stock, bmi.description
                FROM black_market_items bmi
                JOIN black_markets bm ON bmi.market_id = bm.market_id
-               WHERE bm.location_id = ? AND (bmi.stock > 0 OR bmi.stock = -1)
+               WHERE bm.location_id = %s AND (bmi.stock > 0 OR bmi.stock = -1)
                ORDER BY bmi.item_type, bmi.price''',
             (self.location_id,),
             fetch='all'
@@ -4176,7 +4182,7 @@ class FederalDepotBuySelectView(discord.ui.View):
         item_info = self.bot.db.execute_query(
             '''SELECT item_name, price, stock, description, item_type, required_reputation
                FROM federal_supply_items 
-               WHERE location_id = ? AND item_name = ?''',
+               WHERE location_id = %s AND item_name = %s''',
             (self.location_id, item_name),
             fetch='one'
         )
@@ -4248,7 +4254,7 @@ class BlackMarketBuySelectView(discord.ui.View):
             '''SELECT bmi.item_name, bmi.price, bmi.stock, bmi.description, bmi.item_type
                FROM black_market_items bmi
                JOIN black_markets bm ON bmi.market_id = bm.market_id
-               WHERE bm.location_id = ? AND bmi.item_name = ?''',
+               WHERE bm.location_id = %s AND bmi.item_name = %s''',
             (self.location_id, item_name),
             fetch='one'
         )
@@ -4348,7 +4354,7 @@ class FederalDepotQuantityView(discord.ui.View):
         
         # Check character funds and reputation
         char_info = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -4369,7 +4375,7 @@ class FederalDepotQuantityView(discord.ui.View):
         
         # Check reputation
         reputation_data = self.bot.db.execute_query(
-            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            "SELECT reputation FROM character_reputation WHERE user_id = %s AND location_id = %s",
             (interaction.user.id, self.location_id),
             fetch='one'
         )
@@ -4387,13 +4393,13 @@ class FederalDepotQuantityView(discord.ui.View):
         
         # Deduct money
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (total_cost, interaction.user.id)
         )
         
         # Add item to inventory
         existing_item = self.bot.db.execute_query(
-            "SELECT quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+            "SELECT quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
             (interaction.user.id, self.item_name),
             fetch='one'
         )
@@ -4403,20 +4409,20 @@ class FederalDepotQuantityView(discord.ui.View):
         
         if existing_item:
             self.bot.db.execute_query(
-                "UPDATE inventory SET quantity = quantity + ? WHERE owner_id = ? AND item_name = ?",
+                "UPDATE inventory SET quantity = quantity + %s WHERE owner_id = %s AND item_name = %s",
                 (self.quantity, interaction.user.id, self.item_name)
             )
         else:
             self.bot.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, value, description)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, self.item_name, self.item_type, self.quantity, item_value, self.description)
             )
         
         # Update stock if not unlimited
         if self.stock != -1:
             self.bot.db.execute_query(
-                "UPDATE federal_supply_items SET stock = stock - ? WHERE location_id = ? AND item_name = ?",
+                "UPDATE federal_supply_items SET stock = stock - %s WHERE location_id = %s AND item_name = %s",
                 (self.quantity, self.location_id, self.item_name)
             )
         
@@ -4506,7 +4512,7 @@ class BlackMarketQuantityView(discord.ui.View):
         
         # Check character funds
         char_info = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -4530,13 +4536,13 @@ class BlackMarketQuantityView(discord.ui.View):
         
         # Deduct money
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (total_cost, interaction.user.id)
         )
         
         # Add item to inventory
         existing_item = self.bot.db.execute_query(
-            "SELECT quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+            "SELECT quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
             (interaction.user.id, self.item_name),
             fetch='one'
         )
@@ -4546,20 +4552,20 @@ class BlackMarketQuantityView(discord.ui.View):
         
         if existing_item:
             self.bot.db.execute_query(
-                "UPDATE inventory SET quantity = quantity + ? WHERE owner_id = ? AND item_name = ?",
+                "UPDATE inventory SET quantity = quantity + %s WHERE owner_id = %s AND item_name = %s",
                 (self.quantity, interaction.user.id, self.item_name)
             )
         else:
             self.bot.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, value, description)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, self.item_name, self.item_type, self.quantity, item_value, self.description)
             )
         
         # Update stock if not unlimited
         if self.stock != -1:
             self.bot.db.execute_query(
-                "UPDATE black_market_items SET stock = stock - ? WHERE location_id = ? AND item_name = ?",
+                "UPDATE black_market_items SET stock = stock - %s WHERE location_id = %s AND item_name = %s",
                 (self.quantity, self.location_id, self.item_name)
             )
         

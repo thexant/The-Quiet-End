@@ -41,7 +41,7 @@ class RPGBot(commands.Bot):
         self.activity_tracker = None
         self.income_task = None
         self._background_tasks = []
-        self.add_check(self.guild_check)
+        # Multi-server support enabled - no guild restrictions
         
     def start_background_tasks(self):
         """Starts the background tasks if they are not already running."""
@@ -101,41 +101,22 @@ class RPGBot(commands.Bot):
         if hasattr(self, 'income_task') and self.income_task and not self.income_task.done():
             self.income_task.cancel()
             self.income_task = None
-    async def guild_check(self, ctx):
-        """Global check that applies to EVERY command automatically"""
-        # For slash commands
-        if hasattr(ctx, 'interaction'):
-            if not ctx.guild or ctx.guild.id != ALLOWED_GUILD_ID:
-                await ctx.interaction.response.send_message(
-                    "❌ This bot is private and only works in the official server.",
-                    ephemeral=True
-                )
-                return False
-        # For text commands
-        else:
-            if not ctx.guild or ctx.guild.id != ALLOWED_GUILD_ID:
-                # Silently ignore or send message
-                return False
-        return True
     
     async def on_guild_join(self, guild: discord.Guild):
-        """Leave immediately if joining unauthorized guild"""
-        if guild.id != ALLOWED_GUILD_ID:
-            print(f"⚠️ Attempted to join unauthorized guild: {guild.name} ({guild.id})")
-            
-            # Try to send a message before leaving
-            for channel in guild.text_channels:
-                if channel.permissions_for(guild.me).send_messages:
-                    try:
-                        await channel.send(
-                            "❌ This bot is private and only works in the official server. Leaving now."
-                        )
-                        break
-                    except:
-                        pass
-            
-            await guild.leave()
-            print(f"✅ Left unauthorized guild: {guild.name}")    
+        """Welcome message when joining a new guild"""
+        print(f"🎉 Joined guild: {guild.name} ({guild.id})")
+        
+        # Send welcome message to the first available channel
+        for channel in guild.text_channels:
+            if channel.permissions_for(guild.me).send_messages:
+                try:
+                    await channel.send(
+                        "🚀 **The Quiet End RPG Bot** has landed! "
+                        "Use `/help` to get started with commands."
+                    )
+                    break
+                except:
+                    pass    
         
         
     async def close(self):
@@ -171,10 +152,15 @@ class RPGBot(commands.Bot):
         try:
             # Check database integrity first
             if not self.db.check_integrity():
-                print("❌ Database integrity check failed! Attempting to repair...")
-                self.db.vacuum_database()
+                print("❌ Database integrity check failed! Attempting to analyze...")
+                # PostgreSQL equivalent to vacuum - analyze tables for query optimization
+                try:
+                    self.db.execute_query("ANALYZE")
+                    print("✅ Database analysis complete")
+                except Exception as analyze_error:
+                    print(f"⚠️ Database analysis failed: {analyze_error}")
                 if not self.db.check_integrity():
-                    raise Exception("Database is corrupted and cannot be repaired")
+                    raise Exception("Database connection is not working properly")
             
             print("📊 Initializing activity tracker...")
             self.activity_tracker = ActivityTracker(self)
@@ -230,11 +216,7 @@ class RPGBot(commands.Bot):
     async def on_ready(self):
         print(f'🚀 {self.user} has landed in human space!')
         
-        # Leave any unauthorized guilds on startup
-        for guild in list(self.guilds):
-            if guild.id != ALLOWED_GUILD_ID:
-                print(f"⚠️ Leaving unauthorized guild: {guild.name} ({guild.id})")
-                await guild.leave()
+        # Multi-server support enabled
         
         # Continue with your existing on_ready code...
         print(f'🌍 Connected to {len(self.guilds)} guild(s)')
@@ -272,14 +254,7 @@ class RPGBot(commands.Bot):
             asyncio.create_task(web_map_cog.autostart_webmap())
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """This catches ALL slash command interactions globally"""
-        if not interaction.guild or interaction.guild.id != ALLOWED_GUILD_ID:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ This bot is private and only works in the official server.",
-                    ephemeral=True
-                )
-            return False
+        """Global interaction check - multi-server support enabled"""
         return True    
         
     async def on_command_error(self, ctx, error):
@@ -310,7 +285,7 @@ class RPGBot(commands.Bot):
         """Track user activity on any interaction"""
         if interaction.user and not interaction.user.bot:
             char_check = self.db.execute_query(
-                "SELECT user_id FROM characters WHERE user_id = ? AND is_logged_in = 1",
+                "SELECT user_id FROM characters WHERE user_id = %s AND is_logged_in = TRUE",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -332,7 +307,7 @@ class RPGBot(commands.Bot):
         # Track activity for logged-in characters
         if message.author and not message.author.bot:
             char_check = self.db.execute_query(
-                "SELECT user_id FROM characters WHERE user_id = ? AND is_logged_in = 1",
+                "SELECT user_id FROM characters WHERE user_id = %s AND is_logged_in = TRUE",
                 (message.author.id,),
                 fetch='one'
             )
@@ -355,6 +330,8 @@ class RPGBot(commands.Bot):
         # Skip if author is a bot
         if message.author.bot:
             return True
+            
+        print(f"DEBUG: Processing message from {message.author.name}: {message.content[:50]}")
         
         # Skip if message starts with command prefix or is a slash command
         if message.content.startswith(COMMAND_PREFIX):
@@ -362,12 +339,13 @@ class RPGBot(commands.Bot):
         
         # Check if user has a logged-in character
         char_data = self.db.execute_query(
-            "SELECT name, is_logged_in FROM characters WHERE user_id = ? AND is_logged_in = 1",
+            "SELECT name, is_logged_in FROM characters WHERE user_id = %s AND is_logged_in = TRUE",
             (message.author.id,),
             fetch='one'
         )
         
         if not char_data:
+            print(f"DEBUG: No logged-in character found for {message.author.name}")
             return True
         
         char_name = char_data[0]
@@ -376,46 +354,81 @@ class RPGBot(commands.Bot):
         channel = message.channel
         channel_id = channel.id
         
+        print(f"DEBUG: Checking channel {channel.name} (ID: {channel_id}) for location association")
+        
         # For threads, we need to check both the thread ID and parent channel ID
         is_location_channel = False
         
         # Check if it's a sub-location thread first
         if isinstance(channel, discord.Thread):
+            print(f"DEBUG: Channel is a thread, checking sub-location association")
             sub_location_check = self.db.execute_query(
-                "SELECT sub_location_id FROM sub_locations WHERE thread_id = ?",
+                "SELECT sub_location_id FROM sub_locations WHERE thread_id = %s",
                 (channel.id,),
                 fetch='one'
             )
             if sub_location_check:
                 is_location_channel = True
+                print(f"DEBUG: Found sub-location association: {sub_location_check[0]}")
             else:
                 # For other threads, check the parent channel
                 channel_id = channel.parent_id if channel.parent_id else channel_id
+                print(f"DEBUG: No sub-location found, checking parent channel ID: {channel_id}")
         
         if not is_location_channel:
-            # Check if it's a location channel
-            location_check = self.db.execute_query(
-                "SELECT location_id FROM locations WHERE channel_id = ?",
-                (channel_id,),
-                fetch='one'
+            # Primary Method: Check by exact channel name matching
+            print(f"DEBUG: Using name-based location detection for channel: {channel.name}")
+            
+            # Get all locations and check if this channel name matches any location's expected name
+            all_locations = self.db.execute_query(
+                "SELECT location_id, name, location_type FROM locations",
+                fetch='all'
             )
             
-            if location_check:
-                is_location_channel = True
-            else:
-                # Check if it's a home interior channel
-                home_check = self.db.execute_query(
-                    "SELECT home_id FROM home_interiors WHERE channel_id = ?",
-                    (channel_id,),
-                    fetch='one'
+            location_id_found = None
+            for loc_id, loc_name, loc_type in all_locations:
+                # Import here to avoid circular imports
+                from utils.channel_manager import ChannelManager
+                # Create a temporary instance to access the naming method
+                temp_manager = ChannelManager(self)
+                expected_name = temp_manager._generate_channel_name(loc_name, loc_type)
+                
+                if channel.name == expected_name:
+                    location_id_found = loc_id
+                    print(f"DEBUG: Found location via EXACT name match: {loc_name} (ID: {loc_id})")
+                    is_location_channel = True
+                    break
+            
+            # Fallback Method: Check database channel_id if name matching fails
+            if not is_location_channel:
+                print(f"DEBUG: Name matching failed, trying database channel_id lookup for {channel_id}")
+                from utils.channel_manager import ChannelManager
+                channel_manager = ChannelManager(self)
+                location_check = channel_manager.get_location_from_channel_id(
+                    message.guild.id, 
+                    channel_id
                 )
+                
+                if location_check:
+                    is_location_channel = True
+                    location_id_found = location_check[0]
+                    print(f"DEBUG: Found location via database lookup: location_id {location_check[0]}")
+                else:
+                    print(f"DEBUG: No location association found for channel_id {channel_id}")
+                    
+                    # Check if it's a home interior channel
+                    home_check = self.db.execute_query(
+                        "SELECT home_id FROM home_interiors WHERE channel_id = %s",
+                        (channel_id,),
+                        fetch='one'
+                    )
                 
                 if home_check:
                     is_location_channel = True
                 else:
                     # Check if it's a ship interior channel
                     ship_check = self.db.execute_query(
-                        "SELECT ship_id FROM ships WHERE channel_id = ?",
+                        "SELECT ship_id FROM ships WHERE channel_id = %s",
                         (channel_id,),
                         fetch='one'
                     )
@@ -429,7 +442,10 @@ class RPGBot(commands.Bot):
         
         # If not a location channel, process normally
         if not is_location_channel:
+            print(f"DEBUG: Not a location channel: {channel.name}")
             return True
+            
+        print(f"DEBUG: Found location channel, proceeding with speech conversion")
         
         # Special handling for certain message types that shouldn't be converted
         # Skip messages that are primarily embeds or have no text content
@@ -481,14 +497,24 @@ class RPGBot(commands.Bot):
             speech_content += f"\n*uses sticker: {', '.join(sticker_names)}*"
         
         try:
+            print(f"DEBUG: Converting speech for {char_name}: {message.content[:30]}")
             # Delete the original message
             await message.delete()
             
-            # Send the character speech
+            # Send the character speech to original channel first
             if reference:
-                await message.channel.send(speech_content, reference=reference)
+                sent_message = await message.channel.send(speech_content, reference=reference)
             else:
-                await message.channel.send(speech_content)
+                sent_message = await message.channel.send(speech_content)
+            print(f"DEBUG: Sent speech message to original channel")
+            
+            # Then broadcast the converted speech to cross-guild channels
+            await self.broadcast_cross_guild_message(
+                original_channel=message.channel,
+                message_content=speech_content,
+                reference=reference
+            )
+            print(f"DEBUG: Broadcast speech message to cross-guild channels")
             
             # Return False to indicate commands shouldn't be processed (message was deleted)
             return False
@@ -502,6 +528,160 @@ class RPGBot(commands.Bot):
         except Exception:
             # Any other error, process message normally
             return True
+
+    async def broadcast_cross_guild_message(self, original_channel, message_content=None, embed=None, file=None, reference=None, **kwargs):
+        """
+        Broadcast a message to equivalent channels across all guilds where players are present.
+        This is the core cross-guild synchronization system.
+        """
+        try:
+            # Skip if no message content to broadcast
+            if not message_content and not embed and not file:
+                return
+            
+            # Identify what type of channel this is and get cross-guild equivalents
+            cross_guild_channels = await self._get_cross_guild_channels_for_broadcast(original_channel)
+            
+            if not cross_guild_channels:
+                print(f"DEBUG: No cross-guild channels found for {original_channel.name}")
+                return
+            
+            print(f"DEBUG: Broadcasting to {len(cross_guild_channels)} cross-guild channels")
+                
+            # Broadcast to all equivalent channels using a direct method that bypasses message processing
+            for guild, target_channel in cross_guild_channels:
+                try:
+                    # Use the direct Discord API send method to avoid triggering on_message processing
+                    await target_channel.send(
+                        content=message_content,
+                        embed=embed,
+                        file=file,
+                        reference=reference,
+                        **kwargs
+                    )
+                    print(f"DEBUG: Successfully broadcasted to {guild.name}#{target_channel.name}")
+                except discord.HTTPException as e:
+                    # Handle rate limits and permission errors gracefully
+                    print(f"⚠️ Failed to broadcast to {guild.name}#{target_channel.name}: {e}")
+                except Exception as e:
+                    print(f"❌ Error broadcasting to {guild.name}: {e}")
+                    
+        except Exception as e:
+            print(f"❌ Error in cross-guild broadcast: {e}")
+
+    async def _get_cross_guild_channels_for_broadcast(self, original_channel):
+        """
+        Determine what type of channel this is and get equivalent channels across guilds.
+        Returns list of (guild, channel) tuples for broadcasting.
+        """
+        from utils.channel_manager import ChannelManager
+        
+        # Get the first available ChannelManager instance from any cog
+        channel_mgr = None
+        for cog in self.cogs.values():
+            if hasattr(cog, 'channel_mgr') and isinstance(cog.channel_mgr, ChannelManager):
+                channel_mgr = cog.channel_mgr
+                break
+                
+        if not channel_mgr:
+            return []
+            
+        original_guild_id = original_channel.guild.id
+        
+        # Check if this is a main location channel using EXACT name matching first
+        print(f"DEBUG: _get_cross_guild_channels_for_broadcast checking channel {original_channel.name}")
+        
+        # PRIMARY METHOD: Check by exact channel name matching (same logic as handle_character_speech)
+        all_locations = self.db.execute_query(
+            "SELECT location_id, name, location_type FROM locations",
+            fetch='all'
+        )
+        
+        location_id_found = None
+        for loc_id, loc_name, loc_type in all_locations:
+            temp_manager = ChannelManager(self)
+            expected_name = temp_manager._generate_channel_name(loc_name, loc_type)
+            
+            if original_channel.name == expected_name:
+                location_id_found = loc_id
+                print(f"DEBUG: Found location via EXACT name match for broadcast: {loc_name} (ID: {loc_id})")
+                break
+        
+        if location_id_found:
+            return await channel_mgr.get_cross_guild_location_channels(location_id_found, exclude_guild_id=original_guild_id)
+        
+        # FALLBACK METHOD: Check database channel_id if name matching fails
+        print(f"DEBUG: Name matching failed for broadcast, trying database channel_id lookup")
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self)
+        location_check = channel_manager.get_location_from_channel_id(
+            original_channel.guild.id, 
+            original_channel.id
+        )
+        if location_check:
+            location_id = location_check[0]
+            print(f"DEBUG: Found location via database lookup for broadcast: location_id {location_id}")
+            return await channel_mgr.get_cross_guild_location_channels(location_id, exclude_guild_id=original_guild_id)
+        
+        # Check if this is a sub-location thread
+        if isinstance(original_channel, discord.Thread):
+            sub_location_check = self.db.execute_query(
+                "SELECT parent_location_id, name FROM sub_locations WHERE thread_id = %s",
+                (original_channel.id,),
+                fetch='one'
+            )
+            if sub_location_check:
+                parent_location_id, sub_name = sub_location_check
+                return await channel_mgr.get_cross_guild_sub_location_channels(parent_location_id, sub_name, exclude_guild_id=original_guild_id)
+        
+        # Check if this is a ship interior channel
+        ship_check = self.db.execute_query(
+            "SELECT ship_id FROM ships WHERE channel_id = %s",
+            (original_channel.id,),
+            fetch='one'
+        )
+        if ship_check:
+            ship_id = ship_check[0]
+            return await channel_mgr.get_cross_guild_ship_channels(ship_id, exclude_guild_id=original_guild_id)
+        
+        # Check if this is a home interior channel
+        home_check = self.db.execute_query(
+            "SELECT home_id FROM home_interiors WHERE channel_id = %s",
+            (original_channel.id,),
+            fetch='one'
+        )
+        if home_check:
+            home_id = home_check[0]
+            return await channel_mgr.get_cross_guild_home_channels(home_id, exclude_guild_id=original_guild_id)
+        
+        # Not a recognized location channel type
+        return []
+
+    async def send_with_cross_guild_broadcast(self, channel, content=None, **kwargs):
+        """
+        Send a message to a channel and automatically broadcast to cross-guild equivalents.
+        This replaces direct channel.send() calls for location channels.
+        """
+        # Send to original channel first
+        message = await channel.send(content=content, **kwargs)
+        
+        # Broadcast to cross-guild channels
+        await self.broadcast_cross_guild_message(
+            original_channel=channel,
+            message_content=content,
+            **kwargs
+        )
+        
+        return message
+
+    def get_cross_guild_send_method(self, channel):
+        """
+        Returns a send method that automatically broadcasts to cross-guild channels.
+        This can be used by cogs to replace channel.send() calls.
+        """
+        async def cross_guild_send(content=None, **kwargs):
+            return await self.send_with_cross_guild_broadcast(channel, content, **kwargs)
+        return cross_guild_send
         
     async def generate_location_income(self):
         """Generate passive income for locations every hour."""
@@ -539,8 +719,8 @@ class RPGBot(commands.Bot):
                     if final_income > 0:
                         self.db.execute_query(
                             '''UPDATE locations 
-                               SET generated_income = generated_income + ? 
-                               WHERE location_id = ?''',
+                               SET generated_income = generated_income + %s 
+                               WHERE location_id = %s''',
                             (final_income, location_id)
                         )
                 
@@ -598,16 +778,7 @@ if __name__ == "__main__":
         if hasattr(bot, 'db') and hasattr(bot.db, '_shutdown') and not bot.db._shutdown:
             bot.db.cleanup()
         
-        # Final WAL checkpoint
-        try:
-            import sqlite3
-            db_path = bot.db.db_path if hasattr(bot, 'db') else "thequietendDEV.db"
-            if os.path.exists(db_path):
-                conn = sqlite3.connect(db_path)
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                conn.close()
-                print("✅ Final WAL checkpoint complete")
-        except Exception as e:
-            print(f"⚠️ Final checkpoint error: {e}")
+        # PostgreSQL cleanup is already handled by the database cleanup method
+        print("✅ PostgreSQL database cleanup handled by connection pool")
         
         print("✅ Cleanup complete, exiting...")

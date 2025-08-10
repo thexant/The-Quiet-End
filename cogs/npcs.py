@@ -54,7 +54,7 @@ class NPCCog(commands.Cog):
                           n.last_radio_message
                    FROM dynamic_npcs n
                    LEFT JOIN locations l ON n.current_location = l.location_id
-                   WHERE n.is_alive = 1 AND n.current_location IS NOT NULL""",
+                   WHERE n.is_alive = true AND n.current_location IS NOT NULL""",
                 fetch='all'
             )
 
@@ -85,7 +85,7 @@ class NPCCog(commands.Cog):
                     """SELECT n.current_location, l.name as location_name, l.system_name
                        FROM dynamic_npcs n
                        LEFT JOIN locations l ON n.current_location = l.location_id
-                       WHERE n.npc_id = ? AND n.is_alive = 1 AND n.current_location IS NOT NULL""",
+                       WHERE n.npc_id = %s AND n.is_alive = true AND n.current_location IS NOT NULL""",
                     (npc_id,),
                     fetch='one'
                 )
@@ -113,8 +113,8 @@ class NPCCog(commands.Cog):
     
                     # Update last radio message time
                     self.db.execute_query(
-                        "UPDATE dynamic_npcs SET last_radio_message = ? WHERE npc_id = ?",
-                        (datetime.now().isoformat(), npc_id)
+                        "UPDATE dynamic_npcs SET last_radio_message = CURRENT_TIMESTAMP WHERE npc_id = %s",
+                        (npc_id,)
                     )
                 else:
                     # NPC decided not to send a message this cycle
@@ -136,7 +136,7 @@ class NPCCog(commands.Cog):
                 # Get NPCs that aren't currently traveling
                 idle_npcs = self.db.execute_query(
                     """SELECT npc_id, name, current_location FROM dynamic_npcs 
-                       WHERE is_alive = 1 AND travel_start_time IS NULL AND current_location IS NOT NULL""",
+                       WHERE is_alive = true AND travel_start_time IS NULL AND current_location IS NOT NULL""",
                     fetch='all'
                 )
                 
@@ -158,7 +158,7 @@ class NPCCog(commands.Cog):
         
         # Check if location has special alignment requirements
         location_data = self.db.execute_query(
-            "SELECT has_black_market, wealth_level, location_type FROM locations WHERE location_id = ?",
+            "SELECT has_black_market, wealth_level, location_type FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -179,7 +179,7 @@ class NPCCog(commands.Cog):
         # Check average reputation at location to determine dominant faction
         avg_reputation = self.db.execute_query(
             """SELECT AVG(reputation) FROM character_reputation 
-               WHERE location_id = ? AND ABS(reputation) > 10""",
+               WHERE location_id = %s AND ABS(reputation) > 10""",
             (location_id,),
             fetch='one'
         )
@@ -262,7 +262,7 @@ class NPCCog(commands.Cog):
                     """SELECT n.npc_id, n.name, n.ship_name, n.current_location, l.location_type, l.name as location_name
                        FROM dynamic_npcs n
                        JOIN locations l ON n.current_location = l.location_id
-                       WHERE n.is_alive = 1 AND n.travel_start_time IS NULL""",
+                       WHERE n.is_alive = true AND n.travel_start_time IS NULL""",
                     fetch='all'
                 )
                 
@@ -296,11 +296,11 @@ class NPCCog(commands.Cog):
                     """SELECT n.npc_id, n.name, n.callsign, n.current_location, l.name as location_name, l.system_name
                        FROM dynamic_npcs n
                        LEFT JOIN locations l ON n.current_location = l.location_id
-                       WHERE n.is_alive = 1 
+                       WHERE n.is_alive = true 
                        AND n.current_location NOT IN (
                            SELECT DISTINCT current_location 
                            FROM characters 
-                           WHERE is_logged_in = 1 AND current_location IS NOT NULL
+                           WHERE is_logged_in = true AND current_location IS NOT NULL
                        )""",
                     fetch='all'
                 )
@@ -319,7 +319,7 @@ class NPCCog(commands.Cog):
                     
                     # Kill the NPC
                     self.db.execute_query(
-                        "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = ?",
+                        "UPDATE dynamic_npcs SET is_alive = false WHERE npc_id = %s",
                         (npc_id,)
                     )
                     
@@ -375,7 +375,7 @@ class NPCCog(commands.Cog):
         try:
             # Clear old jobs first (keep only jobs from last 3 hours to prevent buildup)
             self.db.execute_query(
-                "DELETE FROM npc_jobs WHERE created_at < datetime('now', '-3 hours')"
+                "DELETE FROM npc_jobs WHERE created_at < NOW() - INTERVAL '3 hours'"
             )
             
             # Get all static NPCs with their locations and occupations
@@ -423,7 +423,7 @@ class NPCCog(commands.Cog):
                               l.name as location_name, l.system_name, l.x_coord, l.y_coord
                        FROM dynamic_npcs n
                        JOIN locations l ON n.current_location = l.location_id
-                       WHERE n.is_alive = 1 AND n.travel_start_time IS NULL""",
+                       WHERE n.is_alive = true AND n.travel_start_time IS NULL""",
                     fetch='all'
                 )
                 
@@ -461,7 +461,7 @@ class NPCCog(commands.Cog):
             # Successful job completion
             credits_earned = random.randint(500, 3000)
             self.db.execute_query(
-                "UPDATE dynamic_npcs SET credits = credits + ? WHERE npc_id = ?",
+                "UPDATE dynamic_npcs SET credits = credits + %s WHERE npc_id = %s",
                 (credits_earned, npc_id)
             )
             
@@ -499,7 +499,7 @@ class NPCCog(commands.Cog):
                 
                 # Kill the NPC
                 self.db.execute_query(
-                    "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = ?",
+                    "UPDATE dynamic_npcs SET is_alive = false WHERE npc_id = %s",
                     (npc_id,)
                 )
                 
@@ -519,7 +519,7 @@ class NPCCog(commands.Cog):
                 # Failed but survived with losses
                 credits_lost = random.randint(200, 1000)
                 self.db.execute_query(
-                    "UPDATE dynamic_npcs SET credits = MAX(0, credits - ?) WHERE npc_id = ?",
+                    "UPDATE dynamic_npcs SET credits = GREATEST(0::bigint, credits - %s) WHERE npc_id = %s",
                     (credits_lost, npc_id)
                 )
                 
@@ -548,7 +548,7 @@ class NPCCog(commands.Cog):
                               l.name as location_name, l.system_name, l.x_coord, l.y_coord
                        FROM dynamic_npcs n
                        LEFT JOIN locations l ON n.current_location = l.location_id
-                       WHERE n.is_alive = 1""",
+                       WHERE n.is_alive = true""",
                     fetch='all'
                 )
                 
@@ -650,7 +650,7 @@ class NPCCog(commands.Cog):
         if random.random() < event["death_chance"]:
             # NPC dies from the event
             self.db.execute_query(
-                "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = ?",
+                "UPDATE dynamic_npcs SET is_alive = false WHERE npc_id = %s",
                 (npc_id,)
             )
             
@@ -685,7 +685,7 @@ class NPCCog(commands.Cog):
         # Get location data if not provided
         if location_type is None or wealth_level is None:
             location_data = self.db.execute_query(
-                "SELECT location_type, wealth_level FROM locations WHERE location_id = ?",
+                "SELECT location_type, wealth_level FROM locations WHERE location_id = %s",
                 (location_id,),
                 fetch='one'
             )
@@ -733,7 +733,7 @@ class NPCCog(commands.Cog):
                 """INSERT INTO static_npcs 
                    (location_id, name, age, occupation, personality, trade_specialty, 
                     alignment, hp, max_hp, combat_rating, credits)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (location_id, name, age, occupation, personality, trade_specialty,
                  alignment, max_hp, max_hp, combat_rating, credits)
             )
@@ -825,7 +825,7 @@ class NPCCog(commands.Cog):
         
         # Validate start location exists
         location_exists = self.db.execute_query(
-            "SELECT location_id FROM locations WHERE location_id = ?",
+            "SELECT location_id FROM locations WHERE location_id = %s",
             (start_location,),
             fetch='one'
         )
@@ -865,7 +865,7 @@ class NPCCog(commands.Cog):
             if not destination_location:
                 nearby_locations = self.db.execute_query(
                     """SELECT destination_location FROM corridors 
-                       WHERE origin_location = ? AND is_active = 1""",
+                       WHERE origin_location = %s AND is_active = true""",
                     (start_location,),
                     fetch='all'
                 )
@@ -888,9 +888,9 @@ class NPCCog(commands.Cog):
                        (name, callsign, age, ship_name, ship_type, current_location, 
                         destination_location, travel_start_time, travel_duration, credits,
                         alignment, hp, max_hp, combat_rating, ship_hull, max_ship_hull)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (name, callsign, age, ship_name, ship_type, start_location,
-                     destination_location, datetime.now().isoformat(), travel_duration, credits,
+                     destination_location, travel_duration, credits,
                      alignment, max_hp, max_hp, combat_rating, max_ship_hull, max_ship_hull)
                 )
             else:
@@ -900,7 +900,7 @@ class NPCCog(commands.Cog):
                        (name, callsign, age, ship_name, ship_type, current_location, 
                         destination_location, travel_start_time, travel_duration, credits,
                         alignment, hp, max_hp, combat_rating, ship_hull, max_ship_hull)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (name, callsign, age, ship_name, ship_type, start_location,
                      None, None, None, credits,
                      alignment, max_hp, max_hp, combat_rating, max_ship_hull, max_ship_hull)
@@ -908,7 +908,7 @@ class NPCCog(commands.Cog):
 
             # Get the ID of the inserted NPC
             npc_id = self.db.execute_query(
-                "SELECT npc_id FROM dynamic_npcs WHERE callsign = ? ORDER BY npc_id DESC LIMIT 1",
+                "SELECT npc_id FROM dynamic_npcs WHERE callsign = %s ORDER BY npc_id DESC LIMIT 1",
                 (callsign,),
                 fetch='one'
             )[0]
@@ -917,7 +917,7 @@ class NPCCog(commands.Cog):
             if not start_traveling:
                 # Get location details for the timer
                 location_info = self.db.execute_query(
-                    "SELECT name, system_name FROM locations WHERE location_id = ?",
+                    "SELECT name, system_name FROM locations WHERE location_id = %s",
                     (start_location,),
                     fetch='one'
                 )
@@ -934,7 +934,7 @@ class NPCCog(commands.Cog):
                 delay = (arrival_time - datetime.now()).total_seconds()
                 
                 if delay > 0:
-                    task = asyncio.create_task(self._handle_npc_arrival_delayed(npc_id, name, destination_location, self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (destination_location,), fetch='one')[0], delay))
+                    task = asyncio.create_task(self._handle_npc_arrival_delayed(npc_id, name, destination_location, self.db.execute_query("SELECT name FROM locations WHERE location_id = %s", (destination_location,), fetch='one')[0], delay))
                     self.dynamic_npc_tasks[npc_id] = task
             
             return npc_id  # Return the NPC ID on success
@@ -971,7 +971,7 @@ class NPCCog(commands.Cog):
             
             # Check if callsign is unique among both players and NPCs
             existing = self.db.execute_query(
-                "SELECT 1 FROM characters WHERE callsign = ? UNION SELECT 1 FROM dynamic_npcs WHERE callsign = ?",
+                "SELECT 1 FROM characters WHERE callsign = %s UNION SELECT 1 FROM dynamic_npcs WHERE callsign = %s",
                 (callsign, callsign),
                 fetch='one'
             )
@@ -1032,7 +1032,7 @@ class NPCCog(commands.Cog):
             """SELECT l.x_coord, l.y_coord, l.system_name
                FROM dynamic_npcs n
                JOIN locations l ON n.current_location = l.location_id
-               WHERE n.callsign = ?""",
+               WHERE n.callsign = %s""",
             (callsign,),
             fetch='one'
         )
@@ -1070,7 +1070,7 @@ class NPCCog(commands.Cog):
                       dl.name as dest_name, dl.system_name as dest_system
                FROM corridors c
                JOIN locations dl ON c.destination_location = dl.location_id
-               WHERE c.origin_location = ? AND c.is_active = 1""",
+               WHERE c.origin_location = %s AND c.is_active = true""",
             (current_location,),
             fetch='all'
         )
@@ -1082,12 +1082,11 @@ class NPCCog(commands.Cog):
         corridor_id, dest_location, travel_time, corridor_name, dest_name, dest_system = random.choice(corridors)
         
         # Start travel
-        start_time = datetime.now()
         self.db.execute_query(
             """UPDATE dynamic_npcs 
-               SET destination_location = ?, travel_start_time = ?, travel_duration = ?
-               WHERE npc_id = ?""",
-            (dest_location, start_time.isoformat(), travel_time, npc_id)
+               SET destination_location = %s, travel_start_time = CURRENT_TIMESTAMP, travel_duration = %s
+               WHERE npc_id = %s""",
+            (dest_location, travel_time, npc_id)
         )
         
         # Announce departure if players are present
@@ -1107,7 +1106,7 @@ class NPCCog(commands.Cog):
         
         # Check if NPC is still alive (might have died in corridor collapse)
         npc_status = self.db.execute_query(
-            "SELECT is_alive FROM dynamic_npcs WHERE npc_id = ?",
+            "SELECT is_alive FROM dynamic_npcs WHERE npc_id = %s",
             (npc_id,),
             fetch='one'
         )
@@ -1118,9 +1117,9 @@ class NPCCog(commands.Cog):
         # Complete the travel
         self.db.execute_query(
             """UPDATE dynamic_npcs 
-               SET current_location = ?, destination_location = NULL, 
+               SET current_location = %s, destination_location = NULL, 
                    travel_start_time = NULL, travel_duration = NULL
-               WHERE npc_id = ?""",
+               WHERE npc_id = %s""",
             (dest_location, npc_id)
         )
         
@@ -1134,7 +1133,7 @@ class NPCCog(commands.Cog):
                       n.last_radio_message
                FROM dynamic_npcs n
                LEFT JOIN locations l ON n.current_location = l.location_id
-               WHERE n.npc_id = ?""",
+               WHERE n.npc_id = %s""",
             (npc_id,),
             fetch='one'
         )
@@ -1151,7 +1150,7 @@ class NPCCog(commands.Cog):
         """Announce NPC departure if players are present"""
         # Check if any players are at this location
         players_present = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE current_location = ? AND is_logged_in = 1",
+            "SELECT user_id FROM characters WHERE current_location = %s AND is_logged_in = true",
             (location_id,),
             fetch='all'
         )
@@ -1159,19 +1158,15 @@ class NPCCog(commands.Cog):
         if not players_present:
             return
         
-        # Get location channel
-        channel_id = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
+        # Get location channels for cross-guild broadcasting
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
         
-        if not channel_id or not channel_id[0]:
+        if not cross_guild_channels:
             return
         
-        for guild in self.bot.guilds:
-            channel = guild.get_channel(channel_id[0])
-            if channel:
+        for guild_channel, channel in cross_guild_channels:
                 travel_hours = travel_time // 3600
                 travel_minutes = (travel_time % 3600) // 60
                 
@@ -1193,7 +1188,7 @@ class NPCCog(commands.Cog):
                 # Removed the "NPC Activity" field
                 
                 try:
-                    await channel.send(embed=embed)
+                    await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
                 except Exception:
                     pass
 
@@ -1201,7 +1196,7 @@ class NPCCog(commands.Cog):
         """Announce NPC arrival if players are present"""
         # Check if any players are at this location
         players_present = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE current_location = ? AND is_logged_in = 1",
+            "SELECT user_id FROM characters WHERE current_location = %s AND is_logged_in = true",
             (location_id,),
             fetch='all'
         )
@@ -1209,19 +1204,15 @@ class NPCCog(commands.Cog):
         if not players_present:
             return
         
-        # Get location channel
-        channel_id = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
+        # Get location channels for cross-guild broadcasting
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
         
-        if not channel_id or not channel_id[0]:
+        if not cross_guild_channels:
             return
         
-        for guild in self.bot.guilds:
-            channel = guild.get_channel(channel_id[0])
-            if channel:
+        for guild_channel, channel in cross_guild_channels:
                 embed = discord.Embed(
                     title="🛬 Arrival",
                     description=f"**{npc_name}** has arrived at this location",
@@ -1235,7 +1226,7 @@ class NPCCog(commands.Cog):
                 # Removed the "NPC Activity" field
                 
                 try:
-                    await channel.send(embed=embed)
+                    await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
                 except Exception:
                     pass
 
@@ -1248,24 +1239,20 @@ class NPCCog(commands.Cog):
         
         # Check if players are present to send the message
         players_present = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE current_location = ? AND is_logged_in = 1",
+            "SELECT user_id FROM characters WHERE current_location = %s AND is_logged_in = true",
             (location_id,),
             fetch='all'
         )
         
         # Only send Discord message if players are present
         if players_present:
-            # Get location channel
-            channel_id = self.db.execute_query(
-                "SELECT channel_id FROM locations WHERE location_id = ?",
-                (location_id,),
-                fetch='one'
-            )
+            # Get location channels for cross-guild broadcasting
+            from utils.channel_manager import ChannelManager
+            channel_manager = ChannelManager(self.bot)
+            cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
             
-            if channel_id and channel_id[0]:
-                for guild in self.bot.guilds:
-                    channel = guild.get_channel(channel_id[0])
-                    if channel:
+            if cross_guild_channels:
+                for guild_channel, channel in cross_guild_channels:
                         embed = discord.Embed(
                             description=f"👤 {action_message}",
                             color=0x6c5ce7
@@ -1278,8 +1265,8 @@ class NPCCog(commands.Cog):
         
         # Always update last action time (whether players are present or not)
         self.db.execute_query(
-            "UPDATE dynamic_npcs SET last_location_action = ? WHERE npc_id = ?",
-            (datetime.now().isoformat(), npc_id)
+            "UPDATE dynamic_npcs SET last_location_action = CURRENT_TIMESTAMP WHERE npc_id = %s",
+            (npc_id,)
         )
         
         # Log the action for background simulation tracking
@@ -1296,7 +1283,7 @@ class NPCCog(commands.Cog):
                    (n.current_location = c.origin_location AND n.destination_location = c.destination_location) OR
                    (n.current_location = c.destination_location AND n.destination_location = c.origin_location)
                )
-               WHERE c.corridor_id = ? AND n.travel_start_time IS NOT NULL AND n.is_alive = 1""",
+               WHERE c.corridor_id = %s AND n.travel_start_time IS NOT NULL AND n.is_alive = true""",
             (corridor_id,),
             fetch='all'
         )
@@ -1304,7 +1291,7 @@ class NPCCog(commands.Cog):
         for npc_id, npc_name, callsign, origin_loc, dest_loc in traveling_npcs:
             # Kill the NPC
             self.db.execute_query(
-                "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = ?",
+                "UPDATE dynamic_npcs SET is_alive = false WHERE npc_id = %s",
                 (npc_id,)
             )
             
@@ -1342,7 +1329,7 @@ class NPCCog(commands.Cog):
     def get_static_npcs_for_location(self, location_id: int) -> List[Tuple[str, int]]:
         """Get static NPCs for a location (for welcome embed)"""
         npcs = self.db.execute_query(
-            "SELECT name, age FROM static_npcs WHERE location_id = ? ORDER BY name",
+            "SELECT name, age FROM static_npcs WHERE location_id = %s ORDER BY name",
             (location_id,),
             fetch='all'
         )

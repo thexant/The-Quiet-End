@@ -424,8 +424,8 @@ class CreationCog(commands.Cog):
                          uses_remaining: int = None, rarity: str = "common", equippable: bool = False,
                          equipment_slot: str = None, stat_modifiers: str = None):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         if not location_name and not player:
@@ -477,7 +477,7 @@ class CreationCog(commands.Cog):
         if player:
             # Give item to player
             char_check = self.db.execute_query(
-                "SELECT user_id FROM characters WHERE user_id = ?",
+                "SELECT user_id FROM characters WHERE user_id = %s",
                 (player.id,),
                 fetch='one'
             )
@@ -488,20 +488,20 @@ class CreationCog(commands.Cog):
             
             # Add to player inventory
             existing_item = self.db.execute_query(
-                "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+                "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
                 (player.id, item_name),
                 fetch='one'
             )
             
             if existing_item:
                 self.db.execute_query(
-                    "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
+                    "UPDATE inventory SET quantity = quantity + %s WHERE item_id = %s",
                     (quantity, existing_item[0])
                 )
             else:
                 self.db.execute_query(
                     '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
                     (player.id, item_name, item_type, quantity, description, value, metadata_str, 
                      equippable or item_type in ["equipment", "clothing"], equipment_slot, json.dumps(parsed_stat_modifiers) if parsed_stat_modifiers else None)
                 )
@@ -525,7 +525,7 @@ class CreationCog(commands.Cog):
         else:
             # Add to location shop
             location = self.db.execute_query(
-                "SELECT location_id FROM locations WHERE LOWER(name) LIKE LOWER(?)",
+                "SELECT location_id FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
                 (f"%{location_name}%",),
                 fetch='one'
             )
@@ -544,7 +544,7 @@ class CreationCog(commands.Cog):
             
             # Check if item already exists in shop
             existing_item = self.db.execute_query(
-                "SELECT item_id, stock FROM shop_items WHERE location_id = ? AND LOWER(item_name) = LOWER(?)",
+                "SELECT item_id, stock FROM shop_items WHERE location_id = %s AND LOWER(item_name) = LOWER(%s)",
                 (location_id, item_name),
                 fetch='one'
             )
@@ -553,13 +553,13 @@ class CreationCog(commands.Cog):
                 shop_item_id, current_stock = existing_item
                 new_stock = current_stock + stock if current_stock != -1 else -1
                 self.db.execute_query(
-                    "UPDATE shop_items SET stock = ?, metadata = ? WHERE item_id = ?",
+                    "UPDATE shop_items SET stock = %s, metadata = %s WHERE item_id = %s",
                     (new_stock, metadata_str, shop_item_id)
                 )
             else:
                 self.db.execute_query(
                     '''INSERT INTO shop_items (location_id, item_name, item_type, price, stock, description, metadata, sold_by_player)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
                     (location_id, item_name, item_type, price, stock, description, metadata_str, False)
                 )
             
@@ -612,15 +612,15 @@ class CreationCog(commands.Cog):
                              system: str = None):
         """Create a fully configured custom location"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Find the connection location
         connection = self.db.execute_query(
             """SELECT location_id, name, x_coord, y_coord, location_type, system_name 
                FROM locations 
-               WHERE LOWER(name) LIKE LOWER(?)""",
+               WHERE LOWER(name) LIKE LOWER(%s)""",
             (f"%{connect_to}%",),
             fetch='one'
         )
@@ -714,7 +714,7 @@ class CreationCog(commands.Cog):
                     has_upgrades, has_shipyard,
                     has_federal_supplies, has_black_market,
                     created_at, is_generated)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), 0)""",
                 (
                     location_data['name'],
                     location_data['type'],
@@ -746,7 +746,7 @@ class CreationCog(commands.Cog):
                     conn,
                     """INSERT INTO sub_locations 
                        (parent_location_id, name, sub_type, description, is_active)
-                       VALUES (?, ?, ?, ?, 1)""",
+                       VALUES (%s, %s, %s, %s, 1)""",
                     (location_id, sub_name, sub_type, sub_desc)
                 )
             
@@ -773,7 +773,7 @@ class CreationCog(commands.Cog):
                         """INSERT INTO static_npcs 
                            (location_id, name, age, occupation, personality, alignment, 
                             hp, max_hp, combat_rating, credits)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         npc_data_list
                     )
             
@@ -893,7 +893,7 @@ class CreationCog(commands.Cog):
         
         # Get connection location details including system info for route type detection
         connect_info = self.db.execute_query(
-            "SELECT x_coord, y_coord, location_type, system_name FROM locations WHERE location_id = ?",
+            "SELECT x_coord, y_coord, location_type, system_name FROM locations WHERE location_id = %s",
             (connect_to_id,),
             fetch='one'
         )
@@ -906,7 +906,7 @@ class CreationCog(commands.Cog):
         
         # Get new location's system info
         new_location_info = self.db.execute_query(
-            "SELECT system_name FROM locations WHERE location_id = ?",
+            "SELECT system_name FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -1006,7 +1006,7 @@ class CreationCog(commands.Cog):
             """INSERT INTO corridors 
                (name, origin_location, destination_location, travel_time,
                 fuel_cost, danger_level, corridor_type, is_active, is_generated)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, 1, 0)""",
             (name, origin_id, dest_id, travel_time, fuel_cost, danger_level, corridor_type)
         )
 
@@ -1089,9 +1089,9 @@ class CreationCog(commands.Cog):
         nearby = self.db.execute_query(
             """SELECT location_id, name, x_coord, y_coord, location_type, system_name
                FROM locations
-               WHERE location_id != ?
-               AND ABS(x_coord - ?) < 30
-               AND ABS(y_coord - ?) < 30
+               WHERE location_id != %s
+               AND ABS(x_coord - %s) < 30
+               AND ABS(y_coord - %s) < 30
                ORDER BY RANDOM()
                LIMIT 10""",
             (location_id, x, y),
@@ -1109,8 +1109,8 @@ class CreationCog(commands.Cog):
             # Check if corridor already exists
             existing = self.db.execute_query(
                 """SELECT corridor_id FROM corridors
-                   WHERE (origin_location = ? AND destination_location = ?)
-                   OR (origin_location = ? AND destination_location = ?)""",
+                   WHERE (origin_location = %s AND destination_location = %s)
+                   OR (origin_location = %s AND destination_location = %s)""",
                 (location_id, other_id, other_id, location_id),
                 fetch='one'
             )
@@ -1132,8 +1132,8 @@ class CreationCog(commands.Cog):
         result = self.db.execute_query(
             """SELECT g.location_id, g.name
                FROM locations g
-               JOIN locations l1 ON l1.location_id = ?
-               JOIN locations l2 ON l2.location_id = ?
+               JOIN locations l1 ON l1.location_id = %s
+               JOIN locations l2 ON l2.location_id = %s
                WHERE g.location_type = 'gate'
                ORDER BY (ABS(g.x_coord - l1.x_coord) + ABS(g.y_coord - l1.y_coord) +
                         ABS(g.x_coord - l2.x_coord) + ABS(g.y_coord - l2.y_coord))
@@ -1262,20 +1262,20 @@ class CreationCog(commands.Cog):
                              corridor_name: str, route_type: Literal["gated", "local_space", "ungated"] = "gated",
                              travel_time: int = 300, fuel_cost: int = 20, danger_level: int = 3):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
             
         await interaction.response.defer(ephemeral=True)
         
         # Find locations by name (case insensitive) and get their types
         origin_loc = self.db.execute_query(
-            "SELECT location_id, name, location_type, system_name FROM locations WHERE LOWER(name) LIKE LOWER(?)", 
+            "SELECT location_id, name, location_type, system_name FROM locations WHERE LOWER(name) LIKE LOWER(%s)", 
             (f"%{origin}%",), 
             fetch='one'
         )
         dest_loc = self.db.execute_query(
-            "SELECT location_id, name, location_type, system_name FROM locations WHERE LOWER(name) LIKE LOWER(?)", 
+            "SELECT location_id, name, location_type, system_name FROM locations WHERE LOWER(name) LIKE LOWER(%s)", 
             (f"%{destination}%",), 
             fetch='one'
         )
@@ -1315,7 +1315,7 @@ class CreationCog(commands.Cog):
         # Check if corridor already exists
         existing = self.db.execute_query(
             '''SELECT corridor_id FROM corridors 
-               WHERE origin_location = ? AND destination_location = ?''',
+               WHERE origin_location = %s AND destination_location = %s''',
             (origin_id, dest_id),
             fetch='one'
         )
@@ -1349,11 +1349,11 @@ class CreationCog(commands.Cog):
             # For gated routes, use the existing _create_gated_corridor method if available
             # Get coordinates to calculate distance
             origin_coords = self.db.execute_query(
-                "SELECT x_coord, y_coord FROM locations WHERE location_id = ?",
+                "SELECT x_coord, y_coord FROM locations WHERE location_id = %s",
                 (origin_id,), fetch='one'
             )
             dest_coords = self.db.execute_query(
-                "SELECT x_coord, y_coord FROM locations WHERE location_id = ?", 
+                "SELECT x_coord, y_coord FROM locations WHERE location_id = %s", 
                 (dest_id,), fetch='one'
             )
             
@@ -1386,7 +1386,7 @@ class CreationCog(commands.Cog):
             self.db.execute_query(
                 '''INSERT INTO corridors 
                    (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_generated)
-                   VALUES (?, ?, ?, ?, ?, ?, 0)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, 0)''',
                 (corridor_name, curr_origin_id, curr_dest_id, travel_time, fuel_cost, danger_level)
             )
         
@@ -1416,8 +1416,8 @@ class CreationCog(commands.Cog):
     async def delete_corridor(self, interaction: discord.Interaction, corridor_name: str):
         """Delete a corridor by name, handling all types (gated, ungated, local space)"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
             
         await interaction.response.defer(ephemeral=True)
@@ -1429,7 +1429,7 @@ class CreationCog(commands.Cog):
                FROM corridors c
                JOIN locations ol ON c.origin_location = ol.location_id
                JOIN locations dl ON c.destination_location = dl.location_id
-               WHERE LOWER(c.name) LIKE LOWER(?)
+               WHERE LOWER(c.name) LIKE LOWER(%s)
                ORDER BY c.name""",
             (f"%{corridor_name}%",),
             fetch='all'
@@ -1476,7 +1476,7 @@ class CreationCog(commands.Cog):
                    FROM travel_sessions ts
                    JOIN corridors c ON ts.corridor_id = c.corridor_id  
                    JOIN characters ch ON ts.user_id = ch.user_id
-                   WHERE ts.corridor_id = ? AND ts.status = 'traveling'""",
+                   WHERE ts.corridor_id = %s AND ts.status = 'traveling'""",
                 (corridor_id,),
                 fetch='all'
             )
@@ -1489,7 +1489,7 @@ class CreationCog(commands.Cog):
                        (n.current_location = c.origin_location AND n.destination_location = c.destination_location) OR
                        (n.current_location = c.destination_location AND n.destination_location = c.origin_location)
                    )
-                   WHERE c.corridor_id = ? AND n.travel_start_time IS NOT NULL AND n.is_alive = 1""",
+                   WHERE c.corridor_id = %s AND n.travel_start_time IS NOT NULL AND n.is_alive = TRUE""",
                 (corridor_id,),
                 fetch='all'
             )
@@ -1550,7 +1550,7 @@ class CreationCog(commands.Cog):
                         npc_id, npc_name, callsign, corridor_name = traveler_data
                         # Kill the NPC
                         self.cog.db.execute_query(
-                            "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = ?",
+                            "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = %s",
                             (npc_id,)
                         )
                         # Log NPC death
@@ -1561,7 +1561,7 @@ class CreationCog(commands.Cog):
                 for corridor_id in self.corridors_to_delete:
                     # Clean up travel sessions
                     self.cog.db.execute_query(
-                        "DELETE FROM travel_sessions WHERE corridor_id = ?",
+                        "DELETE FROM travel_sessions WHERE corridor_id = %s",
                         (corridor_id,)
                     )
                     
@@ -1570,7 +1570,7 @@ class CreationCog(commands.Cog):
                     
                     # Delete the corridor itself
                     self.cog.db.execute_query(
-                        "DELETE FROM corridors WHERE corridor_id = ?",
+                        "DELETE FROM corridors WHERE corridor_id = %s",
                         (corridor_id,)
                     )
                     deleted_count += 1
@@ -1611,8 +1611,8 @@ class CreationCog(commands.Cog):
     
     @creation_group.command(name="dynamic_npc", description="Manually spawn a dynamic NPC")
     async def spawn_dynamic_npc(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         npc_cog = self.bot.get_cog('NPCCog')
@@ -1623,7 +1623,7 @@ class CreationCog(commands.Cog):
         npc_id = await npc_cog.create_dynamic_npc()
         if npc_id:
             npc_info = self.db.execute_query(
-                "SELECT name, callsign, ship_name FROM dynamic_npcs WHERE npc_id = ?",
+                "SELECT name, callsign, ship_name FROM dynamic_npcs WHERE npc_id = %s",
                 (npc_id,),
                 fetch='one'
             )
@@ -1651,12 +1651,12 @@ class CreationCog(commands.Cog):
                         description: str, reward: int, duration: int, danger_level: int,
                         required_skill: str = None, min_skill_level: int = 0, expires_hours: int = 8):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         location = self.db.execute_query(
-            "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(?)",
+            "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
             (f"%{location_name}%",),
             fetch='one'
         )
@@ -1677,7 +1677,7 @@ class CreationCog(commands.Cog):
             '''INSERT INTO jobs
                (location_id, title, description, reward_money, required_skill,
                 min_skill_level, danger_level, duration_minutes, expires_at, is_taken)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)''',
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 0)''',
             (
                 location_id,
                 title,
@@ -1730,13 +1730,13 @@ class CreationCog(commands.Cog):
                                personality: str, age: int = None, 
                                alignment: str = "independent", combat_rating: int = None):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Find location
         location = self.db.execute_query(
-            "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(?)",
+            "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
             (f"%{location_name}%",),
             fetch='one'
         )
@@ -1760,7 +1760,7 @@ class CreationCog(commands.Cog):
         
         # Generate credits based on occupation and location wealth
         location_wealth = self.db.execute_query(
-            "SELECT wealth_level FROM locations WHERE location_id = ?",
+            "SELECT wealth_level FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -1774,7 +1774,7 @@ class CreationCog(commands.Cog):
             '''INSERT INTO static_npcs 
                (location_id, name, age, occupation, personality, alignment, 
                 hp, max_hp, combat_rating, credits)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
             (location_id, name, age, occupation, personality, alignment,
              hp, max_hp, combat_rating, credits)
         )
@@ -1817,8 +1817,8 @@ class CreationCog(commands.Cog):
                                    connect_to: str = None):
         """Create a fully randomized location using galaxy generator logic"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -1854,7 +1854,7 @@ class CreationCog(commands.Cog):
                 connection_info = self.db.execute_query(
                     """SELECT location_id, name, x_coord, y_coord, location_type, system_name
                        FROM locations 
-                       WHERE LOWER(name) LIKE LOWER(?)""",
+                       WHERE LOWER(name) LIKE LOWER(%s)""",
                     (f"%{connect_to}%",),
                     fetch='one'
                 )
@@ -1903,7 +1903,7 @@ class CreationCog(commands.Cog):
             if not connection_id:
                 nearest = self.db.execute_query(
                     """SELECT location_id, name, x_coord, y_coord, location_type, system_name,
-                       SQRT(POWER(x_coord - ?, 2) + POWER(y_coord - ?, 2)) as distance
+                       SQRT(POWER(x_coord - %s, 2) + POWER(y_coord - %s, 2)) as distance
                        FROM locations 
                        ORDER BY distance 
                        LIMIT 1""",
@@ -1946,7 +1946,7 @@ class CreationCog(commands.Cog):
                     has_jobs, has_shops, has_medical, has_repairs, has_fuel, 
                     has_upgrades, has_shipyard, has_federal_supplies, has_black_market,
                     created_at, is_generated, is_derelict)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 1, ?)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), 1, %s)""",
                 (
                     location_data['name'],
                     location_data['type'],
@@ -1986,7 +1986,7 @@ class CreationCog(commands.Cog):
                     if generated_subs:
                         query = '''INSERT INTO sub_locations 
                                   (parent_location_id, name, sub_type, description, is_active)
-                                  VALUES (?, ?, ?, ?, 1)'''
+                                  VALUES (%s, %s, %s, %s, 1)'''
                         self.db.executemany_in_transaction(conn, query, generated_subs)
                 
                 except ImportError:
@@ -2014,7 +2014,7 @@ class CreationCog(commands.Cog):
                                 """INSERT INTO static_npcs 
                                    (location_id, name, age, occupation, personality, alignment, 
                                     hp, max_hp, combat_rating, credits)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                 npc_data_list
                             )
                     except Exception as e:
@@ -2124,7 +2124,7 @@ class CreationCog(commands.Cog):
         
         # Get connection location details
         connect_info = self.db.execute_query(
-            "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = ?",
+            "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s",
             (connect_to_id,),
             fetch='one'
         )
@@ -2154,7 +2154,7 @@ class CreationCog(commands.Cog):
                 """INSERT INTO corridors 
                    (name, origin_location, destination_location, travel_time,
                     fuel_cost, danger_level, is_active, is_generated)
-                   VALUES (?, ?, ?, ?, ?, ?, 1, 1)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, 1, 1)""",
                 (f"{location_name} - {connect_to_name} Route",
                  location_id, connect_to_id, travel_time, fuel_cost, danger_level)
             )
@@ -2163,7 +2163,7 @@ class CreationCog(commands.Cog):
                 """INSERT INTO corridors 
                    (name, origin_location, destination_location, travel_time,
                     fuel_cost, danger_level, is_active, is_generated)
-                   VALUES (?, ?, ?, ?, ?, ?, 1, 1)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, 1, 1)""",
                 (f"{connect_to_name} - {location_name} Route",
                  connect_to_id, location_id, travel_time, fuel_cost, danger_level)
             )
@@ -2179,9 +2179,9 @@ class CreationCog(commands.Cog):
         nearby = self.db.execute_query(
             """SELECT location_id, name, x_coord, y_coord, location_type
                FROM locations
-               WHERE location_id != ?
-               AND ABS(x_coord - ?) < 20
-               AND ABS(y_coord - ?) < 20
+               WHERE location_id != %s
+               AND ABS(x_coord - %s) < 20
+               AND ABS(y_coord - %s) < 20
                ORDER BY RANDOM()
                LIMIT 5""",
             (location_id, x, y),
@@ -2199,8 +2199,8 @@ class CreationCog(commands.Cog):
             # Check if corridor already exists
             existing = self.db.execute_query(
                 """SELECT corridor_id FROM corridors
-                   WHERE (origin_location = ? AND destination_location = ?)
-                   OR (origin_location = ? AND destination_location = ?)""",
+                   WHERE (origin_location = %s AND destination_location = %s)
+                   OR (origin_location = %s AND destination_location = %s)""",
                 (location_id, other_id, other_id, location_id),
                 fetch='one'
             )
@@ -2228,7 +2228,7 @@ class CreationCog(commands.Cog):
                     """INSERT INTO corridors 
                        (name, origin_location, destination_location, travel_time,
                         fuel_cost, danger_level, is_active, is_generated)
-                       VALUES (?, ?, ?, ?, ?, ?, 1, 1)""",
+                       VALUES (%s, %s, %s, %s, %s, %s, 1, 1)""",
                     (f"{location_name} - {other_name} Passage", location_id, other_id,
                      travel_time, fuel_cost, danger_level)
                 )
@@ -2237,7 +2237,7 @@ class CreationCog(commands.Cog):
                     """INSERT INTO corridors 
                        (name, origin_location, destination_location, travel_time,
                         fuel_cost, danger_level, is_active, is_generated)
-                       VALUES (?, ?, ?, ?, ?, ?, 1, 1)""",
+                       VALUES (%s, %s, %s, %s, %s, %s, 1, 1)""",
                     (f"{other_name} - {location_name} Passage", 
                      other_id, location_id, travel_time, fuel_cost, danger_level)
                 )
@@ -2339,13 +2339,13 @@ class CreationCog(commands.Cog):
     async def delete_location(self, interaction: discord.Interaction, location_name: str):
         """Delete a location from the galaxy with confirmation"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Find the location
         location = self.db.execute_query(
-            "SELECT location_id, name, population, location_type, COALESCE(is_derelict, 0) FROM locations WHERE LOWER(name) LIKE LOWER(?)",
+            "SELECT location_id, name, population, location_type, COALESCE(is_derelict, 0) FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
             (f"%{location_name}%",),
             fetch='one'
         )
@@ -2358,7 +2358,7 @@ class CreationCog(commands.Cog):
         
         # Get NPC count
         npc_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM static_npcs WHERE location_id = ?",
+            "SELECT COUNT(*) FROM static_npcs WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )[0]
@@ -2412,8 +2412,8 @@ class CreationCog(commands.Cog):
     async def shuffle_sublocations(self, interaction: discord.Interaction):
         """Shuffle and regenerate all sub-locations in the galaxy"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Create confirmation embed
@@ -2446,15 +2446,15 @@ class CreationCog(commands.Cog):
         name="Optional custom name for the route"
     )
     async def link_locations(self, interaction: discord.Interaction, location1: str, location2: str, name: str = None):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
         
         # Validate both locations exist
         loc1_data = self.db.execute_query(
-            "SELECT location_id, name, location_type, system_name, x_coord, y_coord FROM locations WHERE name = ?",
+            "SELECT location_id, name, location_type, system_name, x_coord, y_coord FROM locations WHERE name = %s",
             (location1,), fetch='one'
         )
         
@@ -2463,7 +2463,7 @@ class CreationCog(commands.Cog):
             return
         
         loc2_data = self.db.execute_query(
-            "SELECT location_id, name, location_type, system_name, x_coord, y_coord FROM locations WHERE name = ?", 
+            "SELECT location_id, name, location_type, system_name, x_coord, y_coord FROM locations WHERE name = %s", 
             (location2,), fetch='one'
         )
         
@@ -2481,8 +2481,8 @@ class CreationCog(commands.Cog):
         # Check if route already exists
         existing_route = self.db.execute_query(
             """SELECT corridor_id FROM corridors 
-               WHERE (origin_location = ? AND destination_location = ?) 
-               OR (origin_location = ? AND destination_location = ? AND is_bidirectional = 1)""",
+               WHERE (origin_location = %s AND destination_location = %s) 
+               OR (origin_location = %s AND destination_location = %s AND is_bidirectional = 1)""",
             (loc1_id, loc2_id, loc2_id, loc1_id), fetch='one'
         )
         
@@ -2515,7 +2515,7 @@ class CreationCog(commands.Cog):
             corridor_id = self.db.execute_query(
                 """INSERT INTO corridors 
                    (name, origin_location, destination_location, corridor_type, travel_time, fuel_cost, danger_level, is_active, is_bidirectional)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, 1, 1)""",
                 (name, loc1_id, loc2_id, corridor_type, 300, 20, 3),
                 fetch='lastrowid'
             )
@@ -2523,15 +2523,15 @@ class CreationCog(commands.Cog):
             # Activate unused or moving gates when they get connected
             gates_activated = []
             if loc1_type == 'gate':
-                gate_status = self.db.execute_query("SELECT gate_status FROM locations WHERE location_id = ?", (loc1_id,), fetch='one')
+                gate_status = self.db.execute_query("SELECT gate_status FROM locations WHERE location_id = %s", (loc1_id,), fetch='one')
                 if gate_status and gate_status[0] in ['unused', 'moving']:
-                    self.db.execute_query("UPDATE locations SET gate_status = 'active' WHERE location_id = ?", (loc1_id,))
+                    self.db.execute_query("UPDATE locations SET gate_status = 'active' WHERE location_id = %s", (loc1_id,))
                     gates_activated.append(loc1_name)
                     
             if loc2_type == 'gate':
-                gate_status = self.db.execute_query("SELECT gate_status FROM locations WHERE location_id = ?", (loc2_id,), fetch='one')
+                gate_status = self.db.execute_query("SELECT gate_status FROM locations WHERE location_id = %s", (loc2_id,), fetch='one')
                 if gate_status and gate_status[0] in ['unused', 'moving']:
-                    self.db.execute_query("UPDATE locations SET gate_status = 'active' WHERE location_id = ?", (loc2_id,))
+                    self.db.execute_query("UPDATE locations SET gate_status = 'active' WHERE location_id = %s", (loc2_id,))
                     gates_activated.append(loc2_name)
             
             # Create success embed
@@ -2563,8 +2563,8 @@ class CreationCog(commands.Cog):
     async def fix_long_routes(self, interaction: discord.Interaction):
         """Identify and fix routes with travel times over 20 minutes"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -2589,11 +2589,11 @@ class CreationCog(commands.Cog):
         for corridor_id, name, origin_id, dest_id, old_time, old_fuel_cost in long_routes:
             # Get location coordinates to calculate distance
             origin_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = ?",
+                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s",
                 (origin_id,), fetch='one'
             )
             dest_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = ?", 
+                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s", 
                 (dest_id,), fetch='one'
             )
             
@@ -2635,7 +2635,7 @@ class CreationCog(commands.Cog):
             
             # Update the corridor with both travel time and fuel cost
             self.db.execute_query(
-                "UPDATE corridors SET travel_time = ?, fuel_cost = ? WHERE corridor_id = ?",
+                "UPDATE corridors SET travel_time = %s, fuel_cost = %s WHERE corridor_id = %s",
                 (new_time, new_fuel_cost, corridor_id)
             )
             
@@ -2688,11 +2688,11 @@ class CreationCog(commands.Cog):
         for corridor_id, name, origin_id, dest_id, old_time, old_fuel_cost in long_routes:
             # Get location coordinates to calculate distance
             origin_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = ?",
+                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s",
                 (origin_id,), fetch='one'
             )
             dest_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = ?", 
+                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s", 
                 (dest_id,), fetch='one'
             )
             
@@ -2734,7 +2734,7 @@ class CreationCog(commands.Cog):
             
             # Update the corridor with both travel time and fuel cost
             self.db.execute_query(
-                "UPDATE corridors SET travel_time = ?, fuel_cost = ? WHERE corridor_id = ?",
+                "UPDATE corridors SET travel_time = %s, fuel_cost = %s WHERE corridor_id = %s",
                 (new_time, new_fuel_cost, corridor_id)
             )
             
@@ -2767,7 +2767,7 @@ class CreationCog(commands.Cog):
                 has_upgrades, has_shipyard,
                 has_federal_supplies, has_black_market,
                 created_at, is_generated)
-               VALUES (?, 'gate', ?, ?, ?, ?, ?, ?, 0, 1, 1, 1, 1, 0, 0, 0, 0, datetime('now'), 0)""",
+               VALUES (%s, 'gate', %s, %s, %s, %s, %s, %s, 0, 1, 1, 1, 1, 0, 0, 0, 0, NOW(), 0)""",
             (
                 gate_name,
                 f"Local gate providing access to {location_data['name']}",
@@ -2800,7 +2800,7 @@ class CreationCog(commands.Cog):
                     """INSERT INTO static_npcs 
                        (location_id, name, age, occupation, personality, alignment, 
                         hp, max_hp, combat_rating, credits)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     npc_data_list
                 )
         
@@ -2811,7 +2811,7 @@ class CreationCog(commands.Cog):
         
         # Get gate info
         gate_info = self.db.execute_query(
-            "SELECT name, system_name FROM locations WHERE location_id = ?",
+            "SELECT name, system_name FROM locations WHERE location_id = %s",
             (gate_id,),
             fetch='one'
         )
@@ -2849,7 +2849,7 @@ class CreationCog(commands.Cog):
             
             # Check for rule violations involving this location
             location_info = self.db.execute_query(
-                "SELECT name, location_type, system_name FROM locations WHERE location_id = ?",
+                "SELECT name, location_type, system_name FROM locations WHERE location_id = %s",
                 (location_id,),
                 fetch='one'
             )
@@ -2866,7 +2866,7 @@ class CreationCog(commands.Cog):
                        FROM corridors c
                        JOIN locations o ON c.origin_location = o.location_id
                        JOIN locations d ON c.destination_location = d.location_id
-                       WHERE (c.origin_location = ? OR c.destination_location = ?)
+                       WHERE (c.origin_location = %s OR c.destination_location = %s)
                        AND ((o.location_type IN ('colony', 'space_station', 'outpost') AND d.location_type = 'gate')
                             OR (o.location_type = 'gate' AND d.location_type IN ('colony', 'space_station', 'outpost')))
                        AND o.system_name = d.system_name
@@ -2878,7 +2878,7 @@ class CreationCog(commands.Cog):
                 for route_id, route_name, corridor_type in incorrect_routes:
                     # Auto-fix the route type
                     self.db.execute_query(
-                        "UPDATE corridors SET corridor_type = 'local_space' WHERE corridor_id = ?",
+                        "UPDATE corridors SET corridor_type = 'local_space' WHERE corridor_id = %s",
                         (route_id,)
                     )
                     warnings.append(f"Auto-fixed route '{route_name}' to use local_space type")
@@ -2890,7 +2890,7 @@ class CreationCog(commands.Cog):
                        FROM corridors c
                        JOIN locations o ON c.origin_location = o.location_id
                        JOIN locations d ON c.destination_location = d.location_id
-                       WHERE (c.origin_location = ? OR c.destination_location = ?)
+                       WHERE (c.origin_location = %s OR c.destination_location = %s)
                        AND c.corridor_type = 'gated'
                        AND o.system_name = d.system_name""",
                     (location_id, location_id),
@@ -2900,7 +2900,7 @@ class CreationCog(commands.Cog):
                 for route_id, route_name, corridor_type in incorrect_gated:
                     # Auto-fix to local_space since they're in same system
                     self.db.execute_query(
-                        "UPDATE corridors SET corridor_type = 'local_space' WHERE corridor_id = ?",
+                        "UPDATE corridors SET corridor_type = 'local_space' WHERE corridor_id = %s",
                         (route_id,)
                     )
                     warnings.append(f"Auto-fixed route '{route_name}' from gated to local_space (same system)")
@@ -2934,7 +2934,7 @@ class LocationDeletionConfirmView(discord.ui.View):
         try:
             # Get location coordinates for finding nearest location
             location_coords = self.cog.db.execute_query(
-                "SELECT x_coord, y_coord FROM locations WHERE location_id = ?",
+                "SELECT x_coord, y_coord FROM locations WHERE location_id = %s",
                 (self.location_id,),
                 fetch='one'
             )
@@ -2948,9 +2948,9 @@ class LocationDeletionConfirmView(discord.ui.View):
             # Find nearest location for news broadcast
             nearest_location = self.cog.db.execute_query(
                 """SELECT location_id, name, 
-                   SQRT(POWER(x_coord - ?, 2) + POWER(y_coord - ?, 2)) as distance
+                   SQRT(POWER(x_coord - %s, 2) + POWER(y_coord - %s, 2)) as distance
                    FROM locations 
-                   WHERE location_id != ? 
+                   WHERE location_id != %s 
                    ORDER BY distance 
                    LIMIT 1""",
                 (x_coord, y_coord, self.location_id),
@@ -3018,43 +3018,43 @@ class LocationDeletionConfirmView(discord.ui.View):
             
             # 1. Delete NPCs and their data
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM npc_jobs WHERE npc_id IN (SELECT npc_id FROM static_npcs WHERE location_id = ?)",
+                conn, "DELETE FROM npc_jobs WHERE npc_id IN (SELECT npc_id FROM static_npcs WHERE location_id = %s)",
                 (self.location_id,)
             )
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM npc_trade_inventory WHERE npc_id IN (SELECT npc_id FROM static_npcs WHERE location_id = ?)",
+                conn, "DELETE FROM npc_trade_inventory WHERE npc_id IN (SELECT npc_id FROM static_npcs WHERE location_id = %s)",
                 (self.location_id,)
             )
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM static_npcs WHERE location_id = ?",
+                conn, "DELETE FROM static_npcs WHERE location_id = %s",
                 (self.location_id,)
             )
             
             # 2. Delete jobs
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM job_tracking WHERE job_id IN (SELECT job_id FROM jobs WHERE location_id = ?)",
+                conn, "DELETE FROM job_tracking WHERE job_id IN (SELECT job_id FROM jobs WHERE location_id = %s)",
                 (self.location_id,)
             )
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM jobs WHERE location_id = ?",
+                conn, "DELETE FROM jobs WHERE location_id = %s",
                 (self.location_id,)
             )
             
             # 3. Delete shop items
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM shop_items WHERE location_id = ?",
+                conn, "DELETE FROM shop_items WHERE location_id = %s",
                 (self.location_id,)
             )
             
             # 4. Delete sub-locations
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM sub_locations WHERE parent_location_id = ?",
+                conn, "DELETE FROM sub_locations WHERE parent_location_id = %s",
                 (self.location_id,)
             )
             
             # 5. Delete location homes and related data
             home_ids = self.cog.db.execute_in_transaction(
-                conn, "SELECT home_id FROM location_homes WHERE location_id = ?",
+                conn, "SELECT home_id FROM location_homes WHERE location_id = %s",
                 (self.location_id,), fetch='all'
             )
             
@@ -3073,82 +3073,82 @@ class LocationDeletionConfirmView(discord.ui.View):
                 )
             
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM location_homes WHERE location_id = ?",
+                conn, "DELETE FROM location_homes WHERE location_id = %s",
                 (self.location_id,)
             )
             
             # 6. Delete location-related data
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM location_items WHERE location_id = ?",
+                conn, "DELETE FROM location_items WHERE location_id = %s",
                 (self.location_id,)
             )
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM location_logs WHERE location_id = ?",
+                conn, "DELETE FROM location_logs WHERE location_id = %s",
                 (self.location_id,)
             )
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM location_ownership WHERE location_id = ?",
+                conn, "DELETE FROM location_ownership WHERE location_id = %s",
                 (self.location_id,)
             )
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM location_upgrades WHERE location_id = ?",
+                conn, "DELETE FROM location_upgrades WHERE location_id = %s",
                 (self.location_id,)
             )
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM location_access_control WHERE location_id = ?",
+                conn, "DELETE FROM location_access_control WHERE location_id = %s",
                 (self.location_id,)
             )
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM location_income_log WHERE location_id = ?",
+                conn, "DELETE FROM location_income_log WHERE location_id = %s",
                 (self.location_id,)
             )
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM location_storage WHERE location_id = ?",
+                conn, "DELETE FROM location_storage WHERE location_id = %s",
                 (self.location_id,)
             )
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM location_economy WHERE location_id = ?",
+                conn, "DELETE FROM location_economy WHERE location_id = %s",
                 (self.location_id,)
             )
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM user_location_panels WHERE location_id = ?",
+                conn, "DELETE FROM user_location_panels WHERE location_id = %s",
                 (self.location_id,)
             )
             
             # 7. Update characters who were at this location (move them to a safe location)
             # First, find a safe location to move them to
             safe_location = self.cog.db.execute_in_transaction(
-                conn, "SELECT location_id FROM locations WHERE location_id != ? LIMIT 1",
+                conn, "SELECT location_id FROM locations WHERE location_id != %s LIMIT 1",
                 (self.location_id,), fetch='one'
             )
             
             if safe_location:
                 safe_location_id = safe_location[0]
                 self.cog.db.execute_in_transaction(
-                    conn, "UPDATE characters SET current_location = ? WHERE current_location = ?",
+                    conn, "UPDATE characters SET current_location = %s WHERE current_location = %s",
                     (safe_location_id, self.location_id)
                 )
             
             # 8. Update ships docked at this location
             if safe_location:
                 self.cog.db.execute_in_transaction(
-                    conn, "UPDATE ships SET docked_at_location = ? WHERE docked_at_location = ?",
+                    conn, "UPDATE ships SET docked_at_location = %s WHERE docked_at_location = %s",
                     (safe_location_id, self.location_id)
                 )
                 self.cog.db.execute_in_transaction(
-                    conn, "UPDATE player_ships SET stored_at_shipyard = ? WHERE stored_at_shipyard = ?",
+                    conn, "UPDATE player_ships SET stored_at_shipyard = %s WHERE stored_at_shipyard = %s",
                     (safe_location_id, self.location_id)
                 )
             
             # 9. Delete all corridors connecting to this location
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM corridors WHERE origin_location = ? OR destination_location = ?",
+                conn, "DELETE FROM corridors WHERE origin_location = %s OR destination_location = %s",
                 (self.location_id, self.location_id)
             )
             
             # 10. Finally, delete the location itself
             self.cog.db.execute_in_transaction(
-                conn, "DELETE FROM locations WHERE location_id = ?",
+                conn, "DELETE FROM locations WHERE location_id = %s",
                 (self.location_id,)
             )
             
@@ -3367,7 +3367,7 @@ class SubLocationShuffleConfirmView(discord.ui.View):
             if sub_locations_to_insert:
                 query = '''INSERT INTO sub_locations 
                           (parent_location_id, name, sub_type, description, is_active)
-                          VALUES (?, ?, ?, ?, 1)'''
+                          VALUES (%s, %s, %s, %s, 1)'''
                 self.cog.db.executemany_in_transaction(conn, query, sub_locations_to_insert)
             
             # Commit the transaction

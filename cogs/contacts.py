@@ -4,7 +4,8 @@ from discord.ext import commands
 import math
 from datetime import datetime
 from typing import Optional
-import sqlite3
+import psycopg2
+from utils.datetime_utils import safe_datetime_parse
 
 class ContactsCog(commands.Cog):
     def __init__(self, bot):
@@ -40,7 +41,7 @@ class ContactsCog(commands.Cog):
                     ts.start_time,
                     CASE 
                         WHEN ts.end_time IS NOT NULL THEN ts.end_time
-                        ELSE datetime(ts.start_time, '+' || cor.travel_time || ' seconds')
+                        ELSE ts.start_time + INTERVAL '1 second' * cor.travel_time
                     END as end_time,
                     cor.name as corridor_name,
                     orig.name as origin_name,
@@ -51,11 +52,11 @@ class ContactsCog(commands.Cog):
                 LEFT JOIN corridors cor ON ts.corridor_id = cor.corridor_id
                 LEFT JOIN locations orig ON ts.origin_location = orig.location_id
                 LEFT JOIN locations dest ON ts.destination_location = dest.location_id
-                WHERE c.is_logged_in = 1
+                WHERE c.is_logged_in = TRUE
                 ORDER BY c.name
             """, fetch='all')
-        except sqlite3.OperationalError as e:
-            if "no such column" in str(e):
+        except psycopg2.Error as e:
+            if "column" in str(e) and "does not exist" in str(e):
                 # Fallback query for older databases
                 online_chars = self.db.execute_query("""
                     SELECT 
@@ -73,7 +74,7 @@ class ContactsCog(commands.Cog):
                         ts.start_time,
                         CASE 
                             WHEN ts.end_time IS NOT NULL THEN ts.end_time
-                            ELSE datetime(ts.start_time, '+' || cor.travel_time || ' seconds')
+                            ELSE ts.start_time + INTERVAL '1 second' * cor.travel_time
                         END as end_time,
                         cor.name as corridor_name,
                         orig.name as origin_name,
@@ -84,7 +85,7 @@ class ContactsCog(commands.Cog):
                     LEFT JOIN corridors cor ON ts.corridor_id = cor.corridor_id
                     LEFT JOIN locations orig ON ts.origin_location = orig.location_id
                     LEFT JOIN locations dest ON ts.destination_location = dest.location_id
-                    WHERE c.is_logged_in = 1
+                    WHERE c.is_logged_in = TRUE
                     ORDER BY c.name
                 """, fetch='all')
             else:
@@ -166,8 +167,8 @@ class ContactsView(discord.ui.View):
                     try:
                         # Handle both timestamp formats
                         if 'T' in start_time:
-                            start = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-                            end = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                            start = safe_datetime_parse(start_time.replace('Z', '+00:00'))
+                            end = safe_datetime_parse(end_time.replace('Z', '+00:00'))
                         else:
                             start = datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
                             end = datetime.strptime(end_time, '%Y-%m-%d %H:%M:%S')
@@ -203,7 +204,7 @@ class ContactsView(discord.ui.View):
             elif ship_id and not location_id:  # Character is in their ship interior
                 try:
                     ship_info = self.db.execute_query(
-                        "SELECT name, ship_type FROM ships WHERE ship_id = ?",
+                        "SELECT name, ship_type FROM ships WHERE ship_id = %s",
                         (ship_id,), fetch='one'
                     )
                     if ship_info:
@@ -333,7 +334,7 @@ class ContactsView(discord.ui.View):
                     ts.start_time,
                     CASE 
                         WHEN ts.end_time IS NOT NULL THEN ts.end_time
-                        ELSE datetime(ts.start_time, '+' || cor.travel_time || ' seconds')
+                        ELSE ts.start_time + INTERVAL '1 second' * cor.travel_time
                     END as end_time,
                     cor.name as corridor_name,
                     orig.name as origin_name,
@@ -344,11 +345,11 @@ class ContactsView(discord.ui.View):
                 LEFT JOIN corridors cor ON ts.corridor_id = cor.corridor_id
                 LEFT JOIN locations orig ON ts.origin_location = orig.location_id
                 LEFT JOIN locations dest ON ts.destination_location = dest.location_id
-                WHERE c.is_logged_in = 1
+                WHERE c.is_logged_in = TRUE
                 ORDER BY c.name
             """, fetch='all')
-        except sqlite3.OperationalError as e:
-            if "no such column" in str(e):
+        except psycopg2.Error as e:
+            if "column" in str(e) and "does not exist" in str(e):
                 # Fallback query for older databases
                 self.contacts = self.db.execute_query("""
                     SELECT 
@@ -366,7 +367,7 @@ class ContactsView(discord.ui.View):
                         ts.start_time,
                         CASE 
                             WHEN ts.end_time IS NOT NULL THEN ts.end_time
-                            ELSE datetime(ts.start_time, '+' || cor.travel_time || ' seconds')
+                            ELSE ts.start_time + INTERVAL '1 second' * cor.travel_time
                         END as end_time,
                         cor.name as corridor_name,
                         orig.name as origin_name,
@@ -377,7 +378,7 @@ class ContactsView(discord.ui.View):
                     LEFT JOIN corridors cor ON ts.corridor_id = cor.corridor_id
                     LEFT JOIN locations orig ON ts.origin_location = orig.location_id
                     LEFT JOIN locations dest ON ts.destination_location = dest.location_id
-                    WHERE c.is_logged_in = 1
+                    WHERE c.is_logged_in = TRUE
                     ORDER BY c.name
                 """, fetch='all')
             else:

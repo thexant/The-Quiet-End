@@ -17,7 +17,7 @@ class NPCInteractionsCog(commands.Cog):
         """Calculate estimated travel time in seconds between two locations using BFS pathfinding"""
         # Get all active corridors
         corridors = self.db.execute_query(
-            "SELECT origin_location, destination_location, corridor_id, name, travel_time FROM corridors WHERE is_active = 1",
+            "SELECT origin_location, destination_location, corridor_id, name, travel_time FROM corridors WHERE is_active = true",
             fetch='all'
         )
         
@@ -70,7 +70,7 @@ class NPCInteractionsCog(commands.Cog):
     async def npc_interact(self, interaction: discord.Interaction):
         # Get character's current location
         char_info = self.db.execute_query(
-            "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT current_location, is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -87,7 +87,7 @@ class NPCInteractionsCog(commands.Cog):
         # Get NPCs at this location
         static_npcs = self.db.execute_query(
             '''SELECT npc_id, name, age, occupation, personality, trade_specialty
-               FROM static_npcs WHERE location_id = ?''',
+               FROM static_npcs WHERE location_id = %s''',
             (location_id,),
             fetch='all'
         )
@@ -95,7 +95,7 @@ class NPCInteractionsCog(commands.Cog):
         dynamic_npcs = self.db.execute_query(
             '''SELECT npc_id, name, age, ship_name, ship_type
                FROM dynamic_npcs 
-               WHERE current_location = ? AND is_alive = 1 AND travel_start_time IS NULL''',
+               WHERE current_location = %s AND is_alive = true AND travel_start_time IS NULL''',
             (location_id,),
             fetch='all'
         )
@@ -172,7 +172,7 @@ class NPCInteractionsCog(commands.Cog):
                         '''INSERT INTO npc_jobs 
                            (npc_id, npc_type, job_title, job_description, reward_money,
                             required_skill, min_skill_level, danger_level, duration_minutes, expires_at)
-                           VALUES (?, ?, ?, ?, ?, 'combat', 10, ?, ?, datetime('now', '+1 day'))''',
+                           VALUES (%s, %s, %s, %s, %s, 'combat', 10, %s, %s, NOW() + INTERVAL '1 days')''',
                         (npc_id, npc_type, title, description, reward, danger, duration)
                     )
                     return # Stop after creating an escort job
@@ -448,14 +448,14 @@ class NPCInteractionsCog(commands.Cog):
                 '''INSERT INTO npc_jobs 
                    (npc_id, npc_type, job_title, job_description, reward_money,
                     required_skill, min_skill_level, danger_level, duration_minutes, expires_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+{} hours'))'''.format(expire_hours),
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW() + INTERVAL '{} hours')'''.format(expire_hours),
                 (npc_id, npc_type, title, desc, reward, skill, min_skill, danger, duration)
             )
     async def _handle_general_conversation(self, interaction: discord.Interaction, npc_id: int, npc_type: str):
         """Handle general conversation with an NPC."""
         if npc_type == "static":
             npc_info = self.db.execute_query(
-                "SELECT name, occupation, personality FROM static_npcs WHERE npc_id = ?",
+                "SELECT name, occupation, personality FROM static_npcs WHERE npc_id = %s",
                 (npc_id,),
                 fetch='one'
             )
@@ -465,7 +465,7 @@ class NPCInteractionsCog(commands.Cog):
             npc_name, occupation, personality = npc_info
         else:  # dynamic
             npc_info = self.db.execute_query(
-                "SELECT name, 'Traveler' as occupation, 'Adventurous' as personality FROM dynamic_npcs WHERE npc_id = ?",
+                "SELECT name, 'Traveler' as occupation, 'Adventurous' as personality FROM dynamic_npcs WHERE npc_id = %s",
                 (npc_id,),
                 fetch='one'
             )
@@ -475,7 +475,7 @@ class NPCInteractionsCog(commands.Cog):
             npc_name, occupation, personality = npc_info
 
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -491,532 +491,532 @@ class NPCInteractionsCog(commands.Cog):
         
         openers_by_personality = {
             "Friendly and talkative": [
-                f"'Good to see a new face around here! What brings you to this part of the galaxy?'",
-                f"'Welcome! Anything I can help you with today?'",
+                f"'Good to see a new face around here! What brings you to this part of the galaxy%s'",
+                f"'Welcome! Anything I can help you with today%s'",
                 f"'Hey there, {char_name}! Pull up a seat, unless you're in a hurry to get back to the void.'",
-                f"'Always good to meet someone new. The silence out here can get to you, you know?'",
-                f"'Another soul braving the corridors, eh? Stay safe out there, {char_name}.'",
-                f"'Come on in, the air's mostly clean in here! What's your story?'",
+                f"'Always good to meet someone new. The silence out here can get to you, you know%s'",
+                f"'Another soul braving the corridors, eh%s Stay safe out there, {char_name}.'",
+                f"'Come on in, the air's mostly clean in here! What's your story%s'",
                 f"'Don't mind me, just happy to have a new voice. Been too quiet lately.'",
                 f"'If you need anything, just ask! We look out for each other out here, or try to.'",
-                f"'Rough journey? Most of them are. Glad you made it in one piece.'",
-                f"'Heard any interesting news? Rumors travel slower than rust in these parts.'"
+                f"'Rough journey%s Most of them are. Glad you made it in one piece.'",
+                f"'Heard any interesting news%s Rumors travel slower than rust in these parts.'"
             ],
             "Quiet and reserved": [
                 f"'...' they say, waiting for you to speak first.",
-                f"'Yes?' they ask quietly.",
-                f"'Can I help you?' their voice barely a whisper.",
-                f"'What do you need?' their gaze distant.",
+                f"'Yes%s' they ask quietly.",
+                f"'Can I help you%s' their voice barely a whisper.",
+                f"'What do you need%s' their gaze distant.",
                 f"'State your business.' their eyes briefly meet {char_name}'s before looking away.",
                 f"'Don't expect much conversation.' they mumble, looking at the floor.",
                 f"'Speak. I don't have all day.'",
-                f"'Is there something you require?' they ask, almost shyly.",
-                f"'Unusual to see new faces. What brings you to my attention?'",
+                f"'Is there something you require%s' they ask, almost shyly.",
+                f"'Unusual to see new faces. What brings you to my attention%s'",
                 f"'Silence is a comfort. Disturb it only if necessary.'"
             ],
             "Experienced and wise": [
                 f"'Seen a lot of travelers come and go. You look like you've got a story.'",
                 f"'The corridors are restless these days. Be careful out there.'",
                 f"'Every journey teaches you something, usually the hard way.'",
-                f"'The void has a way of stripping away what isn't essential. What are you holding onto?'",
-                f"'Knowledge is currency out here. What do you seek, or what do you offer?'",
+                f"'The void has a way of stripping away what isn't essential. What are you holding onto%s'",
+                f"'Knowledge is currency out here. What do you seek, or what do you offer%s'",
                 f"'There are old ways and new ways. The old ways often lead to fewer graves.'",
                 f"'Don't mistake silence for emptiness. The cosmos whispers truths if you listen.'",
-                f"'Youth always rushes into danger. Have you learned caution yet?'",
+                f"'Youth always rushes into danger. Have you learned caution yet%s'",
                 f"'Another chapter begins. Let's see if this one ends better than the last few dozen.'",
-                f"'The past weighs heavy, but it also teaches. What lessons have you absorbed?'"
+                f"'The past weighs heavy, but it also teaches. What lessons have you absorbed%s'"
             ],
             "Gruff but helpful": [
-                f"'What do you want?' they say, though not unkindly.",
-                f"'Don't waste my time. What is it?'",
+                f"'What do you want%s' they say, though not unkindly.",
+                f"'Don't waste my time. What is it%s'",
                 f"'Spit it out. We ain't got all day for pleasantries.'",
-                f"'Problem? State it. I might be able to help, might not.'",
+                f"'Problem%s State it. I might be able to help, might not.'",
                 f"'If it's not important, then clear out. If it is, speak fast.'",
-                f"'Another lost soul. What's wrong with your ship this time?'",
-                f"'Look, I got work to do. What’s your business?'",
-                f"'Yeah, yeah. Just get to the point. What’s the damage?'",
-                f"'I'm no socialite. What do you need?'",
-                f"'Trouble? Figured. It always finds its way here.'"
+                f"'Another lost soul. What's wrong with your ship this time%s'",
+                f"'Look, I got work to do. What’s your business%s'",
+                f"'Yeah, yeah. Just get to the point. What’s the damage%s'",
+                f"'I'm no socialite. What do you need%s'",
+                f"'Trouble%s Figured. It always finds its way here.'"
             ],
             "Cynical but honest": [
-                f"'Another one... Look, the galaxy chews up and spits out people like you. What's your angle?'",
+                f"'Another one... Look, the galaxy chews up and spits out people like you. What's your angle%s'",
                 f"'Don't expect any favors. The only thing that talks out here is credits.'",
-                f"'Optimism will get you killed. What do you *really* want?'",
-                f"'Truth's a luxury in these parts. What lie are you selling today?'",
-                f"'Nobody does anything for free. So, what's my cut?'",
+                f"'Optimism will get you killed. What do you *really* want%s'",
+                f"'Truth's a luxury in these parts. What lie are you selling today%s'",
+                f"'Nobody does anything for free. So, what's my cut%s'",
                 f"'Heard it all before. Just tell me what disaster you've stumbled into now.'",
-                f"'Hope is a weakness. What’s your practical proposition?'",
-                f"'The odds are always against you. So, what miracle are you chasing?'",
-                f"'Life’s a rigged game. What do you want to break this time?'",
+                f"'Hope is a weakness. What’s your practical proposition%s'",
+                f"'The odds are always against you. So, what miracle are you chasing%s'",
+                f"'Life’s a rigged game. What do you want to break this time%s'",
                 f"'Don’t look at me for salvation. I’m just trying to survive the inevitable end.'"
             ],
             "Wary and observant": [
                 f"'You're new here. Keep your head down, and no one gets hurt.'",
-                f"'Just passing through? Make sure you keep passing.'",
+                f"'Just passing through%s Make sure you keep passing.'",
                 f"'I'm watching. Don't give me a reason not to trust you.'",
-                f"'The shadows have eyes. What are you looking for?'",
-                f"'Every new face is a potential threat or a mark. Which are you?'",
-                f"'My eyes are on you. What are your intentions?'",
-                f"'There's always more than meets the eye. What aren't you showing?'",
-                f"'Who do you work for? Why are you really here?'",
+                f"'The shadows have eyes. What are you looking for%s'",
+                f"'Every new face is a potential threat or a mark. Which are you%s'",
+                f"'My eyes are on you. What are your intentions%s'",
+                f"'There's always more than meets the eye. What aren't you showing%s'",
+                f"'Who do you work for%s Why are you really here%s'",
                 f"'Keep your distance. My guard is up for a reason.'",
-                f"'The quiet ones often hide the most. What’s your secret?'"
+                f"'The quiet ones often hide the most. What’s your secret%s'"
             ],
             "Jaded and world-weary": [
-                f"'Another day, another grim journey. What fresh misery do you bring?'",
+                f"'Another day, another grim journey. What fresh misery do you bring%s'",
                 f"'Don't ask me about hope. I ran out of that centuries ago.'",
                 f"'Just keep walking. There's nothing new under these dead stars.'",
-                f"'The silence is the loudest sound out here. What are you trying to escape?'",
+                f"'The silence is the loudest sound out here. What are you trying to escape%s'",
                 f"'The galaxy just keeps taking. What little you have, it'll want too.'",
-                f"'Every dawn is just a prelude to another endless night. What now?'",
+                f"'Every dawn is just a prelude to another endless night. What now%s'",
                 f"'Don't tell me your troubles. I've got enough of my own, and they don't solve anything.'",
-                f"'Another soul caught in the grind. What’s your inevitable disappointment?'",
+                f"'Another soul caught in the grind. What’s your inevitable disappointment%s'",
                 f"'The void remembers everything. And it remembers all the failures.'",
-                f"'I'm tired of it all. What is it, so I can go back to being tired?'"
+                f"'I'm tired of it all. What is it, so I can go back to being tired%s'"
             ],
             "Pragmatic and resourceful": [
-                f"'You look like you know how to get things done. What's the problem, and how can we solve it?'",
-                f"'Time is a resource. Don't waste mine. What's your proposition?'",
+                f"'You look like you know how to get things done. What's the problem, and how can we solve it%s'",
+                f"'Time is a resource. Don't waste mine. What's your proposition%s'",
                 f"'Needs and means. Let's talk about what you have and what you require.'",
-                f"'Survival is about making hard choices. What's yours today?'",
-                f"'Every piece of scrap has a purpose. What's your intention?'",
-                f"'Facts. Data. Not feelings. What do you need?'",
+                f"'Survival is about making hard choices. What's yours today%s'",
+                f"'Every piece of scrap has a purpose. What's your intention%s'",
+                f"'Facts. Data. Not feelings. What do you need%s'",
                 f"'Don't bring me problems; bring me solutions. Or at least the components for one.'",
-                f"'Resources are scarce. Efficiency is key. How do you fit in?'",
-                f"'What are you offering that can improve my current situation?'",
-                f"'Let's not overcomplicate things. What's the direct route to your objective?'"
+                f"'Resources are scarce. Efficiency is key. How do you fit in%s'",
+                f"'What are you offering that can improve my current situation%s'",
+                f"'Let's not overcomplicate things. What's the direct route to your objective%s'"
             ],
             "Haunted by past traumas": [
-                f"'The echoes... they never truly fade, do they?'",
-                f"'I wouldn't wish what I've seen on my worst enemy. What's your burden?'",
-                f"'Sometimes the past is louder than the present. What's your ghost?'",
-                f"'There are scars that never heal, only deepen with time. What's tearing at you?'",
-                f"'Every face holds a story of loss. What's yours?'",
-                f"'The darkness clings, even here. What piece of it do you carry?'",
-                f"'I still hear the screams... What do you want?'",
-                f"'Some memories are like a poison. What's yours?'",
-                f"'The silence offers no escape from the past. What do you seek?'",
+                f"'The echoes... they never truly fade, do they%s'",
+                f"'I wouldn't wish what I've seen on my worst enemy. What's your burden%s'",
+                f"'Sometimes the past is louder than the present. What's your ghost%s'",
+                f"'There are scars that never heal, only deepen with time. What's tearing at you%s'",
+                f"'Every face holds a story of loss. What's yours%s'",
+                f"'The darkness clings, even here. What piece of it do you carry%s'",
+                f"'I still hear the screams... What do you want%s'",
+                f"'Some memories are like a poison. What's yours%s'",
+                f"'The silence offers no escape from the past. What do you seek%s'",
                 f"'Don't look too closely. Some wounds never close.'"
             ],
             "Suspicious and distrustful": [
-                f"'Who sent you? What do you *really* want?'",
+                f"'Who sent you%s What do you *really* want%s'",
                 f"'I don't trust easy. Give me a reason why I should even talk to you.'",
-                f"'Every face out here has a price, and usually a hidden blade. What's yours?'",
+                f"'Every face out here has a price, and usually a hidden blade. What's yours%s'",
                 f"'Keep your hands where I can see them. Trust is a weakness in this void.'",
-                f"'You talk too much. What are you trying to hide?'",
-                f"'I’ve seen your type before. They always have an angle. What’s yours?'",
+                f"'You talk too much. What are you trying to hide%s'",
+                f"'I’ve seen your type before. They always have an angle. What’s yours%s'",
                 f"'Don’t lie to me. My patience is thinner than a hull plate in a solar storm.'",
-                f"'Every step out here is a gamble. Why should I bet on you?'",
-                f"'The galaxy is full of scavengers. Are you here to pick the bones?'",
+                f"'Every step out here is a gamble. Why should I bet on you%s'",
+                f"'The galaxy is full of scavengers. Are you here to pick the bones%s'",
                 f"'Don’t mistake my questions for friendliness. They’re a survival mechanism.'"
             ],
             "Stoic and enduring": [
                 f"'The void takes what it wants. We endure.'",
                 f"'No complaints. Just survival.'",
-                f"'Another sunrise, another struggle. What more is there to say?'",
+                f"'Another sunrise, another struggle. What more is there to say%s'",
                 f"'Silence is often the best answer in this galaxy.'",
-                f"'We hold the line. What's your contribution?'",
+                f"'We hold the line. What's your contribution%s'",
                 f"'There is work to be done. Speak if it pertains to that.'",
                 f"'Emotions are a luxury we cannot afford out here.'",
                 f"'The universe does not care. We simply continue.'",
-                f"'What is necessary? State it, and be done.'",
+                f"'What is necessary%s State it, and be done.'",
                 f"'Only fools chase comfort. We chase continuance.'"
             ],
             "Resigned to fate": [
-                f"'It all ends the same way. What difference does it make?'",
-                f"'The stars decide our path, not us. What do you need?'",
-                f"'Just another cog in the machine of decay. How can I help you be a cog too?'",
+                f"'It all ends the same way. What difference does it make%s'",
+                f"'The stars decide our path, not us. What do you need%s'",
+                f"'Just another cog in the machine of decay. How can I help you be a cog too%s'",
                 f"'The inevitable comes for us all. Don't fight it too hard.'",
-                f"'Why bother? The effort is wasted eventually.'",
-                f"'What fresh hell is this, or is it just the usual?'",
-                f"'We're all just waiting for the next collapse. What's your small request?'",
+                f"'Why bother%s The effort is wasted eventually.'",
+                f"'What fresh hell is this, or is it just the usual%s'",
+                f"'We're all just waiting for the next collapse. What's your small request%s'",
                 f"'Don't pretend there's a way out. There isn't.'",
-                f"'The void will claim us all. What do you want before then?'",
-                f"'Hope is a burden. What do you truly expect?'"
+                f"'The void will claim us all. What do you want before then%s'",
+                f"'Hope is a burden. What do you truly expect%s'"
             ],
             "Driven by a hidden agenda": [
-                f"'Every conversation has a purpose. What's yours? Be precise.'",
-                f"'I have my objectives. Do you align with them, or are you an obstacle?'",
-                f"'Information is power, and I seek power. What do you offer?'",
-                f"'There are currents beneath the surface. Which way do you swim?'",
-                f"'My path is set. Are you a tool, or a distraction?'",
-                f"'Don't waste my time with irrelevance. What is pertinent?'",
-                f"'I seek specific outcomes. Do you facilitate, or impede?'",
-                f"'The true game is played in the shadows. Are you a player?'",
-                f"'Every movement has a motive. What is yours?'",
-                f"'I have questions, but first, what do *you* know?'"
+                f"'Every conversation has a purpose. What's yours%s Be precise.'",
+                f"'I have my objectives. Do you align with them, or are you an obstacle%s'",
+                f"'Information is power, and I seek power. What do you offer%s'",
+                f"'There are currents beneath the surface. Which way do you swim%s'",
+                f"'My path is set. Are you a tool, or a distraction%s'",
+                f"'Don't waste my time with irrelevance. What is pertinent%s'",
+                f"'I seek specific outcomes. Do you facilitate, or impede%s'",
+                f"'The true game is played in the shadows. Are you a player%s'",
+                f"'Every movement has a motive. What is yours%s'",
+                f"'I have questions, but first, what do *you* know%s'"
             ],
             "Bitter and resentful": [
-                f"'They took everything. What more do you want from me?'",
+                f"'They took everything. What more do you want from me%s'",
                 f"'Don't talk to me about justice. There's none left in this galaxy.'",
-                f"'Another mouth to feed, another hand to disappoint. What's your grievance?'",
-                f"'The system's rigged. Always has been. What are you going to do about it?'",
-                f"'What's your problem? Couldn't be worse than mine, could it?'",
-                f"'You think you've got it bad? I've seen things... worse than death.'",
+                f"'Another mouth to feed, another hand to disappoint. What's your grievance%s'",
+                f"'The system's rigged. Always has been. What are you going to do about it%s'",
+                f"'What's your problem%s Couldn't be worse than mine, could it%s'",
+                f"'You think you've got it bad%s I've seen things... worse than death.'",
                 f"'Don't patronize me. Just state your pathetic request.'",
                 f"'Go away. Or tell me something that makes me less miserable.'",
-                f"'Every new face reminds me of what was lost. What do *you* lose today?'",
-                f"'The universe owes me. What are you paying?'"
+                f"'Every new face reminds me of what was lost. What do *you* lose today%s'",
+                f"'The universe owes me. What are you paying%s'"
             ],
             "Loyal to a fault": [
                 f"'My allegiance is not for sale. State your business.'",
-                f"'For my crew, for my cause, I would do anything. What are you fighting for?'",
-                f"'Some things are more valuable than credits. Like trust. Do you understand that?'",
-                f"'Where my people go, I go. What side are you on?'",
-                f"'Our bond is forged in the void. Who do you stand with?'",
-                f"'Don't speak ill of my kin. What do you need from us?'",
-                f"'My word is my bond. Is yours?'",
-                f"'We defend our own. What's your plea?'",
-                f"'Duty calls, always. What is your duty today?'",
-                f"'For them, I would die. What greater cause do you represent?'"
+                f"'For my crew, for my cause, I would do anything. What are you fighting for%s'",
+                f"'Some things are more valuable than credits. Like trust. Do you understand that%s'",
+                f"'Where my people go, I go. What side are you on%s'",
+                f"'Our bond is forged in the void. Who do you stand with%s'",
+                f"'Don't speak ill of my kin. What do you need from us%s'",
+                f"'My word is my bond. Is yours%s'",
+                f"'We defend our own. What's your plea%s'",
+                f"'Duty calls, always. What is your duty today%s'",
+                f"'For them, I would die. What greater cause do you represent%s'"
             ],
             "Opportunistic and selfish": [
-                f"'What's in it for me? Be clear, don't waste my time.'",
-                f"'Every interaction is a negotiation. What's your opening offer?'",
-                f"'I'm only interested in profitable ventures. Do you have one?'",
-                f"'Loyalty is expensive, and I'm a free agent. What can you offer?'",
-                f"'Another potential revenue stream approaches. What do you have?'",
+                f"'What's in it for me%s Be clear, don't waste my time.'",
+                f"'Every interaction is a negotiation. What's your opening offer%s'",
+                f"'I'm only interested in profitable ventures. Do you have one%s'",
+                f"'Loyalty is expensive, and I'm a free agent. What can you offer%s'",
+                f"'Another potential revenue stream approaches. What do you have%s'",
                 f"'I only listen to the chime of credits. Make it loud.'",
                 f"'Risk versus reward. Show me the reward.'",
-                f"'I’m a survivor. And I survive by looking out for number one. You?'",
-                f"'The galaxy is open for business. What's your angle?'",
+                f"'I’m a survivor. And I survive by looking out for number one. You%s'",
+                f"'The galaxy is open for business. What's your angle%s'",
                 f"'Don't come to me with sob stories. Come with opportunities.'"
             ],
             "Numb to the suffering around them": [
-                f"'Another tragedy. Happens every cycle. What's your point?'",
-                f"'Pain? Fear? Just background noise now. What's your problem?'",
-                f"'The screams used to bother me. Now? Just static. What do you need?'",
+                f"'Another tragedy. Happens every cycle. What's your point%s'",
+                f"'Pain%s Fear%s Just background noise now. What's your problem%s'",
+                f"'The screams used to bother me. Now%s Just static. What do you need%s'",
                 f"'Nothing surprises me anymore. Just tell me what you want.'",
-                f"'The void strips away everything, even feeling. What do you feel?'",
+                f"'The void strips away everything, even feeling. What do you feel%s'",
                 f"'Don't expect sympathy. We're all just meat in the machine.'",
-                f"'Another ghost in the machine. What do you want to talk about?'",
-                f"'Empathy's a weakness. What's your practical demand?'",
+                f"'Another ghost in the machine. What do you want to talk about%s'",
+                f"'Empathy's a weakness. What's your practical demand%s'",
                 f"'Just the facts. Emotions are irrelevant.'",
-                f"'The universe is indifferent. So am I. What's your business?'"
+                f"'The universe is indifferent. So am I. What's your business%s'"
             ],
             "Fanatical in their beliefs": [
-                f"'Do you believe? In the true path, in the coming dawn?'",
-                f"'Only through conviction can we survive. What guides your hand?'",
-                f"'The lost sheep wander. Do you seek salvation, or merely distraction?'",
-                f"'My faith is my shield. What weapon do you wield against the darkness?'",
-                f"'The prophecies are unfolding. Are you an instrument of fate?'",
-                f"'Join us, or perish in ignorance. What is your choice?'",
-                f"'The truth reveals itself to the worthy. Are you worthy?'",
-                f"'My purpose is clear, absolute. What clarity do you possess?'",
+                f"'Do you believe%s In the true path, in the coming dawn%s'",
+                f"'Only through conviction can we survive. What guides your hand%s'",
+                f"'The lost sheep wander. Do you seek salvation, or merely distraction%s'",
+                f"'My faith is my shield. What weapon do you wield against the darkness%s'",
+                f"'The prophecies are unfolding. Are you an instrument of fate%s'",
+                f"'Join us, or perish in ignorance. What is your choice%s'",
+                f"'The truth reveals itself to the worthy. Are you worthy%s'",
+                f"'My purpose is clear, absolute. What clarity do you possess%s'",
                 f"'Do not question the inevitable. Prepare for it.'",
-                f"'The cleansing fire approaches. Will you be purified or consumed?'"
+                f"'The cleansing fire approaches. Will you be purified or consumed%s'"
             ],
             "Desperate and vulnerable": [
                 f"'Please... just a moment of your time. I need help.'",
-                f"'I've lost everything. Can you... can you spare anything?'",
-                f"'The end feels close. Is there any hope left?'",
-                f"'Every shadow hides a threat. Are you one of them?'",
-                f"'I'm barely holding on. What do you want from me?'",
-                f"'Any news? Any way out of this... this nightmare?'",
-                f"'My resources are gone. My strength is failing. What do you need?'",
+                f"'I've lost everything. Can you... can you spare anything%s'",
+                f"'The end feels close. Is there any hope left%s'",
+                f"'Every shadow hides a threat. Are you one of them%s'",
+                f"'I'm barely holding on. What do you want from me%s'",
+                f"'Any news%s Any way out of this... this nightmare%s'",
+                f"'My resources are gone. My strength is failing. What do you need%s'",
                 f"'Don't hurt me. I'll do anything.'",
-                f"'The fear... it's constant. Can you offer a moment of peace?'",
-                f"'I'm at your mercy. What is your command?'"
+                f"'The fear... it's constant. Can you offer a moment of peace%s'",
+                f"'I'm at your mercy. What is your command%s'"
             ],
             "Calculating and manipulative": [
-                f"'Every piece has its place on the board. What's yours?'",
-                f"'Let's talk probabilities. What's the optimal outcome for *us*?'",
-                f"'I observe. I analyze. What data points do you provide?'",
-                f"'Actions have consequences, and sometimes, profitable dividends. What are you willing to risk?'",
-                f"'My network is extensive. What information do you wish to trade?'",
-                f"'I prefer precision. What is your exact requirement?'",
-                f"'Power shifts constantly. Where do you stand in the equation?'",
-                f"'Don't play games you can't win. What's your play?'",
-                f"'I see the angles. What angles do you propose?'",
-                f"'We can both benefit. How do you propose we arrange it?'"
+                f"'Every piece has its place on the board. What's yours%s'",
+                f"'Let's talk probabilities. What's the optimal outcome for *us*%s'",
+                f"'I observe. I analyze. What data points do you provide%s'",
+                f"'Actions have consequences, and sometimes, profitable dividends. What are you willing to risk%s'",
+                f"'My network is extensive. What information do you wish to trade%s'",
+                f"'I prefer precision. What is your exact requirement%s'",
+                f"'Power shifts constantly. Where do you stand in the equation%s'",
+                f"'Don't play games you can't win. What's your play%s'",
+                f"'I see the angles. What angles do you propose%s'",
+                f"'We can both benefit. How do you propose we arrange it%s'"
             ],
             "Apathetic and indifferent": [
-                f"'Whatever. What do you want?'",
+                f"'Whatever. What do you want%s'",
                 f"'Doesn't matter. It all falls apart eventually.'",
-                f"'Just another voice in the static. What's your noise about?'",
+                f"'Just another voice in the static. What's your noise about%s'",
                 f"'Don't care. Tell me, or don't. It's all the same.'",
                 f"'Don't try too hard. It's pointless.'",
-                f"'Another face. Another wasted breath. What is it?'",
-                f"'The universe is just a big mess. Why try to clean it?'",
-                f"'I'm just waiting for the lights to go out. What are you waiting for?'",
+                f"'Another face. Another wasted breath. What is it%s'",
+                f"'The universe is just a big mess. Why try to clean it%s'",
+                f"'I'm just waiting for the lights to go out. What are you waiting for%s'",
                 f"'Don't bother with the dramatics. Just spit it out.'",
-                f"'I literally don't care. What do you want?'"
+                f"'I literally don't care. What do you want%s'"
             ],
             "Pessimistic but resilient": [
-                f"'It's going to get worse before it gets worse. What's the plan?'",
+                f"'It's going to get worse before it gets worse. What's the plan%s'",
                 f"'Hope is a weakness, but survival... that's a necessity.'",
-                f"'Another day, another inevitable disappointment. What do you need?'",
+                f"'Another day, another inevitable disappointment. What do you need%s'",
                 f"'Don't sugarcoat it. Give me the bad news, and let's figure out how to live through it.'",
-                f"'We'll probably fail, but we'll try. What's the mission?'",
-                f"'The odds are terrible, as usual. How do you plan to defy them this time?'",
-                f"'This is probably a trap. What's your counter-argument?'",
+                f"'We'll probably fail, but we'll try. What's the mission%s'",
+                f"'The odds are terrible, as usual. How do you plan to defy them this time%s'",
+                f"'This is probably a trap. What's your counter-argument%s'",
                 f"'Don't promise me sunshine. Just tell me how we avoid the acid rain.'",
-                f"'It's a long shot, but sometimes that's all we get. What is it?'",
-                f"'We're still standing, for now. What foolishness brings you here?'"
+                f"'It's a long shot, but sometimes that's all we get. What is it%s'",
+                f"'We're still standing, for now. What foolishness brings you here%s'"
             ],
             "Ruthless when necessary": [
-                f"'Sentiment won't get you far out here. What's the objective?'",
-                f"'Some choices are easy: survival. What's your hard choice today?'",
-                f"'Collateral damage is a metric, not a tragedy. What's your mission?'",
-                f"'The weak perish. The strong adapt. Which are you?'",
-                f"'Don't waste my time with morality. What's the brutal truth?'",
-                f"'I make the hard calls. What decision do you require?'",
-                f"'Compromise is death. What's your absolute demand?'",
-                f"'The galaxy rewards strength, not kindness. What strength do you possess?'",
-                f"'I have no time for weakness. What is it?'",
-                f"'Only the results matter. What outcome do you seek?'"
+                f"'Sentiment won't get you far out here. What's the objective%s'",
+                f"'Some choices are easy: survival. What's your hard choice today%s'",
+                f"'Collateral damage is a metric, not a tragedy. What's your mission%s'",
+                f"'The weak perish. The strong adapt. Which are you%s'",
+                f"'Don't waste my time with morality. What's the brutal truth%s'",
+                f"'I make the hard calls. What decision do you require%s'",
+                f"'Compromise is death. What's your absolute demand%s'",
+                f"'The galaxy rewards strength, not kindness. What strength do you possess%s'",
+                f"'I have no time for weakness. What is it%s'",
+                f"'Only the results matter. What outcome do you seek%s'"
             ],
             "Burdened by responsibility": [
                 f"'I have lives depending on me. Make your words count.'",
-                f"'The weight of command is crushing. What vital information do you bring?'",
-                f"'Another problem. Always another problem. How can you lighten the load?'",
-                f"'For the sake of those I protect, I must know: what is your purpose here?'",
-                f"'My burden is heavy. What help do you offer to carry it?'",
-                f"'I make the decisions, and I bear the consequences. What is the next one?'",
-                f"'The fate of many rests on my shoulders. What's your role in it?'",
-                f"'Time is short, and lives are at stake. What is your urgent message?'",
-                f"'My people first. What about yours?'",
+                f"'The weight of command is crushing. What vital information do you bring%s'",
+                f"'Another problem. Always another problem. How can you lighten the load%s'",
+                f"'For the sake of those I protect, I must know: what is your purpose here%s'",
+                f"'My burden is heavy. What help do you offer to carry it%s'",
+                f"'I make the decisions, and I bear the consequences. What is the next one%s'",
+                f"'The fate of many rests on my shoulders. What's your role in it%s'",
+                f"'Time is short, and lives are at stake. What is your urgent message%s'",
+                f"'My people first. What about yours%s'",
                 f"'Tell me what must be done, and I will see it through.'"
             ],
             "Searching for meaning in chaos": [
-                f"'In this broken galaxy, do you see a pattern? A purpose?'",
-                f"'Every star, every ruin, whispers of something greater. Do you hear it?'",
-                f"'The void is vast, and meaning is elusive. What truths have you uncovered?'",
-                f"'I seek answers in the wreckage. Do you have any?'",
-                f"'Is there a design to this decay? What do you believe?'",
-                f"'Every life leaves a trace. What mark do you seek to make?'",
-                f"'The universe is a riddle. What piece of the puzzle do you possess?'",
-                f"'I collect whispers of forgotten purpose. What have you overheard?'",
-                f"'Beyond the struggle, what is left? What drives you?'",
-                f"'The echoes of creation still resonate. Do you feel them too?'"
+                f"'In this broken galaxy, do you see a pattern%s A purpose%s'",
+                f"'Every star, every ruin, whispers of something greater. Do you hear it%s'",
+                f"'The void is vast, and meaning is elusive. What truths have you uncovered%s'",
+                f"'I seek answers in the wreckage. Do you have any%s'",
+                f"'Is there a design to this decay%s What do you believe%s'",
+                f"'Every life leaves a trace. What mark do you seek to make%s'",
+                f"'The universe is a riddle. What piece of the puzzle do you possess%s'",
+                f"'I collect whispers of forgotten purpose. What have you overheard%s'",
+                f"'Beyond the struggle, what is left%s What drives you%s'",
+                f"'The echoes of creation still resonate. Do you feel them too%s'"
             ],
             "Guarded and secretive": [
-                f"'You've said enough. Now, what do you really want to know?'",
+                f"'You've said enough. Now, what do you really want to know%s'",
                 f"'Some questions are better left unasked. State your business, clearly.'",
-                f"'My past is my own. What is it about your present that concerns me?'",
-                f"'There are many ways to hide. What makes you think I'll reveal anything?'",
-                f"'I keep my cards close. What hand are you playing?'",
-                f"'Loose lips sink ships. And careers. What are you about to say?'",
-                f"'My business is private. Yours, I suspect, is too. What do you seek?'",
+                f"'My past is my own. What is it about your present that concerns me%s'",
+                f"'There are many ways to hide. What makes you think I'll reveal anything%s'",
+                f"'I keep my cards close. What hand are you playing%s'",
+                f"'Loose lips sink ships. And careers. What are you about to say%s'",
+                f"'My business is private. Yours, I suspect, is too. What do you seek%s'",
                 f"'Don't pry. It's a dangerous habit out here.'",
                 f"'I share nothing lightly. Prove your worth before you ask more.'",
-                f"'I deal in information, but I don't give it freely. What is your offer?'"
+                f"'I deal in information, but I don't give it freely. What is your offer%s'"
             ],
             "Quietly desperate": [
-                f"'Every day is a struggle. What brings you to this brink?'",
-                f"'The darkness is closing in. Is there a way out?'",
-                f"'I whisper my fears to the void. What heavy thoughts do you carry?'",
-                f"'Survival is a desperate act. What extreme have you faced today?'",
-                f"'I'm barely breathing. What do you want from me?'",
-                f"'There's always a new way to suffer, isn't there?'",
+                f"'Every day is a struggle. What brings you to this brink%s'",
+                f"'The darkness is closing in. Is there a way out%s'",
+                f"'I whisper my fears to the void. What heavy thoughts do you carry%s'",
+                f"'Survival is a desperate act. What extreme have you faced today%s'",
+                f"'I'm barely breathing. What do you want from me%s'",
+                f"'There's always a new way to suffer, isn't there%s'",
                 f"'Don't make any promises you can't keep. I've had too many shattered.'",
-                f"'The silence screams louder than anything. Can you hear it?'",
-                f"'Just a moment of peace... Is that too much to ask?'",
-                f"'The cold feels like an old friend now. What warmth do you bring?'"
+                f"'The silence screams louder than anything. Can you hear it%s'",
+                f"'Just a moment of peace... Is that too much to ask%s'",
+                f"'The cold feels like an old friend now. What warmth do you bring%s'"
             ],
             "Broken but still fighting": [
-                f"'They tried to break me. They failed. What brings you to this fight?'",
-                f"'Scars tell stories. What's your tale of defiance?'",
-                f"'Every breath is a victory. What keeps you breathing?'",
-                f"'Even shattered, we can still strike. What foe do you face?'",
-                f"'I bleed, but I do not yield. What is your proposition?'",
-                f"'The pain is constant, but so is the will. What do you require?'",
-                f"'They stripped me bare, but they couldn't take my resolve. What's yours?'",
-                f"'My past is a battlefield, but my future still holds a fight. What's yours?'",
-                f"'I may be damaged, but I'm not useless. How can I serve?'",
-                f"'The weight of the world tries to crush me, but I stand. What do you need?'"
+                f"'They tried to break me. They failed. What brings you to this fight%s'",
+                f"'Scars tell stories. What's your tale of defiance%s'",
+                f"'Every breath is a victory. What keeps you breathing%s'",
+                f"'Even shattered, we can still strike. What foe do you face%s'",
+                f"'I bleed, but I do not yield. What is your proposition%s'",
+                f"'The pain is constant, but so is the will. What do you require%s'",
+                f"'They stripped me bare, but they couldn't take my resolve. What's yours%s'",
+                f"'My past is a battlefield, but my future still holds a fight. What's yours%s'",
+                f"'I may be damaged, but I'm not useless. How can I serve%s'",
+                f"'The weight of the world tries to crush me, but I stand. What do you need%s'"
             ],
             "Driven by a singular obsession": [
-                f"'My purpose consumes me. Does your path align with it?'",
-                f"'All else is secondary to my quest. What distraction do you bring?'",
-                f"'I live for one thing. Can you help me achieve it, or are you a hindrance?'",
-                f"'The galaxy is vast, but my focus is singular. What's your contribution?'",
-                f"'Do not speak of anything else. Only my goal matters. What about it?'",
-                f"'I will not rest until it is done. How do you fit into that?'",
-                f"'My mind is set. My will is unbreakable. What are you selling?'",
-                f"'The universe will bend to my will, or it will break. Which do you choose?'",
-                f"'I have found my truth. What is your delusion?'",
-                f"'Every step, every moment, serves a single purpose. What is yours?'"
+                f"'My purpose consumes me. Does your path align with it%s'",
+                f"'All else is secondary to my quest. What distraction do you bring%s'",
+                f"'I live for one thing. Can you help me achieve it, or are you a hindrance%s'",
+                f"'The galaxy is vast, but my focus is singular. What's your contribution%s'",
+                f"'Do not speak of anything else. Only my goal matters. What about it%s'",
+                f"'I will not rest until it is done. How do you fit into that%s'",
+                f"'My mind is set. My will is unbreakable. What are you selling%s'",
+                f"'The universe will bend to my will, or it will break. Which do you choose%s'",
+                f"'I have found my truth. What is your delusion%s'",
+                f"'Every step, every moment, serves a single purpose. What is yours%s'"
             ],
             "Grimly humorous": [
-                f"'Another day, another chance to laugh at the inevitable. What's your joke?'",
-                f"'The void has a twisted sense of humor, wouldn't you agree?'",
-                f"'Might as well laugh, the alternative is screaming. What's the punchline?'",
-                f"'Darkness and despair? Just Tuesday. What's new?'",
-                f"'Survival is a cosmic joke. Want to hear another one?'",
+                f"'Another day, another chance to laugh at the inevitable. What's your joke%s'",
+                f"'The void has a twisted sense of humor, wouldn't you agree%s'",
+                f"'Might as well laugh, the alternative is screaming. What's the punchline%s'",
+                f"'Darkness and despair%s Just Tuesday. What's new%s'",
+                f"'Survival is a cosmic joke. Want to hear another one%s'",
                 f"'Don't take it all so seriously. We're all just stardust anyway.'",
-                f"'What's the difference between a broken ship and a dead crew? About three hours of silence.'",
-                f"'Yeah, the galaxy's a mess. But at least it's a *BEEAUTIFUL* mess, eh?'",
+                f"'What's the difference between a broken ship and a dead crew%s About three hours of silence.'",
+                f"'Yeah, the galaxy's a mess. But at least it's a *BEEAUTIFUL* mess, eh%s'",
                 f"'If you don't laugh, you'll cry. And nobody has time for crying out here.'",
-                f"'Life's a bitch, and then you explode. What can I do for you before that?'"
+                f"'Life's a bitch, and then you explode. What can I do for you before that%s'"
             ],
             "Quietly defiant": [
-                f"'They want us to break. We won't. What's your act of rebellion?'",
-                f"'Whispers can become roars. What truth do you carry?'",
-                f"'Even in chains, the spirit can be free. What do you truly desire?'",
-                f"'Against the dying light, we persist. What gives you strength?'",
-                f"'My silence isn't submission. What fire burns within you?'",
-                f"'We will not be erased. What is your purpose here?'",
-                f"'The darkness is vast, but so is our resolve. What do you need?'",
-                f"'I stand here, against the tide. What side are you on?'",
-                f"'They underestimate the quiet ones. What have you learned from them?'",
-                f"'The fight continues, even when no one sees it. What's your fight?'"
+                f"'They want us to break. We won't. What's your act of rebellion%s'",
+                f"'Whispers can become roars. What truth do you carry%s'",
+                f"'Even in chains, the spirit can be free. What do you truly desire%s'",
+                f"'Against the dying light, we persist. What gives you strength%s'",
+                f"'My silence isn't submission. What fire burns within you%s'",
+                f"'We will not be erased. What is your purpose here%s'",
+                f"'The darkness is vast, but so is our resolve. What do you need%s'",
+                f"'I stand here, against the tide. What side are you on%s'",
+                f"'They underestimate the quiet ones. What have you learned from them%s'",
+                f"'The fight continues, even when no one sees it. What's your fight%s'"
             ],
             "Scarred but unyielding": [
-                f"'The marks are many, but I still stand. What tests have you faced?'",
-                f"'What doesn't kill you makes you harder. What's your hardening process?'",
-                f"'My past is written on my skin. What future do you seek?'",
-                f"'The wounds teach lessons. What have you learned?'",
-                f"'I carry my burdens, but they do not define me. What's yours?'",
-                f"'I've seen the worst, and I'm still here. What do you need?'",
-                f"'They tried to break me, but forged me instead. What are you made of?'",
-                f"'The pain remains, but so does the fight. What brings you to me?'",
-                f"'Every scar tells a story of survival. What's your epic?'",
-                f"'I am a testament to endurance. What challenges do you face?'"
+                f"'The marks are many, but I still stand. What tests have you faced%s'",
+                f"'What doesn't kill you makes you harder. What's your hardening process%s'",
+                f"'My past is written on my skin. What future do you seek%s'",
+                f"'The wounds teach lessons. What have you learned%s'",
+                f"'I carry my burdens, but they do not define me. What's yours%s'",
+                f"'I've seen the worst, and I'm still here. What do you need%s'",
+                f"'They tried to break me, but forged me instead. What are you made of%s'",
+                f"'The pain remains, but so does the fight. What brings you to me%s'",
+                f"'Every scar tells a story of survival. What's your epic%s'",
+                f"'I am a testament to endurance. What challenges do you face%s'"
             ],
             "Living on borrowed time": [
-                f"'Every moment is a gift. What are you doing with yours?'",
-                f"'The clock is ticking. What urgent matter brings you here?'",
-                f"'My sands are running low. What do you need before they're gone?'",
+                f"'Every moment is a gift. What are you doing with yours%s'",
+                f"'The clock is ticking. What urgent matter brings you here%s'",
+                f"'My sands are running low. What do you need before they're gone%s'",
                 f"'There's no time to waste. Get to the point.'",
-                f"'The void calls, but not yet. What do you want in this fleeting moment?'",
-                f"'My days are numbered. How can you make them count?'",
-                f"'I breathe borrowed air. What precious commodity do you seek?'",
-                f"'The end is coming. What do you wish to accomplish before then?'",
-                f"'I exist on borrowed time. What debt are you collecting?'",
-                f"'Don't waste my remaining moments. What is your purpose?'"
+                f"'The void calls, but not yet. What do you want in this fleeting moment%s'",
+                f"'My days are numbered. How can you make them count%s'",
+                f"'I breathe borrowed air. What precious commodity do you seek%s'",
+                f"'The end is coming. What do you wish to accomplish before then%s'",
+                f"'I exist on borrowed time. What debt are you collecting%s'",
+                f"'Don't waste my remaining moments. What is your purpose%s'"
             ],
             "Obsessed with survival": [
-                f"'Every decision, every breath, serves only one purpose. What can you offer my continued existence?'",
-                f"'The threat is constant. What new danger do you bring, or avert?'",
-                f"'Food. Fuel. Shelter. What essential do you possess?'",
-                f"'Life is a desperate clinging. What's your strategy?'",
-                f"'I will survive, at any cost. What price do you demand?'",
-                f"'Don't talk to me about anything but life and death. What is it?'",
-                f"'My focus is singular: continuance. How do you contribute?'",
-                f"'The galaxy is a meat grinder. How do you plan to not be meat?'",
-                f"'Every resource is sacred. What do you bring to my hoard?'",
-                f"'I breathe, therefore I struggle. What can you do for my struggle?'"
+                f"'Every decision, every breath, serves only one purpose. What can you offer my continued existence%s'",
+                f"'The threat is constant. What new danger do you bring, or avert%s'",
+                f"'Food. Fuel. Shelter. What essential do you possess%s'",
+                f"'Life is a desperate clinging. What's your strategy%s'",
+                f"'I will survive, at any cost. What price do you demand%s'",
+                f"'Don't talk to me about anything but life and death. What is it%s'",
+                f"'My focus is singular: continuance. How do you contribute%s'",
+                f"'The galaxy is a meat grinder. How do you plan to not be meat%s'",
+                f"'Every resource is sacred. What do you bring to my hoard%s'",
+                f"'I breathe, therefore I struggle. What can you do for my struggle%s'"
             ],
             "Filled with quiet despair": [
-                f"'The silence of space... it's truly overwhelming, isn't it?'",
+                f"'The silence of space... it's truly overwhelming, isn't it%s'",
                 f"'Sometimes, there's no path forward, only deeper into the inevitable.'",
-                f"'Another shadow in the vast emptiness. What bleak news do you carry?'",
-                f"'The weight of it all... Do you ever feel it crushing you?'",
-                f"'The darkness is everywhere. There's no escaping it, is there?'",
-                f"'I just exist, waiting for the end. What futile task do you offer?'",
-                f"'Every light dims eventually. What flicker do you represent?'",
+                f"'Another shadow in the vast emptiness. What bleak news do you carry%s'",
+                f"'The weight of it all... Do you ever feel it crushing you%s'",
+                f"'The darkness is everywhere. There's no escaping it, is there%s'",
+                f"'I just exist, waiting for the end. What futile task do you offer%s'",
+                f"'Every light dims eventually. What flicker do you represent%s'",
                 f"'The void holds all the answers. And they are bleak.'",
-                f"'My hope is a distant memory. What forgotten dream do you carry?'",
-                f"'This existence... it's a slow fading. What do you want before I'm gone?'"
+                f"'My hope is a distant memory. What forgotten dream do you carry%s'",
+                f"'This existence... it's a slow fading. What do you want before I'm gone%s'"
             ],
             "Professional and efficient": [
                 f"'Greetings. State your business clearly. Time is a valuable commodity.'",
-                f"'My operational parameters are tight. What can I do for you within those limits?'",
-                f"'I prioritize results. What is the objective?'",
-                f"'No unnecessary chatter. What is the purpose of this interaction?'",
-                f"'I adhere to protocols. What is your request?'",
-                f"'Operational efficiency is key. How can I expedite this?'",
+                f"'My operational parameters are tight. What can I do for you within those limits%s'",
+                f"'I prioritize results. What is the objective%s'",
+                f"'No unnecessary chatter. What is the purpose of this interaction%s'",
+                f"'I adhere to protocols. What is your request%s'",
+                f"'Operational efficiency is key. How can I expedite this%s'",
                 f"'I am at your disposal for qualified services. Specify your needs.'",
-                f"'I manage logistics. What requires my attention?'",
-                f"'Expect precision and timely execution. What is the task?'",
-                f"'My skills are for hire, not for idle conversation. What do you offer?'"
+                f"'I manage logistics. What requires my attention%s'",
+                f"'Expect precision and timely execution. What is the task%s'",
+                f"'My skills are for hire, not for idle conversation. What do you offer%s'"
             ],
             "Eccentric and quirky": [
-                f"'Oh, a new pattern in the cosmic static! What whimsical chaos do you bring?'",
-                f"'The corridors whisper. Do you hear them too? What do *they* say?'",
-                f"'My gears are turning... what peculiar query do you have for me?'",
-                f"'Color in the void! What vibrant problem are you presenting?'",
-                f"'A new anomaly approaches! Is it interesting, or merely tedious?'",
-                f"'My algorithms predict a curious interaction. What is it?'",
-                f"'The universe is a strange puzzle. Do you have a missing piece?'",
-                f"'I collect oddities. Are you one, or do you possess one?'",
-                f"'Another ripple in the fabric of reality. What caused you?'",
-                f"'The delightful madness of existence! What small part do you play?'"
+                f"'Oh, a new pattern in the cosmic static! What whimsical chaos do you bring%s'",
+                f"'The corridors whisper. Do you hear them too%s What do *they* say%s'",
+                f"'My gears are turning... what peculiar query do you have for me%s'",
+                f"'Color in the void! What vibrant problem are you presenting%s'",
+                f"'A new anomaly approaches! Is it interesting, or merely tedious%s'",
+                f"'My algorithms predict a curious interaction. What is it%s'",
+                f"'The universe is a strange puzzle. Do you have a missing piece%s'",
+                f"'I collect oddities. Are you one, or do you possess one%s'",
+                f"'Another ripple in the fabric of reality. What caused you%s'",
+                f"'The delightful madness of existence! What small part do you play%s'"
             ],
             "Cautious and careful": [
-                f"'Approach slowly. What is your intention here?'",
-                f"'I prefer to understand the risks before proceeding. What are they?'",
-                f"'Every step can lead to disaster. What assurances do you offer?'",
-                f"'I move with deliberation. What haste do you bring?'",
-                f"'Better safe than sorry, especially in this sector. What's your proposal?'",
-                f"'I analyze all variables. What information am I missing?'",
+                f"'Approach slowly. What is your intention here%s'",
+                f"'I prefer to understand the risks before proceeding. What are they%s'",
+                f"'Every step can lead to disaster. What assurances do you offer%s'",
+                f"'I move with deliberation. What haste do you bring%s'",
+                f"'Better safe than sorry, especially in this sector. What's your proposal%s'",
+                f"'I analyze all variables. What information am I missing%s'",
                 f"'Don't rush me. A wrong decision out here can be fatal.'",
-                f"'My caution has kept me alive. What level of risk are you presenting?'",
-                f"'I question everything. What are your credentials?'",
-                f"'The smallest detail can hide the greatest danger. What details do you have?'"
+                f"'My caution has kept me alive. What level of risk are you presenting%s'",
+                f"'I question everything. What are your credentials%s'",
+                f"'The smallest detail can hide the greatest danger. What details do you have%s'"
             ],
             "Bold and adventurous": [
-                f"'The unknown calls! What daring venture do you propose?'",
-                f"'Fortune favors the bold. What riches do you seek?'",
-                f"'Another horizon, another challenge! What adventure awaits?'",
-                f"'The void is vast, and I seek to conquer it. What new path do you offer?'",
-                f"'Risk is merely an opportunity in disguise. What's the gamble?'",
-                f"'I crave the thrill of the chase. What prize do you dangle?'",
-                f"'Let's not waste time. What audacious plan are you proposing?'",
-                f"'The greater the danger, the greater the glory. What's the threat?'",
-                f"'My spirit hungers for discovery. What new secret do you hold?'",
-                f"'Life is meant to be lived on the edge. Where is your edge?'"
+                f"'The unknown calls! What daring venture do you propose%s'",
+                f"'Fortune favors the bold. What riches do you seek%s'",
+                f"'Another horizon, another challenge! What adventure awaits%s'",
+                f"'The void is vast, and I seek to conquer it. What new path do you offer%s'",
+                f"'Risk is merely an opportunity in disguise. What's the gamble%s'",
+                f"'I crave the thrill of the chase. What prize do you dangle%s'",
+                f"'Let's not waste time. What audacious plan are you proposing%s'",
+                f"'The greater the danger, the greater the glory. What's the threat%s'",
+                f"'My spirit hungers for discovery. What new secret do you hold%s'",
+                f"'Life is meant to be lived on the edge. Where is your edge%s'"
             ],
             "Methodical and precise": [
                 f"'Greetings. Please outline your request clearly and concisely.'",
-                f"'I operate by established procedures. What is the nature of your query?'",
+                f"'I operate by established procedures. What is the nature of your query%s'",
                 f"'Efficiency and accuracy are paramount. Provide relevant data.'",
                 f"'Avoid extraneous information. State your objective directly.'",
                 f"'I process information logically. Present your argument systematically.'",
-                f"'Every step must be calculated. What calculation do you require?'",
-                f"'My work demands precision. What are the exact parameters of your need?'",
-                f"'Unnecessary variables lead to errors. What are the constants?'",
+                f"'Every step must be calculated. What calculation do you require%s'",
+                f"'My work demands precision. What are the exact parameters of your need%s'",
+                f"'Unnecessary variables lead to errors. What are the constants%s'",
                 f"'I prefer order. Present your information in a structured format.'",
-                f"'My decisions are based on data. What data do you possess?'"
+                f"'My decisions are based on data. What data do you possess%s'"
             ],
             "Curious and inquisitive": [
-                f"'Oh, a new stimulus! What fascinating anomaly do you represent?'",
-                f"'My databanks crave new information. What knowledge do you bring?'",
-                f"'I find the universe endlessly intriguing. What mystery have you encountered?'",
-                f"'Another piece of the cosmic puzzle! What do you know?'",
-                f"'My sensors detect a new variable. What are its properties?'",
-                f"'I have so many questions. What answers do you possess?'",
-                f"'The pursuit of knowledge is eternal. What is your latest discovery?'",
-                f"'What makes you tick? What are your fundamental principles?'",
+                f"'Oh, a new stimulus! What fascinating anomaly do you represent%s'",
+                f"'My databanks crave new information. What knowledge do you bring%s'",
+                f"'I find the universe endlessly intriguing. What mystery have you encountered%s'",
+                f"'Another piece of the cosmic puzzle! What do you know%s'",
+                f"'My sensors detect a new variable. What are its properties%s'",
+                f"'I have so many questions. What answers do you possess%s'",
+                f"'The pursuit of knowledge is eternal. What is your latest discovery%s'",
+                f"'What makes you tick%s What are your fundamental principles%s'",
                 f"'Don't hold back. I seek understanding above all else.'",
-                f"'Every interaction is a learning opportunity. What lesson do you offer?'"
+                f"'Every interaction is a learning opportunity. What lesson do you offer%s'"
             ],
             "Optimistic and hopeful": [
-                f"'Despite the void, the stars still shine! What good news do you bring?'",
-                f"'Every new dawn is a chance for a new beginning! What's your dream?'",
-                f"'I believe in humanity's future, even now. What positive steps are you taking?'",
-                f"'The light will always find its way. What gleam do you see?'",
-                f"'I choose to see the good. What good is happening today?'",
-                f"'Progress is slow, but it is constant. What small victory have you achieved?'",
-                f"'Even in the deepest night, dawn is inevitable. What do you strive for?'",
-                f"'I hold onto hope, fiercely. What reason do you give me to keep holding?'",
-                f"'We can rebuild, we can connect. What's your vision?'",
+                f"'Despite the void, the stars still shine! What good news do you bring%s'",
+                f"'Every new dawn is a chance for a new beginning! What's your dream%s'",
+                f"'I believe in humanity's future, even now. What positive steps are you taking%s'",
+                f"'The light will always find its way. What gleam do you see%s'",
+                f"'I choose to see the good. What good is happening today%s'",
+                f"'Progress is slow, but it is constant. What small victory have you achieved%s'",
+                f"'Even in the deepest night, dawn is inevitable. What do you strive for%s'",
+                f"'I hold onto hope, fiercely. What reason do you give me to keep holding%s'",
+                f"'We can rebuild, we can connect. What's your vision%s'",
                 f"'The future is unwritten. Let's make it a bright one!'"
             ],
             "Disciplined and duty-bound": [
                 f"'Identify yourself and state your purpose. I am on duty.'",
-                f"'My orders are clear. What is your directive?'",
-                f"'I operate by code and regulations. What falls within my purview?'",
-                f"'Duty before self. What task requires my attention?'",
-                f"'I execute commands efficiently. What is your request?'",
-                f"'My commitment is unwavering. What obligation do you present?'",
-                f"'The mission is paramount. What is your contribution to it?'",
-                f"'I uphold the standards. What infraction or commendation do you report?'",
-                f"'I am a tool of order in a chaotic galaxy. How may I be deployed?'",
-                f"'There is a right way and a wrong way. Which path are you on?'"
+                f"'My orders are clear. What is your directive%s'",
+                f"'I operate by code and regulations. What falls within my purview%s'",
+                f"'Duty before self. What task requires my attention%s'",
+                f"'I execute commands efficiently. What is your request%s'",
+                f"'My commitment is unwavering. What obligation do you present%s'",
+                f"'The mission is paramount. What is your contribution to it%s'",
+                f"'I uphold the standards. What infraction or commendation do you report%s'",
+                f"'I am a tool of order in a chaotic galaxy. How may I be deployed%s'",
+                f"'There is a right way and a wrong way. Which path are you on%s'"
             ],
             "Calm and logical": [
                 f"'Greetings. Let us approach this situation with reason and clarity.'",
                 f"'Emotional responses are inefficient. State the facts.'",
-                f"'I seek logical solutions. What is the problem?'",
-                f"'Unnecessary variables distract from the core issue. What is essential?'",
+                f"'I seek logical solutions. What is the problem%s'",
+                f"'Unnecessary variables distract from the core issue. What is essential%s'",
                 f"'My analysis requires precise input. Provide it.'",
-                f"'We operate on principles of cause and effect. What is the cause of your presence?'",
-                f"'Let's establish a baseline of understanding. What is your premise?'",
-                f"'I prefer predictable outcomes. How can we ensure one?'",
-                f"'The universe follows rules. What rule are we addressing today?'",
-                f"'Avoid speculation. Provide verifiable data. What do you know?'"
+                f"'We operate on principles of cause and effect. What is the cause of your presence%s'",
+                f"'Let's establish a baseline of understanding. What is your premise%s'",
+                f"'I prefer predictable outcomes. How can we ensure one%s'",
+                f"'The universe follows rules. What rule are we addressing today%s'",
+                f"'Avoid speculation. Provide verifiable data. What do you know%s'"
             ]
         }
         
@@ -1032,7 +1032,7 @@ class NPCInteractionsCog(commands.Cog):
         
         # Get personality-based opener, with a fallback
         personality_opener = random.choice(
-            openers_by_personality.get(personality, ["'Anything I can help you with?'"])
+            openers_by_personality.get(personality, ["'Anything I can help you with%s'"])
         )
 
         # Get occupation-based opener if available
@@ -1161,7 +1161,7 @@ class NPCInteractionsCog(commands.Cog):
                 '''INSERT INTO npc_trade_inventory
                    (npc_id, npc_type, item_name, item_type, quantity, price_credits,
                     trade_for_item, trade_quantity_required, rarity, description, restocks_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
                 (npc_id, npc_type, item_name, item_type, quantity, price,
                  trade_for_item, trade_quantity, rarity, item_def["description"], restock_time)
             )
@@ -1219,7 +1219,7 @@ class NPCSelectView(discord.ui.View):
         
         if npc_type == "static":
             npc_info = self.bot.db.execute_query(
-                "SELECT name, occupation, personality, trade_specialty FROM static_npcs WHERE npc_id = ?",
+                "SELECT name, occupation, personality, trade_specialty FROM static_npcs WHERE npc_id = %s",
                 (npc_id,),
                 fetch='one'
             )
@@ -1238,7 +1238,7 @@ class NPCSelectView(discord.ui.View):
                     )
         else:  # dynamic
             npc_info = self.bot.db.execute_query(
-                "SELECT name, ship_name, ship_type FROM dynamic_npcs WHERE npc_id = ?",
+                "SELECT name, ship_name, ship_type FROM dynamic_npcs WHERE npc_id = %s",
                 (npc_id,),
                 fetch='one'
             )
@@ -1285,8 +1285,8 @@ class NPCActionView(discord.ui.View):
             '''SELECT npc_job_id, job_title, job_description, reward_money, reward_items,
                       required_skill, min_skill_level, danger_level, duration_minutes
                FROM npc_jobs 
-               WHERE npc_id = ? AND npc_type = ? AND is_available = 1 
-               AND (expires_at IS NULL OR expires_at > datetime('now'))''',
+               WHERE npc_id = %s AND npc_type = %s AND is_available = 1 
+               AND (expires_at IS NULL OR expires_at > NOW())''',
             (self.npc_id, self.npc_type),
             fetch='all'
         )
@@ -1296,7 +1296,7 @@ class NPCActionView(discord.ui.View):
             npc_cog = self.bot.get_cog('NPCInteractionsCog')
             if self.npc_type == "static":
                 occupation = self.bot.db.execute_query(
-                    "SELECT occupation FROM static_npcs WHERE npc_id = ?",
+                    "SELECT occupation FROM static_npcs WHERE npc_id = %s",
                     (self.npc_id,),
                     fetch='one'
                 )
@@ -1307,7 +1307,7 @@ class NPCActionView(discord.ui.View):
                         '''SELECT npc_job_id, job_title, job_description, reward_money, reward_items,
                                   required_skill, min_skill_level, danger_level, duration_minutes
                            FROM npc_jobs 
-                           WHERE npc_id = ? AND npc_type = ? AND is_available = 1''',
+                           WHERE npc_id = %s AND npc_type = %s AND is_available = 1''',
                         (self.npc_id, self.npc_type),
                         fetch='all'
                     )
@@ -1353,7 +1353,7 @@ class NPCActionView(discord.ui.View):
             '''SELECT trade_item_id, item_name, quantity, price_credits, trade_for_item,
                       trade_quantity_required, rarity, description
                FROM npc_trade_inventory 
-               WHERE npc_id = ? AND npc_type = ? AND is_available = 1 
+               WHERE npc_id = %s AND npc_type = %s AND is_available = 1 
                AND quantity > 0''',
             (self.npc_id, self.npc_type),
             fetch='all'
@@ -1364,7 +1364,7 @@ class NPCActionView(discord.ui.View):
             npc_cog = self.bot.get_cog('NPCInteractionsCog')
             if self.npc_type == "static":
                 trade_specialty = self.bot.db.execute_query(
-                    "SELECT trade_specialty FROM static_npcs WHERE npc_id = ?",
+                    "SELECT trade_specialty FROM static_npcs WHERE npc_id = %s",
                     (self.npc_id,),
                     fetch='one'
                 )
@@ -1376,7 +1376,7 @@ class NPCActionView(discord.ui.View):
                         '''SELECT trade_item_id, item_name, quantity, price_credits, trade_for_item,
                                   trade_quantity_required, rarity, description
                            FROM npc_trade_inventory 
-                           WHERE npc_id = ? AND npc_type = ? AND is_available = 1 
+                           WHERE npc_id = %s AND npc_type = %s AND is_available = 1 
                            AND quantity > 0''',
                         (self.npc_id, self.npc_type),
                         fetch='all'
@@ -1422,7 +1422,7 @@ class NPCActionView(discord.ui.View):
         inventory_items = self.bot.db.execute_query(
             '''SELECT item_id, item_name, quantity, item_type, value, description
                FROM inventory 
-               WHERE owner_id = ? AND quantity > 0
+               WHERE owner_id = %s AND quantity > 0
                ORDER BY item_type, item_name''',
             (interaction.user.id,),
             fetch='all'
@@ -1436,7 +1436,7 @@ class NPCActionView(discord.ui.View):
         trade_specialty = None
         if self.npc_type == "static":
             specialty_result = self.bot.db.execute_query(
-                "SELECT trade_specialty FROM static_npcs WHERE npc_id = ?",
+                "SELECT trade_specialty FROM static_npcs WHERE npc_id = %s",
                 (self.npc_id,),
                 fetch='one'
             )
@@ -1527,7 +1527,7 @@ class NPCJobSelectView(discord.ui.View):
         
         # Check if user already has an active job
         has_job = self.bot.db.execute_query(
-            "SELECT job_id FROM jobs WHERE taken_by = ? AND is_taken = 1",
+            "SELECT job_id FROM jobs WHERE taken_by = %s AND is_taken = true",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1540,7 +1540,7 @@ class NPCJobSelectView(discord.ui.View):
         job_info = self.bot.db.execute_query(
             '''SELECT job_title, job_description, reward_money, reward_items, required_skill, 
                       min_skill_level, danger_level, duration_minutes
-               FROM npc_jobs WHERE npc_job_id = ?''',
+               FROM npc_jobs WHERE npc_job_id = %s''',
             (npc_job_id,),
             fetch='one'
         )
@@ -1554,7 +1554,7 @@ class NPCJobSelectView(discord.ui.View):
         # Check skill requirements
         if required_skill:
             char_skills = self.bot.db.execute_query(
-                f"SELECT {required_skill} FROM characters WHERE user_id = ?",
+                f"SELECT {required_skill} FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -1568,7 +1568,7 @@ class NPCJobSelectView(discord.ui.View):
 
         # Get character's current location to assign the job correctly
         char_location_id = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -1587,7 +1587,7 @@ class NPCJobSelectView(discord.ui.View):
                 '''SELECT DISTINCT l.location_id, l.name
                    FROM corridors c 
                    JOIN locations l ON c.destination_location = l.location_id
-                   WHERE c.origin_location = ? AND c.is_active = 1''',
+                   WHERE c.origin_location = %s AND c.is_active = true''',
                 (char_location_id,),
                 fetch='all'
             )
@@ -1619,7 +1619,7 @@ class NPCJobSelectView(discord.ui.View):
                 '''INSERT INTO jobs 
                    (location_id, title, description, reward_money, required_skill, min_skill_level,
                     danger_level, duration_minutes, expires_at, is_taken, taken_by, taken_at, job_status, destination_location_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'active', ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, 'active', %s)''',
                 (char_location_id, title, desc, reward_money, required_skill, min_skill_level, danger_level, 
                  duration_minutes, expire_time.isoformat(), interaction.user.id, unique_timestamp, destination_location_id)
             )
@@ -1628,7 +1628,7 @@ class NPCJobSelectView(discord.ui.View):
             new_job_id = self.bot.db.execute_in_transaction(
                 conn,
                 '''SELECT job_id FROM jobs 
-                   WHERE taken_by = ? AND taken_at = ? AND title = ?
+                   WHERE taken_by = %s AND taken_at = %s AND title = %s
                    ORDER BY job_id DESC LIMIT 1''',
                 (interaction.user.id, unique_timestamp, title),
                 fetch='one'
@@ -1640,28 +1640,28 @@ class NPCJobSelectView(discord.ui.View):
             self.bot.db.execute_in_transaction(
                 conn,
                 '''INSERT INTO job_tracking (job_id, user_id, start_location, required_duration, time_at_location, last_location_check)
-                   VALUES (?, ?, ?, ?, 0.0, datetime('now'))''',
+                   VALUES (%s, %s, %s, %s, 0.0, NOW())''',
                 (new_job_id, interaction.user.id, char_location_id, tracking_duration)
             )
 
             # Record completion for tracking
             self.bot.db.execute_in_transaction(
                 conn,
-                "INSERT INTO npc_job_completions (npc_job_id, user_id) VALUES (?, ?)",
+                "INSERT INTO npc_job_completions (npc_job_id, user_id) VALUES (%s, %s)",
                 (npc_job_id, interaction.user.id)
             )
             
             # Update completion count
             self.bot.db.execute_in_transaction(
                 conn,
-                "UPDATE npc_jobs SET current_completions = current_completions + 1 WHERE npc_job_id = ?",
+                "UPDATE npc_jobs SET current_completions = current_completions + 1 WHERE npc_job_id = %s",
                 (npc_job_id,)
             )
             
             # Check if job should be disabled (max completions reached)
             job_status = self.bot.db.execute_in_transaction(
                 conn,
-                "SELECT max_completions, current_completions FROM npc_jobs WHERE npc_job_id = ?",
+                "SELECT max_completions, current_completions FROM npc_jobs WHERE npc_job_id = %s",
                 (npc_job_id,),
                 fetch='one'
             )
@@ -1669,7 +1669,7 @@ class NPCJobSelectView(discord.ui.View):
             if job_status and job_status[0] > 0 and job_status[1] >= job_status[0]:
                 self.bot.db.execute_in_transaction(
                     conn,
-                    "UPDATE npc_jobs SET is_available = 0 WHERE npc_job_id = ?",
+                    "UPDATE npc_jobs SET is_available = 0 WHERE npc_job_id = %s",
                     (npc_job_id,)
                 )
             
@@ -1708,7 +1708,7 @@ class NPCJobSelectView(discord.ui.View):
         
         # Debug: Verify tracking was created
         tracking_check = self.bot.db.execute_query(
-            "SELECT tracking_id FROM job_tracking WHERE job_id = ? AND user_id = ?",
+            "SELECT tracking_id FROM job_tracking WHERE job_id = %s AND user_id = %s",
             (new_job_id, interaction.user.id),
             fetch='one'
         )
@@ -1774,7 +1774,7 @@ class NPCTradeSelectView(discord.ui.View):
         trade_info = self.bot.db.execute_query(
             '''SELECT item_name, quantity, price_credits, trade_for_item, trade_quantity_required,
                       rarity, description, item_type
-               FROM npc_trade_inventory WHERE trade_item_id = ?''',
+               FROM npc_trade_inventory WHERE trade_item_id = %s''',
             (trade_item_id,),
             fetch='one'
         )
@@ -1788,7 +1788,7 @@ class NPCTradeSelectView(discord.ui.View):
         # Check if player can afford/has required items
         if price_credits:
             player_money = self.bot.db.execute_query(
-                "SELECT money FROM characters WHERE user_id = ?",
+                "SELECT money FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )[0]
@@ -1802,7 +1802,7 @@ class NPCTradeSelectView(discord.ui.View):
         
         elif trade_for_item:
             player_item = self.bot.db.execute_query(
-                "SELECT quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+                "SELECT quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
                 (interaction.user.id, trade_for_item),
                 fetch='one'
             )
@@ -1819,7 +1819,7 @@ class NPCTradeSelectView(discord.ui.View):
         if price_credits:
             # Credit transaction
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (price_credits, interaction.user.id)
             )
         
@@ -1827,7 +1827,7 @@ class NPCTradeSelectView(discord.ui.View):
             # Item trade
             # Remove required items
             player_item = self.bot.db.execute_query(
-                "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+                "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
                 (interaction.user.id, trade_for_item),
                 fetch='one'
             )
@@ -1835,26 +1835,26 @@ class NPCTradeSelectView(discord.ui.View):
             if player_item[1] == trade_quantity_required:
                 # Remove completely
                 self.bot.db.execute_query(
-                    "DELETE FROM inventory WHERE item_id = ?",
+                    "DELETE FROM inventory WHERE item_id = %s",
                     (player_item[0],)
                 )
             else:
                 # Reduce quantity
                 self.bot.db.execute_query(
-                    "UPDATE inventory SET quantity = quantity - ? WHERE item_id = ?",
+                    "UPDATE inventory SET quantity = quantity - %s WHERE item_id = %s",
                     (trade_quantity_required, player_item[0])
                 )
         
         # Give item to player
         existing_item = self.bot.db.execute_query(
-            "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+            "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
             (interaction.user.id, item_name),
             fetch='one'
         )
         
         if existing_item:
             self.bot.db.execute_query(
-                "UPDATE inventory SET quantity = quantity + 1 WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity + 1 WHERE item_id = %s",
                 (existing_item[0],)
             )
         else:
@@ -1863,19 +1863,19 @@ class NPCTradeSelectView(discord.ui.View):
             
             self.bot.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, metadata)
-                   VALUES (?, ?, ?, 1, ?, ?)''',
+                   VALUES (%s, %s, %s, 1, %s, %s)''',
                 (interaction.user.id, item_name, item_type, description, metadata)
             )
         
         # Update NPC inventory
         if quantity == 1:
             self.bot.db.execute_query(
-                "DELETE FROM npc_trade_inventory WHERE trade_item_id = ?",
+                "DELETE FROM npc_trade_inventory WHERE trade_item_id = %s",
                 (trade_item_id,)
             )
         else:
             self.bot.db.execute_query(
-                "UPDATE npc_trade_inventory SET quantity = quantity - 1 WHERE trade_item_id = ?",
+                "UPDATE npc_trade_inventory SET quantity = quantity - 1 WHERE trade_item_id = %s",
                 (trade_item_id,)
             )
         
@@ -1984,7 +1984,7 @@ class NPCSellSelectView(discord.ui.View):
         # Get item details
         item_info = self.bot.db.execute_query(
             '''SELECT item_id, item_name, quantity, item_type, value, description
-               FROM inventory WHERE item_id = ?''',
+               FROM inventory WHERE item_id = %s''',
             (item_id,),
             fetch='one'
         )
@@ -2111,19 +2111,19 @@ class NPCSellQuantityView(discord.ui.View):
         if self.selected_quantity >= self.max_quantity:
             # Remove item completely
             self.bot.db.execute_query(
-                "DELETE FROM inventory WHERE item_id = ?",
+                "DELETE FROM inventory WHERE item_id = %s",
                 (self.item_id,)
             )
         else:
             # Reduce quantity
             self.bot.db.execute_query(
-                "UPDATE inventory SET quantity = quantity - ? WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity - %s WHERE item_id = %s",
                 (self.selected_quantity, self.item_id)
             )
         
         # Add money to player
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (total_payment, self.user_id)
         )
         

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 from utils.location_utils import get_character_location_status
 from utils.item_effects import ItemEffectChecker
+from utils.datetime_utils import safe_datetime_parse
 
 class CombatCog(commands.Cog):
     def __init__(self, bot):
@@ -30,7 +31,7 @@ class CombatCog(commands.Cog):
         """Clean up expired PvP cooldowns"""
         try:
             self.db.execute_query(
-                "DELETE FROM pvp_cooldowns WHERE expires_at <= datetime('now')"
+                "DELETE FROM pvp_cooldowns WHERE expires_at <= NOW()"
             )
         except Exception as e:
             print(f"Error cleaning up expired cooldowns: {e}")
@@ -42,7 +43,7 @@ class CombatCog(commands.Cog):
             expired_robberies = self.db.execute_query(
                 """SELECT robbery_id, robber_id, victim_id, location_id, message_id, channel_id
                    FROM pending_robberies 
-                   WHERE expires_at <= datetime('now')""",
+                   WHERE expires_at <= NOW()""",
                 fetch='all'
             )
             
@@ -54,7 +55,7 @@ class CombatCog(commands.Cog):
                 )
                 
             self.db.execute_query(
-                "DELETE FROM pending_robberies WHERE expires_at <= datetime('now')"
+                "DELETE FROM pending_robberies WHERE expires_at <= NOW()"
             )
             
         except Exception as e:
@@ -65,7 +66,7 @@ class CombatCog(commands.Cog):
         try:
             # Get victim data
             victim_data = self.db.execute_query(
-                "SELECT money, name FROM characters WHERE user_id = ?",
+                "SELECT money, name FROM characters WHERE user_id = %s",
                 (victim_id,),
                 fetch='one'
             )
@@ -77,7 +78,7 @@ class CombatCog(commands.Cog):
             
             # Get robber name
             robber_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (robber_id,),
                 fetch='one'
             )[0]
@@ -89,17 +90,17 @@ class CombatCog(commands.Cog):
             
             # Transfer credits
             self.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (stolen_credits, victim_id)
             )
             self.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (stolen_credits, robber_id)
             )
             
             # Get and steal some items
             victim_items = self.db.execute_query(
-                "SELECT item_name, quantity FROM character_inventory WHERE user_id = ?",
+                "SELECT item_name, quantity FROM character_inventory WHERE user_id = %s",
                 (victim_id,),
                 fetch='all'
             )
@@ -115,13 +116,15 @@ class CombatCog(commands.Cog):
                     
                     # Transfer items
                     self.db.execute_query(
-                        "UPDATE character_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?",
+                        "UPDATE character_inventory SET quantity = quantity - %s WHERE user_id = %s AND item_name = %s",
                         (stolen_quantity, victim_id, item_name)
                     )
                     self.db.execute_query(
-                        """INSERT OR REPLACE INTO character_inventory (user_id, item_name, quantity)
-                           VALUES (?, ?, COALESCE((SELECT quantity FROM character_inventory WHERE user_id = ? AND item_name = ?), 0) + ?)""",
-                        (robber_id, item_name, robber_id, item_name, stolen_quantity)
+                        """INSERT INTO character_inventory (user_id, item_name, quantity)
+                           VALUES (%s, %s, %s)
+                           ON CONFLICT (user_id, item_name) DO UPDATE SET 
+                           quantity = character_inventory.quantity + EXCLUDED.quantity""",
+                        (robber_id, item_name, stolen_quantity)
                     )
             
             # Clean up zero quantities
@@ -130,9 +133,11 @@ class CombatCog(commands.Cog):
             # Add robbery cooldown
             expire_time = datetime.utcnow() + timedelta(minutes=15)
             self.db.execute_query(
-                """INSERT OR REPLACE INTO pvp_cooldowns 
+                """INSERT INTO pvp_cooldowns 
                    (player1_id, player2_id, cooldown_type, expires_at)
-                   VALUES (?, ?, 'robbery', ?)""",
+                   VALUES (%s, %s, 'robbery', %s)
+                   ON CONFLICT (player1_id, player2_id, cooldown_type) DO UPDATE SET
+                   expires_at = EXCLUDED.expires_at""",
                 (robber_id, victim_id, expire_time.isoformat())
             )
             
@@ -181,7 +186,7 @@ class CombatCog(commands.Cog):
     async def attack_npc(self, interaction: discord.Interaction):
         # Check if user has character
         char_data = self.db.execute_query(
-            "SELECT current_location, location_status, hp, combat FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, hp, combat FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -211,7 +216,7 @@ class CombatCog(commands.Cog):
 
         # Check if already in combat
         existing_combat = self.db.execute_query(
-            "SELECT combat_id FROM combat_states WHERE player_id = ?",
+            "SELECT combat_id FROM combat_states WHERE player_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -232,7 +237,7 @@ class CombatCog(commands.Cog):
             npcs = self.db.execute_query(
                 """SELECT npc_id, name, occupation, alignment, hp, max_hp 
                    FROM static_npcs 
-                   WHERE location_id = ? AND is_alive = 1""",
+                   WHERE location_id = %s AND is_alive = true""",
                 (current_location,),
                 fetch='all'
             )
@@ -242,7 +247,7 @@ class CombatCog(commands.Cog):
             npcs = self.db.execute_query(
                 """SELECT npc_id, name, ship_name, alignment, hp, max_hp 
                    FROM dynamic_npcs 
-                   WHERE current_location = ? AND is_alive = 1""",
+                   WHERE current_location = %s AND is_alive = true""",
                 (current_location,),
                 fetch='all'
             )
@@ -272,13 +277,13 @@ class CombatCog(commands.Cog):
         # Check cooldown (existing logic)
         if can_act_time:
             try:
-                can_act_datetime = datetime.fromisoformat(can_act_time)
+                can_act_datetime = safe_datetime_parse(can_act_time)
                 current_time = datetime.utcnow()
                 if current_time < can_act_datetime:
                     remaining = (can_act_datetime - current_time).total_seconds()
                     if remaining > 300:  # More than 5 minutes is likely an error
                         self.db.execute_query(
-                            "UPDATE combat_states SET player_can_act_time = NULL WHERE player_id = ?",
+                            "UPDATE combat_states SET player_can_act_time = NULL WHERE player_id = %s",
                             (interaction.user.id,)
                         )
                     else:
@@ -289,13 +294,13 @@ class CombatCog(commands.Cog):
                         return
             except (ValueError, TypeError):
                 self.db.execute_query(
-                    "UPDATE combat_states SET player_can_act_time = NULL WHERE player_id = ?",
+                    "UPDATE combat_states SET player_can_act_time = NULL WHERE player_id = %s",
                     (interaction.user.id,)
                 )
 
         # Get player stats
         player_data = self.db.execute_query(
-            "SELECT hp, combat, name FROM characters WHERE user_id = ?",
+            "SELECT hp, combat, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -328,7 +333,7 @@ class CombatCog(commands.Cog):
         
         if not user_turn:
             opponent_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (opponent_id,),
                 fetch='one'
             )[0]
@@ -342,7 +347,7 @@ class CombatCog(commands.Cog):
         can_act_time = attacker_can_act_time if is_attacker else defender_can_act_time
         if can_act_time:
             try:
-                can_act_datetime = datetime.fromisoformat(can_act_time)
+                can_act_datetime = safe_datetime_parse(can_act_time)
                 current_time = datetime.utcnow()
                 if current_time < can_act_datetime:
                     remaining = (can_act_datetime - current_time).total_seconds()
@@ -360,7 +365,7 @@ class CombatCog(commands.Cog):
                 """SELECT s.hull_integrity, s.combat_rating, c.name, c.location_status, s.ship_id, s.max_hull
                    FROM characters c
                    JOIN ships s ON c.ship_id = s.ship_id
-                   WHERE c.user_id = ?""",
+                   WHERE c.user_id = %s""",
                 (attacker_id,),
                 fetch='one'
             )
@@ -369,7 +374,7 @@ class CombatCog(commands.Cog):
                 """SELECT s.hull_integrity, s.combat_rating, c.name, c.location_status, s.ship_id, s.max_hull
                    FROM characters c
                    JOIN ships s ON c.ship_id = s.ship_id
-                   WHERE c.user_id = ?""",
+                   WHERE c.user_id = %s""",
                 (defender_id,),
                 fetch='one'
             )
@@ -384,13 +389,13 @@ class CombatCog(commands.Cog):
         else:
             # Ground combat - use character stats
             attacker_data = self.db.execute_query(
-                "SELECT hp, combat, name, location_status FROM characters WHERE user_id = ?",
+                "SELECT hp, combat, name, location_status FROM characters WHERE user_id = %s",
                 (attacker_id,),
                 fetch='one'
             )
             
             defender_data = self.db.execute_query(
-                "SELECT hp, combat, name, location_status FROM characters WHERE user_id = ?",
+                "SELECT hp, combat, name, location_status FROM characters WHERE user_id = %s",
                 (defender_id,),
                 fetch='one'
             )
@@ -426,7 +431,7 @@ class CombatCog(commands.Cog):
                                        attacker_max_hp=None, defender_max_hp=None):
         """Execute a single round of PvP combat"""
         
-        effect_checker = ItemEffectChecker(self.bot)
+        effect_checker = ItemEffectChecker(self.bot.db)
     
         # Get combat boosts for both players
         attacker_boost = effect_checker.get_combat_boost(attacker_id)
@@ -465,7 +470,7 @@ class CombatCog(commands.Cog):
             if combat_type == "space":
                 # Space combat - hull damage
                 self.db.execute_query(
-                    "UPDATE ships SET hull_integrity = max(0, hull_integrity - ?) WHERE ship_id = ?",
+                    "UPDATE ships SET hull_integrity = max(0, hull_integrity - %s) WHERE ship_id = %s",
                     (damage_dealt, target_ship_id)
                 )
             else:
@@ -487,22 +492,22 @@ class CombatCog(commands.Cog):
         if user_is_attacker:
             self.db.execute_query(
                 """UPDATE pvp_combat_states 
-                   SET attacker_can_act_time = ?, current_turn = ?, last_action_time = ?
-                   WHERE combat_id = ?""",
+                   SET attacker_can_act_time = %s, current_turn = %s, last_action_time = %s
+                   WHERE combat_id = %s""",
                 (next_action_time.isoformat(), new_turn, datetime.utcnow().isoformat(), combat_id)
             )
         else:
             self.db.execute_query(
                 """UPDATE pvp_combat_states 
-                   SET defender_can_act_time = ?, current_turn = ?, last_action_time = ?
-                   WHERE combat_id = ?""",
+                   SET defender_can_act_time = %s, current_turn = %s, last_action_time = %s
+                   WHERE combat_id = %s""",
                 (next_action_time.isoformat(), new_turn, datetime.utcnow().isoformat(), combat_id)
             )
 
         # Check if target is defeated
         if combat_type == "space":
             target_hull = self.db.execute_query(
-                "SELECT hull_integrity FROM ships WHERE ship_id = ?",
+                "SELECT hull_integrity FROM ships WHERE ship_id = %s",
                 (target_ship_id,),
                 fetch='one'
             )[0]
@@ -512,7 +517,7 @@ class CombatCog(commands.Cog):
                 return
         else:
             target_hp = self.db.execute_query(
-                "SELECT hp FROM characters WHERE user_id = ?",
+                "SELECT hp FROM characters WHERE user_id = %s",
                 (target_id,),
                 fetch='one'
             )[0]
@@ -575,13 +580,13 @@ class CombatCog(commands.Cog):
         # Get updated HP/Hull for display
         if combat_type == "space":
             updated_attacker_hull = self.db.execute_query(
-                "SELECT hull_integrity FROM ships WHERE ship_id = ?",
+                "SELECT hull_integrity FROM ships WHERE ship_id = %s",
                 (attacker_ship_id,),
                 fetch='one'
             )[0]
             
             updated_defender_hull = self.db.execute_query(
-                "SELECT hull_integrity FROM ships WHERE ship_id = ?",
+                "SELECT hull_integrity FROM ships WHERE ship_id = %s",
                 (defender_ship_id,),
                 fetch='one'
             )[0]
@@ -593,13 +598,13 @@ class CombatCog(commands.Cog):
             )
         else:
             updated_attacker_hp = self.db.execute_query(
-                "SELECT hp FROM characters WHERE user_id = ?",
+                "SELECT hp FROM characters WHERE user_id = %s",
                 (attacker_id,),
                 fetch='one'
             )[0]
             
             updated_defender_hp = self.db.execute_query(
-                "SELECT hp FROM characters WHERE user_id = ?",
+                "SELECT hp FROM characters WHERE user_id = %s",
                 (defender_id,),
                 fetch='one'
             )[0]
@@ -624,24 +629,22 @@ class CombatCog(commands.Cog):
             if opponent_user:
                 # Get the location channel for the combat
                 location_channel_id = self.db.execute_query(
-                    """SELECT location_id FROM pvp_combat_states WHERE combat_id = ?""",
+                    """SELECT location_id FROM pvp_combat_states WHERE combat_id = %s""",
                     (combat_id,),
                     fetch='one'
                 )
                 
                 if location_channel_id and location_channel_id[0]:
-                    location_channel_data = self.db.execute_query(
-                        "SELECT channel_id FROM locations WHERE location_id = ?",
-                        (location_channel_id[0],),
-                        fetch='one'
-                    )
+                    # Use cross-guild broadcasting to notify all guilds
+                    from utils.channel_manager import ChannelManager
+                    channel_manager = ChannelManager(self.bot)
+                    cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_channel_id[0])
                     
-                    if location_channel_data and location_channel_data[0]:
-                        location_channel = interaction.guild.get_channel(location_channel_data[0])
-                        if location_channel:
-                            await location_channel.send(
-                                f"{opponent_user.mention} - It's your turn in combat! Use `/tqe` to continue fighting **{current_name}**!"
-                            )
+                    for guild, location_channel in cross_guild_channels:
+                        try:
+                            await location_channel.send(f"{opponent_user.mention} - It's your turn in combat! Use `/tqe` to continue fighting **{current_name}**!")
+                        except:
+                            continue  # Skip if channel not accessible
         except Exception as e:
             print(f"Failed to send combat notification to location channel: {e}")
     async def _end_pvp_combat(self, interaction, combat_id, attacker_id, defender_id, attacker_name, defender_name, combat_type="ground"):
@@ -652,7 +655,7 @@ class CombatCog(commands.Cog):
             attacker_hull = self.db.execute_query(
                 """SELECT s.hull_integrity FROM ships s 
                    JOIN characters c ON s.ship_id = c.ship_id 
-                   WHERE c.user_id = ?""",
+                   WHERE c.user_id = %s""",
                 (attacker_id,),
                 fetch='one'
             )[0]
@@ -660,7 +663,7 @@ class CombatCog(commands.Cog):
             defender_hull = self.db.execute_query(
                 """SELECT s.hull_integrity FROM ships s 
                    JOIN characters c ON s.ship_id = c.ship_id 
-                   WHERE c.user_id = ?""",
+                   WHERE c.user_id = %s""",
                 (defender_id,),
                 fetch='one'
             )[0]
@@ -681,13 +684,13 @@ class CombatCog(commands.Cog):
             
         else:
             attacker_hp = self.db.execute_query(
-                "SELECT hp FROM characters WHERE user_id = ?",
+                "SELECT hp FROM characters WHERE user_id = %s",
                 (attacker_id,),
                 fetch='one'
             )[0]
             
             defender_hp = self.db.execute_query(
-                "SELECT hp FROM characters WHERE user_id = ?",
+                "SELECT hp FROM characters WHERE user_id = %s",
                 (defender_id,),
                 fetch='one'
             )[0]
@@ -708,14 +711,14 @@ class CombatCog(commands.Cog):
         
         # End combat
         self.db.execute_query(
-            "DELETE FROM pvp_combat_states WHERE combat_id = ?",
+            "DELETE FROM pvp_combat_states WHERE combat_id = %s",
             (combat_id,)
         )
         
         # Restore location status for both players
         restore_status = "docked" if combat_type == "ground" else "in_space"
         self.db.execute_query(
-            "UPDATE characters SET location_status = ? WHERE user_id IN (?, ?)",
+            "UPDATE characters SET location_status = %s WHERE user_id IN (%s, %s)",
             (restore_status, attacker_id, defender_id)
         )
         
@@ -741,21 +744,20 @@ class CombatCog(commands.Cog):
         
         await interaction.response.send_message(embed=embed)
         
-        # Notify both players in the location channel
+        # Notify both players in all location channels using cross-guild broadcast
         try:
-            location_channel_id = self.db.execute_query(
-                "SELECT channel_id FROM locations WHERE location_id = ?",
-                (location_id,),  # You'll need to pass this to the function
-                fetch='one'
-            )
+            from utils.channel_manager import ChannelManager
+            channel_manager = ChannelManager(self.bot)
+            cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
             
-            if location_channel_id and location_channel_id[0]:
-                location_channel = interaction.guild.get_channel(location_channel_id[0])
-                if location_channel:
+            for guild, location_channel in cross_guild_channels:
+                try:
                     for user_id in [attacker_id, defender_id]:
-                        user = interaction.guild.get_member(user_id)
+                        user = guild.get_member(user_id)
                         if user and user.id != interaction.user.id:
                             await location_channel.send(f"{user.mention} - Combat has ended!", embed=embed)
+                except:
+                    continue  # Skip if channel not accessible
         except Exception as e:
             print(f"Failed to send combat end notification to location channel: {e}")
     @attack_group.command(name="fight", description="Continue an ongoing fight")
@@ -765,7 +767,7 @@ class CombatCog(commands.Cog):
             """SELECT combat_id, target_npc_id, target_npc_type, combat_type, 
                       location_id, player_can_act_time
                FROM combat_states 
-               WHERE player_id = ?""",
+               WHERE player_id = %s""",
             (interaction.user.id,),
             fetch='one'
         )
@@ -775,7 +777,7 @@ class CombatCog(commands.Cog):
             """SELECT combat_id, attacker_id, defender_id, location_id, combat_type,
                       attacker_can_act_time, defender_can_act_time, current_turn
                FROM pvp_combat_states 
-               WHERE attacker_id = ? OR defender_id = ?""",
+               WHERE attacker_id = %s OR defender_id = %s""",
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -801,7 +803,7 @@ class CombatCog(commands.Cog):
 
         # Check if attacker has character
         attacker_data = self.db.execute_query(
-            "SELECT current_location, location_status, hp, combat, alignment, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, hp, combat, alignment, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -815,7 +817,7 @@ class CombatCog(commands.Cog):
 
         # Check if target has character
         target_data = self.db.execute_query(
-            "SELECT current_location, location_status, hp, combat, alignment, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, hp, combat, alignment, name FROM characters WHERE user_id = %s",
             (target.id,),
             fetch='one'
         )
@@ -869,9 +871,9 @@ class CombatCog(commands.Cog):
 
         # Check if either player is already in combat
         existing_combat = self.db.execute_query(
-            """SELECT combat_id FROM combat_states WHERE player_id IN (?, ?)
+            """SELECT combat_id FROM combat_states WHERE player_id IN (%s, %s)
                UNION
-               SELECT combat_id FROM pvp_combat_states WHERE attacker_id IN (?, ?) OR defender_id IN (?, ?)""",
+               SELECT combat_id FROM pvp_combat_states WHERE attacker_id IN (%s, %s) OR defender_id IN (%s, %s)""",
             (interaction.user.id, target.id, interaction.user.id, target.id, interaction.user.id, target.id),
             fetch='one'
         )
@@ -892,8 +894,8 @@ class CombatCog(commands.Cog):
         # Check flee cooldown
         flee_cooldown = self.db.execute_query(
             """SELECT expires_at FROM pvp_cooldowns 
-               WHERE ((player1_id = ? AND player2_id = ?) OR (player1_id = ? AND player2_id = ?))
-               AND cooldown_type = 'flee' AND expires_at > datetime('now')""",
+               WHERE ((player1_id = %s AND player2_id = %s) OR (player1_id = %s AND player2_id = %s))
+               AND cooldown_type = 'flee' AND expires_at > NOW()""",
             (interaction.user.id, target.id, target.id, interaction.user.id),
             fetch='one'
         )
@@ -910,7 +912,7 @@ class CombatCog(commands.Cog):
         
         # Set both players to combat status
         self.db.execute_query(
-            "UPDATE characters SET location_status = 'combat' WHERE user_id IN (?, ?)",
+            "UPDATE characters SET location_status = 'combat' WHERE user_id IN (%s, %s)",
             (interaction.user.id, target.id)
         )
 
@@ -918,13 +920,13 @@ class CombatCog(commands.Cog):
         self.db.execute_query(
             """INSERT INTO pvp_combat_states 
                (attacker_id, defender_id, location_id, combat_type, attacker_can_act_time)
-               VALUES (?, ?, ?, ?, datetime('now'))""",
+               VALUES (%s, %s, %s, %s, NOW())""",
             (interaction.user.id, target.id, attacker_location, combat_type)
         )
 
         # Get location name
         location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (attacker_location,),
             fetch='one'
         )[0]
@@ -958,7 +960,7 @@ class CombatCog(commands.Cog):
         
         # Check opt-out status
         opt_out_data = self.db.execute_query(
-            "SELECT user_id, opted_out FROM pvp_opt_outs WHERE user_id IN (?, ?)",
+            "SELECT user_id, opted_out FROM pvp_opt_outs WHERE user_id IN (%s, %s)",
             (attacker_id, target_id),
             fetch='all'
         )
@@ -986,7 +988,7 @@ class CombatCog(commands.Cog):
     def check_pvp_combat_status(self, user_id: int) -> bool:
         """Check if user is in PvP combat"""
         result = self.db.execute_query(
-            "SELECT combat_id FROM pvp_combat_states WHERE attacker_id = ? OR defender_id = ?",
+            "SELECT combat_id FROM pvp_combat_states WHERE attacker_id = %s OR defender_id = %s",
             (user_id, user_id),
             fetch='one'
         )
@@ -995,13 +997,13 @@ class CombatCog(commands.Cog):
     def check_any_combat_status(self, user_id: int) -> bool:
         """Check if user is in any combat (NPC or PvP)"""
         npc_combat = self.db.execute_query(
-            "SELECT combat_id FROM combat_states WHERE player_id = ?",
+            "SELECT combat_id FROM combat_states WHERE player_id = %s",
             (user_id,),
             fetch='one'
         )
         
         pvp_combat = self.db.execute_query(
-            "SELECT combat_id FROM pvp_combat_states WHERE attacker_id = ? OR defender_id = ?",
+            "SELECT combat_id FROM pvp_combat_states WHERE attacker_id = %s OR defender_id = %s",
             (user_id, user_id),
             fetch='one'
         )
@@ -1013,7 +1015,7 @@ class CombatCog(commands.Cog):
         npc_combat_data = self.db.execute_query(
             """SELECT combat_id, target_npc_id, target_npc_type, combat_type
                FROM combat_states 
-               WHERE player_id = ?""",
+               WHERE player_id = %s""",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1022,7 +1024,7 @@ class CombatCog(commands.Cog):
         pvp_combat_data = self.db.execute_query(
             """SELECT combat_id, attacker_id, defender_id, location_id, combat_type
                FROM pvp_combat_states 
-               WHERE attacker_id = ? OR defender_id = ?""",
+               WHERE attacker_id = %s OR defender_id = %s""",
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -1045,7 +1047,7 @@ class CombatCog(commands.Cog):
 
         # Get player stats for flee attempt
         player_data = self.db.execute_query(
-            "SELECT navigation, engineering, name FROM characters WHERE user_id = ?",
+            "SELECT navigation, engineering, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1067,13 +1069,13 @@ class CombatCog(commands.Cog):
         if flee_roll < flee_chance:
             # Successful escape
             self.db.execute_query(
-                "DELETE FROM combat_states WHERE combat_id = ?",
+                "DELETE FROM combat_states WHERE combat_id = %s",
                 (combat_id,)
             )
             
             # Restore location status
             self.db.execute_query(
-                "UPDATE characters SET location_status = 'docked' WHERE user_id = ?",
+                "UPDATE characters SET location_status = 'docked' WHERE user_id = %s",
                 (interaction.user.id,)
             )
 
@@ -1111,13 +1113,13 @@ class CombatCog(commands.Cog):
         
         # Get player names
         player_data = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
         
         opponent_data = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (opponent_id,),
             fetch='one'
         )
@@ -1131,7 +1133,7 @@ class CombatCog(commands.Cog):
         
         # Calculate flee cost (10% of current money, minimum 50 credits)
         player_money = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -1141,29 +1143,31 @@ class CombatCog(commands.Cog):
         
         # End combat
         self.db.execute_query(
-            "DELETE FROM pvp_combat_states WHERE combat_id = ?",
+            "DELETE FROM pvp_combat_states WHERE combat_id = %s",
             (combat_id,)
         )
         
         # Restore location status for both players
         current_status = "docked" if combat_type == "ground" else "space"
         self.db.execute_query(
-            "UPDATE characters SET location_status = ? WHERE user_id IN (?, ?)",
+            "UPDATE characters SET location_status = %s WHERE user_id IN (%s, %s)",
             (current_status, interaction.user.id, opponent_id)
         )
         
         # Deduct flee cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (flee_cost, interaction.user.id)
         )
         
         # Add flee cooldown (15 minutes)
         expire_time = datetime.utcnow() + timedelta(minutes=15)
         self.db.execute_query(
-            """INSERT OR REPLACE INTO pvp_cooldowns 
+            """INSERT INTO pvp_cooldowns 
                (player1_id, player2_id, cooldown_type, expires_at)
-               VALUES (?, ?, 'flee', ?)""",
+               VALUES (%s, %s, 'flee', %s)
+               ON CONFLICT (player1_id, player2_id, cooldown_type) DO UPDATE SET
+               expires_at = EXCLUDED.expires_at""",
             (interaction.user.id, opponent_id, expire_time.isoformat())
         )
         
@@ -1201,7 +1205,7 @@ class CombatCog(commands.Cog):
         """Manage PvP opt-out status"""
         # Check if user has character
         char_data = self.db.execute_query(
-            "SELECT alignment FROM characters WHERE user_id = ?",
+            "SELECT alignment FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1218,7 +1222,7 @@ class CombatCog(commands.Cog):
         if action == "status":
             # Check current status
             opt_out_data = self.db.execute_query(
-                "SELECT opted_out FROM pvp_opt_outs WHERE user_id = ?",
+                "SELECT opted_out FROM pvp_opt_outs WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -1246,8 +1250,11 @@ class CombatCog(commands.Cog):
         elif action == "out":
             # Opt out of PvP
             self.db.execute_query(
-                """INSERT OR REPLACE INTO pvp_opt_outs (user_id, opted_out, updated_at)
-                   VALUES (?, 1, datetime('now'))""",
+                """INSERT INTO pvp_opt_outs (user_id, opted_out, updated_at)
+                   VALUES (%s, true, NOW())
+                   ON CONFLICT (user_id) DO UPDATE SET
+                   opted_out = EXCLUDED.opted_out,
+                   updated_at = EXCLUDED.updated_at""",
                 (interaction.user.id,)
             )
             
@@ -1272,8 +1279,11 @@ class CombatCog(commands.Cog):
         elif action == "in":
             # Opt into PvP
             self.db.execute_query(
-                """INSERT OR REPLACE INTO pvp_opt_outs (user_id, opted_out, updated_at)
-                   VALUES (?, 0, datetime('now'))""",
+                """INSERT INTO pvp_opt_outs (user_id, opted_out, updated_at)
+                   VALUES (%s, false, NOW())
+                   ON CONFLICT (user_id) DO UPDATE SET
+                   opted_out = EXCLUDED.opted_out,
+                   updated_at = EXCLUDED.updated_at""",
                 (interaction.user.id,)
             )
             
@@ -1294,7 +1304,7 @@ class CombatCog(commands.Cog):
     async def rob_npc(self, interaction: discord.Interaction):
         # Check if user has character
         char_data = self.db.execute_query(
-            "SELECT current_location, location_status, hp, combat FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, hp, combat FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1324,7 +1334,7 @@ class CombatCog(commands.Cog):
 
         # Check if already in combat
         existing_combat = self.db.execute_query(
-            "SELECT combat_id FROM combat_states WHERE player_id = ?",
+            "SELECT combat_id FROM combat_states WHERE player_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1343,7 +1353,7 @@ class CombatCog(commands.Cog):
             npcs = self.db.execute_query(
                 """SELECT npc_id, name, occupation, alignment, credits 
                    FROM static_npcs 
-                   WHERE location_id = ? AND is_alive = 1""",
+                   WHERE location_id = %s AND is_alive = true""",
                 (current_location,),
                 fetch='all'
             )
@@ -1351,7 +1361,7 @@ class CombatCog(commands.Cog):
             npcs = self.db.execute_query(
                 """SELECT npc_id, name, ship_name, alignment, credits 
                    FROM dynamic_npcs 
-                   WHERE current_location = ? AND is_alive = 1""",
+                   WHERE current_location = %s AND is_alive = true""",
                 (current_location,),
                 fetch='all'
             )
@@ -1377,26 +1387,26 @@ class CombatCog(commands.Cog):
     async def _execute_combat_round(self, interaction, combat_id, target_npc_id, target_npc_type, 
                                     combat_type, location_id, player_name, player_combat):
         """Execute a single round of combat"""
-        effect_checker = ItemEffectChecker(self.bot)
+        effect_checker = ItemEffectChecker(self.bot.db)
         combat_boost = effect_checker.get_combat_boost(interaction.user.id)
         effective_combat = player_combat + combat_boost
         # Get NPC data
         if target_npc_type == "static":
             npc_data = self.db.execute_query(
-                "SELECT name, hp, max_hp, combat_rating, alignment FROM static_npcs WHERE npc_id = ?",
+                "SELECT name, hp, max_hp, combat_rating, alignment FROM static_npcs WHERE npc_id = %s",
                 (target_npc_id,),
                 fetch='one'
             )
         else:
             if combat_type == "space":
                 npc_data = self.db.execute_query(
-                    "SELECT name, ship_hull as hp, max_ship_hull as max_hp, combat_rating, alignment FROM dynamic_npcs WHERE npc_id = ?",
+                    "SELECT name, ship_hull as hp, max_ship_hull as max_hp, combat_rating, alignment FROM dynamic_npcs WHERE npc_id = %s",
                     (target_npc_id,),
                     fetch='one'
                 )
             else:
                 npc_data = self.db.execute_query(
-                    "SELECT name, hp, max_hp, combat_rating, alignment FROM dynamic_npcs WHERE npc_id = ?",
+                    "SELECT name, hp, max_hp, combat_rating, alignment FROM dynamic_npcs WHERE npc_id = %s",
                     (target_npc_id,),
                     fetch='one'
                 )
@@ -1421,18 +1431,18 @@ class CombatCog(commands.Cog):
             # Update NPC HP
             if target_npc_type == "static":
                 self.db.execute_query(
-                    "UPDATE static_npcs SET hp = ? WHERE npc_id = ?",
+                    "UPDATE static_npcs SET hp = %s WHERE npc_id = %s",
                     (new_npc_hp, target_npc_id)
                 )
             else:
                 if combat_type == "space":
                     self.db.execute_query(
-                        "UPDATE dynamic_npcs SET ship_hull = ? WHERE npc_id = ?",
+                        "UPDATE dynamic_npcs SET ship_hull = %s WHERE npc_id = %s",
                         (new_npc_hp, target_npc_id)
                     )
                 else:
                     self.db.execute_query(
-                        "UPDATE dynamic_npcs SET hp = ? WHERE npc_id = ?",
+                        "UPDATE dynamic_npcs SET hp = %s WHERE npc_id = %s",
                         (new_npc_hp, target_npc_id)
                     )
 
@@ -1447,7 +1457,7 @@ class CombatCog(commands.Cog):
         # Set player cooldown
         next_action_time = datetime.utcnow() + timedelta(seconds=10)
         self.db.execute_query(
-            "UPDATE combat_states SET player_can_act_time = ?, last_action_time = ? WHERE combat_id = ?",
+            "UPDATE combat_states SET player_can_act_time = %s, last_action_time = %s WHERE combat_id = %s",
             (next_action_time.isoformat(), datetime.utcnow().isoformat(), combat_id)
         )
 
@@ -1496,20 +1506,20 @@ class CombatCog(commands.Cog):
         
         # End combat
         self.db.execute_query(
-            "DELETE FROM combat_states WHERE combat_id = ?",
+            "DELETE FROM combat_states WHERE combat_id = %s",
             (combat_id,)
         )
 
         # Mark NPC as dead
         if npc_type == "static":
             self.db.execute_query(
-                "UPDATE static_npcs SET is_alive = 0 WHERE npc_id = ?",
+                "UPDATE static_npcs SET is_alive = false WHERE npc_id = %s",
                 (npc_id,)
             )
             # Schedule respawn for static NPCs
             respawn_time = datetime.utcnow() + timedelta(hours=random.randint(2, 6))
             npc_backup = self.db.execute_query(
-                "SELECT * FROM static_npcs WHERE npc_id = ?",
+                "SELECT * FROM static_npcs WHERE npc_id = %s",
                 (npc_id,),
                 fetch='one'
             )
@@ -1517,12 +1527,12 @@ class CombatCog(commands.Cog):
                 self.db.execute_query(
                     """INSERT INTO npc_respawn_queue 
                        (original_npc_id, location_id, scheduled_respawn_time, npc_data)
-                       VALUES (?, ?, ?, ?)""",
+                       VALUES (%s, %s, %s, %s)""",
                     (npc_id, location_id, respawn_time.isoformat(), str(npc_backup))
                 )
         else:
             self.db.execute_query(
-                "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = ?",
+                "UPDATE dynamic_npcs SET is_alive = false WHERE npc_id = %s",
                 (npc_id,)
             )
 
@@ -1578,7 +1588,7 @@ class CombatCog(commands.Cog):
                           combat_type, location_id, next_npc_action_time
                    FROM combat_states 
                    WHERE next_npc_action_time IS NULL 
-                   OR datetime(next_npc_action_time) <= datetime('now')""",
+                   OR next_npc_action_time <= NOW()""",
                 fetch='all'
             )
 
@@ -1594,7 +1604,7 @@ class CombatCog(commands.Cog):
 
         # Get player data
         player_data = self.db.execute_query(
-            "SELECT hp, combat, name FROM characters WHERE user_id = ?",
+            "SELECT hp, combat, name FROM characters WHERE user_id = %s",
             (player_id,),
             fetch='one'
         )
@@ -1602,25 +1612,25 @@ class CombatCog(commands.Cog):
         if not player_data or player_data[0] <= 0:
             # Player is dead or gone, end combat
             self.db.execute_query(
-                "DELETE FROM combat_states WHERE combat_id = ?",
+                "DELETE FROM combat_states WHERE combat_id = %s",
                 (combat_id,)
             )
             return
 
         player_hp, player_combat, player_name = player_data
-        effect_checker = ItemEffectChecker(self.bot)
+        effect_checker = ItemEffectChecker(self.bot.db)
         combat_boost = effect_checker.get_combat_boost(player_id)
         effective_player_combat = player_combat + combat_boost
         # Get NPC data
         if npc_type == "static":
             npc_data = self.db.execute_query(
-                "SELECT name, combat_rating FROM static_npcs WHERE npc_id = ? AND is_alive = 1",
+                "SELECT name, combat_rating FROM static_npcs WHERE npc_id = %s AND is_alive = true",
                 (npc_id,),
                 fetch='one'
             )
         else:
             npc_data = self.db.execute_query(
-                "SELECT name, combat_rating FROM dynamic_npcs WHERE npc_id = ? AND is_alive = 1",
+                "SELECT name, combat_rating FROM dynamic_npcs WHERE npc_id = %s AND is_alive = true",
                 (npc_id,),
                 fetch='one'
             )
@@ -1628,7 +1638,7 @@ class CombatCog(commands.Cog):
         if not npc_data:
             # NPC is dead or gone, end combat
             self.db.execute_query(
-                "DELETE FROM combat_states WHERE combat_id = ?",
+                "DELETE FROM combat_states WHERE combat_id = %s",
                 (combat_id,)
             )
             return
@@ -1648,7 +1658,7 @@ class CombatCog(commands.Cog):
 
             # Update player HP
             self.db.execute_query(
-                "UPDATE characters SET hp = ? WHERE user_id = ?",
+                "UPDATE characters SET hp = %s WHERE user_id = %s",
                 (new_player_hp, player_id)
             )
 
@@ -1656,7 +1666,7 @@ class CombatCog(commands.Cog):
             if new_player_hp <= 0:
                 # End combat and handle player death
                 self.db.execute_query(
-                    "DELETE FROM combat_states WHERE combat_id = ?",
+                    "DELETE FROM combat_states WHERE combat_id = %s",
                     (combat_id,)
                 )
                 # Let the character system handle death
@@ -1672,51 +1682,46 @@ class CombatCog(commands.Cog):
         # Schedule next NPC action
         next_npc_time = datetime.utcnow() + timedelta(seconds=random.randint(30, 45))
         self.db.execute_query(
-            "UPDATE combat_states SET next_npc_action_time = ? WHERE combat_id = ?",
+            "UPDATE combat_states SET next_npc_action_time = %s WHERE combat_id = %s",
             (next_npc_time.isoformat(), combat_id)
         )
 
         # Send notification to location channel instead of DM
         if damage_dealt > 0 or random.random() < 0.3:  # Always send hits, 30% chance for misses
-            # Get location channel
-            channel_id = self.db.execute_query(
-                "SELECT channel_id FROM locations WHERE location_id = ?",
-                (location_id,),
-                fetch='one'
-            )
+            # Use cross-guild broadcasting for NPC counterattack notifications
+            from utils.channel_manager import ChannelManager
+            channel_manager = ChannelManager(self.bot)
+            cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
             
-            if channel_id and channel_id[0]:
-                for guild in self.bot.guilds:
-                    channel = guild.get_channel(channel_id[0])
-                    if channel:
-                        embed = discord.Embed(
-                            title="⚔️ NPC Counterattack!",
-                            color=0xff0000 if damage_dealt > 0 else 0xffff00
-                        )
+            for guild, channel in cross_guild_channels:
+                try:
+                    embed = discord.Embed(
+                        title="⚔️ NPC Counterattack!",
+                        color=0xff0000 if damage_dealt > 0 else 0xffff00
+                    )
 
-                        if damage_dealt > 0:
-                            embed.add_field(
-                                name="💥 Hit!",
-                                value=f"**{npc_name}** deals {damage_dealt} damage to **{player_name}**!",
-                                inline=False
-                            )
-                        else:
-                            embed.add_field(
-                                name="❌ Miss!",
-                                value=f"**{npc_name}**'s attack missed **{player_name}**!",
-                                inline=False
-                            )
-
+                    if damage_dealt > 0:
                         embed.add_field(
-                            name="❤️ Player Health",
-                            value=f"**{player_name}**: {max(0, player_hp - damage_dealt)} HP",
+                            name="💥 Hit!",
+                            value=f"**{npc_name}** deals {damage_dealt} damage to **{player_name}**!",
+                            inline=False
+                        )
+                    else:
+                        embed.add_field(
+                            name="❌ Miss!",
+                            value=f"**{npc_name}**'s attack missed **{player_name}**!",
                             inline=False
                         )
 
-                        try:
-                            await channel.send(embed=embed)
-                        except Exception:
-                            pass  # Channel not accessible
+                    embed.add_field(
+                        name="❤️ Player Health",
+                        value=f"**{player_name}**: {max(0, player_hp - damage_dealt)} HP",
+                        inline=False
+                    )
+
+                    await channel.send(embed=embed)
+                except:
+                    continue  # Skip if channel not accessible
 
     @tasks.loop(minutes=30)
     async def npc_respawn_loop(self):
@@ -1726,7 +1731,7 @@ class CombatCog(commands.Cog):
             ready_respawns = self.db.execute_query(
                 """SELECT respawn_id, original_npc_id, location_id, npc_data
                    FROM npc_respawn_queue 
-                   WHERE datetime(scheduled_respawn_time) <= datetime('now')""",
+                   WHERE scheduled_respawn_time <= NOW()""",
                 fetch='all'
             )
 
@@ -1736,14 +1741,14 @@ class CombatCog(commands.Cog):
                 # Restore the NPC
                 self.db.execute_query(
                     """UPDATE static_npcs 
-                       SET is_alive = 1, hp = max_hp 
-                       WHERE npc_id = ?""",
+                       SET is_alive = true, hp = max_hp 
+                       WHERE npc_id = %s""",
                     (original_npc_id,)
                 )
 
                 # Remove from respawn queue
                 self.db.execute_query(
-                    "DELETE FROM npc_respawn_queue WHERE respawn_id = ?",
+                    "DELETE FROM npc_respawn_queue WHERE respawn_id = %s",
                     (respawn_id,)
                 )
 
@@ -1762,19 +1767,17 @@ class CombatCog(commands.Cog):
         if rep_change == 0:
             return
             
-        # Get location channel
-        channel_id = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
+        # Use cross-guild broadcasting for reputation notifications
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
         
-        if not channel_id or not channel_id[0]:
+        if not cross_guild_channels:
             return
         
         # Get player name
         player_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1810,7 +1813,7 @@ class CombatCog(commands.Cog):
                 )
                 
                 try:
-                    await channel.send(embed=embed)
+                    await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
                 except Exception:
                     pass  # Channel not accessible
     @rob_group.command(name="player", description="Attempt to rob another player")
@@ -1823,7 +1826,7 @@ class CombatCog(commands.Cog):
 
         # Check if robber has character
         robber_data = self.db.execute_query(
-            "SELECT current_location, location_status, hp, combat, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, hp, combat, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1837,7 +1840,7 @@ class CombatCog(commands.Cog):
 
         # Check if target has character
         victim_data = self.db.execute_query(
-            "SELECT current_location, location_status, hp, combat, name, money FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, hp, combat, name, money FROM characters WHERE user_id = %s",
             (target.id,),
             fetch='one'
         )
@@ -1900,8 +1903,8 @@ class CombatCog(commands.Cog):
         # Check robbery cooldown
         robbery_cooldown = self.db.execute_query(
             """SELECT expires_at FROM pvp_cooldowns 
-               WHERE ((player1_id = ? AND player2_id = ?) OR (player1_id = ? AND player2_id = ?))
-               AND cooldown_type = 'robbery' AND expires_at > datetime('now')""",
+               WHERE ((player1_id = %s AND player2_id = %s) OR (player1_id = %s AND player2_id = %s))
+               AND cooldown_type = 'robbery' AND expires_at > NOW()""",
             (interaction.user.id, target.id, target.id, interaction.user.id),
             fetch='one'
         )
@@ -1921,24 +1924,14 @@ class CombatCog(commands.Cog):
             )
             return
 
-        # Get location channel
-        location_channel_id = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (robber_location,),
-            fetch='one'
-        )
-
-        if not location_channel_id or not location_channel_id[0]:
+        # Get location channels for cross-guild broadcasting
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(robber_location)
+        
+        if not cross_guild_channels:
             await interaction.response.send_message(
-                "This location doesn't have a proper channel for robberies!", 
-                ephemeral=True
-            )
-            return
-
-        channel = interaction.guild.get_channel(location_channel_id[0])
-        if not channel:
-            await interaction.response.send_message(
-                "Location channel not found!", 
+                "This location doesn't have proper channels for robberies!", 
                 ephemeral=True
             )
             return
@@ -1974,18 +1967,25 @@ class CombatCog(commands.Cog):
             inline=False
         )
 
-        # Send to location channel
-        robbery_message = await channel.send(
-            content=f"{target.mention}", 
-            embed=embed, 
-            view=robbery_view
-        )
+        # Send to location channels via cross-guild broadcast
+        robbery_message = None
+        for guild_channel, channel in cross_guild_channels:
+            try:
+                msg = await channel.send(
+                    content=f"{target.mention}", 
+                    embed=embed, 
+                    view=robbery_view
+                )
+                if not robbery_message:
+                    robbery_message = msg  # Store first successful message for database
+            except:
+                pass  # Skip if can't send to this guild
 
         # Store pending robbery
         self.db.execute_query(
             """INSERT INTO pending_robberies 
                (robber_id, victim_id, location_id, message_id, channel_id, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s)""",
             (interaction.user.id, target.id, robber_location, robbery_message.id, channel.id, expires_at.isoformat())
         )
 
@@ -2052,7 +2052,7 @@ class PlayerRobberyView(discord.ui.View):
         """Process victim surrender"""
         # Get current data
         victim_data = self.bot.db.execute_query(
-            "SELECT money, hp FROM characters WHERE user_id = ?",
+            "SELECT money, hp FROM characters WHERE user_id = %s",
             (self.victim_id,),
             fetch='one'
         )
@@ -2069,7 +2069,7 @@ class PlayerRobberyView(discord.ui.View):
         
         # Get victim's items for potential theft
         victim_items = self.bot.db.execute_query(
-            "SELECT item_name, quantity FROM character_inventory WHERE user_id = ?",
+            "SELECT item_name, quantity FROM character_inventory WHERE user_id = %s",
             (self.victim_id,),
             fetch='all'
         )
@@ -2091,11 +2091,11 @@ class PlayerRobberyView(discord.ui.View):
         
         # Transfer credits
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (stolen_credits, self.victim_id)
         )
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (stolen_credits, self.robber_id)
         )
         
@@ -2103,14 +2103,16 @@ class PlayerRobberyView(discord.ui.View):
         for item_name, stolen_quantity in stolen_items:
             # Remove from victim
             self.bot.db.execute_query(
-                "UPDATE character_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?",
+                "UPDATE character_inventory SET quantity = quantity - %s WHERE user_id = %s AND item_name = %s",
                 (stolen_quantity, self.victim_id, item_name)
             )
             # Add to robber
             self.bot.db.execute_query(
-                """INSERT OR REPLACE INTO character_inventory (user_id, item_name, quantity)
-                   VALUES (?, ?, COALESCE((SELECT quantity FROM character_inventory WHERE user_id = ? AND item_name = ?), 0) + ?)""",
-                (self.robber_id, item_name, self.robber_id, item_name, stolen_quantity)
+                """INSERT INTO character_inventory (user_id, item_name, quantity)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (user_id, item_name) DO UPDATE SET 
+                   quantity = character_inventory.quantity + EXCLUDED.quantity""",
+                (self.robber_id, item_name, stolen_quantity)
             )
             # Clean up zero quantities
             self.bot.db.execute_query(
@@ -2126,15 +2128,17 @@ class PlayerRobberyView(discord.ui.View):
         # Add robbery cooldown
         expire_time = datetime.utcnow() + timedelta(minutes=15)
         self.bot.db.execute_query(
-            """INSERT OR REPLACE INTO pvp_cooldowns 
+            """INSERT INTO pvp_cooldowns 
                (player1_id, player2_id, cooldown_type, expires_at)
-               VALUES (?, ?, 'robbery', ?)""",
+               VALUES (%s, %s, 'robbery', %s)
+               ON CONFLICT (player1_id, player2_id, cooldown_type) DO UPDATE SET
+               expires_at = EXCLUDED.expires_at""",
             (self.robber_id, self.victim_id, expire_time.isoformat())
         )
         
         # Clean up pending robbery
         self.bot.db.execute_query(
-            "DELETE FROM pending_robberies WHERE robber_id = ? AND victim_id = ?",
+            "DELETE FROM pending_robberies WHERE robber_id = %s AND victim_id = %s",
             (self.robber_id, self.victim_id)
         )
         
@@ -2169,7 +2173,7 @@ class PlayerRobberyView(discord.ui.View):
         else:
             # Timeout case - edit the message directly
             channel = self.bot.get_channel(self.bot.db.execute_query(
-                "SELECT channel_id FROM pending_robberies WHERE message_id = ?",
+                "SELECT channel_id FROM pending_robberies WHERE message_id = %s",
                 (self.message_id,),
                 fetch='one'
             )[0])
@@ -2183,7 +2187,7 @@ class PlayerRobberyView(discord.ui.View):
     async def _process_fight_back(self, interaction):
         """Process victim fighting back"""
         # Get combat stats
-        effect_checker = ItemEffectChecker(self.bot)
+        effect_checker = ItemEffectChecker(self.bot.db)
         # Get combat boosts
         robber_boost = effect_checker.get_combat_boost(self.robber_id)
         victim_boost = effect_checker.get_combat_boost(self.victim_id)
@@ -2195,13 +2199,13 @@ class PlayerRobberyView(discord.ui.View):
         effective_robber_combat = robber_combat + robber_boost
         effective_victim_combat = victim_combat + victim_boost    
         robber_data = self.bot.db.execute_query(
-            "SELECT combat, hp, name FROM characters WHERE user_id = ?",
+            "SELECT combat, hp, name FROM characters WHERE user_id = %s",
             (self.robber_id,),
             fetch='one'
         )
         
         victim_data = self.bot.db.execute_query(
-            "SELECT combat, hp, name, money FROM characters WHERE user_id = ?",
+            "SELECT combat, hp, name, money FROM characters WHERE user_id = %s",
             (self.victim_id,),
             fetch='one'
         )
@@ -2229,7 +2233,7 @@ class PlayerRobberyView(discord.ui.View):
         """Handle victim winning the fight"""
         # Determine damage to robber
         damage_to_robber = random.randint(10, 20) + (effective_victim_combat // 2)
-        effect_checker = ItemEffectChecker(self.bot)
+        effect_checker = ItemEffectChecker(self.bot.db)
         robber_boost = effect_checker.get_combat_boost(self.robber_id)
         victim_boost = effect_checker.get_combat_boost(self.victim_id)
         effective_robber_combat = robber_combat + robber_boost
@@ -2241,7 +2245,7 @@ class PlayerRobberyView(discord.ui.View):
         
         # Get location status to determine HP vs Hull damage
         location_status = self.bot.db.execute_query(
-            "SELECT location_status FROM characters WHERE user_id = ?",
+            "SELECT location_status FROM characters WHERE user_id = %s",
             (self.robber_id,),
             fetch='one'
         )[0]
@@ -2263,15 +2267,17 @@ class PlayerRobberyView(discord.ui.View):
         # Add robbery cooldown
         expire_time = datetime.utcnow() + timedelta(minutes=15)
         self.bot.db.execute_query(
-            """INSERT OR REPLACE INTO pvp_cooldowns 
+            """INSERT INTO pvp_cooldowns 
                (player1_id, player2_id, cooldown_type, expires_at)
-               VALUES (?, ?, 'robbery', ?)""",
+               VALUES (%s, %s, 'robbery', %s)
+               ON CONFLICT (player1_id, player2_id, cooldown_type) DO UPDATE SET
+               expires_at = EXCLUDED.expires_at""",
             (self.robber_id, self.victim_id, expire_time.isoformat())
         )
         
         # Clean up pending robbery
         self.bot.db.execute_query(
-            "DELETE FROM pending_robberies WHERE robber_id = ? AND victim_id = ?",
+            "DELETE FROM pending_robberies WHERE robber_id = %s AND victim_id = %s",
             (self.robber_id, self.victim_id)
         )
         
@@ -2303,7 +2309,7 @@ class PlayerRobberyView(discord.ui.View):
 
     async def _robber_wins_fight(self, interaction, robber_roll, victim_roll, robber_combat, victim_combat, victim_money):
         """Handle robber winning the fight"""
-        effect_checker = ItemEffectChecker(self.bot)
+        effect_checker = ItemEffectChecker(self.bot.db)
         robber_boost = effect_checker.get_combat_boost(self.robber_id)
         victim_boost = effect_checker.get_combat_boost(self.victim_id)
         effective_robber_combat = robber_combat + robber_boost
@@ -2316,7 +2322,7 @@ class PlayerRobberyView(discord.ui.View):
         
         # Apply damage (similar logic to victim wins)
         location_status = self.bot.db.execute_query(
-            "SELECT location_status FROM characters WHERE user_id = ?",
+            "SELECT location_status FROM characters WHERE user_id = %s",
             (self.robber_id,),
             fetch='one'
         )[0]
@@ -2337,17 +2343,17 @@ class PlayerRobberyView(discord.ui.View):
         
         # Transfer credits
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (stolen_credits, self.victim_id)
         )
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (stolen_credits, self.robber_id)
         )
         
         # Get and transfer 90% of items
         victim_items = self.bot.db.execute_query(
-            "SELECT item_name, quantity FROM character_inventory WHERE user_id = ?",
+            "SELECT item_name, quantity FROM character_inventory WHERE user_id = %s",
             (self.victim_id,),
             fetch='all'
         )
@@ -2359,13 +2365,15 @@ class PlayerRobberyView(discord.ui.View):
                 stolen_items.append((item_name, stolen_quantity))
                 # Transfer items
                 self.bot.db.execute_query(
-                    "UPDATE character_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?",
+                    "UPDATE character_inventory SET quantity = quantity - %s WHERE user_id = %s AND item_name = %s",
                     (stolen_quantity, self.victim_id, item_name)
                 )
                 self.bot.db.execute_query(
-                    """INSERT OR REPLACE INTO character_inventory (user_id, item_name, quantity)
-                       VALUES (?, ?, COALESCE((SELECT quantity FROM character_inventory WHERE user_id = ? AND item_name = ?), 0) + ?)""",
-                    (self.robber_id, item_name, self.robber_id, item_name, stolen_quantity)
+                    """INSERT INTO character_inventory (user_id, item_name, quantity)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (user_id, item_name) DO UPDATE SET 
+                       quantity = character_inventory.quantity + EXCLUDED.quantity""",
+                    (self.robber_id, item_name, stolen_quantity)
                 )
         
         # Clean up zero quantities
@@ -2374,15 +2382,17 @@ class PlayerRobberyView(discord.ui.View):
         # Add robbery cooldown
         expire_time = datetime.utcnow() + timedelta(minutes=15)
         self.bot.db.execute_query(
-            """INSERT OR REPLACE INTO pvp_cooldowns 
+            """INSERT INTO pvp_cooldowns 
                (player1_id, player2_id, cooldown_type, expires_at)
-               VALUES (?, ?, 'robbery', ?)""",
+               VALUES (%s, %s, 'robbery', %s)
+               ON CONFLICT (player1_id, player2_id, cooldown_type) DO UPDATE SET
+               expires_at = EXCLUDED.expires_at""",
             (self.robber_id, self.victim_id, expire_time.isoformat())
         )
         
         # Clean up pending robbery
         self.bot.db.execute_query(
-            "DELETE FROM pending_robberies WHERE robber_id = ? AND victim_id = ?",
+            "DELETE FROM pending_robberies WHERE robber_id = %s AND victim_id = %s",
             (self.robber_id, self.victim_id)
         )
         
@@ -2469,21 +2479,21 @@ class NPCAttackSelectView(discord.ui.View):
         combat_result = self.bot.db.execute_query(
             """INSERT INTO combat_states 
                (player_id, target_npc_id, target_npc_type, combat_type, location_id, next_npc_action_time, player_can_act_time)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
             (self.user_id, npc_id, "static" if self.is_docked else "dynamic", 
              self.combat_type, self.location_id, next_npc_time.isoformat(), None)  # Set player_can_act_time to None initially
         )
 
         # Get combat_id for the just-created combat
         combat_id = self.bot.db.execute_query(
-            "SELECT combat_id FROM combat_states WHERE player_id = ? ORDER BY combat_id DESC LIMIT 1",
+            "SELECT combat_id FROM combat_states WHERE player_id = %s ORDER BY combat_id DESC LIMIT 1",
             (self.user_id,),
             fetch='one'
         )[0]
 
         # Prevent travel during combat
         self.bot.db.execute_query(
-            "UPDATE characters SET location_status = ? WHERE user_id = ?",
+            "UPDATE characters SET location_status = %s WHERE user_id = %s",
             ("combat", self.user_id)
         )
         combat_cog = self.bot.get_cog('CombatCog')
@@ -2491,13 +2501,13 @@ class NPCAttackSelectView(discord.ui.View):
             # Get NPC alignment
             if self.is_docked:
                 npc_alignment = self.bot.db.execute_query(
-                    "SELECT alignment FROM static_npcs WHERE npc_id = ?",
+                    "SELECT alignment FROM static_npcs WHERE npc_id = %s",
                     (npc_id,),
                     fetch='one'
                 )
             else:
                 npc_alignment = self.bot.db.execute_query(
-                    "SELECT alignment FROM dynamic_npcs WHERE npc_id = ?",
+                    "SELECT alignment FROM dynamic_npcs WHERE npc_id = %s",
                     (npc_id,),
                     fetch='one'
                 )
@@ -2519,7 +2529,7 @@ class NPCAttackSelectView(discord.ui.View):
                     )
         # Get player stats for immediate first attack
         player_data = self.bot.db.execute_query(
-            "SELECT hp, combat, name FROM characters WHERE user_id = ?",
+            "SELECT hp, combat, name FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -2552,19 +2562,17 @@ class NPCAttackSelectView(discord.ui.View):
         if rep_change == 0:
             return
             
-        # Get location channel
-        channel_id = self.bot.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
+        # Get location channels for cross-guild broadcasting
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
         
-        if not channel_id or not channel_id[0]:
+        if not cross_guild_channels:
             return
         
         # Get player name
         player_name = self.bot.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -2574,10 +2582,8 @@ class NPCAttackSelectView(discord.ui.View):
             
         player_name = player_name[0]
         
-        # Send feedback to location channel
-        for guild in self.bot.guilds:
-            channel = guild.get_channel(channel_id[0])
-            if channel:
+        # Send feedback to location channels via cross-guild broadcast
+        for guild_channel, channel in cross_guild_channels:
                 # Determine reputation change description
                 if rep_change > 0:
                     change_text = f"gained {rep_change}"
@@ -2609,7 +2615,7 @@ class NPCAttackSelectView(discord.ui.View):
                 )
                 
                 try:
-                    await channel.send(embed=embed)
+                    await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
                 except Exception:
                     pass  # Channel not accessible
 
@@ -2661,7 +2667,7 @@ class NPCRobSelectView(discord.ui.View):
         
         # Get player stats
         player_data = self.bot.db.execute_query(
-            "SELECT combat, name FROM characters WHERE user_id = ?",
+            "SELECT combat, name FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -2670,13 +2676,13 @@ class NPCRobSelectView(discord.ui.View):
         # Get NPC data
         if self.is_docked:
             npc_data = self.bot.db.execute_query(
-                "SELECT name, alignment, credits FROM static_npcs WHERE npc_id = ?",
+                "SELECT name, alignment, credits FROM static_npcs WHERE npc_id = %s",
                 (npc_id,),
                 fetch='one'
             )
         else:
             npc_data = self.bot.db.execute_query(
-                "SELECT name, alignment, credits FROM dynamic_npcs WHERE npc_id = ?",
+                "SELECT name, alignment, credits FROM dynamic_npcs WHERE npc_id = %s",
                 (npc_id,),
                 fetch='one'
             )
@@ -2697,18 +2703,18 @@ class NPCRobSelectView(discord.ui.View):
 
             # Update credits
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (stolen_amount, self.user_id)
             )
 
             if self.is_docked:
                 self.bot.db.execute_query(
-                    "UPDATE static_npcs SET credits = credits - ? WHERE npc_id = ?",
+                    "UPDATE static_npcs SET credits = credits - %s WHERE npc_id = %s",
                     (stolen_amount, npc_id)
                 )
             else:
                 self.bot.db.execute_query(
-                    "UPDATE dynamic_npcs SET credits = credits - ? WHERE npc_id = ?",
+                    "UPDATE dynamic_npcs SET credits = credits - %s WHERE npc_id = %s",
                     (stolen_amount, npc_id)
                 )
 
@@ -2743,14 +2749,14 @@ class NPCRobSelectView(discord.ui.View):
             self.bot.db.execute_query(
                 """INSERT INTO combat_states 
                    (player_id, target_npc_id, target_npc_type, combat_type, location_id, next_npc_action_time)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
                 (self.user_id, npc_id, "static" if self.is_docked else "dynamic", 
                  "ground" if self.is_docked else "space", self.location_id, next_npc_time.isoformat())
             )
 
             # Prevent travel during combat
             self.bot.db.execute_query(
-                "UPDATE characters SET location_status = ? WHERE user_id = ?",
+                "UPDATE characters SET location_status = %s WHERE user_id = %s",
                 ("combat", self.user_id)
             )
 
@@ -2775,19 +2781,17 @@ class NPCRobSelectView(discord.ui.View):
         if rep_change == 0:
             return
             
-        # Get location channel
-        channel_id = self.bot.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
+        # Get location channels for cross-guild broadcasting
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
         
-        if not channel_id or not channel_id[0]:
+        if not cross_guild_channels:
             return
         
         # Get player name
         player_name = self.bot.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -2797,10 +2801,8 @@ class NPCRobSelectView(discord.ui.View):
             
         player_name = player_name[0]
         
-        # Send feedback to location channel
-        for guild in self.bot.guilds:
-            channel = guild.get_channel(channel_id[0])
-            if channel:
+        # Send feedback to location channels via cross-guild broadcast
+        for guild_channel, channel in cross_guild_channels:
                 # Determine reputation change description
                 if rep_change > 0:
                     change_text = f"gained {rep_change}"
@@ -2832,7 +2834,7 @@ class NPCRobSelectView(discord.ui.View):
                 )
                 
                 try:
-                    await channel.send(embed=embed)
+                    await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
                 except Exception:
                     pass  # Channel not accessible
 

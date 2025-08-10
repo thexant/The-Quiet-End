@@ -1,18 +1,41 @@
 version: '3.8'
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: thequietend-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: thequietend_db
+      POSTGRES_USER: thequietend_user
+      POSTGRES_PASSWORD: thequietend_pass
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U thequietend_user -d thequietend_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   rpg-bot:
     build: .
     container_name: discord-rpg-bot
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     
     # Environment variables
     environment:
-      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - DISCORD_TOKEN=MTM5MTk4NjEzMzEzODY3MzY5NA.G1coX_.qRv1hxW-E_IhRJw3dORCgyi6uuY_T7OdaGyBQE
       - COMMAND_PREFIX=${COMMAND_PREFIX:-!}
       - ACTIVITY_NAME=${ACTIVITY_NAME:-Entropy}
-      - ALLOWED_GUILD_ID=${ALLOWED_GUILD_ID}
-      - DATABASE_PATH=/app/data/THEQUIETEND.db
+      - ALLOWED_GUILD_ID=${ALLOWED_GUILD_ID:-}  # Optional: leave empty for multi-server support
+      - DATABASE_URL=postgresql://thequietend_user:thequietend_pass@postgres:5432/thequietend_db
     
     # Volume mounts for data persistence
     volumes:
@@ -39,3 +62,6 @@ services:
           memory: 512M
         reservations:
           memory: 256M
+
+volumes:
+  postgres_data:

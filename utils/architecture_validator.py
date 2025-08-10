@@ -70,7 +70,7 @@ class ArchitectureValidator:
         # Find location pairs with multiple routes of THE SAME TYPE (true duplicates)
         duplicates = self.db.execute_query(
             """SELECT origin_location, destination_location, corridor_type, COUNT(*) as count,
-                      GROUP_CONCAT(corridor_id || ':' || name) as corridor_info
+                      STRING_AGG(corridor_id || ':' || name, ',') as corridor_info
                FROM corridors 
                GROUP BY origin_location, destination_location, corridor_type
                HAVING COUNT(*) > 1""",
@@ -96,7 +96,7 @@ class ArchitectureValidator:
             
             for corridor_id, corridor_name in routes_to_delete:
                 self.db.execute_query(
-                    "DELETE FROM corridors WHERE corridor_id = ?",
+                    "DELETE FROM corridors WHERE corridor_id = %s",
                     (corridor_id,)
                 )
                 routes_removed += 1
@@ -127,7 +127,7 @@ class ArchitectureValidator:
         )
         
         for corridor_id, name, origin_name, dest_name, origin_type, dest_type in cross_system_violations:
-            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,))
             fixes['cross_system_removed'] += 1
             if not silent:
                 connection_type = f"{origin_type} ↔ {dest_type}"
@@ -147,7 +147,7 @@ class ArchitectureValidator:
         )
         
         for corridor_id, name, origin_name, dest_name in major_to_major_gated:
-            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,))
             fixes['major_to_major_removed'] += 1
             if not silent:
                 print(f"🗑️ Removed major-to-major gated: {name} ({origin_name} → {dest_name})")
@@ -170,7 +170,7 @@ class ArchitectureValidator:
         )
         
         for corridor_id, name, origin_name, dest_name, origin_type, dest_type in gated_major_to_gate:
-            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,))
             fixes['gated_violations_removed'] += 1
             if not silent:
                 connection_type = f"{origin_type} ↔ {dest_type}"
@@ -181,15 +181,18 @@ class ArchitectureValidator:
         # Get all systems and their major locations and gates
         systems_data = self.db.execute_query(
             """SELECT DISTINCT l.system_name,
-                      GROUP_CONCAT(CASE WHEN l.location_type IN ('colony', 'space_station', 'outpost') 
-                                        THEN l.location_id || ':' || l.name END) as majors,
-                      GROUP_CONCAT(CASE WHEN l.location_type = 'gate' 
-                                        THEN l.location_id || ':' || l.name || ':' || l.gate_status END) as gates
+                      STRING_AGG(CASE WHEN l.location_type IN ('colony', 'space_station', 'outpost') 
+                                        THEN l.location_id || ':' || l.name END, ',') as majors,
+                      STRING_AGG(CASE WHEN l.location_type = 'gate' 
+                                        THEN l.location_id || ':' || l.name || ':' || l.gate_status END, ',') as gates
                FROM locations l
                WHERE l.system_name IS NOT NULL 
                AND l.location_type IN ('colony', 'space_station', 'outpost', 'gate')
                GROUP BY l.system_name
-               HAVING majors IS NOT NULL AND gates IS NOT NULL""",
+               HAVING STRING_AGG(CASE WHEN l.location_type IN ('colony', 'space_station', 'outpost') 
+                                        THEN l.location_id || ':' || l.name END, ',') IS NOT NULL 
+                  AND STRING_AGG(CASE WHEN l.location_type = 'gate' 
+                                        THEN l.location_id || ':' || l.name || ':' || l.gate_status END, ',') IS NOT NULL""",
             fetch='all'
         )
         
@@ -225,10 +228,10 @@ class ArchitectureValidator:
         # Check if connection already exists
         existing_connection = self.db.execute_query(
             """SELECT corridor_id FROM corridors 
-               WHERE ((origin_location = ? AND destination_location = ?) OR 
-                      (origin_location = ? AND destination_location = ?))
+               WHERE ((origin_location = %s AND destination_location = %s) OR 
+                      (origin_location = %s AND destination_location = %s))
                AND corridor_type = 'local_space'
-               AND is_active = 1""",
+               AND is_active = true""",
             (major_id, gate_id, gate_id, major_id),
             fetch='one'
         )
@@ -237,9 +240,9 @@ class ArchitectureValidator:
             # Double-check: Ensure we're not creating duplicate connections by checking more thoroughly
             double_check = self.db.execute_query(
                 """SELECT COUNT(*) FROM corridors 
-                   WHERE ((origin_location = ? AND destination_location = ?) OR 
-                          (origin_location = ? AND destination_location = ?))
-                   AND is_active = 1""",
+                   WHERE ((origin_location = %s AND destination_location = %s) OR 
+                          (origin_location = %s AND destination_location = %s))
+                   AND is_active = true""",
                 (major_id, gate_id, gate_id, major_id),
                 fetch='one'
             )[0]
@@ -257,7 +260,7 @@ class ArchitectureValidator:
                 """INSERT INTO corridors 
                    (name, origin_location, destination_location, is_active, 
                     travel_time, fuel_cost, danger_level, is_bidirectional, last_shift)
-                   VALUES (?, ?, ?, 1, 60, 5, 1, 1, datetime('now'))""",
+                   VALUES (%s, %s, %s, 1, 60, 5, 1, 1, NOW())""",
                 (route_name, major_id, gate_id)
             )
             
@@ -266,7 +269,7 @@ class ArchitectureValidator:
                 """INSERT INTO corridors 
                    (name, origin_location, destination_location, is_active, 
                     travel_time, fuel_cost, danger_level, is_bidirectional, last_shift)
-                   VALUES (?, ?, ?, 1, 60, 5, 1, 1, datetime('now'))""",
+                   VALUES (%s, %s, %s, 1, 60, 5, 1, 1, NOW())""",
                 (route_name, gate_id, major_id)
             )
             
@@ -314,7 +317,7 @@ class ArchitectureValidator:
         """Remove all gated connections from a gate (keep only local space)"""
         gated_corridors = self.db.execute_query(
             """SELECT corridor_id FROM corridors 
-               WHERE (origin_location = ? OR destination_location = ?)
+               WHERE (origin_location = %s OR destination_location = %s)
                AND corridor_type = 'gated'""",
             (gate_id, gate_id),
             fetch='all'
@@ -322,7 +325,7 @@ class ArchitectureValidator:
         
         for corridor_tuple in gated_corridors:
             corridor_id = corridor_tuple[0]
-            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,))
             if not silent:
                 print(f"🗑️ Removed gated connection from gate {gate_name}")
 
@@ -334,7 +337,7 @@ class ArchitectureValidator:
         if current_gated_connections < 1:
             # Find nearby active gates to connect to
             gate_info = self.db.execute_query(
-                "SELECT x_coord, y_coord FROM locations WHERE location_id = ?",
+                "SELECT x_coordinate, y_coordinate FROM locations WHERE location_id = %s",
                 (gate_id,), fetch='one'
             )
             
@@ -345,12 +348,12 @@ class ArchitectureValidator:
             
             # Find nearby active gates (not including this one)
             nearby_gates = self.db.execute_query(
-                """SELECT location_id, name, x_coord, y_coord 
+                """SELECT location_id, name, x_coordinate, y_coordinate 
                    FROM locations 
                    WHERE location_type = 'gate' 
                    AND gate_status = 'active' 
-                   AND location_id != ?
-                   ORDER BY ((x_coord - ?) * (x_coord - ?) + (y_coord - ?) * (y_coord - ?))
+                   AND location_id != %s
+                   ORDER BY ((x_coordinate - %s) * (x_coordinate - %s) + (y_coordinate - %s) * (y_coordinate - %s))
                    LIMIT 3""",
                 (gate_id, gate_x, gate_x, gate_y, gate_y),
                 fetch='all'
@@ -361,14 +364,14 @@ class ArchitectureValidator:
                 # Check if bidirectional corridors already exist
                 forward_exists = self.db.execute_query(
                     """SELECT corridor_id FROM corridors 
-                       WHERE origin_location = ? AND destination_location = ?
+                       WHERE origin_location = %s AND destination_location = %s
                        AND corridor_type != 'local_space'""",
                     (gate_id, target_id), fetch='one'
                 )
                 
                 backward_exists = self.db.execute_query(
                     """SELECT corridor_id FROM corridors 
-                       WHERE origin_location = ? AND destination_location = ?
+                       WHERE origin_location = %s AND destination_location = %s
                        AND corridor_type != 'local_space'""",
                     (target_id, gate_id), fetch='one'
                 )
@@ -382,7 +385,7 @@ class ArchitectureValidator:
                 if not forward_exists:
                     self.db.execute_query(
                         """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated, is_bidirectional)
-                           VALUES (?, ?, ?, ?, ?, 2, 1, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, 2, 1, 1, 1)""",
                         (f"{gate_name} - {target_name} Corridor", gate_id, target_id, travel_time, fuel_cost)
                     )
                     fixes_made += 1
@@ -393,7 +396,7 @@ class ArchitectureValidator:
                 if not backward_exists:
                     self.db.execute_query(
                         """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated, is_bidirectional)
-                           VALUES (?, ?, ?, ?, ?, 2, 1, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, 2, 1, 1, 1)""",
                         (f"{target_name} - {gate_name} Corridor", target_id, gate_id, travel_time, fuel_cost)
                     )
                     fixes_made += 1

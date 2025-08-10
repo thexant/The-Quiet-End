@@ -552,7 +552,7 @@ class HolographicFloorplanGenerator:
         location_data = self.db.execute_query(
             """SELECT location_id, name, location_type, wealth_level, population, 
                       is_derelict, faction, description
-               FROM locations WHERE location_id = ?""",
+               FROM locations WHERE location_id = %s""",
             (location_id,),
             fetch='one'
         )
@@ -577,7 +577,7 @@ class HolographicFloorplanGenerator:
         sub_locations = self.db.execute_query(
             """SELECT sub_location_id, name, sub_type, description, is_active 
                FROM sub_locations 
-               WHERE parent_location_id = ? AND is_active = 1
+               WHERE parent_location_id = %s AND is_active = true
                ORDER BY sub_type = 'admin' DESC, sub_type""",  # Prioritize admin facilities
             (location_id,),
             fetch='all'

@@ -350,7 +350,7 @@ class ExportCog(commands.Cog):
                 news_id, news_type, title, description, location_id,
                 scheduled_delivery, delay_hours, event_data
             FROM news_queue
-            WHERE is_delivered = 1
+            WHERE is_delivered = true
             ORDER BY scheduled_delivery DESC
             LIMIT 100
         """, fetch='all')

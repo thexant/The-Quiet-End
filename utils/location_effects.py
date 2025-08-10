@@ -1,6 +1,7 @@
 # utils/location_effects.py
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from utils.datetime_utils import safe_datetime_parse
 
 class LocationEffectsManager:
     """Utility class for managing and querying location effects"""
@@ -94,7 +95,7 @@ class LocationEffectsManager:
             if effect_type in effect_descriptions:
                 desc = effect_descriptions[effect_type]
                 if expires_at:
-                    expire_time = datetime.fromisoformat(expires_at)
+                    expire_time = safe_datetime_parse(expires_at)
                     time_left = expire_time - datetime.now()
                     total_seconds = max(0, int(time_left.total_seconds()))
                     hours_left = total_seconds // 3600

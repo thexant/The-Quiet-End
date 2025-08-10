@@ -6,6 +6,7 @@ import asyncio
 import random
 import datetime
 from typing import Optional, List
+from utils.datetime_utils import safe_datetime_parse
 
 class RemoveAllBountiesView(discord.ui.View):
     def __init__(self, bot, user_id: int, bounties: list, total_refund: int, total_payments: int):
@@ -31,7 +32,7 @@ class RemoveAllBountiesView(discord.ui.View):
             # Get payments for this bounty
             payments = self.bot.db.execute_query(
                 '''SELECT COALESCE(SUM(payment_amount), 0) FROM bounty_payments 
-                   WHERE bounty_id = ?''',
+                   WHERE bounty_id = %s''',
                 (bounty_id,),
                 fetch='one'
             )[0]
@@ -39,13 +40,13 @@ class RemoveAllBountiesView(discord.ui.View):
             # Return payments to target
             if payments > 0:
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (payments, target_id)
                 )
             
             # Mark bounty as inactive
             self.bot.db.execute_query(
-                "UPDATE personal_bounties SET is_active = 0 WHERE bounty_id = ?",
+                "UPDATE personal_bounties SET is_active = false WHERE bounty_id = %s",
                 (bounty_id,)
             )
             
@@ -53,7 +54,7 @@ class RemoveAllBountiesView(discord.ui.View):
         
         # Return total refund to setter
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (self.total_refund, interaction.user.id)
         )
         
@@ -113,9 +114,9 @@ class BountyCog(commands.Cog):
         # Table to track capture attempt cooldowns
         self.db.execute_query("""
             CREATE TABLE IF NOT EXISTS capture_cooldowns (
-                attacker_id INTEGER,
-                target_id INTEGER,
-                attempt_time TEXT,
+                attacker_id BIGINT,
+                target_id BIGINT,
+                attempt_time TIMESTAMP,
                 PRIMARY KEY (attacker_id, target_id)
             )
         """)
@@ -123,30 +124,30 @@ class BountyCog(commands.Cog):
         # Table to track travel bans after being captured
         self.db.execute_query("""
             CREATE TABLE IF NOT EXISTS travel_bans (
-                user_id INTEGER PRIMARY KEY,
-                ban_until TEXT,
+                user_id BIGINT PRIMARY KEY,
+                ban_until TIMESTAMP,
                 reason TEXT
             )
         """)
             # Table to track personal bounties
         self.db.execute_query("""
             CREATE TABLE IF NOT EXISTS personal_bounties (
-                bounty_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                target_id INTEGER NOT NULL,
-                setter_id INTEGER NOT NULL,
+                bounty_id SERIAL PRIMARY KEY,
+                target_id BIGINT NOT NULL,
+                setter_id BIGINT NOT NULL,
                 setter_name TEXT NOT NULL,
                 target_name TEXT NOT NULL,
                 amount INTEGER NOT NULL,
-                set_at TEXT NOT NULL,
-                is_active INTEGER DEFAULT 1
+                set_at TIMESTAMP NOT NULL,
+                is_active BOOLEAN DEFAULT true
             )
         """)
         self.db.execute_query("""
             CREATE TABLE IF NOT EXISTS bounty_payments (
-                payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payment_id SERIAL PRIMARY KEY,
                 bounty_id INTEGER NOT NULL,
                 payment_amount INTEGER NOT NULL,
-                paid_at TEXT NOT NULL,
+                paid_at TIMESTAMP NOT NULL,
                 FOREIGN KEY (bounty_id) REFERENCES personal_bounties (bounty_id)
             )
         """)
@@ -175,7 +176,7 @@ class BountyCog(commands.Cog):
     async def check_travel_ban(self, user_id: int) -> Optional[str]:
         """Check if user is travel banned and return reason if banned"""
         ban_data = self.db.execute_query(
-            "SELECT ban_until, reason FROM travel_bans WHERE user_id = ?",
+            "SELECT ban_until, reason FROM travel_bans WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -184,8 +185,12 @@ class BountyCog(commands.Cog):
             return None
             
         ban_until_str, reason = ban_data
-        ban_until = datetime.datetime.fromisoformat(ban_until_str)
-        current_time = datetime.datetime.now()
+        # Handle both datetime objects (PostgreSQL) and strings (SQLite)
+        if isinstance(ban_until_str, datetime):
+            ban_until = ban_until_str
+        else:
+            ban_until = safe_datetime_parse(ban_until_str)
+        current_time = datetime.now()
         
         if current_time < ban_until:
             remaining = ban_until - current_time
@@ -195,7 +200,7 @@ class BountyCog(commands.Cog):
         else:
             # Ban expired, remove it
             self.db.execute_query(
-                "DELETE FROM travel_bans WHERE user_id = ?",
+                "DELETE FROM travel_bans WHERE user_id = %s",
                 (user_id,)
             )
             return None
@@ -203,7 +208,7 @@ class BountyCog(commands.Cog):
     async def check_capture_cooldown(self, attacker_id: int, target_id: int) -> Optional[int]:
         """Check if there's a cooldown between attacker and target, returns seconds remaining"""
         cooldown_data = self.db.execute_query(
-            "SELECT attempt_time FROM capture_cooldowns WHERE attacker_id = ? AND target_id = ?",
+            "SELECT attempt_time FROM capture_cooldowns WHERE attacker_id = %s AND target_id = %s",
             (attacker_id, target_id),
             fetch='one'
         )
@@ -211,8 +216,12 @@ class BountyCog(commands.Cog):
         if not cooldown_data:
             return None
             
-        attempt_time = datetime.datetime.fromisoformat(cooldown_data[0])
-        current_time = datetime.datetime.now()
+        # Handle both datetime objects (PostgreSQL) and strings (SQLite)
+        if isinstance(cooldown_data[0], datetime):
+            attempt_time = cooldown_data[0]
+        else:
+            attempt_time = safe_datetime_parse(cooldown_data[0])
+        current_time = datetime.now()
         time_diff = current_time - attempt_time
         
         # 30 second cooldown
@@ -221,7 +230,7 @@ class BountyCog(commands.Cog):
         else:
             # Cooldown expired, remove it
             self.db.execute_query(
-                "DELETE FROM capture_cooldowns WHERE attacker_id = ? AND target_id = ?",
+                "DELETE FROM capture_cooldowns WHERE attacker_id = %s AND target_id = %s",
                 (attacker_id, target_id)
             )
             return None
@@ -233,7 +242,7 @@ class BountyCog(commands.Cog):
     async def post_bounty(self, interaction: discord.Interaction, target: discord.Member, amount: int):
         # Check if setter has a character
         setter_data = self.db.execute_query(
-            "SELECT name, money FROM characters WHERE user_id = ?",
+            "SELECT name, money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -249,7 +258,7 @@ class BountyCog(commands.Cog):
         
         # Check if target has a character
         target_data = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (target.id,),
             fetch='one'
         )
@@ -288,7 +297,7 @@ class BountyCog(commands.Cog):
         
         # Check if target already has an active bounty from this player
         existing_bounty = self.db.execute_query(
-            "SELECT bounty_id FROM personal_bounties WHERE target_id = ? AND setter_id = ? AND is_active = 1",
+            "SELECT bounty_id FROM personal_bounties WHERE target_id = %s AND setter_id = %s AND is_active = true",
             (target.id, interaction.user.id),
             fetch='one'
         )
@@ -304,17 +313,17 @@ class BountyCog(commands.Cog):
         
         # Deduct money
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (amount, interaction.user.id)
         )
         
         # Create bounty record
-        current_time = datetime.datetime.now()
+        current_time = datetime.now()
         self.db.execute_query(
             '''INSERT INTO personal_bounties 
                (target_id, setter_id, setter_name, target_name, amount, set_at)
-               VALUES (?, ?, ?, ?, ?, ?)''',
-            (target.id, interaction.user.id, setter_name, target_name, amount, current_time.isoformat())
+               VALUES (%s, %s, %s, %s, %s, %s)''',
+            (target.id, interaction.user.id, setter_name, target_name, amount, current_time)
         )
         
         # Post galactic news - UPDATED
@@ -322,7 +331,7 @@ class BountyCog(commands.Cog):
         if news_cog:
             # Find the character's current location for news posting
             char_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -364,7 +373,7 @@ class BountyCog(commands.Cog):
     async def remove_bounty(self, interaction: discord.Interaction, target: discord.Member):
         # Check if user has a character
         char_data = self.db.execute_query(
-            "SELECT name, money FROM characters WHERE user_id = ?",
+            "SELECT name, money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -380,7 +389,7 @@ class BountyCog(commands.Cog):
         
         # Check if target has a character
         target_data = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (target.id,),
             fetch='one'
         )
@@ -397,7 +406,7 @@ class BountyCog(commands.Cog):
         # Find active bounties set by this user on the target
         user_bounties = self.db.execute_query(
             '''SELECT bounty_id, amount, set_at FROM personal_bounties 
-               WHERE setter_id = ? AND target_id = ? AND is_active = 1
+               WHERE setter_id = %s AND target_id = %s AND is_active = true
                ORDER BY set_at DESC''',
             (interaction.user.id, target.id),
             fetch='all'
@@ -421,14 +430,14 @@ class BountyCog(commands.Cog):
             # Check for payments made on this bounty
             payments_made = self.db.execute_query(
                 '''SELECT COALESCE(SUM(payment_amount), 0) FROM bounty_payments 
-                   WHERE bounty_id = ?''',
+                   WHERE bounty_id = %s''',
                 (bounty_id,),
                 fetch='one'
             )[0]
             
             # Return original amount to setter
             self.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (original_amount, interaction.user.id)
             )
             total_refund += original_amount
@@ -436,14 +445,14 @@ class BountyCog(commands.Cog):
             # Return any payments to target
             if payments_made > 0:
                 self.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (payments_made, target.id)
                 )
                 total_target_refund += payments_made
             
             # Mark bounty as inactive (cancelled)
             self.db.execute_query(
-                "UPDATE personal_bounties SET is_active = 0 WHERE bounty_id = ?",
+                "UPDATE personal_bounties SET is_active = false WHERE bounty_id = %s",
                 (bounty_id,)
             )
             
@@ -519,7 +528,7 @@ class BountyCog(commands.Cog):
             news_cog = self.bot.get_cog('GalacticNewsCog')
             if news_cog:
                 char_location = self.db.execute_query(
-                    "SELECT current_location FROM characters WHERE user_id = ?",
+                    "SELECT current_location FROM characters WHERE user_id = %s",
                     (interaction.user.id,),
                     fetch='one'
                 )
@@ -542,7 +551,7 @@ class BountyCog(commands.Cog):
     async def remove_all_bounties(self, interaction: discord.Interaction):
         # Check if user has a character
         char_data = self.db.execute_query(
-            "SELECT name, money FROM characters WHERE user_id = ?",
+            "SELECT name, money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -560,7 +569,7 @@ class BountyCog(commands.Cog):
         all_bounties = self.db.execute_query(
             '''SELECT pb.bounty_id, pb.target_id, pb.target_name, pb.amount, pb.set_at
                FROM personal_bounties pb
-               WHERE pb.setter_id = ? AND pb.is_active = 1
+               WHERE pb.setter_id = %s AND pb.is_active = true
                ORDER BY pb.set_at DESC''',
             (interaction.user.id,),
             fetch='all'
@@ -583,7 +592,7 @@ class BountyCog(commands.Cog):
             # Check payments for this bounty
             payments = self.db.execute_query(
                 '''SELECT COALESCE(SUM(payment_amount), 0) FROM bounty_payments 
-                   WHERE bounty_id = ?''',
+                   WHERE bounty_id = %s''',
                 (bounty_id,),
                 fetch='one'
             )[0]
@@ -623,7 +632,7 @@ class BountyCog(commands.Cog):
     async def capture_bounty_target(self, interaction: discord.Interaction, target: discord.Member):
         # Check if attacker has a character
         attacker_data = self.db.execute_query(
-            "SELECT current_location, hp, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, hp, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -653,7 +662,7 @@ class BountyCog(commands.Cog):
         
         # Check if target has a character
         target_data = self.db.execute_query(
-            "SELECT current_location, hp, money, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, hp, money, name FROM characters WHERE user_id = %s",
             (target.id,),
             fetch='one'
         )
@@ -693,7 +702,7 @@ class BountyCog(commands.Cog):
         # Check if target has active bounties
         active_bounties = self.db.execute_query(
             '''SELECT SUM(amount), COUNT(*) FROM personal_bounties 
-               WHERE target_id = ? AND is_active = 1''',
+               WHERE target_id = %s AND is_active = true''',
             (target.id,),
             fetch='one'
         )
@@ -727,7 +736,7 @@ class BountyCog(commands.Cog):
         
         # Get location info
         location_info = self.db.execute_query(
-            "SELECT name, channel_id FROM locations WHERE location_id = ?",
+            "SELECT name, channel_id FROM locations WHERE location_id = %s",
             (attacker_location,),
             fetch='one'
         )
@@ -765,7 +774,7 @@ class BountyCog(commands.Cog):
         bounty_details = self.db.execute_query(
             '''SELECT pb.bounty_id, pb.setter_id, pb.setter_name, pb.amount
                FROM personal_bounties pb
-               WHERE pb.target_id = ? AND pb.is_active = 1''',
+               WHERE pb.target_id = %s AND pb.is_active = true''',
             (target.id,),
             fetch='all'
         )
@@ -778,7 +787,7 @@ class BountyCog(commands.Cog):
             # Get total payments made for this bounty
             payments_made = self.db.execute_query(
                 '''SELECT COALESCE(SUM(payment_amount), 0) FROM bounty_payments 
-                   WHERE bounty_id = ?''',
+                   WHERE bounty_id = %s''',
                 (bounty_id,),
                 fetch='one'
             )[0]
@@ -791,7 +800,7 @@ class BountyCog(commands.Cog):
         # Distribute payouts to bounty setters
         for setter_id, setter_name, original_amount, payments_received, total_payout in bounty_payouts:
             self.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (total_payout, setter_id)
             )
             
@@ -816,13 +825,13 @@ class BountyCog(commands.Cog):
         original_bounty_total = sum(bounty[2] for bounty in bounty_details)  # bounty_amount from bounty_details
         
         self.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (original_bounty_total, interaction.user.id)
         )
         
         # Reduce target's HP by 80%
         target_current_hp = self.db.execute_query(
-            "SELECT hp FROM characters WHERE user_id = ?",
+            "SELECT hp FROM characters WHERE user_id = %s",
             (target.id,),
             fetch='one'
         )[0]
@@ -831,21 +840,23 @@ class BountyCog(commands.Cog):
         new_hp = target_current_hp - hp_reduction
         
         self.db.execute_query(
-            "UPDATE characters SET hp = ? WHERE user_id = ?",
+            "UPDATE characters SET hp = %s WHERE user_id = %s",
             (new_hp, target.id)
         )
         
         # Mark all bounties as inactive (captured)
         self.db.execute_query(
-            "UPDATE personal_bounties SET is_active = 0 WHERE target_id = ? AND is_active = 1",
+            "UPDATE personal_bounties SET is_active = false WHERE target_id = %s AND is_active = true",
             (target.id,)
         )
         
         # Apply 1-minute travel ban to target
-        ban_until = datetime.datetime.now() + datetime.timedelta(minutes=1)
+        ban_until = datetime.now() + datetime.timedelta(minutes=1)
         self.db.execute_query(
-            "INSERT OR REPLACE INTO travel_bans (user_id, ban_until, reason) VALUES (?, ?, ?)",
-            (target.id, ban_until.isoformat(), "Captured for bounty")
+            """INSERT INTO travel_bans (user_id, ban_until, reason) VALUES (%s, %s, %s)
+               ON CONFLICT (user_id) DO UPDATE SET 
+               ban_until = EXCLUDED.ban_until, reason = EXCLUDED.reason""",
+            (target.id, ban_until, "Captured for bounty")
         )
         
         # Create capture results embed for location channel
@@ -896,7 +907,7 @@ class BountyCog(commands.Cog):
             location_channel = self.bot.get_channel(location_channel_id)
             if location_channel:
                 try:
-                    await location_channel.send(embed=capture_embed)
+                    await self.bot.send_with_cross_guild_broadcast(location_channel, embed=capture_embed)
                 except:
                     pass
         
@@ -907,10 +918,12 @@ class BountyCog(commands.Cog):
         """Handle a failed bounty capture attempt"""
         
         # Set cooldown for this attacker-target pair
-        current_time = datetime.datetime.now()
+        current_time = datetime.now()
         self.db.execute_query(
-            "INSERT OR REPLACE INTO capture_cooldowns (attacker_id, target_id, attempt_time) VALUES (?, ?, ?)",
-            (interaction.user.id, target.id, current_time.isoformat())
+            """INSERT INTO capture_cooldowns (attacker_id, target_id, attempt_time) VALUES (%s, %s, %s)
+               ON CONFLICT (attacker_id, target_id) DO UPDATE SET 
+               attempt_time = EXCLUDED.attempt_time""",
+            (interaction.user.id, target.id, current_time)
         )
         
         # Create public failed capture announcement
@@ -951,7 +964,7 @@ class BountyCog(commands.Cog):
             location_channel = self.bot.get_channel(location_channel_id)
             if location_channel:
                 try:
-                    await location_channel.send(embed=failed_embed)
+                    await self.bot.send_with_cross_guild_broadcast(location_channel, embed=failed_embed)
                 except:
                     pass
         
@@ -961,7 +974,7 @@ class BountyCog(commands.Cog):
     def has_active_bounty(self, user_id: int) -> bool:
         """Check if a user has any active bounties"""
         bounty_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM personal_bounties WHERE target_id = ? AND is_active = 1",
+            "SELECT COUNT(*) FROM personal_bounties WHERE target_id = %s AND is_active = true",
             (user_id,),
             fetch='one'
         )[0]
@@ -971,7 +984,7 @@ class BountyCog(commands.Cog):
     async def view_local_bounties(self, interaction: discord.Interaction):
         # Check if user has a character
         char_data = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -994,7 +1007,7 @@ class BountyCog(commands.Cog):
                JOIN corridors cor ON ts.corridor_id = cor.corridor_id
                JOIN locations ol ON ts.origin_location = ol.location_id
                JOIN locations dl ON ts.destination_location = dl.location_id
-               WHERE ts.user_id = ? AND ts.status = 'traveling' ''',
+               WHERE ts.user_id = %s AND ts.status = 'traveling' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -1015,7 +1028,7 @@ class BountyCog(commands.Cog):
             
         elif current_location:  # At a normal location
             location_name = self.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (current_location,),
                 fetch='one'
             )[0]
@@ -1038,7 +1051,7 @@ class BountyCog(commands.Cog):
             return
         
         # Find bountied players in reachable locations
-        location_ids_str = ','.join(['?' for _ in search_locations])
+        location_ids_str = ','.join(['%s' for _ in search_locations])
         bountied_players = self.db.execute_query(
             f'''SELECT DISTINCT pb.target_name, SUM(pb.amount) as total_bounty, 
                       COUNT(*) as bounty_count, l.name as location_name,
@@ -1047,7 +1060,7 @@ class BountyCog(commands.Cog):
                JOIN characters c ON pb.target_id = c.user_id
                JOIN locations l ON c.current_location = l.location_id
                WHERE c.current_location IN ({location_ids_str}) 
-               AND pb.is_active = 1 AND c.is_logged_in = 1
+               AND pb.is_active = true AND c.is_logged_in = true
                GROUP BY pb.target_id, pb.target_name, l.name
                ORDER BY total_bounty DESC''',
             search_locations,
@@ -1064,7 +1077,7 @@ class BountyCog(commands.Cog):
                JOIN travel_sessions ts ON c.user_id = ts.user_id
                JOIN corridors cor ON ts.corridor_id = cor.corridor_id
                WHERE (ts.origin_location IN ({location_ids_str}) OR ts.destination_location IN ({location_ids_str}))
-               AND pb.is_active = 1 AND c.is_logged_in = 1 
+               AND pb.is_active = true AND c.is_logged_in = true 
                AND ts.status = 'traveling'
                AND cor.corridor_type != 'ungated'
                GROUP BY pb.target_id, pb.target_name, cor.name
@@ -1155,7 +1168,7 @@ class BountyCog(commands.Cog):
                 # Get connected locations via gated corridors only
                 connected = self.db.execute_query(
                     '''SELECT destination_location FROM corridors 
-                       WHERE origin_location = ? AND is_active = 1 
+                       WHERE origin_location = %s AND is_active = true 
                        AND corridor_type != 'ungated' ''',
                     (location_id,),
                     fetch='all'
@@ -1174,7 +1187,7 @@ class BountyCog(commands.Cog):
     async def pay_bounty(self, interaction: discord.Interaction, amount: int):
         # Check if user has a character
         char_data = self.db.execute_query(
-            "SELECT name, money FROM characters WHERE user_id = ?",
+            "SELECT name, money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1207,7 +1220,7 @@ class BountyCog(commands.Cog):
         active_bounties = self.db.execute_query(
             '''SELECT bounty_id, setter_id, setter_name, amount
                FROM personal_bounties 
-               WHERE target_id = ? AND is_active = 1
+               WHERE target_id = %s AND is_active = true
                ORDER BY bounty_id ASC''',
             (interaction.user.id,),
             fetch='all'
@@ -1230,7 +1243,7 @@ class BountyCog(commands.Cog):
         existing_payments = self.db.execute_query(
             f'''SELECT bounty_id, SUM(payment_amount) as total_paid
                FROM bounty_payments 
-               WHERE bounty_id IN ({','.join(['?' for _ in bounty_ids])})
+               WHERE bounty_id IN ({','.join(['%s' for _ in bounty_ids])})
                GROUP BY bounty_id''',
             bounty_ids,
             fetch='all'
@@ -1261,7 +1274,7 @@ class BountyCog(commands.Cog):
         
         # Deduct money from player
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (actual_payment, interaction.user.id)
         )
         
@@ -1287,11 +1300,11 @@ class BountyCog(commands.Cog):
             
             if payment_for_bounty > 0:
                 # Record the payment
-                current_time = datetime.datetime.now()
+                current_time = datetime.now()
                 self.db.execute_query(
                     '''INSERT INTO bounty_payments (bounty_id, payment_amount, paid_at)
-                       VALUES (?, ?, ?)''',
-                    (bounty_id, payment_for_bounty, current_time.isoformat())
+                       VALUES (%s, %s, %s)''',
+                    (bounty_id, payment_for_bounty, current_time)
                 )
                 
                 payments_made.append((setter_name, payment_for_bounty, bounty_amount))
@@ -1308,13 +1321,13 @@ class BountyCog(commands.Cog):
             transfer_amount = original_amount + total_paid
             
             self.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (transfer_amount, setter_id)
             )
             
             # Mark bounty as inactive (paid off)
             self.db.execute_query(
-                "UPDATE personal_bounties SET is_active = 0 WHERE bounty_id = ?",
+                "UPDATE personal_bounties SET is_active = false WHERE bounty_id = %s",
                 (bounty_id,)
             )
             
@@ -1366,7 +1379,7 @@ class BountyCog(commands.Cog):
     async def capture_bounty(self, interaction: discord.Interaction, target: discord.Member):
         # Check if attacker has a character
         attacker_data = self.db.execute_query(
-            "SELECT current_location, hp FROM characters WHERE user_id = ?",
+            "SELECT current_location, hp FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1396,7 +1409,7 @@ class BountyCog(commands.Cog):
 
         # Check if target has a character
         target_data = self.db.execute_query(
-            "SELECT current_location, hp, money FROM characters WHERE user_id = ?",
+            "SELECT current_location, hp, money FROM characters WHERE user_id = %s",
             (target.id,),
             fetch='one'
         )
@@ -1435,7 +1448,7 @@ class BountyCog(commands.Cog):
 
         # Get location info
         location_info = self.db.execute_query(
-            "SELECT name, channel_id FROM locations WHERE location_id = ?",
+            "SELECT name, channel_id FROM locations WHERE location_id = %s",
             (attacker_location,),
             fetch='one'
         )
@@ -1451,14 +1464,14 @@ class BountyCog(commands.Cog):
 
         # Get both players' reputations at current location
         attacker_rep = self.db.execute_query(
-            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            "SELECT reputation FROM character_reputation WHERE user_id = %s AND location_id = %s",
             (interaction.user.id, attacker_location),
             fetch='one'
         )
         attacker_reputation = attacker_rep[0] if attacker_rep else 0
         
         target_rep = self.db.execute_query(
-            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            "SELECT reputation FROM character_reputation WHERE user_id = %s AND location_id = %s",
             (target.id, attacker_location),
             fetch='one'
         )
@@ -1544,19 +1557,19 @@ class BountyCog(commands.Cog):
         # Update attacker's money
         if total_money_reward > 0:
             self.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (total_money_reward, interaction.user.id)
             )
         
         # Remove target's money
         self.db.execute_query(
-            "UPDATE characters SET money = 0 WHERE user_id = ?",
+            "UPDATE characters SET money = 0 WHERE user_id = %s",
             (target.id,)
         )
         
         # Reduce target's HP by 50%
         target_current_hp = self.db.execute_query(
-            "SELECT hp FROM characters WHERE user_id = ?",
+            "SELECT hp FROM characters WHERE user_id = %s",
             (target.id,),
             fetch='one'
         )[0]
@@ -1565,7 +1578,7 @@ class BountyCog(commands.Cog):
         new_hp = target_current_hp - hp_reduction
         
         self.db.execute_query(
-            "UPDATE characters SET hp = ? WHERE user_id = ?",
+            "UPDATE characters SET hp = %s WHERE user_id = %s",
             (new_hp, target.id)
         )
         
@@ -1582,10 +1595,12 @@ class BountyCog(commands.Cog):
             )
         
         # Apply 1-minute travel ban to target
-        ban_until = datetime.datetime.now() + datetime.timedelta(minutes=1)
+        ban_until = datetime.now() + datetime.timedelta(minutes=1)
         self.db.execute_query(
-            "INSERT OR REPLACE INTO travel_bans (user_id, ban_until, reason) VALUES (?, ?, ?)",
-            (target.id, ban_until.isoformat(), "Captured by opposing faction")
+            """INSERT INTO travel_bans (user_id, ban_until, reason) VALUES (%s, %s, %s)
+               ON CONFLICT (user_id) DO UPDATE SET 
+               ban_until = EXCLUDED.ban_until, reason = EXCLUDED.reason""",
+            (target.id, ban_until, "Captured by opposing faction")
         )
         
         # Create comprehensive capture results embed for location channel
@@ -1650,7 +1665,7 @@ class BountyCog(commands.Cog):
             location_channel = self.bot.get_channel(location_channel_id)
             if location_channel:
                 try:
-                    await location_channel.send(embed=capture_embed)
+                    await self.bot.send_with_cross_guild_broadcast(location_channel, embed=capture_embed)
                 except:
                     pass  # Channel send failed
 
@@ -1664,10 +1679,12 @@ class BountyCog(commands.Cog):
         """Handle a failed capture attempt"""
         
         # Set cooldown for this attacker-target pair
-        current_time = datetime.datetime.now()
+        current_time = datetime.now()
         self.db.execute_query(
-            "INSERT OR REPLACE INTO capture_cooldowns (attacker_id, target_id, attempt_time) VALUES (?, ?, ?)",
-            (interaction.user.id, target.id, current_time.isoformat())
+            """INSERT INTO capture_cooldowns (attacker_id, target_id, attempt_time) VALUES (%s, %s, %s)
+               ON CONFLICT (attacker_id, target_id) DO UPDATE SET 
+               attempt_time = EXCLUDED.attempt_time""",
+            (interaction.user.id, target.id, current_time)
         )
         
         # Create public failed capture announcement
@@ -1708,7 +1725,7 @@ class BountyCog(commands.Cog):
             location_channel = self.bot.get_channel(location_channel_id)
             if location_channel:
                 try:
-                    await location_channel.send(embed=failed_embed)
+                    await self.bot.send_with_cross_guild_broadcast(location_channel, embed=failed_embed)
                 except:
                     pass
 
@@ -1720,7 +1737,7 @@ class BountyCog(commands.Cog):
     async def bounty_status(self, interaction: discord.Interaction):
         # Check character exists
         char_data = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1742,7 +1759,7 @@ class BountyCog(commands.Cog):
         # Check if user has bounties on them
         bounties_on_user = self.db.execute_query(
             '''SELECT setter_name, amount FROM personal_bounties 
-               WHERE target_id = ? AND is_active = 1
+               WHERE target_id = %s AND is_active = true
                ORDER BY amount DESC''',
             (interaction.user.id,),
             fetch='all'
@@ -1757,7 +1774,7 @@ class BountyCog(commands.Cog):
                 # Get bounty ID to check payments
                 bounty_id = self.db.execute_query(
                     '''SELECT bounty_id FROM personal_bounties 
-                       WHERE target_id = ? AND setter_name = ? AND amount = ? AND is_active = 1
+                       WHERE target_id = %s AND setter_name = %s AND amount = %s AND is_active = true
                        LIMIT 1''',
                     (interaction.user.id, setter_name, amount),
                     fetch='one'
@@ -1766,7 +1783,7 @@ class BountyCog(commands.Cog):
                 if bounty_id:
                     payments_made = self.db.execute_query(
                         '''SELECT COALESCE(SUM(payment_amount), 0) FROM bounty_payments 
-                           WHERE bounty_id = ?''',
+                           WHERE bounty_id = %s''',
                         (bounty_id[0],),
                         fetch='one'
                     )[0]
@@ -1811,7 +1828,7 @@ class BountyCog(commands.Cog):
         # Check bounties set by user
         bounties_set = self.db.execute_query(
             '''SELECT target_name, amount FROM personal_bounties 
-               WHERE setter_id = ? AND is_active = 1
+               WHERE setter_id = %s AND is_active = true
                ORDER BY amount DESC''',
             (interaction.user.id,),
             fetch='all'
@@ -1851,17 +1868,21 @@ class BountyCog(commands.Cog):
             """SELECT c.name, cd.attempt_time 
                FROM capture_cooldowns cd
                JOIN characters c ON cd.target_id = c.user_id
-               WHERE cd.attacker_id = ?""",
+               WHERE cd.attacker_id = %s""",
             (interaction.user.id,),
             fetch='all'
         )
         
         if cooldowns:
             cooldown_text = []
-            current_time = datetime.datetime.now()
+            current_time = datetime.now()
             
             for target_name, attempt_time_str in cooldowns:
-                attempt_time = datetime.datetime.fromisoformat(attempt_time_str)
+                # Handle both datetime objects (PostgreSQL) and strings (SQLite)
+                if isinstance(attempt_time_str, datetime):
+                    attempt_time = attempt_time_str
+                else:
+                    attempt_time = safe_datetime_parse(attempt_time_str)
                 time_diff = current_time - attempt_time
                 
                 if time_diff.total_seconds() < 30:

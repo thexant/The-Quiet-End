@@ -3,7 +3,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from utils.holographic_floorplan_generator import HolographicFloorplanGenerator
-from config import ALLOWED_GUILD_ID
+# Multi-server support enabled - no guild restrictions needed
 import os
 
 class FloormapCog(commands.Cog):
@@ -18,16 +18,13 @@ class FloormapCog(commands.Cog):
     async def floormap(self, interaction: discord.Interaction):
         """Display the floormap for the user's current location"""
         
-        # Check guild restriction
-        if ALLOWED_GUILD_ID and interaction.guild_id != ALLOWED_GUILD_ID:
-            await interaction.response.send_message("This command is not available in this server.", ephemeral=True)
-            return
+        # Multi-server support enabled
             
         await interaction.response.defer(ephemeral=True)
         
         # Check if user has a character
         char_info = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -92,16 +89,13 @@ class FloormapCog(commands.Cog):
     async def regenerate_floormap(self, interaction: discord.Interaction):
         """Force regenerate the floormap by deleting cached version"""
         
-        # Check guild restriction
-        if ALLOWED_GUILD_ID and interaction.guild_id != ALLOWED_GUILD_ID:
-            await interaction.response.send_message("This command is not available in this server.", ephemeral=True)
-            return
+        # Multi-server support enabled
             
         await interaction.response.defer(ephemeral=True)
         
         # Check if user has a character
         char_info = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )

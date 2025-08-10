@@ -42,7 +42,7 @@ class CreateCharacterButton(discord.ui.Button):
         
         # Check if user already has a character
         existing_char = db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -80,7 +80,7 @@ class LoginButton(discord.ui.Button):
         
         # Check if user has a character
         char_data = db.execute_query(
-            "SELECT name, is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT name, is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -127,7 +127,7 @@ class LogoutButton(discord.ui.Button):
         
         # Check if user has a character and is logged in
         char_data = db.execute_query(
-            "SELECT name, is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT name, is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -226,7 +226,7 @@ class CreateRandomCharacterButton(discord.ui.Button):
         
         # Check if user already has a character
         existing_char = db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -300,7 +300,7 @@ class GamePanelCog(commands.Cog):
                         except discord.NotFound:
                             # Message was deleted, remove from database
                             self.db.execute_query(
-                                "DELETE FROM game_panels WHERE message_id = ?",
+                                "DELETE FROM game_panels WHERE message_id = %s",
                                 (message_id,)
                             )
                         except discord.Forbidden:
@@ -323,7 +323,7 @@ class GamePanelCog(commands.Cog):
         
         # Check if there's a panel in this channel
         panel = self.db.execute_query(
-            "SELECT message_id FROM game_panels WHERE guild_id = ? AND channel_id = ?",
+            "SELECT message_id FROM game_panels WHERE guild_id = %s AND channel_id = %s",
             (interaction.guild.id, interaction.channel.id),
             fetch='one'
         )
@@ -357,7 +357,7 @@ class GamePanelCog(commands.Cog):
         
         # Remove from database
         self.db.execute_query(
-            "DELETE FROM game_panels WHERE guild_id = ? AND channel_id = ?",
+            "DELETE FROM game_panels WHERE guild_id = %s AND channel_id = %s",
             (interaction.guild.id, interaction.channel.id)
         )
         
@@ -383,7 +383,7 @@ class GamePanelCog(commands.Cog):
         
         # Check if there's a panel in the specified channel
         panel = self.db.execute_query(
-            "SELECT message_id FROM game_panels WHERE guild_id = ? AND channel_id = ?",
+            "SELECT message_id FROM game_panels WHERE guild_id = %s AND channel_id = %s",
             (interaction.guild.id, channel.id),
             fetch='one'
         )
@@ -417,7 +417,7 @@ class GamePanelCog(commands.Cog):
         
         # Remove from database
         self.db.execute_query(
-            "DELETE FROM game_panels WHERE guild_id = ? AND channel_id = ?",
+            "DELETE FROM game_panels WHERE guild_id = %s AND channel_id = %s",
             (interaction.guild.id, channel.id)
         )
         
@@ -438,7 +438,7 @@ class GamePanelCog(commands.Cog):
             return
         
         panels = self.db.execute_query(
-            "SELECT channel_id, message_id, created_at FROM game_panels WHERE guild_id = ?",
+            "SELECT channel_id, message_id, created_at FROM game_panels WHERE guild_id = %s",
             (interaction.guild.id,),
             fetch='all'
         )
@@ -495,7 +495,7 @@ class GamePanelCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         
         panels = self.db.execute_query(
-            "SELECT channel_id, message_id FROM game_panels WHERE guild_id = ?",
+            "SELECT channel_id, message_id FROM game_panels WHERE guild_id = %s",
             (interaction.guild.id,),
             fetch='all'
         )
@@ -538,7 +538,7 @@ class GamePanelCog(commands.Cog):
         # Remove orphaned panels
         for channel_id, message_id, reason in orphaned_panels:
             self.db.execute_query(
-                "DELETE FROM game_panels WHERE guild_id = ? AND channel_id = ? AND message_id = ?",
+                "DELETE FROM game_panels WHERE guild_id = %s AND channel_id = %s AND message_id = %s",
                 (interaction.guild.id, channel_id, message_id)
             )
         
@@ -609,7 +609,7 @@ class GamePanelCog(commands.Cog):
         
         # Get active player count
         active_players = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
+            "SELECT COUNT(*) FROM characters WHERE is_logged_in = true",
             fetch='one'
         )[0]
         
@@ -698,7 +698,7 @@ class GamePanelCog(commands.Cog):
             if not guild:
                 # Guild no longer exists, remove panel
                 self.db.execute_query(
-                    "DELETE FROM game_panels WHERE guild_id = ?",
+                    "DELETE FROM game_panels WHERE guild_id = %s",
                     (guild_id,)
                 )
                 orphaned_count += 1
@@ -709,7 +709,7 @@ class GamePanelCog(commands.Cog):
             if not channel:
                 # Channel no longer exists, remove panel
                 self.db.execute_query(
-                    "DELETE FROM game_panels WHERE channel_id = ?",
+                    "DELETE FROM game_panels WHERE channel_id = %s",
                     (channel_id,)
                 )
                 orphaned_count += 1
@@ -721,7 +721,7 @@ class GamePanelCog(commands.Cog):
             except discord.NotFound:
                 # Message no longer exists, remove panel
                 self.db.execute_query(
-                    "DELETE FROM game_panels WHERE message_id = ?",
+                    "DELETE FROM game_panels WHERE message_id = %s",
                     (message_id,)
                 )
                 orphaned_count += 1

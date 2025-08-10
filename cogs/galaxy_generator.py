@@ -12,7 +12,7 @@ import numpy as np
 import re
 import io
 import asyncio
-import sqlite3
+import psycopg2
 from datetime import datetime, timedelta
 from typing import List, Tuple, Dict, Any, Optional
 from utils.history_generator import HistoryGenerator
@@ -350,7 +350,7 @@ class GalaxyGeneratorCog(commands.Cog):
                         print("⚠️ Database query timeout in auto-shift, skipping this cycle")
                         await asyncio.sleep(3600)  # Wait 1 hour and try again
                         continue
-                    except (RuntimeError, sqlite3.Error, sqlite3.OperationalError) as e:
+                    except (RuntimeError, psycopg2.Error, psycopg2.OperationalError) as e:
                         print(f"⚠️ Database error in auto-shift: {e}")
                         await asyncio.sleep(3600)  # Wait 1 hour and try again
                         continue
@@ -431,8 +431,8 @@ class GalaxyGeneratorCog(commands.Cog):
                             # Log current galaxy state for troubleshooting
                             try:
                                 total_locations = self.db.execute_query("SELECT COUNT(*) FROM locations", fetch='one')[0]
-                                active_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1", fetch='one')[0]
-                                dormant_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 0", fetch='one')[0]
+                                active_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = true", fetch='one')[0]
+                                dormant_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = false", fetch='one')[0]
                                 print(f"🔍 Galaxy state: {total_locations} locations, {active_corridors} active corridors, {dormant_corridors} dormant corridors")
                             except Exception as state_error:
                                 print(f"⚠️ Could not gather galaxy state: {state_error}")
@@ -444,7 +444,7 @@ class GalaxyGeneratorCog(commands.Cog):
             print(f"📋 Shift error details: {traceback.format_exc()}")
             # Log error context for debugging
             try:
-                current_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1", fetch='one')[0]
+                current_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = true", fetch='one')[0]
                 print(f"🔍 Current active corridors: {current_corridors}")
             except Exception as context_error:
                 print(f"⚠️ Could not gather error context: {context_error}")
@@ -477,7 +477,7 @@ class GalaxyGeneratorCog(commands.Cog):
         # Build connectivity graph
         graph = {loc[0]: set() for loc in locations}
         active_corridors = self.db.execute_query(
-            "SELECT origin_location, destination_location FROM corridors WHERE is_active = 1",
+            "SELECT origin_location, destination_location FROM corridors WHERE is_active = true",
             fetch='all'
         )
         
@@ -544,7 +544,7 @@ class GalaxyGeneratorCog(commands.Cog):
         # Find disconnected components
         graph = {loc['id']: set() for loc in all_locations}
         active_corridors = self.db.execute_query(
-            "SELECT origin_location, destination_location FROM corridors WHERE is_active = 1",
+            "SELECT origin_location, destination_location FROM corridors WHERE is_active = true",
             fetch='all'
         )
         
@@ -589,7 +589,7 @@ class GalaxyGeneratorCog(commands.Cog):
             for loc_id_a in component:
                 for loc_id_b in largest_component:
                     dormant_corridor = self.db.execute_query(
-                        "SELECT corridor_id FROM corridors WHERE origin_location = ? AND destination_location = ? AND is_active = 0",
+                        "SELECT corridor_id FROM corridors WHERE origin_location = %s AND destination_location = %s AND is_active = false",
                         (loc_id_a, loc_id_b),
                         fetch='one'
                     )
@@ -604,7 +604,7 @@ class GalaxyGeneratorCog(commands.Cog):
             # If found dormant corridor, activate it
             if best_corridor_id:
                 self.db.execute_query(
-                    "UPDATE corridors SET is_active = 1 WHERE corridor_id = ?",
+                    "UPDATE corridors SET is_active = true WHERE corridor_id = %s",
                     (best_corridor_id,)
                 )
                 fixes_applied += 1
@@ -638,7 +638,7 @@ class GalaxyGeneratorCog(commands.Cog):
                             '''INSERT INTO corridors 
                                (name, origin_location, destination_location, travel_time, fuel_cost, 
                                 danger_level, is_active, is_generated)
-                               VALUES (?, ?, ?, ?, ?, ?, 1, 1)''',
+                               VALUES (%s, %s, %s, %s, %s, %s, 1, 1)''',
                             (name, loc_a['id'], loc_b['id'], travel_time, fuel_cost, danger),
                             fetch='lastrowid'
                         )
@@ -648,7 +648,7 @@ class GalaxyGeneratorCog(commands.Cog):
                             '''INSERT INTO corridors 
                                (name, origin_location, destination_location, travel_time, fuel_cost, 
                                 danger_level, is_active, is_generated)
-                               VALUES (?, ?, ?, ?, ?, ?, 1, 1)''',
+                               VALUES (%s, %s, %s, %s, %s, %s, 1, 1)''',
                             (f"{name} Return", loc_b['id'], loc_a['id'], travel_time, fuel_cost, danger),
                             fetch='lastrowid'
                         )
@@ -685,7 +685,7 @@ class GalaxyGeneratorCog(commands.Cog):
             # Build connectivity graph
             graph = {loc[0]: set() for loc in all_locations}
             active_corridors = self.db.execute_query(
-                "SELECT origin_location, destination_location FROM corridors WHERE is_active = 1",
+                "SELECT origin_location, destination_location FROM corridors WHERE is_active = true",
                 fetch='all'
             )
             
@@ -727,7 +727,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 if len(comp) == 1:  # Single isolated location
                     loc_id = list(comp)[0]
                     loc_type = self.db.execute_query(
-                        "SELECT location_type FROM locations WHERE location_id = ?",
+                        "SELECT location_type FROM locations WHERE location_id = %s",
                         (loc_id,), fetch='one'
                     )
                     if loc_type and loc_type[0] in major_location_types:
@@ -772,8 +772,8 @@ class GalaxyGeneratorCog(commands.Cog):
         conn = None  # Initialize database connection variable                     
         
         # Validate permissions first
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Debug mode overrides for testing
@@ -917,9 +917,16 @@ class GalaxyGeneratorCog(commands.Cog):
                 print("🔧 DEBUG: Inserting galaxy info...")
                 current_time = datetime.now()
                 self.db.execute_in_transaction(conn,
-                    """INSERT OR REPLACE INTO galaxy_info 
+                    """INSERT INTO galaxy_info 
                        (galaxy_id, name, start_date, time_scale_factor, time_started_at, is_time_paused, current_ingame_time) 
-                       VALUES (1, ?, ?, 4.0, ?, 0, ?)""",
+                       VALUES (1, %s, %s, 4.0, %s, false, %s)
+                       ON CONFLICT (galaxy_id) DO UPDATE SET 
+                       name = EXCLUDED.name,
+                       start_date = EXCLUDED.start_date,
+                       time_scale_factor = EXCLUDED.time_scale_factor,
+                       time_started_at = EXCLUDED.time_started_at,
+                       is_time_paused = EXCLUDED.is_time_paused,
+                       current_ingame_time = EXCLUDED.current_ingame_time""",
                     (galaxy_name, start_date, current_time.isoformat(), start_date_obj.isoformat())
                 )
                 print("🔧 DEBUG: Galaxy info inserted successfully")
@@ -942,14 +949,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 print("🔧 DEBUG: Committing transaction...")
                 self.db.commit_transaction(conn)
                 conn = None
-                print("🔧 DEBUG: Transaction committed, starting WAL checkpoint...")
-                # Force WAL checkpoint to ensure data is written
-                try:
-                    self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
-                    print("🔧 DEBUG: WAL checkpoint completed")
-                except Exception as checkpoint_error:
-                    print(f"⚠️ WAL checkpoint failed (continuing): {checkpoint_error}")
-                    # Continue - checkpoint failure shouldn't break generation
+                print("🔧 DEBUG: Transaction committed successfully")
             except Exception as e:
                 print(f"🔧 DEBUG: Exception in Phase 1: {e}")
                 if conn:
@@ -985,12 +985,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 await progress_msg.edit(content="🌌 **Galaxy Generation**\n🌉 Creating active corridor network...")
                 corridors = await self._create_corridors(None, corridor_routes, all_locations)
                 
-                # Force checkpoint to ensure data is written
-                try:
-                    self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
-                    print("✅ Phase 2 WAL checkpoint completed")
-                except Exception as checkpoint_error:
-                    print(f"⚠️ Phase 2 WAL checkpoint failed (continuing): {checkpoint_error}")
+                # Data written successfully to PostgreSQL
                 await asyncio.sleep(1.0)
 
             except Exception as e:
@@ -1024,11 +1019,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Commit this transaction before log generation
                 self.db.commit_transaction(conn)
                 conn = None
-                try:
-                    self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
-                    print("✅ Phase 3 WAL checkpoint completed")
-                except Exception as checkpoint_error:
-                    print(f"⚠️ Phase 3 WAL checkpoint failed (continuing): {checkpoint_error}")
+                print("✅ Phase 3 transaction committed")
                 await asyncio.sleep(1.0)
 
                 # Generate logs in separate transaction
@@ -1040,13 +1031,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     print(f"⚠️ Log generation failed: {e}")
                     log_books_created = 0  # Continue even if log generation fails
                 
-                # Force checkpoint before dormant corridor generation
-                try:
-                    self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")  # Changed from TRUNCATE to PASSIVE for safety
-                    print("✅ Pre-dormant corridor WAL checkpoint completed")
-                except Exception as checkpoint_error:
-                    print(f"⚠️ Pre-dormant corridor WAL checkpoint failed (continuing): {checkpoint_error}")
-                # Brief yield to allow checkpoint completion
+                # Brief pause before dormant corridor generation
                 await asyncio.sleep(0.1)
                 
                 try:
@@ -1085,12 +1070,7 @@ class GalaxyGeneratorCog(commands.Cog):
             # Phase 4: NPC Generation (completely outside any transaction)
             await progress_msg.edit(content="🌌 **Galaxy Generation**\n🤖 Populating with inhabitants...")
 
-            # Ensure database consistency before NPC generation with explicit checkpoint
-            try:
-                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
-                print("✅ Database checkpoint completed before NPC generation")
-            except Exception as checkpoint_error:
-                print(f"⚠️ Checkpoint before NPC generation failed (continuing): {checkpoint_error}")
+            print("✅ Database consistency maintained before NPC generation")
 
             # Now generate NPCs without any active transactions
             await self._create_npcs_outside_transaction(all_locations, progress_msg)
@@ -1359,7 +1339,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     self.db.execute_query(
                         '''INSERT INTO static_npcs 
                            (location_id, name, age, occupation, personality, alignment, hp, max_hp, combat_rating, credits) 
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
                         current_batch,
                         many=True
                     )
@@ -1382,7 +1362,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 self.db.execute_query(
                     '''INSERT INTO static_npcs 
                        (location_id, name, age, occupation, personality, alignment, hp, max_hp, combat_rating, credits) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
                     current_batch,
                     many=True
                 )
@@ -1505,7 +1485,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 if npcs_to_insert:
                     query = '''INSERT INTO static_npcs 
                                (location_id, name, age, occupation, personality, alignment, hp, max_hp, combat_rating, credits) 
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'''
                     self.db.executemany_in_transaction(conn, query, npcs_to_insert)
                     print(f"🤖 Created {len(npcs_to_insert)} static NPCs (batch {locations_processed // 50})...")
                     npcs_to_insert = []  # Clear the list
@@ -1517,7 +1497,7 @@ class GalaxyGeneratorCog(commands.Cog):
         if npcs_to_insert:
             query = '''INSERT INTO static_npcs 
                        (location_id, name, age, occupation, personality, alignment, hp, max_hp, combat_rating, credits) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'''
             self.db.executemany_in_transaction(conn, query, npcs_to_insert)
             print(f"🤖 Created {len(npcs_to_insert)} static NPCs (final batch).")
     
@@ -1612,7 +1592,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 market_id = self.db.execute_in_transaction(
                     conn,
                     '''INSERT INTO black_markets (location_id, market_type, reputation_required, is_hidden)
-                       VALUES (?, ?, ?, 1)''',
+                       VALUES (%s, %s, %s, 1)''',
                     (location['id'], market_type, reputation_required),
                     fetch='lastrowid'
                 )
@@ -1650,7 +1630,7 @@ class GalaxyGeneratorCog(commands.Cog):
         if locations_to_flag:
             self.db.executemany_in_transaction(
                 conn,
-                "UPDATE locations SET has_black_market = 1 WHERE location_id = ?",
+                "UPDATE locations SET has_black_market = 1 WHERE location_id = %s",
                 locations_to_flag
             )
         
@@ -1659,7 +1639,7 @@ class GalaxyGeneratorCog(commands.Cog):
             self.db.executemany_in_transaction(
                 conn,
                 '''INSERT INTO black_market_items (market_id, item_name, item_type, price, description, stock)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s)''',
                 items_to_insert
             )
             
@@ -2033,7 +2013,7 @@ class GalaxyGeneratorCog(commands.Cog):
 
         # Fetch all active corridors to build the graph
         corridors = self.db.execute_query(
-            "SELECT origin_location, destination_location FROM corridors WHERE is_active = 1",
+            "SELECT origin_location, destination_location FROM corridors WHERE is_active = true",
             fetch='all'
         )
 
@@ -2150,7 +2130,7 @@ class GalaxyGeneratorCog(commands.Cog):
                (name, location_type, description, wealth_level, population,
                 x_coord, y_coord, system_name, established_date, has_jobs, has_shops, has_medical, 
                 has_repairs, has_fuel, has_upgrades, has_black_market, is_generated, is_derelict) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
             (location['name'], location['type'], location['description'], 
              location['wealth_level'], location['population'], location['x_coord'], 
              location['y_coord'], location['system_name'], location['established_date'],
@@ -2160,7 +2140,7 @@ class GalaxyGeneratorCog(commands.Cog):
         )
             
         return self.db.execute_query(
-            "SELECT location_id FROM locations WHERE name = ? ORDER BY location_id DESC LIMIT 1",
+            "SELECT location_id FROM locations WHERE name = %s ORDER BY location_id DESC LIMIT 1",
             (location['name'],),
             fetch='one'
         )[0]
@@ -2297,10 +2277,10 @@ class GalaxyGeneratorCog(commands.Cog):
         # Database operations
         if locations_to_update:
             update_query = """UPDATE locations SET 
-                                has_federal_supplies = ?, 
-                                has_upgrades = ?, 
-                                has_shipyard = ? 
-                              WHERE location_id = ?"""
+                                has_federal_supplies = %s, 
+                                has_upgrades = %s, 
+                                has_shipyard = %s 
+                              WHERE location_id = %s"""
             self.db.executemany_in_transaction(conn, update_query, locations_to_update)
         
         # Insert federal supply items into shop_items table with federal tag
@@ -2308,7 +2288,7 @@ class GalaxyGeneratorCog(commands.Cog):
             self.db.executemany_in_transaction(
                 conn,
                 '''INSERT INTO shop_items (location_id, item_name, item_type, price, description, stock, metadata, sold_by_player)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
                 federal_items_to_insert
             )
             
@@ -2339,7 +2319,7 @@ class GalaxyGeneratorCog(commands.Cog):
         # Get location requirements
         location_data = self.db.execute_query(
             """SELECT has_black_market, has_federal_supplies, wealth_level 
-               FROM locations WHERE location_id = ?""",
+               FROM locations WHERE location_id = %s""",
             (location_id,),
             fetch='one'
         )
@@ -2360,7 +2340,7 @@ class GalaxyGeneratorCog(commands.Cog):
             # Update static NPCs to match required alignment
             wrong_npcs = self.db.execute_query(
                 """SELECT npc_id FROM static_npcs 
-                   WHERE location_id = ? AND alignment != ? AND is_alive = 1""",
+                   WHERE location_id = %s AND alignment != %s AND is_alive = true""",
                 (location_id, required_alignment),
                 fetch='all'
             )
@@ -2368,7 +2348,7 @@ class GalaxyGeneratorCog(commands.Cog):
             for (npc_id,) in wrong_npcs:
                 # Kill wrong-aligned NPCs and schedule respawn with correct alignment
                 self.db.execute_query(
-                    "UPDATE static_npcs SET is_alive = 0 WHERE npc_id = ?",
+                    "UPDATE static_npcs SET is_alive = false WHERE npc_id = %s",
                     (npc_id,)
                 )
                 
@@ -2377,7 +2357,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 self.db.execute_query(
                     """INSERT INTO npc_respawn_queue 
                        (original_npc_id, location_id, scheduled_respawn_time, npc_data)
-                       VALUES (?, ?, ?, ?)""",
+                       VALUES (%s, %s, %s, %s)""",
                     (npc_id, location_id, respawn_time.isoformat(), f"alignment:{required_alignment}")
                 )
             
@@ -2385,7 +2365,7 @@ class GalaxyGeneratorCog(commands.Cog):
             self.db.execute_query(
                 """UPDATE dynamic_npcs 
                    SET current_location = NULL, destination_location = NULL
-                   WHERE current_location = ? AND alignment != ? AND is_alive = 1""",
+                   WHERE current_location = %s AND alignment != %s AND is_alive = true""",
                 (location_id, required_alignment)
             )
     # =================================================================================
@@ -2906,7 +2886,7 @@ class GalaxyGeneratorCog(commands.Cog):
                         '''INSERT INTO location_homes 
                            (location_id, home_type, home_name, price, interior_description, 
                             activities, value_modifier, is_available)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, 1)''',
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, 1)''',
                         (location['id'], home_type, home_name, price, interior_desc,
                          ','.join(activities), value_modifier)
                     )
@@ -2914,7 +2894,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     # Get the home_id of the just-inserted home
                     home_id = self.db.execute_query(
                         '''SELECT home_id FROM location_homes 
-                           WHERE location_id = ? AND home_name = ? 
+                           WHERE location_id = %s AND home_name = %s 
                            ORDER BY home_id DESC LIMIT 1''',
                         (location['id'], home_name),
                         fetch='one'
@@ -2926,7 +2906,7 @@ class GalaxyGeneratorCog(commands.Cog):
                         self.db.execute_query(
                             '''INSERT INTO home_activities 
                                (home_id, activity_type, activity_name)
-                               VALUES (?, ?, ?)''',
+                               VALUES (%s, %s, %s)''',
                             (home_id, activity_type, activity_data.get('name', activity_type))
                         )
                     
@@ -2947,7 +2927,7 @@ class GalaxyGeneratorCog(commands.Cog):
             return results
         
         # Get details for affected gates
-        gate_placeholders = ','.join('?' * len(affected_gate_ids))
+        gate_placeholders = ','.join('%s' * len(affected_gate_ids))
         affected_gates = self.db.execute_query(
             f"SELECT location_id, name FROM locations WHERE location_id IN ({gate_placeholders}) AND location_type = 'gate' AND gate_status = 'active'",
             affected_gate_ids,
@@ -2960,8 +2940,8 @@ class GalaxyGeneratorCog(commands.Cog):
             # Check how many active corridors this gate still has after the shift
             remaining_corridors = self.db.execute_query(
                 """SELECT COUNT(*) FROM corridors 
-                   WHERE (origin_location = ? OR destination_location = ?) 
-                   AND is_active = 1
+                   WHERE (origin_location = %s OR destination_location = %s) 
+                   AND is_active = true
                    AND name NOT LIKE '%Approach%' 
                    AND name NOT LIKE '%Arrival%' 
                    AND name NOT LIKE '%Departure%'""",
@@ -2977,7 +2957,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     reconnection_time = datetime.now() + timedelta(hours=hours_until_reconnection)
                     
                     self.db.execute_query(
-                        "UPDATE locations SET gate_status = 'moving', reconnection_eta = ? WHERE location_id = ?",
+                        "UPDATE locations SET gate_status = 'moving', reconnection_eta = %s WHERE location_id = %s",
                         (reconnection_time, gate_id)
                     )
                     
@@ -2993,19 +2973,19 @@ class GalaxyGeneratorCog(commands.Cog):
                     self.db.execute_query(
                         """UPDATE locations SET 
                            gate_status = 'unused', 
-                           abandoned_since = ?,
+                           abandoned_since = %s,
                            has_shops = 0, 
                            has_medical = 0,
                            has_repairs = 0,
                            has_fuel = 0,
                            population = 0
-                           WHERE location_id = ?""",
+                           WHERE location_id = %s""",
                         (current_time, gate_id)
                     )
                     
                     # Remove static NPCs from abandoned gates
                     self.db.execute_query(
-                        "DELETE FROM static_npcs WHERE location_id = ?",
+                        "DELETE FROM static_npcs WHERE location_id = %s",
                         (gate_id,)
                     )
                     
@@ -3021,7 +3001,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     reconnection_time = datetime.now() + timedelta(hours=hours_until_reconnection)
                     
                     self.db.execute_query(
-                        "UPDATE locations SET gate_status = 'moving', reconnection_eta = ? WHERE location_id = ?",
+                        "UPDATE locations SET gate_status = 'moving', reconnection_eta = %s WHERE location_id = %s",
                         (reconnection_time, gate_id)
                     )
                     
@@ -3045,7 +3025,7 @@ class GalaxyGeneratorCog(commands.Cog):
                WHERE location_type = 'gate' 
                AND gate_status = 'moving' 
                AND reconnection_eta IS NOT NULL 
-               AND reconnection_eta <= datetime('now')""",
+               AND reconnection_eta <= NOW()""",
             fetch='all'
         )
         
@@ -3063,13 +3043,13 @@ class GalaxyGeneratorCog(commands.Cog):
                 """UPDATE locations SET 
                    gate_status = 'active', 
                    reconnection_eta = NULL,
-                   population = ?,
+                   population = %s,
                    has_shops = 1,
                    has_medical = 1,
                    has_repairs = 1,
                    has_fuel = 1,
                    has_upgrades = 0
-                   WHERE location_id = ?""",
+                   WHERE location_id = %s""",
                 (gate_population, gate_id)
             )
             
@@ -3084,8 +3064,8 @@ class GalaxyGeneratorCog(commands.Cog):
                    FROM locations 
                    WHERE location_type = 'gate' 
                    AND gate_status = 'active' 
-                   AND location_id != ?
-                   ORDER BY ((x_coord - ?) * (x_coord - ?) + (y_coord - ?) * (y_coord - ?))
+                   AND location_id != %s
+                   ORDER BY ((x_coord - %s) * (x_coord - %s) + (y_coord - %s) * (y_coord - %s))
                    LIMIT 3""",
                 (gate_id, gate_x, gate_x, gate_y, gate_y),
                 fetch='all'
@@ -3098,8 +3078,8 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Check if corridor already exists
                 existing = self.db.execute_query(
                     """SELECT corridor_id FROM corridors 
-                       WHERE (origin_location = ? AND destination_location = ?)
-                       OR (origin_location = ? AND destination_location = ?)""",
+                       WHERE (origin_location = %s AND destination_location = %s)
+                       OR (origin_location = %s AND destination_location = %s)""",
                     (gate_id, target_id, target_id, gate_id),
                     fetch='one'
                 )
@@ -3118,14 +3098,14 @@ class GalaxyGeneratorCog(commands.Cog):
                     self.db.execute_query(
                         """INSERT INTO corridors (name, origin_location, destination_location, 
                            travel_time, fuel_cost, danger_level, is_active, is_generated)
-                           VALUES (?, ?, ?, ?, ?, ?, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, 1, 1)""",
                         (corridor_name, gate_id, target_id, main_time, fuel_cost, danger_level)
                     )
                     
                     self.db.execute_query(
                         """INSERT INTO corridors (name, origin_location, destination_location, 
                            travel_time, fuel_cost, danger_level, is_active, is_generated)
-                           VALUES (?, ?, ?, ?, ?, ?, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, 1, 1)""",
                         (f"{target_name} - {gate_name} Route", target_id, gate_id, main_time, fuel_cost, danger_level)
                     )
                     
@@ -3134,9 +3114,9 @@ class GalaxyGeneratorCog(commands.Cog):
             # Reactivate any deactivated corridors from when it became moving
             self.db.execute_query(
                 """UPDATE corridors 
-                   SET is_active = 1 
-                   WHERE (origin_location = ? OR destination_location = ?)
-                   AND is_active = 0""",
+                   SET is_active = true 
+                   WHERE (origin_location = %s OR destination_location = %s)
+                   AND is_active = false""",
                 (gate_id, gate_id)
             )
             
@@ -3154,7 +3134,7 @@ class GalaxyGeneratorCog(commands.Cog):
                WHERE location_type = 'gate' 
                AND gate_status = 'unused' 
                AND abandoned_since IS NOT NULL 
-               AND abandoned_since <= ?""",
+               AND abandoned_since <= %s""",
             (cutoff_time,),
             fetch='all'
         )
@@ -3180,12 +3160,12 @@ class GalaxyGeneratorCog(commands.Cog):
                 self.db.execute_query(
                     """UPDATE locations SET 
                        gate_status = 'moving',
-                       reconnection_eta = ?,
+                       reconnection_eta = %s,
                        abandoned_since = NULL,
-                       population = ?,
+                       population = %s,
                        has_fuel = 1,
                        has_repairs = 1
-                       WHERE location_id = ?""",
+                       WHERE location_id = %s""",
                     (reconnection_time, basic_population, gate_id)
                 )
                 
@@ -3645,7 +3625,7 @@ class GalaxyGeneratorCog(commands.Cog):
             query = '''INSERT INTO corridors 
                        (name, origin_location, destination_location, travel_time, fuel_cost, 
                         danger_level, corridor_type, is_active, is_generated)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)'''
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, 0, 1)'''
             self.db.executemany_in_transaction(micro_conn, query, batch_data)
             self.db.commit_transaction(micro_conn)
         except Exception as e:
@@ -3660,8 +3640,8 @@ class GalaxyGeneratorCog(commands.Cog):
         shift_intensity="Intensity of corridor shift if reshift is True (1-5)"
     )
     async def fix_routes(self, interaction: discord.Interaction, reshift: bool = False, shift_intensity: int = 2):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer()
@@ -3738,7 +3718,7 @@ class GalaxyGeneratorCog(commands.Cog):
                         """INSERT INTO corridors 
                            (name, origin_location, destination_location, travel_time,
                             fuel_cost, danger_level, is_active, is_generated)
-                           VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, 1, 1, 1)""",
                         (f"{gate_name} Approach", loc_id, gate_id, approach_time, fuel_cost)
                     )
                     fixes['missing_approaches'] += 1
@@ -3754,7 +3734,7 @@ class GalaxyGeneratorCog(commands.Cog):
                         """INSERT INTO corridors 
                            (name, origin_location, destination_location, travel_time,
                             fuel_cost, danger_level, is_active, is_generated)
-                           VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, 1, 1, 1)""",
                         (f"{gate_name} Arrival", gate_id, loc_id, arrival_time, fuel_cost)
                     )
                     fixes['missing_arrivals'] += 1
@@ -3774,7 +3754,7 @@ class GalaxyGeneratorCog(commands.Cog):
                    AND c.name NOT LIKE '%Arrival%'
                    AND c.name NOT LIKE '%Departure%'
                    AND c.corridor_type != 'ungated'
-                   AND c.is_active = 1""",
+                   AND c.is_active = true""",
                 fetch='all'
             )
             
@@ -3820,7 +3800,7 @@ class GalaxyGeneratorCog(commands.Cog):
                                 """INSERT INTO corridors 
                                    (name, origin_location, destination_location, travel_time,
                                     fuel_cost, danger_level, is_active, is_generated)
-                                   VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                                   VALUES (%s, %s, %s, %s, %s, 1, 1, 1)""",
                                 (departure_name, loc_id, dest_gate, dep_time, fuel_cost)
                             )
                             fixes['missing_departures'] += 1
@@ -3891,8 +3871,8 @@ class GalaxyGeneratorCog(commands.Cog):
     async def fix_moving_gates(self, interaction: discord.Interaction):
         """Fix moving gates that may be missing local space connections"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer()
@@ -3914,8 +3894,8 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Check if gate has any local space connections
                 local_connections = self.db.execute_query(
                     """SELECT COUNT(*) FROM corridors 
-                       WHERE (origin_location = ? OR destination_location = ?)
-                       AND is_active = 1
+                       WHERE (origin_location = %s OR destination_location = %s)
+                       AND is_active = true
                        AND (name LIKE '%Local Space%' OR name LIKE '%Approach%' OR 
                             name LIKE '%Arrival%' OR name LIKE '%Departure%')""",
                     (gate_id, gate_id),
@@ -3962,7 +3942,7 @@ class GalaxyGeneratorCog(commands.Cog):
         try:
             # Get user's current location
             char_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -3975,7 +3955,7 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Check if it's a moving gate
             location_info = self.db.execute_query(
-                "SELECT name, location_type, gate_status FROM locations WHERE location_id = ?",
+                "SELECT name, location_type, gate_status FROM locations WHERE location_id = %s",
                 (location_id,), fetch='one'
             )
             
@@ -3990,12 +3970,10 @@ class GalaxyGeneratorCog(commands.Cog):
                 return
             
             # Activate ALL corridors from this moving gate
-            updated = self.db.execute_query(
-                "UPDATE corridors SET is_active = 1 WHERE origin_location = ? AND is_active = 0",
+            activated_count = self.db.execute_query(
+                "UPDATE corridors SET is_active = true WHERE origin_location = %s AND is_active = false",
                 (location_id,)
             )
-            
-            activated_count = self.db.cursor.rowcount if hasattr(self.db, 'cursor') else 0
             
             await interaction.followup.send(f"✅ Activated {activated_count} inactive corridors from {loc_name}. Try `/travel routes` now!", ephemeral=True)
             
@@ -4007,8 +3985,8 @@ class GalaxyGeneratorCog(commands.Cog):
     async def fix_all_moving_gate_routes(self, interaction: discord.Interaction):
         """Activate all inactive local space corridors for moving gates across the galaxy"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
             
         await interaction.response.defer()
@@ -4021,7 +3999,7 @@ class GalaxyGeneratorCog(commands.Cog):
                    JOIN locations l ON c.origin_location = l.location_id
                    WHERE l.location_type = 'gate' 
                    AND l.gate_status = 'moving'
-                   AND c.is_active = 0
+                   AND c.is_active = false
                    AND (c.name LIKE '%Local Space%' OR c.name LIKE '%Approach%' OR 
                         c.name LIKE '%Arrival%' OR c.name LIKE '%Departure%')""",
                 fetch='all'
@@ -4033,14 +4011,14 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Activate all inactive local space corridors for moving gates
             activated = self.db.execute_query(
-                """UPDATE corridors SET is_active = 1 
+                """UPDATE corridors SET is_active = true 
                    WHERE corridor_id IN (
                        SELECT c.corridor_id
                        FROM corridors c
                        JOIN locations l ON c.origin_location = l.location_id
                        WHERE l.location_type = 'gate' 
                        AND l.gate_status = 'moving'
-                       AND c.is_active = 0
+                       AND c.is_active = false
                        AND (c.name LIKE '%Local Space%' OR c.name LIKE '%Approach%' OR 
                             c.name LIKE '%Arrival%' OR c.name LIKE '%Departure%')
                    )""",
@@ -4096,7 +4074,7 @@ class GalaxyGeneratorCog(commands.Cog):
         try:
             # Get user's current location
             char_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4120,14 +4098,14 @@ class GalaxyGeneratorCog(commands.Cog):
                    FROM corridors c
                    JOIN locations l ON c.destination_location = l.location_id
                    JOIN locations lo ON c.origin_location = lo.location_id
-                   WHERE c.origin_location = ? AND c.is_active = 1
+                   WHERE c.origin_location = %s AND c.is_active = true
                    ORDER BY c.travel_time''',
                 (current_location_id,),
                 fetch='all'
             )
             
             location_info = self.db.execute_query(
-                "SELECT name, location_type, gate_status FROM locations WHERE location_id = ?",
+                "SELECT name, location_type, gate_status FROM locations WHERE location_id = %s",
                 (current_location_id,), fetch='one'
             )
             
@@ -4168,8 +4146,8 @@ class GalaxyGeneratorCog(commands.Cog):
     async def fix_broken_corridor_refs(self, interaction: discord.Interaction):
         """Fix corridors that reference non-existent locations"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
             
         await interaction.response.defer()
@@ -4180,7 +4158,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 """SELECT c.corridor_id, c.name, c.origin_location, c.destination_location
                    FROM corridors c
                    LEFT JOIN locations l ON c.destination_location = l.location_id
-                   WHERE l.location_id IS NULL AND c.is_active = 1""",
+                   WHERE l.location_id IS NULL AND c.is_active = true""",
                 fetch='all'
             )
             
@@ -4189,7 +4167,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 """SELECT c.corridor_id, c.name, c.origin_location, c.destination_location
                    FROM corridors c
                    LEFT JOIN locations lo ON c.origin_location = lo.location_id
-                   WHERE lo.location_id IS NULL AND c.is_active = 1""",
+                   WHERE lo.location_id IS NULL AND c.is_active = true""",
                 fetch='all'
             )
             
@@ -4201,11 +4179,11 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Delete broken corridors
             for corridor_id, name, origin_id, dest_id in broken_dest_corridors:
-                self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+                self.db.execute_query("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,))
                 print(f"🗑️ Deleted corridor with broken destination: {name} (dest_id: {dest_id})")
                 
             for corridor_id, name, origin_id, dest_id in broken_origin_corridors:
-                self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+                self.db.execute_query("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,))
                 print(f"🗑️ Deleted corridor with broken origin: {name} (origin_id: {origin_id})")
             
             # Now fix all moving gates by ensuring they have proper local connections
@@ -4252,7 +4230,7 @@ class GalaxyGeneratorCog(commands.Cog):
         try:
             # Get user's current location
             char_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4265,7 +4243,7 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Get raw corridors from this location
             raw_corridors = self.db.execute_query(
-                "SELECT corridor_id, name, origin_location, destination_location, is_active FROM corridors WHERE origin_location = ?",
+                "SELECT corridor_id, name, origin_location, destination_location, is_active FROM corridors WHERE origin_location = %s",
                 (current_location_id,), fetch='all'
             )
             
@@ -4275,13 +4253,13 @@ class GalaxyGeneratorCog(commands.Cog):
                 for corridor_id, corridor_name, origin_id, dest_id, is_active in raw_corridors:
                     # Test destination location exists
                     dest_exists = self.db.execute_query(
-                        "SELECT name FROM locations WHERE location_id = ?",
+                        "SELECT name FROM locations WHERE location_id = %s",
                         (dest_id,), fetch='one'
                     )
                     
                     # Test origin location exists  
                     origin_exists = self.db.execute_query(
-                        "SELECT name FROM locations WHERE location_id = ?",
+                        "SELECT name FROM locations WHERE location_id = %s",
                         (origin_id,), fetch='one'
                     )
                     
@@ -4334,8 +4312,8 @@ class GalaxyGeneratorCog(commands.Cog):
     async def create_missing_local_route(self, interaction: discord.Interaction):
         """Create the missing local space corridor for current moving gate"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
             
         await interaction.response.defer(ephemeral=True)
@@ -4343,7 +4321,7 @@ class GalaxyGeneratorCog(commands.Cog):
         try:
             # Get user's current location
             char_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4356,7 +4334,7 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Get gate info
             gate_info = self.db.execute_query(
-                "SELECT name, location_type, gate_status, system_name, x_coord, y_coord FROM locations WHERE location_id = ?",
+                "SELECT name, location_type, gate_status, system_name, x_coord, y_coord FROM locations WHERE location_id = %s",
                 (gate_id,), fetch='one'
             )
             
@@ -4373,11 +4351,11 @@ class GalaxyGeneratorCog(commands.Cog):
             # Find nearest location in same system
             nearest_location = self.db.execute_query(
                 """SELECT location_id, name, x_coord, y_coord,
-                          ((x_coord - ?) * (x_coord - ?) + (y_coord - ?) * (y_coord - ?)) as distance_sq
+                          ((x_coord - %s) * (x_coord - %s) + (y_coord - %s) * (y_coord - %s)) as distance_sq
                    FROM locations 
-                   WHERE system_name = ? 
+                   WHERE system_name = %s 
                    AND location_type IN ('colony', 'space_station', 'outpost')
-                   AND location_id != ?
+                   AND location_id != %s
                    ORDER BY distance_sq
                    LIMIT 1""",
                 (gate_x, gate_x, gate_y, gate_y, system_name, gate_id),
@@ -4397,14 +4375,14 @@ class GalaxyGeneratorCog(commands.Cog):
             # Gate to Location
             self.db.execute_query(
                 """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
-                   VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                   VALUES (%s, %s, %s, %s, %s, 1, 1, 1)""",
                 (f"{gate_name} - {loc_name} Departure (Local Space)", gate_id, loc_id, approach_time, fuel_cost)
             )
             
             # Location to Gate  
             self.db.execute_query(
                 """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
-                   VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                   VALUES (%s, %s, %s, %s, %s, 1, 1, 1)""",
                 (f"{loc_name} - {gate_name} Approach (Local Space)", loc_id, gate_id, approach_time, fuel_cost)
             )
             
@@ -4424,7 +4402,7 @@ class GalaxyGeneratorCog(commands.Cog):
         try:
             # Get user's current location
             char_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4437,7 +4415,7 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Get location details
             location_info = self.db.execute_query(
-                "SELECT name, location_type, gate_status, system_name FROM locations WHERE location_id = ?",
+                "SELECT name, location_type, gate_status, system_name FROM locations WHERE location_id = %s",
                 (location_id,), fetch='one'
             )
             
@@ -4453,7 +4431,7 @@ class GalaxyGeneratorCog(commands.Cog):
                           l.name as dest_name, l.location_type as dest_type
                    FROM corridors c
                    JOIN locations l ON c.destination_location = l.location_id
-                   WHERE c.origin_location = ?
+                   WHERE c.origin_location = %s
                    ORDER BY c.is_active DESC, c.name""",
                 (location_id,), fetch='all'
             )
@@ -4464,7 +4442,7 @@ class GalaxyGeneratorCog(commands.Cog):
                           l.name as dest_name, l.location_type as dest_type
                    FROM corridors c
                    JOIN locations l ON c.destination_location = l.location_id
-                   WHERE c.origin_location = ? AND c.is_active = 1
+                   WHERE c.origin_location = %s AND c.is_active = true
                    ORDER BY c.travel_time""",
                 (location_id,), fetch='all'
             )
@@ -4530,8 +4508,8 @@ class GalaxyGeneratorCog(commands.Cog):
     async def fix_gate_architecture(self, interaction: discord.Interaction):
         """Fix existing galaxy to use proper Major Location -> Local Space -> Gate architecture"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer()
@@ -4591,8 +4569,8 @@ class GalaxyGeneratorCog(commands.Cog):
     async def fix_corridor_types(self, interaction: discord.Interaction):
         """Fix misclassified corridor types based on location rules"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer()
@@ -4607,7 +4585,7 @@ class GalaxyGeneratorCog(commands.Cog):
             type_counts = self.db.execute_query("""
                 SELECT corridor_type, COUNT(*) as count
                 FROM corridors 
-                WHERE is_active = 1
+                WHERE is_active = true
                 GROUP BY corridor_type
             """, fetch='all')
             
@@ -4668,7 +4646,7 @@ class GalaxyGeneratorCog(commands.Cog):
         )
         
         for corridor_id, name, origin_name, dest_name, origin_type, dest_type in cross_system_violations:
-            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,))
             fixes['cross_system_removed'] += 1
             connection_type = f"{origin_type} ↔ {dest_type}"
             print(f"🗑️ Removed cross-system violation: {name} - {connection_type} ({origin_name} → {dest_name})")
@@ -4719,8 +4697,8 @@ class GalaxyGeneratorCog(commands.Cog):
         # Check if connection already exists
         existing = self.db.execute_query(
             """SELECT corridor_id, danger_level, travel_time FROM corridors 
-               WHERE ((origin_location = ? AND destination_location = ?) OR
-                      (origin_location = ? AND destination_location = ?))
+               WHERE ((origin_location = %s AND destination_location = %s) OR
+                      (origin_location = %s AND destination_location = %s))
                AND corridor_type != 'ungated'""",
             (major_id, gate_id, gate_id, major_id),
             fetch='one'
@@ -4735,8 +4713,8 @@ class GalaxyGeneratorCog(commands.Cog):
                 
                 self.db.execute_query(
                     """UPDATE corridors 
-                       SET danger_level = ?, travel_time = ?
-                       WHERE corridor_id = ?""",
+                       SET danger_level = %s, travel_time = %s
+                       WHERE corridor_id = %s""",
                     (target_danger, target_time, corridor_id)
                 )
                 fixes['major_to_gate_fixed'] += 1
@@ -4749,13 +4727,13 @@ class GalaxyGeneratorCog(commands.Cog):
             # Create bidirectional local space corridors
             self.db.execute_query(
                 """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
-                   VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                   VALUES (%s, %s, %s, %s, %s, 1, 1, 1)""",
                 (f"{major_name} - {gate_name} Approach (Local Space)", major_id, gate_id, approach_time, fuel_cost)
             )
             
             self.db.execute_query(
                 """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
-                   VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                   VALUES (%s, %s, %s, %s, %s, 1, 1, 1)""",
                 (f"{gate_name} - {major_name} Departure (Local Space)", gate_id, major_id, approach_time, fuel_cost)
             )
             
@@ -4804,7 +4782,7 @@ class GalaxyGeneratorCog(commands.Cog):
         """Remove all gated connections from a gate (keep only local space)"""
         gated_corridors = self.db.execute_query(
             """SELECT corridor_id FROM corridors 
-               WHERE (origin_location = ? OR destination_location = ?)
+               WHERE (origin_location = %s OR destination_location = %s)
                AND name NOT LIKE '%Local Space%' 
                AND name NOT LIKE '%Approach%' 
                AND name NOT LIKE '%Arrival%' 
@@ -4815,13 +4793,13 @@ class GalaxyGeneratorCog(commands.Cog):
         )
         
         for (corridor_id,) in gated_corridors:
-            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,))
 
     async def _ensure_moving_gate_local_connections(self, gate_id, gate_name):
         """Ensure a moving gate has active local space connections to nearby locations"""
         # Find nearby major locations in the same system
         gate_info = self.db.execute_query(
-            "SELECT system_name, x_coord, y_coord FROM locations WHERE location_id = ?",
+            "SELECT system_name, x_coord, y_coord FROM locations WHERE location_id = %s",
             (gate_id,), fetch='one'
         )
         
@@ -4833,9 +4811,9 @@ class GalaxyGeneratorCog(commands.Cog):
         # Find major locations in the same system
         nearby_locations = self.db.execute_query(
             """SELECT location_id, name, x_coord, y_coord,
-                      ((x_coord - ?) * (x_coord - ?) + (y_coord - ?) * (y_coord - ?)) as distance_sq
+                      ((x_coord - %s) * (x_coord - %s) + (y_coord - %s) * (y_coord - %s)) as distance_sq
                FROM locations 
-               WHERE system_name = ? 
+               WHERE system_name = %s 
                AND location_type IN ('colony', 'space_station', 'outpost')
                ORDER BY distance_sq
                LIMIT 3""",
@@ -4848,7 +4826,7 @@ class GalaxyGeneratorCog(commands.Cog):
             # Check if FROM gate connection exists (this is what's missing!)
             gate_to_loc_exists = self.db.execute_query(
                 """SELECT corridor_id FROM corridors 
-                   WHERE origin_location = ? AND destination_location = ? AND is_active = 1""",
+                   WHERE origin_location = %s AND destination_location = %s AND is_active = true""",
                 (gate_id, loc_id),
                 fetch='one'
             )
@@ -4856,7 +4834,7 @@ class GalaxyGeneratorCog(commands.Cog):
             # Check if TO gate connection exists  
             loc_to_gate_exists = self.db.execute_query(
                 """SELECT corridor_id FROM corridors 
-                   WHERE origin_location = ? AND destination_location = ? AND is_active = 1""",
+                   WHERE origin_location = %s AND destination_location = %s AND is_active = true""",
                 (loc_id, gate_id),
                 fetch='one'
             )
@@ -4868,7 +4846,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 
                 self.db.execute_query(
                     """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
-                       VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                       VALUES (%s, %s, %s, %s, %s, 1, 1, 1)""",
                     (f"{gate_name} - {loc_name} Departure (Local Space)", gate_id, loc_id, approach_time, fuel_cost)
                 )
                 print(f"  ✅ Created FROM gate route: {gate_name} → {loc_name}")
@@ -4880,7 +4858,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 
                 self.db.execute_query(
                     """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
-                       VALUES (?, ?, ?, ?, ?, 1, 1, 1)""",
+                       VALUES (%s, %s, %s, %s, %s, 1, 1, 1)""",
                     (f"{loc_name} - {gate_name} Approach (Local Space)", loc_id, gate_id, approach_time, fuel_cost)
                 )
                 print(f"  ✅ Created TO gate route: {loc_name} → {gate_name}")
@@ -4893,7 +4871,7 @@ class GalaxyGeneratorCog(commands.Cog):
         if current_gated_connections < 1:
             # Find nearby active gates to connect to
             gate_info = self.db.execute_query(
-                "SELECT x_coord, y_coord FROM locations WHERE location_id = ?",
+                "SELECT x_coord, y_coord FROM locations WHERE location_id = %s",
                 (gate_id,), fetch='one'
             )
             
@@ -4908,8 +4886,8 @@ class GalaxyGeneratorCog(commands.Cog):
                    FROM locations 
                    WHERE location_type = 'gate' 
                    AND gate_status = 'active' 
-                   AND location_id != ?
-                   ORDER BY ((x_coord - ?) * (x_coord - ?) + (y_coord - ?) * (y_coord - ?))
+                   AND location_id != %s
+                   ORDER BY ((x_coord - %s) * (x_coord - %s) + (y_coord - %s) * (y_coord - %s))
                    LIMIT 3""",
                 (gate_id, gate_x, gate_x, gate_y, gate_y),
                 fetch='all'
@@ -4920,14 +4898,14 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Check if bidirectional corridors already exist
                 forward_exists = self.db.execute_query(
                     """SELECT corridor_id FROM corridors 
-                       WHERE origin_location = ? AND destination_location = ?
+                       WHERE origin_location = %s AND destination_location = %s
                        AND name NOT LIKE '%Local Space%'""",
                     (gate_id, target_id), fetch='one'
                 )
                 
                 backward_exists = self.db.execute_query(
                     """SELECT corridor_id FROM corridors 
-                       WHERE origin_location = ? AND destination_location = ?
+                       WHERE origin_location = %s AND destination_location = %s
                        AND name NOT LIKE '%Local Space%'""",
                     (target_id, gate_id), fetch='one'
                 )
@@ -4941,7 +4919,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 if not forward_exists:
                     self.db.execute_query(
                         """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
-                           VALUES (?, ?, ?, ?, ?, 2, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, 2, 1, 1)""",
                         (f"{gate_name} - {target_name} Corridor", gate_id, target_id, travel_time, fuel_cost)
                     )
                     fixes_made += 1
@@ -4951,7 +4929,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 if not backward_exists:
                     self.db.execute_query(
                         """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated)
-                           VALUES (?, ?, ?, ?, ?, 2, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, 2, 1, 1)""",
                         (f"{target_name} - {gate_name} Corridor", target_id, gate_id, travel_time, fuel_cost)
                     )
                     fixes_made += 1
@@ -4977,7 +4955,7 @@ class GalaxyGeneratorCog(commands.Cog):
         )
         
         for corridor_id, name, origin_name, dest_name in major_to_major_gated:
-            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,))
             fixes['major_to_major_removed'] += 1
             print(f"🗑️ Removed major-to-major gated: {name} ({origin_name} → {dest_name})")
 
@@ -4999,7 +4977,7 @@ class GalaxyGeneratorCog(commands.Cog):
         )
         
         for corridor_id, name, origin_name, dest_name, origin_type, dest_type in gated_major_to_gate:
-            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,))
+            self.db.execute_query("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,))
             fixes['gated_violations_removed'] += 1
             connection_type = f"{origin_type} ↔ {dest_type}"
             print(f"🗑️ Removed gated major-gate connection: {name} - {connection_type} ({origin_name} → {dest_name})")
@@ -5115,7 +5093,7 @@ class GalaxyGeneratorCog(commands.Cog):
             # Get majors and gates in this system
             locations = self.db.execute_query(
                 """SELECT location_id, name, location_type FROM locations
-                   WHERE system_name = ? 
+                   WHERE system_name = %s 
                    AND location_type IN ('colony', 'space_station', 'outpost', 'gate')""",
                 (system_name,),
                 fetch='all'
@@ -5131,8 +5109,8 @@ class GalaxyGeneratorCog(commands.Cog):
                 for gate_id, gate_name in gates:
                     connection_exists = self.db.execute_query(
                         """SELECT COUNT(*) FROM corridors 
-                           WHERE ((origin_location = ? AND destination_location = ?) OR
-                                  (origin_location = ? AND destination_location = ?))
+                           WHERE ((origin_location = %s AND destination_location = %s) OR
+                                  (origin_location = %s AND destination_location = %s))
                            AND (danger_level = 1 OR corridor_type = 'local_space')
                            AND corridor_type != 'ungated'""",
                         (major_id, gate_id, gate_id, major_id),
@@ -5155,8 +5133,8 @@ class GalaxyGeneratorCog(commands.Cog):
     async def shift_corridors(self, interaction: discord.Interaction, 
                              intensity: int = 2, target_region: str = None):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         if intensity < 1 or intensity > 5:
@@ -5284,8 +5262,8 @@ class GalaxyGeneratorCog(commands.Cog):
     @galaxy_group.command(name="force_gate_check", description="Force immediate gate status update and reconnection check")
     async def force_gate_check(self, interaction: discord.Interaction):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer()
@@ -5304,7 +5282,7 @@ class GalaxyGeneratorCog(commands.Cog):
                    WHERE location_type = 'gate' 
                    AND gate_status = 'moving' 
                    AND reconnection_eta IS NOT NULL 
-                   AND reconnection_eta <= datetime('now')""",
+                   AND reconnection_eta <= NOW()""",
                 fetch='all'
             )
             
@@ -5320,8 +5298,8 @@ class GalaxyGeneratorCog(commands.Cog):
                        has_medical = 1, 
                        has_repairs = 1,
                        has_fuel = 1,
-                       population = ?
-                       WHERE location_id = ?""",
+                       population = %s
+                       WHERE location_id = %s""",
                     (random.randint(50, 150), gate_id)
                 )
                 
@@ -5332,7 +5310,7 @@ class GalaxyGeneratorCog(commands.Cog):
                                    (l1.y_coord - l2.y_coord) * (l1.y_coord - l2.y_coord)) as distance
                        FROM locations l1
                        JOIN locations l2 ON l2.location_type IN ('colony', 'space_station', 'outpost')
-                       WHERE l1.location_id = ?
+                       WHERE l1.location_id = %s
                        AND l2.gate_status = 'active'
                        ORDER BY distance LIMIT 1""",
                     (gate_id,),
@@ -5342,9 +5320,9 @@ class GalaxyGeneratorCog(commands.Cog):
                 if nearest_major:
                     # Reactivate any deactivated corridors from when it became moving
                     self.db.execute_query(
-                        """UPDATE corridors SET is_active = 1 
-                           WHERE (origin_location = ? OR destination_location = ?)
-                           AND is_active = 0""",
+                        """UPDATE corridors SET is_active = true 
+                           WHERE (origin_location = %s OR destination_location = %s)
+                           AND is_active = false""",
                         (gate_id, gate_id)
                     )
                 
@@ -5358,7 +5336,7 @@ class GalaxyGeneratorCog(commands.Cog):
                    WHERE location_type = 'gate' 
                    AND gate_status = 'unused' 
                    AND abandoned_since IS NOT NULL 
-                   AND abandoned_since <= datetime('now', '-3 days')""",
+                   AND abandoned_since <= NOW() - INTERVAL '3 days'""",
                 fetch='all'
             )
             
@@ -5374,9 +5352,9 @@ class GalaxyGeneratorCog(commands.Cog):
                     self.db.execute_query(
                         """UPDATE locations SET 
                            gate_status = 'moving',
-                           reconnection_eta = ?,
+                           reconnection_eta = %s,
                            abandoned_since = NULL
-                           WHERE location_id = ?""",
+                           WHERE location_id = %s""",
                         (reconnection_time, gate_id)
                     )
                     
@@ -5443,8 +5421,8 @@ class GalaxyGeneratorCog(commands.Cog):
     ])
     async def debug_gates(self, interaction: discord.Interaction, status: str = "all", page: int = 1):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer()
@@ -5457,13 +5435,13 @@ class GalaxyGeneratorCog(commands.Cog):
                        COUNT(c.corridor_id) as connected_routes
                 FROM locations l
                 LEFT JOIN corridors c ON (c.origin_location = l.location_id OR c.destination_location = l.location_id) 
-                                      AND c.is_active = 1
+                                      AND c.is_active = true
                 WHERE l.location_type = 'gate'
             """
             
             params = []
             if status != "all":
-                base_query += " AND l.gate_status = ?"
+                base_query += " AND l.gate_status = %s"
                 params.append(status)
             
             base_query += """
@@ -5542,7 +5520,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 extra_info = ""
                 if gate_status == 'moving' and reconnection_eta:
                     try:
-                        eta = datetime.fromisoformat(reconnection_eta.replace('Z', '+00:00'))
+                        eta = safe_datetime_parse(reconnection_eta.replace('Z', '+00:00'))
                         time_remaining = eta - datetime.now()
                         if time_remaining.total_seconds() > 0:
                             hours_remaining = int(time_remaining.total_seconds() // 3600)
@@ -5553,7 +5531,7 @@ class GalaxyGeneratorCog(commands.Cog):
                         extra_info = " (ETA: Unknown)"
                 elif gate_status == 'unused' and abandoned_since:
                     try:
-                        abandoned = datetime.fromisoformat(abandoned_since.replace('Z', '+00:00'))
+                        abandoned = safe_datetime_parse(abandoned_since.replace('Z', '+00:00'))
                         time_abandoned = datetime.now() - abandoned
                         days_abandoned = int(time_abandoned.total_seconds() // 86400)
                         extra_info = f" ({days_abandoned}d ago)"
@@ -5612,8 +5590,8 @@ class GalaxyGeneratorCog(commands.Cog):
     async def debug_dormant_corridors(self, interaction: discord.Interaction):
         """Debug dormant corridors that appear on galaxy map but aren't accessible"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("This command requires administrator permissions.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
             
         await interaction.response.defer()
@@ -5621,7 +5599,7 @@ class GalaxyGeneratorCog(commands.Cog):
         try:
             # Get character location for context
             character = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE discord_id = ?",
+                "SELECT current_location FROM characters WHERE discord_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -5634,7 +5612,7 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Get location name
             location_info = self.db.execute_query(
-                "SELECT name, location_type FROM locations WHERE location_id = ?",
+                "SELECT name, location_type FROM locations WHERE location_id = %s",
                 (current_location_id,),
                 fetch='one'
             )
@@ -5647,7 +5625,7 @@ class GalaxyGeneratorCog(commands.Cog):
                           l.name as dest_name, l.location_type as dest_type
                    FROM corridors c
                    JOIN locations l ON c.destination_location = l.location_id
-                   WHERE c.origin_location = ?
+                   WHERE c.origin_location = %s
                    ORDER BY c.is_active DESC, c.name""",
                 (current_location_id,),
                 fetch='all'
@@ -5658,8 +5636,8 @@ class GalaxyGeneratorCog(commands.Cog):
             dormant_corridors = [c for c in all_corridors if c[2] == 0]
             
             # Get overall corridor statistics
-            total_active = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1", fetch='one')[0]
-            total_dormant = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 0", fetch='one')[0]
+            total_active = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = true", fetch='one')[0]
+            total_dormant = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = false", fetch='one')[0]
             
             embed = discord.Embed(
                 title="🔍 Dormant Corridor Diagnostics",
@@ -5710,7 +5688,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Analysis of dormant corridors
                 analysis = []
                 recent_shift_count = sum(1 for c in dormant_corridors if c[3] and 
-                                       (datetime.now() - datetime.fromisoformat(c[3])).days < 7)
+                                       (datetime.now() - safe_datetime_parse(c[3])).days < 7)
                                        
                 analysis.append(f"**Recent Shifts (7 days):** {recent_shift_count}/{len(dormant_corridors)}")
                 
@@ -5744,8 +5722,8 @@ class GalaxyGeneratorCog(commands.Cog):
     async def activate_dormant_corridors(self, interaction: discord.Interaction, intensity: int = 2):
         """Manually activate dormant corridors that should be accessible"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("This command requires administrator permissions.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
             
         if intensity < 1 or intensity > 5:
@@ -5759,7 +5737,7 @@ class GalaxyGeneratorCog(commands.Cog):
             dormant_corridors = self.db.execute_query(
                 """SELECT corridor_id, name, origin_location, destination_location 
                    FROM corridors 
-                   WHERE is_active = 0
+                   WHERE is_active = false
                    AND name NOT LIKE '%Approach%' 
                    AND name NOT LIKE '%Arrival%' 
                    AND name NOT LIKE '%Departure%'
@@ -5787,7 +5765,7 @@ class GalaxyGeneratorCog(commands.Cog):
             for corridor in corridors_to_activate:
                 # Check if activation would improve connectivity
                 self.db.execute_query(
-                    "UPDATE corridors SET is_active = 1 WHERE corridor_id = ?",
+                    "UPDATE corridors SET is_active = true WHERE corridor_id = %s",
                     (corridor[0],)
                 )
                 
@@ -5800,8 +5778,8 @@ class GalaxyGeneratorCog(commands.Cog):
             corridor_ids = [c[0] for c in corridors_to_activate]
             if corridor_ids:
                 self.db.execute_query(
-                    "UPDATE corridors SET last_shift = datetime('now') WHERE corridor_id IN ({})".format(
-                        ','.join('?' * len(corridor_ids))
+                    "UPDATE corridors SET last_shift = NOW() WHERE corridor_id IN ({})".format(
+                        ','.join('%s' * len(corridor_ids))
                     ),
                     corridor_ids
                 )
@@ -5853,7 +5831,7 @@ class GalaxyGeneratorCog(commands.Cog):
             f"""SELECT DISTINCT c.discord_id, l.name as location_name
                 FROM characters c
                 JOIN locations l ON c.current_location = l.location_id
-                WHERE c.current_location IN ({','.join(['?'] * len(affected_locations))})""",
+                WHERE c.current_location IN ({','.join(['%s'] * len(affected_locations))})""",
             list(affected_locations),
             fetch='all'
         )
@@ -5881,14 +5859,14 @@ class GalaxyGeneratorCog(commands.Cog):
         corridor_queries = [
             ("""SELECT corridor_id, name, origin_location, destination_location, travel_time, fuel_cost, danger_level
                 FROM corridors 
-                WHERE is_active = 1 
+                WHERE is_active = true 
                 AND name NOT LIKE '%Approach%' 
                 AND name NOT LIKE '%Arrival%' 
                 AND name NOT LIKE '%Departure%'
                 AND name NOT LIKE '%Local Space%'""", 'active'),
             ("""SELECT corridor_id, name, origin_location, destination_location, travel_time, fuel_cost, danger_level
                 FROM corridors 
-                WHERE is_active = 0
+                WHERE is_active = false
                 AND name NOT LIKE '%Approach%' 
                 AND name NOT LIKE '%Arrival%' 
                 AND name NOT LIKE '%Departure%'
@@ -5944,14 +5922,14 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Deactivate old corridor
                 if not self._would_isolate_location(deactivate_corridor[0], deactivate_corridor[2], deactivate_corridor[3]):
                     batch_operations.append(
-                        ("UPDATE corridors SET is_active = 0, last_shift = datetime('now') WHERE corridor_id = ?", 
+                        ("UPDATE corridors SET is_active = false, last_shift = NOW() WHERE corridor_id = %s", 
                          (deactivate_corridor[0],), 'deactivate', deactivate_corridor)
                     )
                     
                     # Activate replacement corridor if available
                     if activate_corridor:
                         batch_operations.append(
-                            ("UPDATE corridors SET is_active = 1, last_shift = datetime('now') WHERE corridor_id = ?", 
+                            ("UPDATE corridors SET is_active = true, last_shift = NOW() WHERE corridor_id = %s", 
                              (activate_corridor[0],), 'activate', activate_corridor)
                         )
             
@@ -6188,11 +6166,11 @@ class GalaxyGeneratorCog(commands.Cog):
         for _, _, operation_type, corridor in operations:
             # Add both endpoints of deactivated corridors
             origin_loc = self.db.execute_query(
-                "SELECT location_type FROM locations WHERE location_id = ?", 
+                "SELECT location_type FROM locations WHERE location_id = %s", 
                 (corridor[2],), fetch='one'
             )
             dest_loc = self.db.execute_query(
-                "SELECT location_type FROM locations WHERE location_id = ?", 
+                "SELECT location_type FROM locations WHERE location_id = %s", 
                 (corridor[3],), fetch='one'
             )
             
@@ -6440,8 +6418,8 @@ class GalaxyGeneratorCog(commands.Cog):
                     # Update the corridor with new destination, parameters, and correct corridor type
                     self.db.execute_query(
                         """UPDATE corridors 
-                           SET destination_location = ?, travel_time = ?, fuel_cost = ?, danger_level = ?, corridor_type = ?, last_shift = datetime('now')
-                           WHERE corridor_id = ?""",
+                           SET destination_location = %s, travel_time = %s, fuel_cost = %s, danger_level = %s, corridor_type = %s, last_shift = NOW()
+                           WHERE corridor_id = %s""",
                         (op['new_dest_id'], op['new_travel_time'], op['new_fuel_cost'], 
                          op['new_danger_level'], op['new_corridor_type'], op['corridor_id'])
                     )
@@ -6451,7 +6429,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     
                     # Check for bidirectional corridors
                     is_bidirectional = self.db.execute_query(
-                        "SELECT is_bidirectional FROM corridors WHERE corridor_id = ?",
+                        "SELECT is_bidirectional FROM corridors WHERE corridor_id = %s",
                         (op['corridor_id'],), fetch='one'
                     )
                     
@@ -6462,7 +6440,7 @@ class GalaxyGeneratorCog(commands.Cog):
                         # Find the reverse corridor and update it too
                         reverse_corridor = self.db.execute_query(
                             """SELECT corridor_id FROM corridors 
-                               WHERE origin_location = ? AND destination_location = ? AND corridor_id != ?""",
+                               WHERE origin_location = %s AND destination_location = %s AND corridor_id != %s""",
                             (op['old_dest_id'], op['origin_id'], op['corridor_id']), fetch='one'
                         )
                         
@@ -6475,8 +6453,8 @@ class GalaxyGeneratorCog(commands.Cog):
                             
                             self.db.execute_query(
                                 """UPDATE corridors 
-                                   SET origin_location = ?, travel_time = ?, fuel_cost = ?, danger_level = ?, corridor_type = ?, last_shift = datetime('now')
-                                   WHERE corridor_id = ?""",
+                                   SET origin_location = %s, travel_time = %s, fuel_cost = %s, danger_level = %s, corridor_type = %s, last_shift = NOW()
+                                   WHERE corridor_id = %s""",
                                 (op['new_dest_id'], op['new_travel_time'], op['new_fuel_cost'], 
                                  op['new_danger_level'], reverse_corridor_type, reverse_corridor[0])
                             )
@@ -6518,13 +6496,13 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Count active connections for both endpoints
         origin_connections = self.db.execute_query(
-            "SELECT COUNT(*) FROM corridors WHERE (origin_location = ? OR destination_location = ?) AND is_active = 1 AND corridor_id != ?",
+            "SELECT COUNT(*) FROM corridors WHERE (origin_location = %s OR destination_location = %s) AND is_active = true AND corridor_id != %s",
             (origin_id, origin_id, corridor_id),
             fetch='one'
         )[0]
         
         dest_connections = self.db.execute_query(
-            "SELECT COUNT(*) FROM corridors WHERE (origin_location = ? OR destination_location = ?) AND is_active = 1 AND corridor_id != ?",
+            "SELECT COUNT(*) FROM corridors WHERE (origin_location = %s OR destination_location = %s) AND is_active = true AND corridor_id != %s",
             (dest_id, dest_id, corridor_id),
             fetch='one'
         )[0]
@@ -6535,7 +6513,7 @@ class GalaxyGeneratorCog(commands.Cog):
             
         # Special protection for gates - check if either endpoint is a gate
         gate_info = self.db.execute_query(
-            "SELECT location_id, location_type, gate_status FROM locations WHERE location_id IN (?, ?)",
+            "SELECT location_id, location_type, gate_status FROM locations WHERE location_id IN (%s, %s)",
             (origin_id, dest_id),
             fetch='all'
         )
@@ -6547,8 +6525,8 @@ class GalaxyGeneratorCog(commands.Cog):
                     """SELECT COUNT(*) FROM corridors c
                        JOIN locations lo ON c.origin_location = lo.location_id
                        JOIN locations ld ON c.destination_location = ld.location_id
-                       WHERE (c.origin_location = ? OR c.destination_location = ?)
-                       AND c.is_active = 1 AND c.corridor_id != ?
+                       WHERE (c.origin_location = %s OR c.destination_location = %s)
+                       AND c.is_active = true AND c.corridor_id != %s
                        AND c.corridor_type = 'gated'
                        AND lo.system_name != ld.system_name""",
                     (location_id, location_id, corridor_id),
@@ -6652,7 +6630,7 @@ class GalaxyGeneratorCog(commands.Cog):
         for system_name, gate_count in systems_to_isolate:
             # Get all gates in this system
             system_gates = self.db.execute_query(
-                "SELECT location_id FROM locations WHERE system_name = ? AND location_type = 'gate'",
+                "SELECT location_id FROM locations WHERE system_name = %s AND location_type = 'gate'",
                 (system_name,),
                 fetch='all'
             )
@@ -6670,9 +6648,9 @@ class GalaxyGeneratorCog(commands.Cog):
                     """SELECT c.corridor_id FROM corridors c
                        JOIN locations lo ON c.origin_location = lo.location_id
                        JOIN locations ld ON c.destination_location = ld.location_id
-                       WHERE (c.origin_location = ? OR c.destination_location = ?)
+                       WHERE (c.origin_location = %s OR c.destination_location = %s)
                        AND c.corridor_type = 'gated' 
-                       AND c.is_active = 1
+                       AND c.is_active = true
                        AND lo.system_name != ld.system_name""",
                     (gate_id, gate_id),
                     fetch='all'
@@ -6680,7 +6658,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 
                 for (corridor_id,) in external_corridors:
                     self.db.execute_query(
-                        "UPDATE corridors SET is_active = 0, last_shift = datetime('now') WHERE corridor_id = ?",
+                        "UPDATE corridors SET is_active = false, last_shift = NOW() WHERE corridor_id = %s",
                         (corridor_id,)
                     )
                     external_corridors_deactivated += 1
@@ -6699,7 +6677,7 @@ class GalaxyGeneratorCog(commands.Cog):
                FROM corridors c
                JOIN locations lo ON c.origin_location = lo.location_id
                JOIN locations ld ON c.destination_location = ld.location_id
-               WHERE c.corridor_id = ?""",
+               WHERE c.corridor_id = %s""",
             (corridor_id,),
             fetch='one'
         )
@@ -6725,7 +6703,7 @@ class GalaxyGeneratorCog(commands.Cog):
         # Find all active gates and check their gated corridor connections
         isolated_gates = self.db.execute_query(
             """SELECT g.location_id, g.name, g.system_name,
-                      COUNT(CASE WHEN c.corridor_type = 'gated' AND c.is_active = 1 
+                      COUNT(CASE WHEN c.corridor_type = 'gated' AND c.is_active = true 
                                  AND lo.system_name != ld.system_name THEN 1 END) as gated_routes
                FROM locations g
                LEFT JOIN corridors c ON (c.origin_location = g.location_id OR c.destination_location = g.location_id)
@@ -6746,8 +6724,8 @@ class GalaxyGeneratorCog(commands.Cog):
                    FROM corridors c
                    JOIN locations lo ON c.origin_location = lo.location_id
                    JOIN locations ld ON c.destination_location = ld.location_id
-                   WHERE (c.origin_location = ? OR c.destination_location = ?)
-                   AND c.is_active = 0
+                   WHERE (c.origin_location = %s OR c.destination_location = %s)
+                   AND c.is_active = false
                    AND c.corridor_type = 'gated'
                    AND lo.system_name != ld.system_name
                    LIMIT 2""",  # Activate up to 2 gated routes per isolated gate
@@ -6759,7 +6737,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 for corridor_id, corridor_name, origin_id, dest_id in dormant_gated:
                     # Activate the dormant gated corridor
                     self.db.execute_query(
-                        "UPDATE corridors SET is_active = 1, last_shift = datetime('now') WHERE corridor_id = ?",
+                        "UPDATE corridors SET is_active = true, last_shift = NOW() WHERE corridor_id = %s",
                         (corridor_id,)
                     )
                     repair_results['corridors_activated'] += 1
@@ -6819,10 +6797,10 @@ class GalaxyGeneratorCog(commands.Cog):
             # Check if there are any ungated corridors that make this too direct
             direct_ungated = self.db.execute_query(
                 """SELECT c.corridor_id FROM corridors c
-                   WHERE ((c.origin_location = ? AND c.destination_location = ?) OR
-                          (c.origin_location = ? AND c.destination_location = ?))
+                   WHERE ((c.origin_location = %s AND c.destination_location = %s) OR
+                          (c.origin_location = %s AND c.destination_location = %s))
                    AND c.corridor_type = 'ungated' 
-                   AND c.is_active = 1""",
+                   AND c.is_active = true""",
                 (loc_a_id, loc_b_id, loc_b_id, loc_a_id),
                 fetch='all'
             )
@@ -6832,7 +6810,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 for (corridor_id,) in direct_ungated:
                     if random.random() < 0.4:  # 40% chance to break overly direct long routes
                         self.db.execute_query(
-                            "UPDATE corridors SET is_active = 0, last_shift = datetime('now') WHERE corridor_id = ?",
+                            "UPDATE corridors SET is_active = false, last_shift = NOW() WHERE corridor_id = %s",
                             (corridor_id,)
                         )
                         complexity_results['routes_broken'] += 1
@@ -6844,8 +6822,8 @@ class GalaxyGeneratorCog(commands.Cog):
                     """SELECT COUNT(*) FROM corridors c
                        JOIN locations lo ON c.origin_location = lo.location_id
                        JOIN locations ld ON c.destination_location = ld.location_id
-                       WHERE lo.system_name = ? AND ld.system_name = ?
-                       AND c.corridor_type = 'gated' AND c.is_active = 1""",
+                       WHERE lo.system_name = %s AND ld.system_name = %s
+                       AND c.corridor_type = 'gated' AND c.is_active = true""",
                     (loc_a_system, loc_b_system),
                     fetch='one'
                 )[0]
@@ -6856,9 +6834,9 @@ class GalaxyGeneratorCog(commands.Cog):
                         """SELECT c.corridor_id FROM corridors c
                            JOIN locations lo ON c.origin_location = lo.location_id
                            JOIN locations ld ON c.destination_location = ld.location_id
-                           WHERE lo.system_name = ? AND ld.system_name = ?
-                           AND c.corridor_type = 'gated' AND c.is_active = 1
-                           ORDER BY RANDOM() LIMIT ?""",
+                           WHERE lo.system_name = %s AND ld.system_name = %s
+                           AND c.corridor_type = 'gated' AND c.is_active = true
+                           ORDER BY RANDOM() LIMIT %s""",
                         (loc_a_system, loc_b_system, parallel_gated - 2),  # Keep only 2 routes
                         fetch='all'
                     )
@@ -6866,7 +6844,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     for (corridor_id,) in excess_routes:
                         if random.random() < 0.3:  # 30% chance to break excess parallel routes
                             self.db.execute_query(
-                                "UPDATE corridors SET is_active = 0, last_shift = datetime('now') WHERE corridor_id = ?",
+                                "UPDATE corridors SET is_active = false, last_shift = NOW() WHERE corridor_id = %s",
                                 (corridor_id,)
                             )
                             complexity_results['routes_broken'] += 1
@@ -6885,7 +6863,7 @@ class GalaxyGeneratorCog(commands.Cog):
         long_routes = self.db.execute_query(
             """SELECT corridor_id, name, origin_location, destination_location, travel_time
                FROM corridors 
-               WHERE travel_time > 900 AND is_active = 1
+               WHERE travel_time > 900 AND is_active = true
                ORDER BY travel_time DESC""",
             fetch='all'
         )
@@ -6895,11 +6873,11 @@ class GalaxyGeneratorCog(commands.Cog):
         for corridor_id, name, origin_id, dest_id, old_time in long_routes:
             # Get location info
             origin_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = ?",
+                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s",
                 (origin_id,), fetch='one'
             )
             dest_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = ?", 
+                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s", 
                 (dest_id,), fetch='one'
             )
             
@@ -6923,7 +6901,7 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Update the corridor
             self.db.execute_query(
-                "UPDATE corridors SET travel_time = ? WHERE corridor_id = ?",
+                "UPDATE corridors SET travel_time = %s WHERE corridor_id = %s",
                 (new_time, corridor_id)
             )
             
@@ -7008,7 +6986,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     """INSERT INTO corridors 
                        (name, origin_location, destination_location, travel_time,
                         fuel_cost, danger_level, corridor_type, is_active, is_generated)
-                       VALUES (?, ?, ?, ?, ?, 1, 'local_space', 1, 1)""",
+                       VALUES (%s, %s, %s, %s, %s, 1, 'local_space', 1, 1)""",
                     (f"{gate_name} Approach", loc_id, gate_id, approach_time, fuel_cost)
                 )
                 route_fixes['missing_approaches'] += 1
@@ -7023,7 +7001,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     """INSERT INTO corridors 
                        (name, origin_location, destination_location, travel_time,
                         fuel_cost, danger_level, corridor_type, is_active, is_generated)
-                       VALUES (?, ?, ?, ?, ?, 1, 'local_space', 1, 1)""",
+                       VALUES (%s, %s, %s, %s, %s, 1, 'local_space', 1, 1)""",
                     (f"{gate_name} Arrival", gate_id, loc_id, arrival_time, fuel_cost)
                 )
                 route_fixes['missing_arrivals'] += 1
@@ -7042,7 +7020,7 @@ class GalaxyGeneratorCog(commands.Cog):
                AND c.name NOT LIKE '%Arrival%'
                AND c.name NOT LIKE '%Departure%'
                AND c.corridor_type != 'ungated'
-               AND c.is_active = 1""",
+               AND c.is_active = true""",
             fetch='all'
         )
         
@@ -7088,7 +7066,7 @@ class GalaxyGeneratorCog(commands.Cog):
                             """INSERT INTO corridors 
                                (name, origin_location, destination_location, travel_time,
                                 fuel_cost, danger_level, corridor_type, is_active, is_generated)
-                               VALUES (?, ?, ?, ?, ?, 1, 'local_space', 1, 1)""",
+                               VALUES (%s, %s, %s, %s, %s, 1, 'local_space', 1, 1)""",
                             (departure_name, loc_id, dest_gate, dep_time, fuel_cost)
                         )
                         route_fixes['missing_departures'] += 1
@@ -7119,7 +7097,7 @@ class GalaxyGeneratorCog(commands.Cog):
             """SELECT COUNT(*) FROM corridors c
                JOIN locations lo ON c.origin_location = lo.location_id
                JOIN locations ld ON c.destination_location = ld.location_id
-               WHERE c.corridor_type = 'gated' AND c.is_active = 1
+               WHERE c.corridor_type = 'gated' AND c.is_active = true
                AND lo.location_type = 'gate' AND ld.location_type = 'gate'
                AND lo.system_name != ld.system_name""",
             fetch='one'
@@ -7129,7 +7107,7 @@ class GalaxyGeneratorCog(commands.Cog):
             """SELECT COUNT(*) FROM corridors c
                JOIN locations lo ON c.origin_location = lo.location_id
                JOIN locations ld ON c.destination_location = ld.location_id
-               WHERE c.corridor_type = 'gated' AND c.is_active = 0
+               WHERE c.corridor_type = 'gated' AND c.is_active = false
                AND lo.location_type = 'gate' AND ld.location_type = 'gate'
                AND lo.system_name != ld.system_name""",
             fetch='one'
@@ -7163,8 +7141,8 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Check if they already have any corridor between them
                 existing = self.db.execute_query(
                     """SELECT COUNT(*) FROM corridors 
-                       WHERE (origin_location = ? AND destination_location = ?) 
-                          OR (origin_location = ? AND destination_location = ?)""",
+                       WHERE (origin_location = %s AND destination_location = %s) 
+                          OR (origin_location = %s AND destination_location = %s)""",
                     (gate_a_id, gate_b_id, gate_b_id, gate_a_id),
                     fetch='one'
                 )[0]
@@ -7187,7 +7165,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     '''INSERT INTO corridors 
                        (name, origin_location, destination_location, travel_time, fuel_cost, 
                         danger_level, corridor_type, is_active, is_generated)
-                       VALUES (?, ?, ?, ?, ?, ?, 'gated', 0, 1)''',
+                       VALUES (%s, %s, %s, %s, %s, %s, 'gated', 0, 1)''',
                     (f"{corridor_name} (Dormant)", gate_a_id, gate_b_id, travel_time, fuel_cost, danger)
                 )
                 
@@ -7195,7 +7173,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     '''INSERT INTO corridors 
                        (name, origin_location, destination_location, travel_time, fuel_cost, 
                         danger_level, corridor_type, is_active, is_generated)
-                       VALUES (?, ?, ?, ?, ?, ?, 'gated', 0, 1)''',
+                       VALUES (%s, %s, %s, %s, %s, %s, 'gated', 0, 1)''',
                     (f"{corridor_name} Return (Dormant)", gate_b_id, gate_a_id, travel_time, fuel_cost, danger)
                 )
                 
@@ -7224,8 +7202,8 @@ class GalaxyGeneratorCog(commands.Cog):
             # Check if they already have any corridor between them
             existing = self.db.execute_query(
                 """SELECT COUNT(*) FROM corridors 
-                   WHERE (origin_location = ? AND destination_location = ?) 
-                      OR (origin_location = ? AND destination_location = ?)""",
+                   WHERE (origin_location = %s AND destination_location = %s) 
+                      OR (origin_location = %s AND destination_location = %s)""",
                 (loc_a['id'], loc_b['id'], loc_b['id'], loc_a['id']),
                 fetch='one'
             )[0]
@@ -7247,7 +7225,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 '''INSERT INTO corridors 
                    (name, origin_location, destination_location, travel_time, fuel_cost, 
                     danger_level, corridor_type, is_active, is_generated)
-                   VALUES (?, ?, ?, ?, ?, ?, 'ungated', 0, 1)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, 'ungated', 0, 1)''',
                 (f"{corridor_name} (Dormant)", loc_a['id'], loc_b['id'], travel_time, fuel_cost, danger)
             )
             
@@ -7255,7 +7233,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 '''INSERT INTO corridors 
                    (name, origin_location, destination_location, travel_time, fuel_cost, 
                     danger_level, corridor_type, is_active, is_generated)
-                   VALUES (?, ?, ?, ?, ?, ?, 'ungated', 0, 1)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, 'ungated', 0, 1)''',
                 (f"{corridor_name} Return (Dormant)", loc_b['id'], loc_a['id'], travel_time, fuel_cost, danger)
             )
             
@@ -7278,7 +7256,7 @@ class GalaxyGeneratorCog(commands.Cog):
         # Build graph of active corridors
         graph = {loc[0]: set() for loc in locations}
         active_corridors = self.db.execute_query(
-            "SELECT origin_location, destination_location FROM corridors WHERE is_active = 1",
+            "SELECT origin_location, destination_location FROM corridors WHERE is_active = true",
             fetch='all'
         )
         
@@ -7361,8 +7339,8 @@ class GalaxyGeneratorCog(commands.Cog):
     @galaxy_group.command(name="analyze_connectivity", description="Analyze current galaxy connectivity")
     async def analyze_connectivity(self, interaction: discord.Interaction):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer()
@@ -7423,12 +7401,12 @@ class GalaxyGeneratorCog(commands.Cog):
         )
         
         active_corridors = self.db.execute_query(
-            "SELECT origin_location, destination_location FROM corridors WHERE is_active = 1",
+            "SELECT origin_location, destination_location FROM corridors WHERE is_active = true",
             fetch='all'
         )
         
         dormant_corridors = self.db.execute_query(
-            "SELECT COUNT(*) FROM corridors WHERE is_active = 0",
+            "SELECT COUNT(*) FROM corridors WHERE is_active = false",
             fetch='one'
         )[0]
         
@@ -7665,8 +7643,8 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Get basic stats
         total_locations = self.db.execute_query("SELECT COUNT(*) FROM locations", fetch='one')[0]
-        active_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 1", fetch='one')[0]
-        dormant_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = 0", fetch='one')[0]
+        active_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = true", fetch='one')[0]
+        dormant_corridors = self.db.execute_query("SELECT COUNT(*) FROM corridors WHERE is_active = false", fetch='one')[0]
         
         if not total_locations:
             return {"status": "error", "message": "No locations found"}
@@ -7685,8 +7663,8 @@ class GalaxyGeneratorCog(commands.Cog):
             # Count gated corridors for this gate using the new corridor_type column
             gate_corridors = self.db.execute_query("""
                 SELECT COUNT(*) FROM corridors 
-                WHERE (origin_location = ? OR destination_location = ?) 
-                AND is_active = 1
+                WHERE (origin_location = %s OR destination_location = %s) 
+                AND is_active = true
                 AND corridor_type = 'gated'
             """, (gate_id, gate_id), fetch='one')[0]
             
@@ -7749,16 +7727,16 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Remove shortest/least strategic dormant corridors first
                 corridors_to_remove = self.db.execute_query("""
                     SELECT corridor_id FROM corridors 
-                    WHERE is_active = 0 
+                    WHERE is_active = false 
                     ORDER BY travel_time ASC, fuel_cost ASC
-                    LIMIT ?
+                    LIMIT %s
                 """, (dormant_to_remove,), fetch='all')
                 
                 # Batch delete operations to prevent locks
                 if corridors_to_remove:
                     batch_operations = []
                     for (corridor_id,) in corridors_to_remove:
-                        batch_operations.append(("DELETE FROM corridors WHERE corridor_id = ?", (corridor_id,)))
+                        batch_operations.append(("DELETE FROM corridors WHERE corridor_id = %s", (corridor_id,)))
                     
                     # Execute in small batches with yielding
                     batch_size = 10
@@ -7783,10 +7761,10 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Deactivate non-critical corridors (avoid isolation)
                 corridors_to_deactivate = self.db.execute_query("""
                     SELECT corridor_id, origin_location, destination_location FROM corridors 
-                    WHERE is_active = 1 
+                    WHERE is_active = true 
                     AND corridor_type != 'local_space'
                     ORDER BY travel_time DESC, danger_level DESC
-                    LIMIT ?
+                    LIMIT %s
                 """, (active_to_deactivate * 2,), fetch='all')  # Get more candidates
                 
                 # Batch deactivation operations to prevent locks
@@ -7798,7 +7776,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     # Check if deactivation would isolate a location
                     if not self._would_isolate_location(corridor_id, origin_id, dest_id):
                         deactivation_operations.append((
-                            "UPDATE corridors SET is_active = 0, last_shift = datetime('now') WHERE corridor_id = ?",
+                            "UPDATE corridors SET is_active = false, last_shift = NOW() WHERE corridor_id = %s",
                             (corridor_id,)
                         ))
                         cleanup_count += 1
@@ -7825,11 +7803,11 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Get location types and system info for both endpoints
         origin_data = self.db.execute_query(
-            "SELECT location_type, system_name FROM locations WHERE location_id = ?", 
+            "SELECT location_type, system_name FROM locations WHERE location_id = %s", 
             (origin_id,), fetch='one'
         )
         dest_data = self.db.execute_query(
-            "SELECT location_type, system_name FROM locations WHERE location_id = ?", 
+            "SELECT location_type, system_name FROM locations WHERE location_id = %s", 
             (dest_id,), fetch='one'
         )
         
@@ -7888,7 +7866,7 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Update the corridor_type in the database if it's incorrect
             self.db.execute_query(
-                "UPDATE corridors SET corridor_type = ? WHERE corridor_id = ?",
+                "UPDATE corridors SET corridor_type = %s WHERE corridor_id = %s",
                 (correct_type, corridor_id)
             )
     async def _generate_sub_locations_for_all_locations(self, conn, all_locations: List[Dict]) -> int:
@@ -7911,7 +7889,7 @@ class GalaxyGeneratorCog(commands.Cog):
         if sub_locations_to_insert:
             query = '''INSERT INTO sub_locations 
                        (parent_location_id, name, sub_type, description) 
-                       VALUES (?, ?, ?, ?)'''
+                       VALUES (%s, %s, %s, %s)'''
             self.db.executemany_in_transaction(conn, query, sub_locations_to_insert)
             print(f"🏢 Generated {len(sub_locations_to_insert)} sub-locations in total.")
             
@@ -8249,7 +8227,7 @@ class GalaxyGeneratorCog(commands.Cog):
         try:
             query = '''INSERT INTO corridors (name, origin_location, destination_location, 
                        travel_time, fuel_cost, danger_level, is_active, is_generated) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)'''
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)'''
             self.db.executemany_in_transaction(micro_conn, query, batch_data)
             self.db.commit_transaction(micro_conn)
         except Exception as e:
@@ -8318,7 +8296,7 @@ class GalaxyGeneratorCog(commands.Cog):
         self.db.execute_query(
             '''INSERT INTO corridors 
                (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, corridor_type, is_generated)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1)''',
+               VALUES (%s, %s, %s, %s, %s, %s, %s, 1)''',
             (name, origin_id, dest_id, travel_time, fuel_cost, danger_level, corridor_type)
         )
         
@@ -8366,7 +8344,7 @@ class GalaxyGeneratorCog(commands.Cog):
                    (name, location_type, description, wealth_level, population,
                     x_coord, y_coord, system_name, established_date, has_jobs, has_shops, has_medical, 
                     has_repairs, has_fuel, has_upgrades, has_black_market, is_generated, is_derelict, has_shipyard) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'''
         params = (
             location['name'], location['type'], location['description'], 
             location['wealth_level'], location['population'], location['x_coord'], 
@@ -8522,7 +8500,7 @@ class GalaxyGeneratorCog(commands.Cog):
                    FROM corridors c
                    JOIN locations ol ON c.origin_location = ol.location_id
                    JOIN locations dl ON c.destination_location = dl.location_id
-                   WHERE c.is_active = 1''',
+                   WHERE c.is_active = true''',
                 fetch='all'
             )
         
@@ -8601,13 +8579,13 @@ class GalaxyGeneratorCog(commands.Cog):
         player_coords = None
         if highlight_player:
             result = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (highlight_player.id,), fetch='one'
             )
             if result:
                 player_location = result[0]
                 loc_data = self.db.execute_query(
-                    "SELECT x_coord, y_coord FROM locations WHERE location_id = ?",
+                    "SELECT x_coord, y_coord FROM locations WHERE location_id = %s",
                     (player_location,), fetch='one'
                 )
                 if loc_data:
@@ -8761,11 +8739,11 @@ class GalaxyGeneratorCog(commands.Cog):
                 else:
                     # Check if it's between gates (main gated corridor)
                     origin_is_gate = self.db.execute_query(
-                        "SELECT location_type FROM locations WHERE location_id = ?",
+                        "SELECT location_type FROM locations WHERE location_id = %s",
                         (origin_id,), fetch='one'
                     )
                     dest_is_gate = self.db.execute_query(
-                        "SELECT location_type FROM locations WHERE location_id = ?",
+                        "SELECT location_type FROM locations WHERE location_id = %s",
                         (dest_id,), fetch='one'
                     )
                     
@@ -8961,7 +8939,7 @@ class GalaxyGeneratorCog(commands.Cog):
             gate_connectivity = {}
             for gate in gates:
                 connections = self.db.execute_query(
-                    "SELECT COUNT(*) FROM corridors WHERE origin_location = ? OR destination_location = ?",
+                    "SELECT COUNT(*) FROM corridors WHERE origin_location = %s OR destination_location = %s",
                     (gate[0], gate[0]), fetch='one'
                 )[0]
                 gate_connectivity[gate[0]] = connections
@@ -9227,7 +9205,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 
                 # Black market indicator (if applicable)
                 has_black_market = self.db.execute_query(
-                    "SELECT has_black_market FROM locations WHERE location_id = ?",
+                    "SELECT has_black_market FROM locations WHERE location_id = %s",
                     (loc_id,), fetch='one'
                 )
                 if has_black_market and has_black_market[0]:
@@ -9285,7 +9263,7 @@ class GalaxyGeneratorCog(commands.Cog):
         elif map_style == 'connections':
             # Color and size based on connectivity
             connections = self.db.execute_query(
-                "SELECT COUNT(*) FROM corridors WHERE origin_location = ? OR destination_location = ?",
+                "SELECT COUNT(*) FROM corridors WHERE origin_location = %s OR destination_location = %s",
                 (loc_id, loc_id), fetch='one'
             )[0]
             
@@ -9296,7 +9274,7 @@ class GalaxyGeneratorCog(commands.Cog):
         elif map_style == 'danger':
             # Color based on nearby corridor danger
             avg_danger = self.db.execute_query(
-                "SELECT AVG(danger_level) FROM corridors WHERE origin_location = ?",
+                "SELECT AVG(danger_level) FROM corridors WHERE origin_location = %s",
                 (loc_id,), fetch='one'
             )[0] or 1
             
@@ -9329,7 +9307,7 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Determine corridor type
             corridor_data = self.db.execute_query(
-                "SELECT name, corridor_type FROM corridors WHERE origin_location = ? AND destination_location = ?",
+                "SELECT name, corridor_type FROM corridors WHERE origin_location = %s AND destination_location = %s",
                 (origin_id, dest_id), fetch='one'
             )
             if corridor_data:
@@ -9470,7 +9448,7 @@ class GalaxyGeneratorCog(commands.Cog):
         """Check if either endpoint of corridor is a gate"""
         gate_check = self.db.execute_query(
             '''SELECT COUNT(*) FROM locations 
-               WHERE (location_id = ? OR location_id = ?) AND location_type = 'gate' ''',
+               WHERE (location_id = %s OR location_id = %s) AND location_type = 'gate' ''',
             (origin_id, dest_id),
             fetch='one'
         )
@@ -9499,7 +9477,7 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Get connections for context
             connections = self.db.execute_query(
-                "SELECT COUNT(*) FROM corridors WHERE origin_location = ? OR destination_location = ?",
+                "SELECT COUNT(*) FROM corridors WHERE origin_location = %s OR destination_location = %s",
                 (loc_id, loc_id), fetch='one'
             )[0]
             
@@ -9559,7 +9537,7 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Connectivity bonus
         connections = self.db.execute_query(
-            "SELECT COUNT(*) FROM corridors WHERE origin_location = ? OR destination_location = ?",
+            "SELECT COUNT(*) FROM corridors WHERE origin_location = %s OR destination_location = %s",
             (loc_id, loc_id), fetch='one'
         )[0]
         priority += connections * 0.8
@@ -10047,7 +10025,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 if repeaters_to_insert:
                     query = '''INSERT INTO repeaters 
                                (location_id, repeater_type, receive_range, transmit_range, is_active)
-                               VALUES (?, 'built_in', ?, ?, 1)'''
+                               VALUES (%s, 'built_in', %s, %s, 1)'''
                     self.db.executemany_in_transaction(conn, query, repeaters_to_insert)
                     total_created += len(repeaters_to_insert)
                     print(f"📡 Installed {len(repeaters_to_insert)} repeaters (batch {i//batch_size + 1}), total: {total_created}")
@@ -10063,7 +10041,7 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Check if galactic updates channel is already configured
         updates_channel_id = self.db.execute_query(
-            "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = ?",
+            "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = %s",
             (guild.id,),
             fetch='one'
         )
@@ -10080,19 +10058,19 @@ class GalaxyGeneratorCog(commands.Cog):
                     news_channel = channel
                     # Update database configuration
                     existing_config = self.db.execute_query(
-                        "SELECT guild_id FROM server_config WHERE guild_id = ?",
+                        "SELECT guild_id FROM server_config WHERE guild_id = %s",
                         (guild.id,),
                         fetch='one'
                     )
                     
                     if existing_config:
                         self.db.execute_query(
-                            "UPDATE server_config SET galactic_updates_channel_id = ? WHERE guild_id = ?",
+                            "UPDATE server_config SET galactic_updates_channel_id = %s WHERE guild_id = %s",
                             (news_channel.id, guild.id)
                         )
                     else:
                         self.db.execute_query(
-                            "INSERT INTO server_config (guild_id, galactic_updates_channel_id) VALUES (?, ?)",
+                            "INSERT INTO server_config (guild_id, galactic_updates_channel_id) VALUES (%s, %s)",
                             (guild.id, news_channel.id)
                         )
                     
@@ -10299,7 +10277,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 
                 query = '''INSERT INTO location_logs 
                            (location_id, author_id, author_name, message, posted_at, is_generated)
-                           VALUES (?, ?, ?, ?, ?, ?)'''
+                           VALUES (%s, %s, %s, %s, %s, %s)'''
                 self.db.executemany_in_transaction(micro_conn, query, batch_data)
                 self.db.commit_transaction(micro_conn)
                 
@@ -10358,7 +10336,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 "Long-range probe returned with stellar data.",
                 "Cultural exchange program approved.",
                 "Resource extraction quotas met ahead of deadline.",
-                "How much further to Earth?",
+                "How much further to Earth%s",
                 "Another quiet day. Good for catching up on paperwork."
             ],
             'space_station': [
@@ -10381,7 +10359,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 "Observatory windows cleaned, visibility excellent.",
                 "Module atmospheric pressure stable.",
                 "Power conduits showing minor thermal variations.",
-                "How much further to Earth?"
+                "How much further to Earth%s"
             ],
             'outpost': [
                 "Long-range communications restored after failure.",
@@ -10425,7 +10403,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 "Energy field fluctuations minimal.",
                 "Gate synchronization nominal.",
                 "Passenger manifest verification complete.",
-                "How much further to Earth?"
+                "How much further to Earth%s"
             ]
         }
         
@@ -10498,24 +10476,12 @@ class GalaxyGeneratorCog(commands.Cog):
     async def _ensure_database_ready_for_history(self):
         """Ensure database is ready for history generation after potential resets"""
         try:
-            # Force WAL checkpoint to ensure any previous operations are committed
-            self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
-            print("✅ WAL checkpoint completed before history generation")
-            
-            # Brief pause to allow checkpoint to complete
+            # Brief pause before history generation
             await asyncio.sleep(1.0)
             
             # Test database connectivity with a simple query
             self.db.execute_query("SELECT COUNT(*) FROM locations WHERE is_generated = 1", fetch='one')
             print("✅ Database connectivity verified for history generation")
-            
-            # Verify foreign keys are enabled
-            fk_check = self.db.execute_query("PRAGMA foreign_keys", fetch='one')
-            if fk_check and fk_check[0] == 1:
-                print("✅ Foreign key constraints verified as enabled")
-            else:
-                print("⚠️ Foreign key constraints not enabled - enabling now")
-                self.db.execute_query("PRAGMA foreign_keys=ON")
             
         except Exception as e:
             print(f"⚠️ Database readiness check failed: {e}")

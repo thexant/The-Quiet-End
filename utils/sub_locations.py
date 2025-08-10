@@ -393,7 +393,7 @@ class SubLocationManager:
         stored_subs = self.db.execute_query(
             '''SELECT sub_type, name, description, thread_id 
                FROM sub_locations 
-               WHERE parent_location_id = ? AND is_active = 1''',
+               WHERE parent_location_id = %s AND is_active = true''',
             (parent_location_id,),
             fetch='all'
         )
@@ -422,7 +422,7 @@ class SubLocationManager:
         
         # Check if sub-location already exists
         existing = self.db.execute_query(
-            "SELECT thread_id FROM sub_locations WHERE parent_location_id = ? AND sub_type = ? AND is_active = 1",
+            "SELECT thread_id FROM sub_locations WHERE parent_location_id = %s AND sub_type = %s AND is_active = true",
             (location_id, sub_type),
             fetch='one'
         )
@@ -438,7 +438,7 @@ class SubLocationManager:
             else:
                 # Thread was deleted, clear the record
                 self.db.execute_query(
-                    "UPDATE sub_locations SET thread_id = NULL WHERE parent_location_id = ? AND sub_type = ?",
+                    "UPDATE sub_locations SET thread_id = NULL WHERE parent_location_id = %s AND sub_type = %s",
                     (location_id, sub_type)
                 )
         
@@ -454,8 +454,8 @@ class SubLocationManager:
             
             # Update database with new thread ID
             self.db.execute_query(
-                '''UPDATE sub_locations SET thread_id = ?
-                   WHERE parent_location_id = ? AND sub_type = ?''',
+                '''UPDATE sub_locations SET thread_id = %s
+                   WHERE parent_location_id = %s AND sub_type = %s''',
                 (thread.id, location_id, sub_type)
             )
             
@@ -482,7 +482,7 @@ class SubLocationManager:
     async def _send_sub_location_welcome(self, thread: discord.Thread, sub_data: Dict, location_id: int):
         """Send welcome message to sub-location thread with interactive services"""
         location_info = self.db.execute_query(
-            "SELECT name, location_type, wealth_level FROM locations WHERE location_id = ?",
+            "SELECT name, location_type, wealth_level FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -619,7 +619,7 @@ class SubLocationManager:
         if not sub_type:
             # Get sub_type from database
             stored_sub_type = self.db.execute_query(
-                "SELECT sub_type FROM sub_locations WHERE sub_location_id = ?",
+                "SELECT sub_type FROM sub_locations WHERE sub_location_id = %s",
                 (sub_data['sub_location_id'],),
                 fetch='one'
             )
@@ -674,14 +674,14 @@ class SubLocationManager:
         inactive_threads = self.db.execute_query(
             '''SELECT sl.sub_location_id, sl.thread_id, sl.parent_location_id, sl.sub_type
                FROM sub_locations sl
-               WHERE sl.is_active = 1 AND sl.last_active < ?''',
+               WHERE sl.is_active = true AND sl.last_active < %s''',
             (cutoff_time,),
             fetch='all'
         )
         
         for sub_id, thread_id, location_id, sub_type in inactive_threads:
             self.db.execute_query(
-                "UPDATE sub_locations SET is_active = 0 WHERE sub_location_id = ?",
+                "UPDATE sub_locations SET is_active = 0 WHERE sub_location_id = %s",
                 (sub_id,)
             )
             
@@ -697,7 +697,7 @@ class SubLocationManager:
         """Generate and store persistent sub-locations for a location during galaxy generation"""
         # Clear any existing sub-locations
         self.db.execute_query(
-            "DELETE FROM sub_locations WHERE parent_location_id = ?",
+            "DELETE FROM sub_locations WHERE parent_location_id = %s",
             (parent_location_id,)
         )
         
@@ -722,7 +722,7 @@ class SubLocationManager:
                 self.db.execute_query(
                     '''INSERT INTO sub_locations 
                        (parent_location_id, name, sub_type, description, is_active)
-                       VALUES (?, ?, ?, ?, 1)''',
+                       VALUES (%s, %s, %s, %s, 1)''',
                     (parent_location_id, props['name'], sub_type, props['description'])
                 )
                 created_count += 1
@@ -769,7 +769,7 @@ class SubLocationManager:
             self.db.execute_query(
                 '''INSERT INTO sub_locations 
                    (parent_location_id, name, sub_type, description, is_active)
-                   VALUES (?, ?, ?, ?, 1)''',
+                   VALUES (%s, %s, %s, %s, 1)''',
                 (parent_location_id, props['name'], sub_type, props['description'])
             )
             created_count += 1
@@ -1971,7 +1971,7 @@ class SubLocationServiceView(discord.ui.View):
         """Handle service interactions"""
         # Check if user has a character
         char_info = self.db.execute_query(
-            "SELECT name, hp, max_hp, money, current_location, appearance FROM characters WHERE user_id = ?",
+            "SELECT name, hp, max_hp, money, current_location, appearance FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2012,7 +2012,7 @@ class SubLocationServiceView(discord.ui.View):
 
         elif service_type == "change_bio":
             bio = self.db.execute_query(
-                "SELECT biography FROM character_identity WHERE user_id = ?",
+                "SELECT biography FROM character_identity WHERE user_id = %s",
                 (interaction.user.id,), fetch='one'
             )
             modal = ChangeBioModal(
@@ -2027,7 +2027,7 @@ class SubLocationServiceView(discord.ui.View):
 
         elif service_type == "change_dob":
             dob = self.db.execute_query(
-                "SELECT birth_month, birth_day FROM character_identity WHERE user_id = ?",
+                "SELECT birth_month, birth_day FROM character_identity WHERE user_id = %s",
                 (interaction.user.id,), fetch='one'
             )
             current_dob = f"{dob[0]:02d}/{dob[1]:02d}" if dob else ""
@@ -2043,7 +2043,7 @@ class SubLocationServiceView(discord.ui.View):
             
         elif service_type == "take_id_photo":
             current_image = self.db.execute_query(
-                "SELECT image_url FROM characters WHERE user_id = ?",
+                "SELECT image_url FROM characters WHERE user_id = %s",
                 (interaction.user.id,), fetch='one'
             )
             current_url = current_image[0] if current_image else ""
@@ -2195,7 +2195,7 @@ class SubLocationServiceView(discord.ui.View):
         elif service_type == "check_schedules":
             await self._handle_check_schedules(interaction, char_name)
         elif service_type == "travel_info":
-            await self._handle_traveler_info(interaction, char_name)
+            await self._handle_travel_info(interaction, char_name)
         elif service_type == "security_consult":
             await self._handle_security_consult(interaction, char_name)
         elif service_type == "browse_archives":
@@ -2492,7 +2492,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Apply healing
         self.db.execute_query(
-            "UPDATE characters SET hp = ?, money = ? WHERE user_id = ?",
+            "UPDATE characters SET hp = %s, money = %s WHERE user_id = %s",
             (max_hp, money - total_cost, interaction.user.id)
         )
         
@@ -2526,7 +2526,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -2571,7 +2571,7 @@ class SubLocationServiceView(discord.ui.View):
             
             if bonus > 0:
                 self.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (bonus, interaction.user.id)
                 )
             
@@ -2623,7 +2623,7 @@ class SubLocationServiceView(discord.ui.View):
             
             if cost_change < 0 and money >= abs(cost_change):
                 self.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (cost_change, interaction.user.id)
                 )
                 cost_text = f"Cost: {abs(cost_change)} credits"
@@ -2663,7 +2663,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -2683,7 +2683,7 @@ class SubLocationServiceView(discord.ui.View):
         if random.random() < 0.25:
             bonus = random.randint(5, 12)
             self.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (bonus, interaction.user.id)
             )
         
@@ -2719,7 +2719,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -2840,7 +2840,7 @@ class SubLocationServiceView(discord.ui.View):
         import random
         
         char_info = self.db.execute_query(
-            "SELECT hp, max_hp FROM characters WHERE user_id = ?",
+            "SELECT hp, max_hp FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2873,7 +2873,7 @@ class SubLocationServiceView(discord.ui.View):
             if money >= basic_cost:
                 healing = 20
                 self.db.execute_query(
-                    "UPDATE characters SET hp = hp + ?, money = money - ? WHERE user_id = ?",
+                    "UPDATE characters SET hp = hp + %s, money = money - %s WHERE user_id = %s",
                     (healing, basic_cost, interaction.user.id)
                 )
                 embed = discord.Embed(
@@ -2898,7 +2898,7 @@ class SubLocationServiceView(discord.ui.View):
         # Full emergency treatment
         healing = max_hp - hp  # Full heal
         self.db.execute_query(
-            "UPDATE characters SET hp = ?, money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET hp = %s, money = money - %s WHERE user_id = %s",
             (max_hp, total_cost, interaction.user.id)
         )
         
@@ -2952,7 +2952,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Check if user has a ship
         ship_exists = self.db.execute_query(
-            "SELECT COUNT(*) FROM ships WHERE owner_id = ?",
+            "SELECT COUNT(*) FROM ships WHERE owner_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2971,13 +2971,13 @@ class SubLocationServiceView(discord.ui.View):
         metadata = ItemConfig.create_item_metadata(mod_name)
         self.db.execute_query(
             '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s, %s, %s)''',
             (interaction.user.id, mod_name, "ship_modification", 1, description, cost, metadata)
         )
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -3011,21 +3011,21 @@ class SubLocationServiceView(discord.ui.View):
         # Create navigation puzzle
         navigation_puzzles = [
             {
-                "scenario": "You spot an efficient trade route avoiding pirate zones. Which path would you choose?",
+                "scenario": "You spot an efficient trade route avoiding pirate zones. Which path would you choose%s",
                 "options": ["Direct path through asteroid field", "Longer route via safe systems", "Medium route with escort convoy"],
                 "correct": 1,
                 "success_msg": "Smart choice! You identified the optimal safe route.",
                 "fail_msg": "That route has higher risks. You still gain some insight though."
             },
             {
-                "scenario": "A nebula is interfering with navigation. How do you plot around it?",
+                "scenario": "A nebula is interfering with navigation. How do you plot around it%s",
                 "options": ["Use stellar beacons for triangulation", "Plot course through thinnest section", "Wait for nebula to dissipate"],
                 "correct": 0,
                 "success_msg": "Excellent navigation! The beacon method is most reliable.",
                 "fail_msg": "That could work but isn't the most efficient approach."
             },
             {
-                "scenario": "Multiple jump gates are available. Which offers the best fuel efficiency?",
+                "scenario": "Multiple jump gates are available. Which offers the best fuel efficiency%s",
                 "options": ["Newest gate with unknown traffic", "Busy gate with predictable routes", "Old gate with maintenance issues"],
                 "correct": 1,
                 "success_msg": "Perfect! The established route offers predictable fuel costs.",
@@ -3055,7 +3055,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Get character navigation skill
         char_info = self.bot.db.execute_query(
-            "SELECT navigation, experience FROM characters WHERE user_id = ?",
+            "SELECT navigation, experience FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3095,7 +3095,7 @@ class SubLocationServiceView(discord.ui.View):
             # Successful navigation analysis - award XP
             xp_reward = random.randint(15, 25)
             self.bot.db.execute_query(
-                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                 (xp_reward, interaction.user.id)
             )
             
@@ -3132,7 +3132,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Get character money for premium options
         char_info = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3186,14 +3186,14 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
         # Award small XP for the experience
         xp_reward = random.randint(8, 15)
         self.bot.db.execute_query(
-            "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+            "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
             (xp_reward, interaction.user.id)
         )
         
@@ -3238,7 +3238,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Get character engineering skill
         char_info = self.bot.db.execute_query(
-            "SELECT engineering FROM characters WHERE user_id = ?",
+            "SELECT engineering FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3259,7 +3259,7 @@ class SubLocationServiceView(discord.ui.View):
             xp_reward = random.randint(12, 20)
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ?, experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s, experience = experience + %s WHERE user_id = %s",
                 (credit_reward, xp_reward, interaction.user.id)
             )
             
@@ -3288,7 +3288,7 @@ class SubLocationServiceView(discord.ui.View):
             xp_reward = random.randint(5, 10)
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ?, experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s, experience = experience + %s WHERE user_id = %s",
                 (consolation, xp_reward, interaction.user.id)
             )
             
@@ -3382,13 +3382,13 @@ class SubLocationServiceView(discord.ui.View):
         metadata = ItemConfig.create_item_metadata(item_name)
         self.db.execute_query(
             '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s, %s, %s)''',
             (interaction.user.id, item_name, item_type, 1, description, cost, metadata)
         )
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -3433,7 +3433,7 @@ class SubLocationServiceView(discord.ui.View):
             metadata = ItemConfig.create_item_metadata(item_name)
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, item_name, item_type, quantity, description, value, metadata)
             )
             
@@ -3465,7 +3465,7 @@ class SubLocationServiceView(discord.ui.View):
         import random
         
         ship_info = self.db.execute_query(
-            "SELECT hull_integrity, max_hull FROM ships WHERE owner_id = ?",
+            "SELECT hull_integrity, max_hull FROM ships WHERE owner_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3515,11 +3515,11 @@ class SubLocationServiceView(discord.ui.View):
         
         # Apply emergency repairs
         self.db.execute_query(
-            "UPDATE ships SET hull_integrity = ? WHERE owner_id = ?",
+            "UPDATE ships SET hull_integrity = %s WHERE owner_id = %s",
             (max_hull, interaction.user.id)
         )
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (total_cost, interaction.user.id)
         )
         
@@ -3540,7 +3540,7 @@ class SubLocationServiceView(discord.ui.View):
         import random
         
         ship_info = self.db.execute_query(
-            "SELECT hull_integrity, max_hull, current_fuel, fuel_capacity FROM ships WHERE owner_id = ?",
+            "SELECT hull_integrity, max_hull, current_fuel, fuel_capacity FROM ships WHERE owner_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3600,7 +3600,7 @@ class SubLocationServiceView(discord.ui.View):
             """SELECT l.location_id, l.name, l.location_type, l.wealth_level 
                FROM characters c 
                JOIN locations l ON c.current_location = l.location_id 
-               WHERE c.user_id = ?""",
+               WHERE c.user_id = %s""",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3634,7 +3634,7 @@ class SubLocationServiceView(discord.ui.View):
         event = self.db.execute_query(
             '''SELECT event_title, event_description, historical_figure, event_date, event_type
                FROM galactic_history 
-               WHERE location_id = ?
+               WHERE location_id = %s
                ORDER BY RANDOM() LIMIT 1''',
             (location_id,),
             fetch='one'
@@ -3771,7 +3771,7 @@ class SubLocationServiceView(discord.ui.View):
             # Could add rewards here - credits, items, reputation, etc.
             reward = random.randint(50, 200)
             self.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, interaction.user.id)
             )
             
@@ -3814,7 +3814,7 @@ class SubLocationServiceView(discord.ui.View):
             '''SELECT event_title, event_description, event_date, event_type, l.name as location_name
                FROM galactic_history gh
                LEFT JOIN locations l ON gh.location_id = l.location_id
-               WHERE historical_figure = ?
+               WHERE historical_figure = %s
                ORDER BY event_date ASC
                LIMIT 3''',
             (figure_name,),
@@ -3872,7 +3872,7 @@ class SubLocationServiceView(discord.ui.View):
             """SELECT l.location_id, l.name 
                FROM characters c 
                JOIN locations l ON c.current_location = l.location_id 
-               WHERE c.user_id = ?""",
+               WHERE c.user_id = %s""",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3886,9 +3886,9 @@ class SubLocationServiceView(discord.ui.View):
         # Get multiple historical events (3-5)
         events = self.db.execute_query(
             '''SELECT event_title, event_date, event_type, 
-                      CASE WHEN location_id = ? THEN 'Local' ELSE 'Galactic' END as scope
+                      CASE WHEN location_id = %s THEN 'Local' ELSE 'Galactic' END as scope
                FROM galactic_history 
-               WHERE location_id = ? OR location_id IS NULL
+               WHERE location_id = %s OR location_id IS NULL
                ORDER BY RANDOM() LIMIT 5''',
             (location_id, location_id),
             fetch='all'
@@ -3946,13 +3946,13 @@ class SubLocationServiceView(discord.ui.View):
             metadata = ItemConfig.create_item_metadata(item_name)
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, item_name, "medical", 1, description, cost, metadata)
             )
             
             # Deduct money
             self.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (cost, interaction.user.id)
             )
             
@@ -4002,7 +4002,7 @@ class SubLocationServiceView(discord.ui.View):
     async def _handle_repair_ship(self, interaction: discord.Interaction, char_name: str, money: int):
         """Handle ship repair service"""
         ship_info = self.db.execute_query(
-            "SELECT hull_integrity, max_hull FROM ships WHERE owner_id = ?",
+            "SELECT hull_integrity, max_hull FROM ships WHERE owner_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -4049,11 +4049,11 @@ class SubLocationServiceView(discord.ui.View):
         
         # Apply repairs
         self.db.execute_query(
-            "UPDATE ships SET hull_integrity = ? WHERE owner_id = ?",
+            "UPDATE ships SET hull_integrity = %s WHERE owner_id = %s",
             (max_hull, interaction.user.id)
         )
         self.db.execute_query(
-            "UPDATE characters SET money = ? WHERE user_id = ?",
+            "UPDATE characters SET money = %s WHERE user_id = %s",
             (money - total_cost, interaction.user.id)
         )
         
@@ -4071,7 +4071,7 @@ class SubLocationServiceView(discord.ui.View):
     async def _handle_refuel_ship(self, interaction: discord.Interaction, char_name: str, money: int):
         """Handle ship refueling service"""
         ship_info = self.db.execute_query(
-            "SELECT fuel_capacity, current_fuel FROM ships WHERE owner_id = ?",
+            "SELECT fuel_capacity, current_fuel FROM ships WHERE owner_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -4118,11 +4118,11 @@ class SubLocationServiceView(discord.ui.View):
         
         # Apply refueling
         self.db.execute_query(
-            "UPDATE ships SET current_fuel = ? WHERE owner_id = ?",
+            "UPDATE ships SET current_fuel = %s WHERE owner_id = %s",
             (fuel_capacity, interaction.user.id)
         )
         self.db.execute_query(
-            "UPDATE characters SET money = ? WHERE user_id = ?",
+            "UPDATE characters SET money = %s WHERE user_id = %s",
             (money - total_cost, interaction.user.id)
         )
         
@@ -4140,7 +4140,7 @@ class SubLocationServiceView(discord.ui.View):
     async def _handle_ship_diagnostics(self, interaction: discord.Interaction, char_name: str):
         """Handle ship diagnostics"""
         ship_info = self.db.execute_query(
-            "SELECT name, ship_type, fuel_capacity, current_fuel, hull_integrity, max_hull FROM ships WHERE owner_id = ?",
+            "SELECT name, ship_type, fuel_capacity, current_fuel, hull_integrity, max_hull FROM ships WHERE owner_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -4197,7 +4197,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = ? WHERE user_id = ?",
+            "UPDATE characters SET money = %s WHERE user_id = %s",
             (money - cost, interaction.user.id)
         )
         
@@ -4265,14 +4265,14 @@ class SubLocationServiceView(discord.ui.View):
         if outcome < 0.4:  # 40% chance to win
             winnings = bet * 2
             self.db.execute_query(
-                "UPDATE characters SET money = ? WHERE user_id = ?",
+                "UPDATE characters SET money = %s WHERE user_id = %s",
                 (money + winnings - bet, interaction.user.id)
             )
             result = f"You win {winnings} credits!"
             color = 0x00ff00
         else:  # 60% chance to lose
             self.db.execute_query(
-                "UPDATE characters SET money = ? WHERE user_id = ?",
+                "UPDATE characters SET money = %s WHERE user_id = %s",
                 (money - bet, interaction.user.id)
             )
             result = f"You lose {bet} credits."
@@ -4507,7 +4507,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = ? WHERE user_id = ?",
+            "UPDATE characters SET money = %s WHERE user_id = %s",
             (money - cost, interaction.user.id)
         )
         
@@ -4581,7 +4581,7 @@ class SubLocationServiceView(discord.ui.View):
             
             # Get current HP
             char_info = self.db.execute_query(
-                "SELECT hp, max_hp, money FROM characters WHERE user_id = ?",
+                "SELECT hp, max_hp, money FROM characters WHERE user_id = %s",
                 (select_interaction.user.id,),
                 fetch='one'
             )
@@ -4606,7 +4606,7 @@ class SubLocationServiceView(discord.ui.View):
             
             # Update money and HP
             self.db.execute_query(
-                "UPDATE characters SET money = money - ?, hp = hp + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s, hp = hp + %s WHERE user_id = %s",
                 (cost, actual_restore, select_interaction.user.id)
             )
             
@@ -4673,7 +4673,7 @@ class SubLocationServiceView(discord.ui.View):
             
             # Check current money
             current_money = self.db.execute_query(
-                "SELECT money FROM characters WHERE user_id = ?",
+                "SELECT money FROM characters WHERE user_id = %s",
                 (select_interaction.user.id,),
                 fetch='one'
             )[0]
@@ -4689,13 +4689,13 @@ class SubLocationServiceView(discord.ui.View):
             
             # Deduct cost
             self.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (cost, select_interaction.user.id)
             )
             
             # Get current location for nearby checks
             current_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (select_interaction.user.id,),
                 fetch='one'
             )[0]
@@ -4704,7 +4704,7 @@ class SubLocationServiceView(discord.ui.View):
                 # Check for nearby location events
                 nearby_locations = self.db.execute_query(
                     """SELECT location_id, name FROM locations 
-                       WHERE location_id != ? 
+                       WHERE location_id != %s 
                        ORDER BY RANDOM() LIMIT 5""",
                     (current_location,),
                     fetch='all'
@@ -4719,7 +4719,7 @@ class SubLocationServiceView(discord.ui.View):
                 # Get nearby location wealth/population data
                 nearby_locations = self.db.execute_query(
                     """SELECT name, wealth_level, population FROM locations 
-                       WHERE location_id != ? 
+                       WHERE location_id != %s 
                        ORDER BY RANDOM() LIMIT 4""",
                     (current_location,),
                     fetch='all'
@@ -4736,7 +4736,7 @@ class SubLocationServiceView(discord.ui.View):
                 available_jobs = self.db.execute_query(
                     """SELECT j.title, l.name FROM jobs j 
                        JOIN locations l ON j.location_id = l.location_id 
-                       WHERE j.is_taken = 0 AND j.location_id != ? 
+                       WHERE j.is_taken = 0 AND j.location_id != %s 
                        ORDER BY RANDOM() LIMIT 3""",
                     (current_location,),
                     fetch='all'
@@ -4835,7 +4835,7 @@ class SubLocationServiceView(discord.ui.View):
                 
                 # Check balance
                 current_money = self.bot.db.execute_query(
-                    "SELECT money FROM characters WHERE user_id = ?",
+                    "SELECT money FROM characters WHERE user_id = %s",
                     (interaction.user.id,),
                     fetch='one'
                 )[0]
@@ -4882,12 +4882,12 @@ class SubLocationServiceView(discord.ui.View):
                     pass  # No change
                 elif won:
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = money - ? + ? WHERE user_id = ?",
+                        "UPDATE characters SET money = money - %s + %s WHERE user_id = %s",
                         (self.bet_amount, winnings, interaction.user.id)
                     )
                 else:
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                        "UPDATE characters SET money = money - %s WHERE user_id = %s",
                         (self.bet_amount, interaction.user.id)
                     )
                 
@@ -4995,7 +4995,7 @@ class SubLocationServiceView(discord.ui.View):
         """Handle corridor status check"""
         gate_corridors = self.db.execute_query(
             """SELECT c.name, c.danger_level, c.is_active 
-               FROM corridors c WHERE c.origin_location = ? OR c.destination_location = ?""",
+               FROM corridors c WHERE c.origin_location = %s OR c.destination_location = %s""",
             (self.location_id, self.location_id),
             fetch='all'
         )
@@ -5023,7 +5023,7 @@ class SubLocationServiceView(discord.ui.View):
     async def _handle_priority_refuel(self, interaction: discord.Interaction, char_name: str, money: int):
         """Handle priority refueling service at gate fuel depot"""
         ship_info = self.db.execute_query(
-            "SELECT fuel_capacity, current_fuel FROM ships WHERE owner_id = ?",
+            "SELECT fuel_capacity, current_fuel FROM ships WHERE owner_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -5070,11 +5070,11 @@ class SubLocationServiceView(discord.ui.View):
         
         # Apply premium refueling (also gives small efficiency bonus)
         self.db.execute_query(
-            "UPDATE ships SET current_fuel = ?, fuel_efficiency = fuel_efficiency + 1 WHERE owner_id = ?",
+            "UPDATE ships SET current_fuel = %s, fuel_efficiency = fuel_efficiency + 1 WHERE owner_id = %s",
             (fuel_capacity, interaction.user.id)
         )
         self.db.execute_query(
-            "UPDATE characters SET money = ? WHERE user_id = ?",
+            "UPDATE characters SET money = %s WHERE user_id = %s",
             (money - total_cost, interaction.user.id)
         )
         
@@ -5108,7 +5108,7 @@ class SubLocationServiceView(discord.ui.View):
             metadata = ItemConfig.create_item_metadata(item_name)
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, item_name, item_type, quantity, description, value, metadata)
             )
             
@@ -5179,7 +5179,7 @@ class SubLocationServiceView(discord.ui.View):
             new_hp = hp + hp_restored
             
             self.db.execute_query(
-                "UPDATE characters SET hp = ? WHERE user_id = ?",
+                "UPDATE characters SET hp = %s WHERE user_id = %s",
                 (new_hp, interaction.user.id)
             )
             
@@ -5452,7 +5452,7 @@ class SubLocationServiceView(discord.ui.View):
         else:
             fitness_boost = min(max_hp - hp, 15)
             self.db.execute_query(
-                "UPDATE characters SET hp = hp + ? WHERE user_id = ?",
+                "UPDATE characters SET hp = hp + %s WHERE user_id = %s",
                 (fitness_boost, interaction.user.id)
             )
             message = f"The workout improves your physical condition! (+{fitness_boost} HP)"
@@ -5532,7 +5532,7 @@ class SubLocationServiceView(discord.ui.View):
             )
         else:
             self.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (cost, interaction.user.id)
             )
             
@@ -5627,7 +5627,7 @@ class SubLocationServiceView(discord.ui.View):
             actual_restore = min(hp_restore, max_hp - hp)
             
             self.db.execute_query(
-                "UPDATE characters SET money = money - ?, hp = hp + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s, hp = hp + %s WHERE user_id = %s",
                 (cost, actual_restore, interaction.user.id)
             )
             
@@ -5712,7 +5712,7 @@ class SubLocationServiceView(discord.ui.View):
             if bonus_type == "credits":
                 bonus_amount = random.randint(5, 25)
                 self.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (bonus_amount, interaction.user.id)
                 )
                 embed.add_field(name="💰 Bonus", value=f"Someone appreciated your company! +{bonus_amount} credits", inline=False)
@@ -6128,7 +6128,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -6147,7 +6147,7 @@ class SubLocationServiceView(discord.ui.View):
         if won:
             winnings = random.randint(cost + 5, cost * 3)  # Win 5+ to 3x the cost
             self.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (winnings, interaction.user.id)
             )
             
@@ -6196,7 +6196,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -6219,7 +6219,7 @@ class SubLocationServiceView(discord.ui.View):
         if random.random() < 0.15:  # 15% chance
             bonus = random.randint(3, 8)
             self.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (bonus, interaction.user.id)
             )
         
@@ -6252,7 +6252,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -6301,7 +6301,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Get current HP for healing calculation
         char_info = self.db.execute_query(
-            "SELECT hp, max_hp FROM characters WHERE user_id = ?",
+            "SELECT hp, max_hp FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -6323,7 +6323,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -6345,7 +6345,7 @@ class SubLocationServiceView(discord.ui.View):
         
         if hp_gained > 0:
             self.db.execute_query(
-                "UPDATE characters SET hp = ? WHERE user_id = ?",
+                "UPDATE characters SET hp = %s WHERE user_id = %s",
                 (new_hp, interaction.user.id)
             )
         
@@ -6383,7 +6383,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Get current HP and check for negative effects
         char_info = self.db.execute_query(
-            "SELECT hp, max_hp FROM characters WHERE user_id = ?",
+            "SELECT hp, max_hp FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -6405,7 +6405,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -6416,7 +6416,7 @@ class SubLocationServiceView(discord.ui.View):
         
         if hp_gained > 0:
             self.db.execute_query(
-                "UPDATE characters SET hp = ? WHERE user_id = ?",
+                "UPDATE characters SET hp = %s WHERE user_id = %s",
                 (new_hp, interaction.user.id)
             )
         
@@ -6424,7 +6424,7 @@ class SubLocationServiceView(discord.ui.View):
         negative_effects_cleared = False
         negative_effects = self.db.execute_query(
             """SELECT item_id FROM inventory 
-               WHERE owner_id = ? AND item_name LIKE 'Active:%' 
+               WHERE owner_id = %s AND item_name LIKE 'Active:%' 
                AND (item_name LIKE '%Hangover%' OR item_name LIKE '%Fatigue%' OR item_name LIKE '%Poison%')""",
             (interaction.user.id,),
             fetch='all'
@@ -6433,7 +6433,7 @@ class SubLocationServiceView(discord.ui.View):
         if negative_effects:
             for effect in negative_effects:
                 self.db.execute_query(
-                    "DELETE FROM inventory WHERE item_id = ?",
+                    "DELETE FROM inventory WHERE item_id = %s",
                     (effect[0],)
                 )
             negative_effects_cleared = True
@@ -6485,8 +6485,8 @@ class SubLocationServiceView(discord.ui.View):
         # Simple approach: check if user has used this service recently at this location
         recent_usage = self.db.execute_query(
             """SELECT last_used FROM service_cooldowns 
-               WHERE user_id = ? AND service_type = 'spacer_bulletin' AND location_id = ?
-               AND datetime(last_used, '+6 hours') > datetime('now')""",
+               WHERE user_id = %s AND service_type = 'spacer_bulletin' AND location_id = %s
+               AND last_used + INTERVAL '6 hours' > NOW()""",
             (interaction.user.id, self.location_id),
             fetch='one'
         )
@@ -6503,8 +6503,10 @@ class SubLocationServiceView(discord.ui.View):
         
         # Update cooldown
         self.db.execute_query(
-            """INSERT OR REPLACE INTO service_cooldowns (user_id, service_type, location_id, last_used)
-               VALUES (?, 'spacer_bulletin', ?, datetime('now'))""",
+            """INSERT INTO service_cooldowns (user_id, service_type, location_id, last_used)
+               VALUES (%s, 'spacer_bulletin', %s, NOW())
+               ON CONFLICT (user_id, service_type, location_id) DO UPDATE SET
+               last_used = EXCLUDED.last_used""",
             (interaction.user.id, self.location_id)
         )
         
@@ -6571,7 +6573,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Check if user has a ship
         ship_info = self.db.execute_query(
-            "SELECT ship_id, fuel, fuel_capacity FROM ships WHERE owner_id = ?",
+            "SELECT ship_id, fuel, fuel_capacity FROM ships WHERE owner_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -6589,7 +6591,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -6610,7 +6612,7 @@ class SubLocationServiceView(discord.ui.View):
                 
                 self.db.execute_query(
                     '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                     (interaction.user.id, item_name, item_type, 1, description, value, metadata)
                 )
                 
@@ -6638,7 +6640,7 @@ class SubLocationServiceView(discord.ui.View):
             
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, "Active: Fuel Efficiency Boost", "effect", 1, 
                  f"Temporary +1 fuel efficiency for next {boost_duration_hours} travel hours", 0, effect_metadata)
             )
@@ -6684,7 +6686,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Get character's engineering skill
         char_info = self.db.execute_query(
-            "SELECT engineering FROM characters WHERE user_id = ?",
+            "SELECT engineering FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -6705,7 +6707,7 @@ class SubLocationServiceView(discord.ui.View):
             xp_reward = random.randint(10, 20)
             
             self.db.execute_query(
-                "UPDATE characters SET money = money + ?, experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s, experience = experience + %s WHERE user_id = %s",
                 (credit_reward, xp_reward, interaction.user.id)
             )
             
@@ -6733,7 +6735,7 @@ class SubLocationServiceView(discord.ui.View):
             xp_reward = random.randint(5, 12)
             
             self.db.execute_query(
-                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                 (xp_reward, interaction.user.id)
             )
             
@@ -6763,7 +6765,7 @@ class SubLocationServiceView(discord.ui.View):
         
         # Get character's navigation skill
         char_info = self.db.execute_query(
-            "SELECT navigation FROM characters WHERE user_id = ?",
+            "SELECT navigation FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -6784,7 +6786,7 @@ class SubLocationServiceView(discord.ui.View):
             xp_reward = random.randint(15, 25)
             
             self.db.execute_query(
-                "UPDATE characters SET money = money + ?, experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s, experience = experience + %s WHERE user_id = %s",
                 (credit_reward, xp_reward, interaction.user.id)
             )
             
@@ -6810,7 +6812,7 @@ class SubLocationServiceView(discord.ui.View):
             xp_reward = random.randint(5, 10)
             
             self.db.execute_query(
-                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                 (xp_reward, interaction.user.id)
             )
             
@@ -6890,12 +6892,12 @@ class SubLocationServiceView(discord.ui.View):
         # Apply changes
         if credit_change != 0:
             self.db.execute_query(
-                "UPDATE characters SET money = money + ?, experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s, experience = experience + %s WHERE user_id = %s",
                 (credit_change, xp_reward, interaction.user.id)
             )
         else:
             self.db.execute_query(
-                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                 (xp_reward, interaction.user.id)
             )
         
@@ -6976,13 +6978,13 @@ class EmergencySupplySelectView(discord.ui.View):
         
         # Calculate final price with location modifiers
         current_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
         wealth_level = self.db.execute_query(
-            "SELECT wealth_level FROM locations WHERE location_id = ?",
+            "SELECT wealth_level FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )[0] if current_location else 1
@@ -6995,7 +6997,7 @@ class EmergencySupplySelectView(discord.ui.View):
         
         embed = discord.Embed(
             title="📦 Confirm Purchase",
-            description=f"Purchase **{selected_item[0]}** from the emergency supply cache?",
+            description=f"Purchase **{selected_item[0]}** from the emergency supply cache%s",
             color=0x4682b4
         )
         embed.add_field(name="📋 Item", value=selected_item[2], inline=False)
@@ -7023,14 +7025,14 @@ class EmergencySupplySelectView(discord.ui.View):
         
         # Get current location for economic modifiers
         current_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
         # Apply location wealth modifiers (convenience pricing)
         wealth_level = self.db.execute_query(
-            "SELECT wealth_level FROM locations WHERE location_id = ?",
+            "SELECT wealth_level FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )[0] if current_location else 1
@@ -7722,7 +7724,7 @@ class EmergencySupplySelectView(discord.ui.View):
         
         # Get character data for money check
         char_info = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -7747,7 +7749,7 @@ class EmergencySupplySelectView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -7789,7 +7791,7 @@ class EmergencySupplySelectView(discord.ui.View):
         
         # Get character data for money check
         char_info = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -7814,7 +7816,7 @@ class EmergencySupplySelectView(discord.ui.View):
         
         # Deduct cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -7858,7 +7860,7 @@ class EmergencySupplySelectView(discord.ui.View):
         
         # Get character data for money check
         char_info = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -7887,7 +7889,7 @@ class EmergencySupplySelectView(discord.ui.View):
             basic_cost = base_cost
             if money >= basic_cost:
                 self.db.execute_query(
-                    "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money - %s WHERE user_id = %s",
                     (basic_cost, interaction.user.id)
                 )
                 embed = discord.Embed(
@@ -7913,7 +7915,7 @@ class EmergencySupplySelectView(discord.ui.View):
         
         # Deduct full cost
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (total_cost, interaction.user.id)
         )
         
@@ -7962,7 +7964,7 @@ class EmergencySupplySelectView(discord.ui.View):
         import random
         
         char_data = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -7987,7 +7989,7 @@ class EmergencySupplySelectView(discord.ui.View):
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
         
-        self.db.execute_query("UPDATE characters SET money = money - ? WHERE user_id = ?", (cost, interaction.user.id))
+        self.db.execute_query("UPDATE characters SET money = money - %s WHERE user_id = %s", (cost, interaction.user.id))
         
         cleaning_outcomes = [
             "Micro-meteorite scarring polished to pristine condition",
@@ -8014,7 +8016,7 @@ class EmergencySupplySelectView(discord.ui.View):
         """Handle radiation decontamination service"""
         import random
         
-        char_data = self.db.execute_query("SELECT money FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+        char_data = self.db.execute_query("SELECT money FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')
         
         if not char_data:
             embed = discord.Embed(title="☢️ Radiation Decontamination - 50C", description="Character data not found.", color=0xff0000)
@@ -8036,7 +8038,7 @@ class EmergencySupplySelectView(discord.ui.View):
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
         
-        self.db.execute_query("UPDATE characters SET money = money - ? WHERE user_id = ?", (cost, interaction.user.id))
+        self.db.execute_query("UPDATE characters SET money = money - %s WHERE user_id = %s", (cost, interaction.user.id))
         
         radiation_sources = ["Pulsar proximity contamination", "Solar flare particle exposure", "Quantum tunnel radiation residue", "Asteroid belt radioactive dust", "Neutron star field contamination", "Cosmic ray bombardment traces"]
         decon_methods = ["Ion beam neutralization protocol", "Electromagnetic field purging sequence", "Molecular disintegration chambers", "Quantum flux stabilization process", "Particle beam decontamination sweep"]
@@ -8059,7 +8061,7 @@ class EmergencySupplySelectView(discord.ui.View):
         """Handle basic decontamination service"""
         import random
         
-        char_data = self.db.execute_query("SELECT money FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+        char_data = self.db.execute_query("SELECT money FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')
         
         if not char_data:
             embed = discord.Embed(title="🛡️ Basic Decontamination - 30C", description="Character data not found.", color=0xff0000)
@@ -8081,7 +8083,7 @@ class EmergencySupplySelectView(discord.ui.View):
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
         
-        self.db.execute_query("UPDATE characters SET money = money - ? WHERE user_id = ?", (cost, interaction.user.id))
+        self.db.execute_query("UPDATE characters SET money = money - %s WHERE user_id = %s", (cost, interaction.user.id))
         
         basic_contaminants = ["Standard space dust accumulation", "Atmospheric entry burn residue", "Docking bay particulate matter", "Common stellar wind deposits", "Navigation beacon interference particles"]
         cleaning_procedures = ["Automated spray wash cycle", "Sonic vibration cleaning", "Electrostatic dust removal", "Pressure wash and rinse sequence", "Standard decontamination protocol"]
@@ -8382,7 +8384,7 @@ class NavigationPuzzleView(discord.ui.View):
         
         # Get user's character info
         char_info = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -8397,7 +8399,7 @@ class NavigationPuzzleView(discord.ui.View):
             # Award credits for correct answer
             reward = random.randint(150, 300)
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, interaction.user.id)
             )
             
@@ -8413,7 +8415,7 @@ class NavigationPuzzleView(discord.ui.View):
             # Small consolation reward for participation
             consolation = random.randint(25, 75)
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (consolation, interaction.user.id)
             )
             
@@ -8479,7 +8481,7 @@ class NavigationDataView(discord.ui.View):
         
         # Check if user has enough money
         current_money = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -8493,7 +8495,7 @@ class NavigationDataView(discord.ui.View):
         
         # Deduct cost and provide premium data
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
         
@@ -8560,7 +8562,7 @@ class ChangeCharacterInfoModal(discord.ui.Modal):
         
         # Check character funds
         money = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -8578,7 +8580,7 @@ class ChangeCharacterInfoModal(discord.ui.Modal):
             
             # Deduct cost
             self.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (self.cost, interaction.user.id)
             )
             
@@ -8602,7 +8604,7 @@ class ChangeCharacterInfoModal(discord.ui.Modal):
 class ChangeNameModal(ChangeCharacterInfoModal):
     async def update_database(self, interaction: discord.Interaction, new_value: str):
         self.db.execute_query(
-            "UPDATE characters SET name = ? WHERE user_id = ?",
+            "UPDATE characters SET name = %s WHERE user_id = %s",
             (new_value, interaction.user.id)
         )
         # Also update their server nickname
@@ -8635,7 +8637,7 @@ class ChangeDescriptionModal(discord.ui.Modal):
         
         # Check character funds
         money = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -8653,7 +8655,7 @@ class ChangeDescriptionModal(discord.ui.Modal):
             
             # Deduct cost
             self.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (self.cost, interaction.user.id)
             )
             
@@ -8669,7 +8671,7 @@ class ChangeDescriptionModal(discord.ui.Modal):
 
     async def update_database(self, interaction: discord.Interaction, new_value: str):
         self.db.execute_query(
-            "UPDATE characters SET appearance = ? WHERE user_id = ?",
+            "UPDATE characters SET appearance = %s WHERE user_id = %s",
             (new_value, interaction.user.id)
         )
 
@@ -8695,7 +8697,7 @@ class ChangeBioModal(discord.ui.Modal):
         
         # Check character funds
         money = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -8713,7 +8715,7 @@ class ChangeBioModal(discord.ui.Modal):
             
             # Deduct cost
             self.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (self.cost, interaction.user.id)
             )
             
@@ -8729,7 +8731,7 @@ class ChangeBioModal(discord.ui.Modal):
 
     async def update_database(self, interaction: discord.Interaction, new_value: str):
         self.db.execute_query(
-            "UPDATE character_identity SET biography = ? WHERE user_id = ?",
+            "UPDATE character_identity SET biography = %s WHERE user_id = %s",
             (new_value, interaction.user.id)
         )
 
@@ -8743,7 +8745,7 @@ class ChangeDOBModal(ChangeCharacterInfoModal):
             raise ValueError("Please use MM/DD format (e.g., 03/15).")
 
         self.db.execute_query(
-            "UPDATE character_identity SET birth_month = ?, birth_day = ? WHERE user_id = ?",
+            "UPDATE character_identity SET birth_month = %s, birth_day = %s WHERE user_id = %s",
             (birth_month, birth_day, interaction.user.id)
         )
 class ChangeImageModal(ChangeCharacterInfoModal):
@@ -8759,7 +8761,7 @@ class ChangeImageModal(ChangeCharacterInfoModal):
                 raise ValueError("URL must link to an image file (.jpg, .jpeg, .png, .gif, .webp)")
         
         self.db.execute_query(
-            "UPDATE characters SET image_url = ? WHERE user_id = ?",
+            "UPDATE characters SET image_url = %s WHERE user_id = %s",
             (new_value if new_value else None, interaction.user.id)
         )
 
@@ -8779,7 +8781,7 @@ class EmergencySupplyPurchaseView(discord.ui.View):
 
         # Re-check money (in case it changed)
         char_info = self.db.execute_query(
-            "SELECT money, name FROM characters WHERE user_id = ?",
+            "SELECT money, name FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -8798,7 +8800,7 @@ class EmergencySupplyPurchaseView(discord.ui.View):
 
         # Check if item already exists in inventory
         existing_item = self.db.execute_query(
-            "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+            "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
             (self.user_id, item_name),
             fetch='one'
         )
@@ -8820,20 +8822,20 @@ class EmergencySupplyPurchaseView(discord.ui.View):
         if existing_item:
             # Update existing stack
             self.db.execute_query(
-                "UPDATE inventory SET quantity = quantity + 1 WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity + 1 WHERE item_id = %s",
                 (existing_item[0],)
             )
         else:
             # Create new inventory entry
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (self.user_id, item_name, item_type, 1, actual_description, self.final_cost, metadata)
             )
 
         # Deduct money
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (self.final_cost, self.user_id)
         )
 

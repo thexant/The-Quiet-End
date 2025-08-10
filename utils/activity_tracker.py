@@ -3,6 +3,7 @@ import asyncio
 import discord
 from datetime import datetime, timedelta
 from typing import Dict, Set
+from utils.datetime_utils import safe_datetime_parse
 
 class ActivityTracker:
     def __init__(self, bot):
@@ -15,13 +16,13 @@ class ActivityTracker:
     def update_activity(self, user_id: int):
         """Update user's last activity timestamp"""
         self.db.execute_query(
-            "UPDATE characters SET last_activity = CURRENT_TIMESTAMP WHERE user_id = ? AND is_logged_in = 1",
+            "UPDATE characters SET last_activity = CURRENT_TIMESTAMP WHERE user_id = %s AND is_logged_in = true",
             (user_id,)
         )
         
         # Check if there's an active warning in the database
         active_warning = self.db.execute_query(
-            "SELECT warning_id FROM afk_warnings WHERE user_id = ? AND is_active = 1",
+            "SELECT warning_id FROM afk_warnings WHERE user_id = %s AND is_active = true",
             (user_id,),
             fetch='one'
         )
@@ -35,7 +36,7 @@ class ActivityTracker:
             
             # Mark the warning as inactive in the database
             self.db.execute_query(
-                "UPDATE afk_warnings SET is_active = 0 WHERE user_id = ?",
+                "UPDATE afk_warnings SET is_active = false WHERE user_id = %s",
                 (user_id,)
             )
             
@@ -113,10 +114,10 @@ class ActivityTracker:
                 one_hour_ago = datetime.utcnow() - timedelta(hours=1)
                 inactive_users = self.db.execute_query(
                     '''SELECT user_id, name FROM characters 
-                       WHERE is_logged_in = 1 
-                       AND datetime(last_activity) < datetime(?)
-                       AND user_id NOT IN (SELECT user_id FROM afk_warnings WHERE is_active = 1)''',
-                    (one_hour_ago.isoformat(),),
+                       WHERE is_logged_in = true 
+                       AND last_activity < %s
+                       AND user_id NOT IN (SELECT user_id FROM afk_warnings WHERE is_active = true)''',
+                    (one_hour_ago,),
                     fetch='all'
                 )
                 
@@ -142,14 +143,14 @@ class ActivityTracker:
             # Find any active warnings that haven't expired
             current_time = datetime.utcnow()
             active_warnings = self.db.execute_query(
-                "SELECT user_id, expires_at FROM afk_warnings WHERE is_active = 1 AND datetime(expires_at) > datetime(?)",
-                (current_time.isoformat(),),
+                "SELECT user_id, expires_at FROM afk_warnings WHERE is_active = true AND expires_at > %s",
+                (current_time,),
                 fetch='all'
             )
             
             for user_id, expires_at_str in active_warnings:
                 try:
-                    expires_at = datetime.fromisoformat(expires_at_str)
+                    expires_at = safe_datetime_parse(expires_at_str)
                     time_remaining = (expires_at - current_time).total_seconds()
                     
                     if time_remaining > 0:
@@ -160,7 +161,7 @@ class ActivityTracker:
                     else:
                         # Warning has expired, mark as inactive
                         self.db.execute_query(
-                            "UPDATE afk_warnings SET is_active = 0 WHERE user_id = ?",
+                            "UPDATE afk_warnings SET is_active = false WHERE user_id = %s",
                             (user_id,)
                         )
                 except Exception as e:
@@ -177,7 +178,7 @@ class ActivityTracker:
             
             # Check if warning is still active (user didn't interact)
             active_warning = self.db.execute_query(
-                "SELECT warning_id FROM afk_warnings WHERE user_id = ? AND is_active = 1",
+                "SELECT warning_id FROM afk_warnings WHERE user_id = %s AND is_active = true",
                 (user_id,),
                 fetch='one'
             )
@@ -190,7 +191,7 @@ class ActivityTracker:
                 
                 # Clean up warning
                 self.db.execute_query(
-                    "UPDATE afk_warnings SET is_active = 0 WHERE user_id = ?",
+                    "UPDATE afk_warnings SET is_active = false WHERE user_id = %s",
                     (user_id,)
                 )
                 
@@ -213,7 +214,7 @@ class ActivityTracker:
             
             # Check if they're still logged in
             is_logged_in = self.db.execute_query(
-                "SELECT is_logged_in FROM characters WHERE user_id = ?",
+                "SELECT is_logged_in FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -225,7 +226,12 @@ class ActivityTracker:
             # Create warning record using UTC time
             expires_at = datetime.utcnow() + timedelta(minutes=10)
             self.db.execute_query(
-                "INSERT OR REPLACE INTO afk_warnings (user_id, expires_at, is_active) VALUES (?, ?, 1)",
+                """INSERT INTO afk_warnings (user_id, expires_at, is_active) 
+                   VALUES (%s, %s, true)
+                   ON CONFLICT (user_id) DO UPDATE SET 
+                   expires_at = EXCLUDED.expires_at,
+                   is_active = EXCLUDED.is_active,
+                   warning_time = NOW()""",
                 (user_id, expires_at.isoformat())
             )
             
@@ -252,13 +258,13 @@ class ActivityTracker:
             
             # Check if they're still logged in AND warning is still active
             still_logged_in = self.db.execute_query(
-                "SELECT is_logged_in FROM characters WHERE user_id = ?",
+                "SELECT is_logged_in FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
             
             active_warning = self.db.execute_query(
-                "SELECT warning_id FROM afk_warnings WHERE user_id = ? AND is_active = 1",
+                "SELECT warning_id FROM afk_warnings WHERE user_id = %s AND is_active = true",
                 (user_id,),
                 fetch='one'
             )
@@ -279,7 +285,7 @@ class ActivityTracker:
                 
                 # Clean up warning regardless of logout success
                 self.db.execute_query(
-                    "UPDATE afk_warnings SET is_active = 0 WHERE user_id = ?",
+                    "UPDATE afk_warnings SET is_active = false WHERE user_id = %s",
                     (user_id,)
                 )
             else:
@@ -310,6 +316,6 @@ class ActivityTracker:
         
         # Mark any active warnings as inactive
         self.db.execute_query(
-            "UPDATE afk_warnings SET is_active = 0 WHERE user_id = ?",
+            "UPDATE afk_warnings SET is_active = false WHERE user_id = %s",
             (user_id,)
         )

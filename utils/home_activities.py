@@ -79,7 +79,7 @@ class HomeActivityManager:
         """Get all activities for a home"""
         activities = self.db.execute_query(
             '''SELECT activity_type, activity_name FROM home_activities
-               WHERE home_id = ? AND is_active = 1''',
+               WHERE home_id = %s AND is_active = true''',
             (home_id,),
             fetch='all'
         )
@@ -205,7 +205,7 @@ class HomeActivityView(discord.ui.View):
                 '''SELECT COUNT(DISTINCT item_name), COALESCE(SUM(quantity), 0), h.storage_capacity
                    FROM location_homes h
                    LEFT JOIN home_storage s ON h.home_id = s.home_id
-                   WHERE h.home_id = ?
+                   WHERE h.home_id = %s
                    GROUP BY h.storage_capacity''',
                 (self.home_id,),
                 fetch='one'
@@ -250,7 +250,7 @@ class IncomeButton(discord.ui.Button):
             '''SELECT SUM(hu.daily_income), hi.accumulated_income
                FROM home_upgrades hu
                LEFT JOIN home_income hi ON hu.home_id = hi.home_id
-               WHERE hu.home_id = ?
+               WHERE hu.home_id = %s
                GROUP BY hi.accumulated_income''',
             (home_id,),
             fetch='one'

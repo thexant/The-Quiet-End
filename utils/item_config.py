@@ -146,7 +146,7 @@ class ItemConfig:
             "usage_type": "heal_hp",
             "effect_value": 1,
             "single_use": True,
-            "rarirty": "common"
+            "rarity": "common"
         },
         "Canned Stew": {
             "type": "consumable",
@@ -961,7 +961,7 @@ class ItemConfig:
             "description": "Formal pants for professional appearances",
             "base_value": 80,
             "equippable": True,
-            "equipment_slot": "legs_left",
+            "equipment_slot": "legs_both",
             "stat_modifiers": {"defense": 0},
             "rarity": "common"
         },        

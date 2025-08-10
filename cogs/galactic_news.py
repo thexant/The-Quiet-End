@@ -8,6 +8,7 @@ import json
 import math
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List
+from utils.datetime_utils import safe_datetime_parse
 
 class GalacticNewsCog(commands.Cog):
     def __init__(self, bot):
@@ -32,7 +33,7 @@ class GalacticNewsCog(commands.Cog):
                 """SELECT news_id, guild_id, news_type, title, description, 
                           location_id, delay_hours, event_data
                    FROM news_queue 
-                   WHERE is_delivered = 0 AND scheduled_delivery <= datetime('now', '+1 second')
+                   WHERE is_delivered = false AND scheduled_delivery <= NOW() + INTERVAL '1 second'
                    ORDER BY scheduled_delivery ASC""",
                 fetch='all'
             )
@@ -49,7 +50,7 @@ class GalacticNewsCog(commands.Cog):
                     
                 # Get galactic updates channel
                 updates_channel_id = self.db.execute_query(
-                    "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = ?",
+                    "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = %s",
                     (guild_id,),
                     fetch='one'
                 )
@@ -69,7 +70,7 @@ class GalacticNewsCog(commands.Cog):
                     
                     # Mark as delivered
                     self.db.execute_query(
-                        "UPDATE news_queue SET is_delivered = 1 WHERE news_id = ?",
+                        "UPDATE news_queue SET is_delivered = true WHERE news_id = %s",
                         (news_id,)
                     )
                     
@@ -132,7 +133,7 @@ class GalacticNewsCog(commands.Cog):
         # Add location context if available
         if location_id:
             location_info = self.db.execute_query(
-                "SELECT name, location_type, system_name, x_coord, y_coord FROM locations WHERE location_id = ?",
+                "SELECT name, location_type, system_name, x_coord, y_coord FROM locations WHERE location_id = %s",
                 (location_id,),
                 fetch='one'
             )
@@ -184,7 +185,7 @@ class GalacticNewsCog(commands.Cog):
             
         # Get location coordinates
         location_info = self.db.execute_query(
-            "SELECT x_coord, y_coord FROM locations WHERE location_id = ?",
+            "SELECT x_coord, y_coord FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -211,20 +212,17 @@ class GalacticNewsCog(commands.Cog):
         """Queue news for delivery with appropriate delay"""
         
         delay_hours = self.calculate_news_delay(location_id)
-        delivery_time = datetime.utcnow() + timedelta(hours=delay_hours)
+        delivery_time = datetime.now(timezone.utc) + timedelta(hours=delay_hours)
         
         event_data_json = json.dumps(event_data) if event_data else None
-        
-        # Correct the timestamp format for SQLite compatibility
-        delivery_time_str = delivery_time.strftime("%Y-%m-%d %H:%M:%S")
         
         self.db.execute_query(
             """INSERT INTO news_queue 
                (guild_id, news_type, title, description, location_id, 
                 scheduled_delivery, delay_hours, event_data)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
             (guild_id, news_type, title, description, location_id, 
-             delivery_time_str, delay_hours, event_data_json)
+             delivery_time, delay_hours, event_data_json)
         )
         
         print(f"📰 Queued {news_type} news for {guild_id}: {title} (delay: {delay_hours:.1f}h)")
@@ -319,8 +317,7 @@ class GalacticNewsCog(commands.Cog):
             description += urgency_tags.get(intensity, "\n\n`Classification: Unspecified`")
             
             # Add timestamp
-            from datetime import datetime
-            timestamp = datetime.utcnow().strftime("%H:%M IST")
+            timestamp = datetime.now(timezone.utc).strftime("%H:%M IST")
             description += f"\n\n*Broadcast Time: {timestamp}*"
             
             # Find a central location for delay calculation
@@ -352,8 +349,11 @@ class GalacticNewsCog(commands.Cog):
             
             if last_check:
                 last_check_time_str, current_stored_shift = last_check
-                if last_check_time_str:
-                    last_check_time = datetime.fromisoformat(last_check_time_str)
+                if last_check_time_str and isinstance(last_check_time_str, str) and last_check_time_str.strip():
+                    try:
+                        last_check_time = safe_datetime_parse(last_check_time_str)
+                    except (ValueError, TypeError):
+                        last_check_time = None
                 else:
                     last_check_time = None
             else:
@@ -374,7 +374,7 @@ class GalacticNewsCog(commands.Cog):
                     
                     # Update stored shift
                     self.db.execute_query(
-                        "UPDATE galaxy_info SET last_shift_check = ?, current_shift = ? WHERE galaxy_id = 1",
+                        "UPDATE galaxy_info SET last_shift_check = %s, current_shift = %s WHERE galaxy_id = 1",
                         (current_time.isoformat(), shift_period)
                     )
                     
@@ -382,7 +382,7 @@ class GalacticNewsCog(commands.Cog):
                 else:
                     # Just update check time
                     self.db.execute_query(
-                        "UPDATE galaxy_info SET last_shift_check = ? WHERE galaxy_id = 1",
+                        "UPDATE galaxy_info SET last_shift_check = %s WHERE galaxy_id = 1",
                         (current_time.isoformat(),)
                     )
             
@@ -450,7 +450,7 @@ class GalacticNewsCog(commands.Cog):
         
         # Get location info
         location_info = self.db.execute_query(
-            "SELECT name, location_type, system_name FROM locations WHERE location_id = ?",
+            "SELECT name, location_type, system_name FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -689,13 +689,13 @@ class GalacticNewsCog(commands.Cog):
             
         # Get queue statistics
         pending_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM news_queue WHERE guild_id = ? AND is_delivered = 0",
+            "SELECT COUNT(*) FROM news_queue WHERE guild_id = %s AND is_delivered = false",
             (interaction.guild.id,),
             fetch='one'
         )[0]
         
         delivered_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM news_queue WHERE guild_id = ? AND is_delivered = 1",  
+            "SELECT COUNT(*) FROM news_queue WHERE guild_id = %s AND is_delivered = true",  
             (interaction.guild.id,),
             fetch='one'
         )[0]
@@ -704,7 +704,7 @@ class GalacticNewsCog(commands.Cog):
         recent_by_type = self.db.execute_query(
             """SELECT news_type, COUNT(*) 
                FROM news_queue 
-               WHERE guild_id = ? AND created_at > datetime('now', '-24 hours')
+               WHERE guild_id = %s AND created_at > NOW() - INTERVAL '24 hours'
                GROUP BY news_type""",
             (interaction.guild.id,),
             fetch='all'
@@ -752,7 +752,7 @@ class GalacticNewsCog(commands.Cog):
         try:
             # Get count of pending news before clearing
             pending_count = self.db.execute_query(
-                "SELECT COUNT(*) FROM news_queue WHERE guild_id = ? AND is_delivered = 0",
+                "SELECT COUNT(*) FROM news_queue WHERE guild_id = %s AND is_delivered = false",
                 (interaction.guild.id,),
                 fetch='one'
             )[0]
@@ -763,7 +763,7 @@ class GalacticNewsCog(commands.Cog):
             
             # Clear all pending news for this guild
             self.db.execute_query(
-                "DELETE FROM news_queue WHERE guild_id = ? AND is_delivered = 0",
+                "DELETE FROM news_queue WHERE guild_id = %s AND is_delivered = false",
                 (interaction.guild.id,)
             )
             

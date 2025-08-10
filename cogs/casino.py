@@ -104,7 +104,7 @@ class SlotMachineView(discord.ui.View):
         try:
             # Get character name
             char_info = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -191,7 +191,7 @@ class SlotMachineView(discord.ui.View):
         
         # Check balance
         balance = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -202,7 +202,7 @@ class SlotMachineView(discord.ui.View):
         
         # Deduct bet
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (self.bet_amount, interaction.user.id)
         )
         
@@ -217,7 +217,7 @@ class SlotMachineView(discord.ui.View):
             
             # Add winnings
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (winnings, interaction.user.id)
             )
         
@@ -280,7 +280,7 @@ class BlackjackView(discord.ui.View):
         try:
             # Get character name
             char_info = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -405,7 +405,7 @@ class BlackjackView(discord.ui.View):
         
         # Check balance
         balance = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -416,7 +416,7 @@ class BlackjackView(discord.ui.View):
         
         # Deduct bet
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (self.bet_amount, interaction.user.id)
         )
         
@@ -494,7 +494,7 @@ class BlackjackView(discord.ui.View):
         
         if winnings > 0:
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (winnings, interaction.user.id)
             )
         
@@ -567,7 +567,7 @@ class DiceGameView(discord.ui.View):
         try:
             # Get character name
             char_info = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -668,7 +668,7 @@ class DiceGameView(discord.ui.View):
         
         # Check balance
         balance = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -679,7 +679,7 @@ class DiceGameView(discord.ui.View):
         
         # Deduct bet
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (self.bet_amount, interaction.user.id)
         )
         
@@ -709,7 +709,7 @@ class DiceGameView(discord.ui.View):
         
         if winnings > 0:
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (winnings, interaction.user.id)
             )
         

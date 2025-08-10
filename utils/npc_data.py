@@ -1061,28 +1061,28 @@ RADIO_MESSAGES = [
     "{callsign} to any station, requesting updated navigation data for the {system} system.",
     "Transit Control, this is {callsign} reporting successful corridor transit to {location}.",
     "{callsign} here, experiencing minor navigation drift. Recalibrating course to {location}.",
-    "Any vessels near {location}? This is {callsign}, could use an updated traffic report.",
+    "Any vessels near {location}%s This is {callsign}, could use an updated traffic report.",
     
     # Trade and business
     "Commercial traffic, this is {callsign} with cargo manifest for {location}. ETA fifteen minutes.",
     "{callsign} calling {location} Station, requesting priority docking for time-sensitive cargo.",
     "This is Captain {name} aboard {ship}, seeking trade opportunities at {location}.",
-    "{callsign} to merchant vessels, anyone interested in bulk cargo exchange at {location}?",
+    "{callsign} to merchant vessels, anyone interested in bulk cargo exchange at {location}%s",
     "Trading stop setup! {callsign} offering competitive rates on manufactured goods.",
     
     # Social and casual
     "Good morning spacerfarers! {callsign} broadcasting from {location}. Beautiful view of {system} today.",
     "{callsign} here, taking a break at {location}. Great fuel prices and decent food!",
     "This is {callsign}, just wanted to say the staff at {location} are incredibly helpful.",
-    "Any familiar voices out there? {callsign} getting lonely on these long hauls.",
+    "Any familiar voices out there%s {callsign} getting lonely on these long hauls.",
     "Captain {name} logging off for rest cycle. {callsign} will be monitoring emergency frequencies.",
-    "Test, test... Does this thing work?",
+    "Test, test... Does this thing work%s",
     # Technical and maintenance
     "{callsign} requesting mechanic availability at {location}. Minor engine calibration needed.",
     "This is {callsign}, completed system diagnostics. All green across the board.",
     "{callsign} to technical services, seeking recommendation for fuel injector replacement.",
     "Engineering check complete! {callsign} ready for next sector transit.",
-    "This is {callsign}, anyone else experiencing minor comm static in the {system} system?",
+    "This is {callsign}, anyone else experiencing minor comm static in the {system} system%s",
     
     # Weather and conditions
     "{callsign} reporting clear space lanes between {location} and nearby systems.",
@@ -1102,11 +1102,11 @@ RADIO_MESSAGES = [
     "Captain {name} logging personal note: {location} has the best coffee in three systems.",
     "{callsign} to old friends, still flying the trade routes. Hope to cross paths again soon.",
     "This is {callsign}, teaching the new crew member about proper radio etiquette. Wave hello everyone!",
-    "Hello? {name} here, passing through {system}. Anyone nearby? Want to meet for drinks?",
+    "Hello%s {name} here, passing through {system}. Anyone nearby%s Want to meet for drinks%s",
     "{callsign} CALLING IN, I AM FULL OF SPACE MILK!",
     "Just got a new ship, The {ship}. Let's see how this thing flies!",
     # Grim Realities
-    "This is {callsign} to anyone on this frequency... My nav-computer is cycling, showing a corridor that shouldn't be here. Is... is anyone else seeing this?",
+    "This is {callsign} to anyone on this frequency... My nav-computer is cycling, showing a corridor that shouldn't be here. Is... is anyone else seeing this%s",
     "{callsign} requesting updated corridor stability data. My last chart is three cycles old and I don't trust it. Anything more recent would be appreciated.",
     "This is {callsign}, making my approach to {location}. Looks like another one of your docking lights is out. You guys should really get that fixed before someone clips the bay.",
     "{callsign} here. If anyone's docked at {location} and has a compatible power socket, I'd trade a week's worth of rations for a few hours of charge.",
@@ -1121,7 +1121,7 @@ RADIO_MESSAGES = [
     "Reporting from {location}: Disease outbreak contained, but medical supplies are critically low. Send doctors or diagnostics. This is {callsign} signing off.",
     "This is {callsign}, reports of unexpected Corridor collapse near the old {system} jump point. Verify your navigation data twice before jumping.",
     "Witnessed a ship vanish mid-transit. Just... gone. This is {callsign} still shaking from the sight. Corridors are a fickle mistress.",
-    "Days blur into weeks out here. This is {callsign}, just a voice in the dark. Anyone else feel it? The quiet end.",
+    "Days blur into weeks out here. This is {callsign}, just a voice in the dark. Anyone else feel it%s The quiet end.",
     "Overheard some disturbing chatter from a pilot who spent too long in a storm. Mentioned 'voices in the static'.",
     "Emergency broadcast: This is {callsign}, my ship is adrift. Power failing. I'm dumping all non-essentials. If you hear explosions, it's just my life savings going out the airlock. Farewell."
 ]

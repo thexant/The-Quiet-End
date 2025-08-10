@@ -38,10 +38,10 @@ check_env() {
 DISCORD_TOKEN=your_bot_token_here
 COMMAND_PREFIX=!
 ACTIVITY_NAME=Entropy
-ALLOWED_GUILD_ID=your_guild_id_here
+# ALLOWED_GUILD_ID=your_guild_id_here  # Optional: Set to restrict to single guild
 
-# Optional: Database path (defaults to /app/data/bot.db in container)
-# DATABASE_PATH=/app/data/bot.db
+# Database URL for PostgreSQL connection
+DATABASE_URL=postgresql://thequietend_user:thequietend_pass@postgres:5432/thequietend_db
 EOF
         print_warning "Please edit .env file with your bot token and guild ID before running the bot!"
         exit 1
@@ -106,10 +106,10 @@ update() {
 
 # Backup database
 backup() {
-    print_status "Creating database backup..."
+    print_status "Creating PostgreSQL database backup..."
     timestamp=$(date +%Y%m%d_%H%M%S)
-    docker-compose exec rpg-bot cp /app/data/bot.db /app/data/backup_${timestamp}.db
-    print_success "Database backed up to data/backup_${timestamp}.db"
+    docker-compose exec postgres pg_dump -U thequietend_user thequietend_db > data/backup_${timestamp}.sql
+    print_success "Database backed up to data/backup_${timestamp}.sql"
 }
 
 # Show help

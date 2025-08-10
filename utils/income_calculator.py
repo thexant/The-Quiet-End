@@ -36,6 +36,7 @@ class HomeIncomeCalculator:
     async def _calculate_all_income(self):
         """Calculate income for all homes with upgrades"""
         from utils.time_system import TimeSystem
+        from utils.datetime_utils import safe_datetime_parse
         time_system = TimeSystem(self.bot)
         
         # Get all homes with income-generating upgrades
@@ -54,7 +55,7 @@ class HomeIncomeCalculator:
         for home_id, last_calculated_str, current_accumulated in homes_with_income:
             # Get total daily income for this home
             total_daily = self.db.execute_query(
-                "SELECT SUM(daily_income) FROM home_upgrades WHERE home_id = ?",
+                "SELECT SUM(daily_income) FROM home_upgrades WHERE home_id = %s",
                 (home_id,),
                 fetch='one'
             )[0]
@@ -64,7 +65,7 @@ class HomeIncomeCalculator:
             
             # Calculate time passed
             if last_calculated_str:
-                last_calculated = datetime.fromisoformat(last_calculated_str)
+                last_calculated = safe_datetime_parse(last_calculated_str)
                 days_passed = (current_time - last_calculated).total_seconds() / 86400
             else:
                 days_passed = 0
@@ -81,11 +82,12 @@ class HomeIncomeCalculator:
             
             # Update or insert income record
             self.db.execute_query(
-                '''INSERT OR REPLACE INTO home_income 
+                '''INSERT INTO home_income 
                    (home_id, accumulated_income, last_collected, last_calculated)
-                   VALUES (?, ?, 
-                           COALESCE((SELECT last_collected FROM home_income WHERE home_id = ?), CURRENT_TIMESTAMP),
-                           ?)''',
-                (home_id, total_accumulated, home_id, current_time.isoformat())
+                   VALUES (%s, %s, NOW(), %s)
+                   ON CONFLICT (home_id) DO UPDATE SET 
+                   accumulated_income = EXCLUDED.accumulated_income,
+                   last_calculated = EXCLUDED.last_calculated''',
+                (home_id, total_accumulated, current_time.isoformat())
             )
 

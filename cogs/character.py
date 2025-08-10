@@ -9,6 +9,7 @@ from datetime import datetime
 import asyncio
 from utils.item_effects import ItemEffectChecker
 from utils.views import ObserveModal, RadioModal, GiveItemSelectView, SellItemSelectView, LogoutConfirmView
+from utils.datetime_utils import safe_datetime_parse
 
 
 
@@ -59,7 +60,7 @@ class CharacterCog(commands.Cog):
 
         # Get logged in players count
         logged_in_count = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
+            "SELECT COUNT(*) FROM characters WHERE is_logged_in = true",
             fetch='one'
         )[0]
 
@@ -95,28 +96,29 @@ class CharacterCog(commands.Cog):
         char_data = self.db.execute_query(
             """SELECT name, is_logged_in, current_location, current_ship_id, 
                location_status, money
-               FROM characters WHERE user_id = ?""",
+               FROM characters WHERE user_id = %s""",
             (interaction.user.id,),
             fetch='one'
         )
         
         # Check if this command is being run in a location channel
-        location_channel_check = self.db.execute_query(
-            "SELECT location_id, name, location_type FROM locations WHERE channel_id = ?",
-            (interaction.channel.id,),
-            fetch='one'
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        location_channel_check = channel_manager.get_location_from_channel_id(
+            interaction.guild.id, 
+            interaction.channel.id
         )
         
         # Check if this command is being run in a home interior channel
         home_channel_check = self.db.execute_query(
-            "SELECT home_id FROM home_interiors WHERE channel_id = ?",
+            "SELECT home_id FROM home_interiors WHERE channel_id = %s",
             (interaction.channel.id,),
             fetch='one'
         )
         
         # Check if this command is being run in a ship interior channel
         ship_channel_check = self.db.execute_query(
-            "SELECT ship_id FROM ships WHERE channel_id = ?",
+            "SELECT ship_id FROM ships WHERE channel_id = %s",
             (interaction.channel.id,),
             fetch='one'
         )
@@ -189,7 +191,7 @@ class CharacterCog(commands.Cog):
         
         # Get age from character_identity table
         age_data = self.db.execute_query(
-            "SELECT age FROM character_identity WHERE user_id = ?",
+            "SELECT age FROM character_identity WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -221,12 +223,12 @@ class CharacterCog(commands.Cog):
                           ts.end_time, ts.temp_channel_id,
                           ol.name as origin_name, dl.name as dest_name, 
                           c.name as corridor_name,
-                          julianday(ts.end_time) - julianday('now') as time_remaining
+                          EXTRACT(EPOCH FROM (ts.end_time - NOW())) / 86400.0 as time_remaining
                    FROM travel_sessions ts
                    JOIN locations ol ON ts.origin_location = ol.location_id
                    JOIN locations dl ON ts.destination_location = dl.location_id
                    JOIN corridors c ON ts.corridor_id = c.corridor_id
-                   WHERE ts.user_id = ? AND ts.status = 'traveling'""",
+                   WHERE ts.user_id = %s AND ts.status = 'traveling'""",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -266,7 +268,7 @@ class CharacterCog(commands.Cog):
             location_type = ""
             if current_location:
                 location_info = self.db.execute_query(
-                    "SELECT name, location_type FROM locations WHERE location_id = ?",
+                    "SELECT name, location_type FROM locations WHERE location_id = %s",
                     (current_location,),
                     fetch='one'
                 )
@@ -316,7 +318,7 @@ class CharacterCog(commands.Cog):
     @app_commands.describe(thought="What your character is thinking")
     async def think(self, interaction: discord.Interaction, thought: str):
         char_data = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -348,7 +350,7 @@ class CharacterCog(commands.Cog):
     @app_commands.describe(observation="What you observe in your surroundings")
     async def observe(self, interaction: discord.Interaction, observation: str):
         char_data = self.db.execute_query(
-            "SELECT name, current_location FROM characters WHERE user_id = ?",
+            "SELECT name, current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -366,7 +368,7 @@ class CharacterCog(commands.Cog):
         location_name = "Unknown Location"
         if current_location:
             loc_info = self.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (current_location,),
                 fetch='one'
             )
@@ -394,7 +396,7 @@ class CharacterCog(commands.Cog):
     async def status_shorthand(self, interaction: discord.Interaction):
         # Check if user has a character and get HP info
         char_data = self.db.execute_query(
-            "SELECT name, is_logged_in, hp, max_hp FROM characters WHERE user_id = ?",
+            "SELECT name, is_logged_in, hp, max_hp FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -413,7 +415,7 @@ class CharacterCog(commands.Cog):
             """SELECT s.current_fuel, s.fuel_capacity, s.hull_integrity, s.max_hull, s.name
                FROM ships s 
                INNER JOIN player_ships ps ON s.ship_id = ps.ship_id 
-               WHERE ps.owner_id = ? AND ps.is_active = 1""",
+               WHERE ps.owner_id = %s AND ps.is_active = true""",
             (interaction.user.id,),
             fetch='one'
         )
@@ -486,7 +488,7 @@ class CharacterCog(commands.Cog):
     async def here_shorthand(self, interaction: discord.Interaction):
         # Check if this command is being run in a ship interior channel
         ship_channel_check = self.db.execute_query(
-            "SELECT ship_id, name, ship_type, interior_description, owner_id FROM ships WHERE channel_id = ?",
+            "SELECT ship_id, name, ship_type, interior_description, owner_id FROM ships WHERE channel_id = %s",
             (interaction.channel.id,),
             fetch='one'
         )
@@ -535,7 +537,7 @@ class CharacterCog(commands.Cog):
             """SELECT lh.home_id, lh.home_name, lh.owner_id, lh.interior_description 
                FROM location_homes lh 
                JOIN home_interiors hi ON lh.home_id = hi.home_id 
-               WHERE hi.channel_id = ?""",
+               WHERE hi.channel_id = %s""",
             (interaction.channel.id,),
             fetch='one'
         )
@@ -580,10 +582,11 @@ class CharacterCog(commands.Cog):
             return
         
         # Check if this command is being run in a location channel
-        location_channel_check = self.db.execute_query(
-            "SELECT location_id, name, location_type FROM locations WHERE channel_id = ?",
-            (interaction.channel.id,),
-            fetch='one'
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        location_channel_check = channel_manager.get_location_from_channel_id(
+            interaction.guild.id, 
+            interaction.channel.id
         )
         
         if location_channel_check:
@@ -606,7 +609,7 @@ class CharacterCog(commands.Cog):
     async def act(self, interaction: discord.Interaction, action: str):
         # fetch character name from your DB
         row = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch="one"
         )
@@ -638,7 +641,7 @@ class CharacterCog(commands.Cog):
     async def say(self, interaction: discord.Interaction, message: str):
         # Check if user has a logged-in character
         char_data = self.db.execute_query(
-            "SELECT name, is_logged_in FROM characters WHERE user_id = ? AND is_logged_in = 1",
+            "SELECT name, is_logged_in FROM characters WHERE user_id = %s AND is_logged_in = true",
             (interaction.user.id,),
             fetch='one'
         )
@@ -667,7 +670,7 @@ class CharacterCog(commands.Cog):
     @character_group.command(name="create", description="Create a new character")
     async def create_character(self, interaction: discord.Interaction):
         existing = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE user_id = ?",
+            "SELECT user_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -704,7 +707,7 @@ class CharacterCog(commands.Cog):
     @character_group.command(name="dock", description="Dock your ship at the current location")
     async def dock_ship(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -729,19 +732,19 @@ class CharacterCog(commands.Cog):
         
         # Dock the ship
         self.db.execute_query(
-            "UPDATE characters SET location_status = 'docked' WHERE user_id = ?",
+            "UPDATE characters SET location_status = 'docked' WHERE user_id = %s",
             (interaction.user.id,)
         )
         
         # Get character name and location name for roleplay message
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
         location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )[0]
@@ -757,7 +760,7 @@ class CharacterCog(commands.Cog):
     @character_group.command(name="undock", description="Undock and move to space near the location")
     async def undock_ship(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(
-            "SELECT current_location, location_status, current_ship_id FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, current_ship_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -788,9 +791,9 @@ class CharacterCog(commands.Cog):
         blocking_jobs = self.db.execute_query(
             '''SELECT COUNT(*) FROM jobs j 
                LEFT JOIN job_tracking jt ON j.job_id = jt.job_id
-               WHERE j.taken_by = ? AND j.job_status = 'active' 
-               AND (jt.start_location = ? OR (jt.start_location IS NULL AND j.location_id = ?))
-               AND (j.destination_location_id IS NULL OR j.destination_location_id = ?)''',
+               WHERE j.taken_by = %s AND j.job_status = 'active' 
+               AND (jt.start_location = %s OR (jt.start_location IS NULL AND j.location_id = %s))
+               AND (j.destination_location_id IS NULL OR j.destination_location_id = %s)''',
             (interaction.user.id, current_location, current_location, current_location),
             fetch='one'
         )[0]
@@ -802,7 +805,7 @@ class CharacterCog(commands.Cog):
                 color=0xff9900
             )
             embed.add_field(
-                name="Confirm Undocking?",
+                name="Confirm Undocking%s",
                 value="This will cancel your active jobs without reward.",
                 inline=False
             )
@@ -821,19 +824,19 @@ class CharacterCog(commands.Cog):
         
         # Undock the ship
         self.db.execute_query(
-            "UPDATE characters SET location_status = 'in_space' WHERE user_id = ?",
+            "UPDATE characters SET location_status = 'in_space' WHERE user_id = %s",
             (interaction.user.id,)
         )
         
         # Get character name and location name for roleplay message
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
         location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )[0]
@@ -875,7 +878,7 @@ class CharacterCog(commands.Cog):
             FROM characters c
             LEFT JOIN locations l ON c.current_location = l.location_id
             LEFT JOIN ships     s ON c.ship_id       = s.ship_id
-            WHERE c.user_id = ?
+            WHERE c.user_id = %s
             ''',
             (interaction.user.id,),
             fetch='one'
@@ -1021,7 +1024,7 @@ class CharacterCog(commands.Cog):
     @character_group.command(name="location", description="View current location and available actions")
     async def location_info(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(
-            "SELECT user_id, current_location, location_status FROM characters WHERE user_id = ?",
+            "SELECT user_id, current_location, location_status FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1046,7 +1049,7 @@ class CharacterCog(commands.Cog):
                    JOIN locations ol ON ts.origin_location = ol.location_id
                    JOIN locations dl ON ts.destination_location = dl.location_id
                    JOIN corridors c ON ts.corridor_id = c.corridor_id
-                   WHERE ts.user_id = ? AND ts.status = 'traveling'""",
+                   WHERE ts.user_id = %s AND ts.status = 'traveling'""",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -1059,7 +1062,7 @@ class CharacterCog(commands.Cog):
                 # Calculate time remaining
                 from datetime import datetime
                 try:
-                    end_dt = datetime.fromisoformat(end_time)
+                    end_dt = safe_datetime_parse(end_time)
                     now = datetime.utcnow()
                     time_remaining = (end_dt - now).total_seconds()
                     
@@ -1104,12 +1107,24 @@ class CharacterCog(commands.Cog):
                 )
                 return
         
-        # Get location info
-        location_info = self.db.execute_query(
-            "SELECT name, channel_id FROM locations WHERE location_id = ?",
+        # Get location info using guild-specific system
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        channel_info = channel_manager.get_channel_id_from_location(
+            interaction.guild.id, 
+            current_location
+        )
+        
+        # Get location name separately
+        location_name = self.db.execute_query(
+            "SELECT name FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )
+        
+        location_info = None
+        if channel_info and location_name:
+            location_info = (location_name[0], channel_info[0])  # (name, channel_id)
         
         if not location_info:
             await interaction.response.send_message(
@@ -1153,7 +1168,7 @@ class CharacterCog(commands.Cog):
     @character_group.command(name="inventory", description="View your inventory")
     async def view_inventory(self, interaction: discord.Interaction):
         char_check = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE user_id = ?",
+            "SELECT user_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1170,7 +1185,7 @@ class CharacterCog(commands.Cog):
                       i.item_id, CASE WHEN ce.equipment_id IS NOT NULL THEN 1 ELSE 0 END as is_equipped
                FROM inventory i
                LEFT JOIN character_equipment ce ON i.item_id = ce.item_id AND ce.user_id = i.owner_id
-               WHERE i.owner_id = ?
+               WHERE i.owner_id = %s
                ORDER BY is_equipped DESC, i.item_type, i.item_name''',
             (interaction.user.id,),
             fetch='all'
@@ -1241,7 +1256,7 @@ class CharacterCog(commands.Cog):
                FROM characters c
                LEFT JOIN character_identity ci ON c.user_id = ci.user_id
                LEFT JOIN locations l ON ci.birthplace_id = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (target_user.id,),
             fetch='one'
         )        
@@ -1340,7 +1355,7 @@ class CharacterCog(commands.Cog):
                c.name as owner_name
                FROM ships s
                JOIN characters c ON s.owner_id = c.user_id
-               WHERE s.owner_id = ?''',
+               WHERE s.owner_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -1445,7 +1460,7 @@ class CharacterCog(commands.Cog):
     async def search_location(self, interaction: discord.Interaction):
         # Check character exists and get location
         char_data = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1458,7 +1473,7 @@ class CharacterCog(commands.Cog):
         
         # Check location type (no searching on ships or travel channels)
         location_info = self.db.execute_query(
-            "SELECT name, location_type, wealth_level FROM locations WHERE location_id = ?",
+            "SELECT name, location_type, wealth_level FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )
@@ -1476,16 +1491,19 @@ class CharacterCog(commands.Cog):
         
         # Check cooldown
         cooldown_data = self.db.execute_query(
-            "SELECT last_search_time FROM search_cooldowns WHERE user_id = ? AND location_id = ?",
+            "SELECT last_search_time FROM search_cooldowns WHERE user_id = %s AND location_id = %s",
             (interaction.user.id, current_location),
             fetch='one'
         )
         
-        import datetime
-        current_time = datetime.datetime.now()
+        current_time = datetime.now()
         
         if cooldown_data:
-            last_search = datetime.datetime.fromisoformat(cooldown_data[0])
+            # Handle both datetime objects (PostgreSQL) and strings (SQLite)
+            if isinstance(cooldown_data[0], datetime):
+                last_search = cooldown_data[0]
+            else:
+                last_search = safe_datetime_parse(cooldown_data[0])
             time_diff = current_time - last_search
             
             # 15 minute cooldown
@@ -1550,8 +1568,10 @@ class CharacterCog(commands.Cog):
         
         # Update cooldown
         self.db.execute_query(
-            "INSERT OR REPLACE INTO search_cooldowns (user_id, last_search_time, location_id) VALUES (?, ?, ?)",
-            (interaction.user.id, current_time.isoformat(), current_location)
+            """INSERT INTO search_cooldowns (user_id, last_search_time, location_id) VALUES (%s, %s, %s)
+               ON CONFLICT (user_id) DO UPDATE SET 
+               last_search_time = EXCLUDED.last_search_time, location_id = EXCLUDED.location_id""",
+            (interaction.user.id, current_time, current_location)
         )
         
         # Generate search results
@@ -1560,7 +1580,7 @@ class CharacterCog(commands.Cog):
             '''SELECT item_name, item_type, SUM(quantity) as total_quantity, 
                       MAX(description) as description, MAX(value) as value
                FROM location_items 
-               WHERE location_id = ?
+               WHERE location_id = %s
                GROUP BY item_name, item_type
                LIMIT 5''',
             (current_location,),
@@ -1580,7 +1600,7 @@ class CharacterCog(commands.Cog):
             
             # Remove the dropped items from the location
             self.db.execute_query(
-                "DELETE FROM location_items WHERE location_id = ? AND item_name = ? LIMIT ?",
+                "DELETE FROM location_items WHERE location_id = %s AND item_name = %s LIMIT %s",
                 (current_location, item_name, quantity)
             )
 
@@ -1618,7 +1638,7 @@ class CharacterCog(commands.Cog):
                 if item_def:
                     # Check if player already has this item
                     existing_item = self.db.execute_query(
-                        "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+                        "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
                         (interaction.user.id, actual_name),
                         fetch='one'
                     )
@@ -1626,7 +1646,7 @@ class CharacterCog(commands.Cog):
                     if existing_item:
                         # Update existing stack
                         self.db.execute_query(
-                            "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
+                            "UPDATE inventory SET quantity = quantity + %s WHERE item_id = %s",
                             (actual_quantity, existing_item[0])
                         )
                     else:
@@ -1635,7 +1655,7 @@ class CharacterCog(commands.Cog):
                         self.db.execute_query(
                             '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, 
                                description, value, metadata)
-                               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                               VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                             (interaction.user.id, actual_name, item_def["type"], actual_quantity,
                              item_def["description"], item_def["base_value"], metadata)
                         )
@@ -1647,14 +1667,14 @@ class CharacterCog(commands.Cog):
                     for dropped in dropped_items:
                         if dropped[0] == actual_name:  # item_name matches
                             existing_item = self.db.execute_query(
-                                "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+                                "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
                                 (interaction.user.id, actual_name),
                                 fetch='one'
                             )
                             
                             if existing_item:
                                 self.db.execute_query(
-                                    "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
+                                    "UPDATE inventory SET quantity = quantity + %s WHERE item_id = %s",
                                     (actual_quantity, existing_item[0])
                                 )
                             else:
@@ -1665,7 +1685,7 @@ class CharacterCog(commands.Cog):
                                 self.db.execute_query(
                                     '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, 
                                        description, value, metadata)
-                                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                                       VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                                     (interaction.user.id, actual_name, dropped[1], actual_quantity,
                                      dropped[3], dropped[4], metadata)
                                 )
@@ -1696,7 +1716,7 @@ class CharacterCog(commands.Cog):
     async def look_around(self, interaction: discord.Interaction):
         # Get character location
         char_info = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1709,7 +1729,7 @@ class CharacterCog(commands.Cog):
         
         # Get location name
         location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )[0]
@@ -1718,7 +1738,7 @@ class CharacterCog(commands.Cog):
         items = self.db.execute_query(
             '''SELECT item_name, quantity, dropped_by, dropped_at 
                FROM location_items 
-               WHERE location_id = ?
+               WHERE location_id = %s
                ORDER BY dropped_at DESC
                LIMIT 10''',
             (current_location,),
@@ -1756,7 +1776,7 @@ class CharacterCog(commands.Cog):
     @character_group.command(name="delete", description="Permanently delete your character (cannot be undone!)")
     async def delete_character(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(
-            "SELECT name, money, hp FROM characters WHERE user_id = ?",
+            "SELECT name, money, hp FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1817,7 +1837,7 @@ class CharacterCog(commands.Cog):
         
         # Check if character exists and is logged in
         char_data = self.db.execute_query(
-            "SELECT name, is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT name, is_logged_in FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -1830,7 +1850,7 @@ class CharacterCog(commands.Cog):
         
         # Award XP
         self.db.execute_query(
-            "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+            "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
             (xp_gained, user_id)
         )
         
@@ -1845,7 +1865,7 @@ class CharacterCog(commands.Cog):
         # Get all owned homes
         owned_homes = self.db.execute_query(
             '''SELECT home_id, home_name, location_id FROM location_homes 
-               WHERE owner_id = ?''',
+               WHERE owner_id = %s''',
             (user_id,),
             fetch='all'
         )
@@ -1855,22 +1875,22 @@ class CharacterCog(commands.Cog):
             self.db.execute_query(
                 '''UPDATE location_homes 
                    SET owner_id = NULL, is_available = 1, purchase_date = NULL
-                   WHERE owner_id = ?''',
+                   WHERE owner_id = %s''',
                 (user_id,)
             )
             
             # Remove any market listings
             self.db.execute_query(
                 '''UPDATE home_market_listings 
-                   SET is_active = 0
-                   WHERE seller_id = ?''',
+                   SET is_active = false
+                   WHERE seller_id = %s''',
                 (user_id,)
             )
             
             # Clean up home interior threads
             for home_id, home_name, location_id in owned_homes:
                 interior_info = self.db.execute_query(
-                    "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+                    "SELECT channel_id FROM home_interiors WHERE home_id = %s",
                     (home_id,),
                     fetch='one'
                 )
@@ -1895,7 +1915,7 @@ class CharacterCog(commands.Cog):
                       s.cargo_capacity, s.speed_rating, s.combat_rating, s.fuel_efficiency
                FROM ship_exchange_listings sel
                JOIN ships s ON sel.ship_id = s.ship_id
-               WHERE sel.owner_id = ? AND sel.is_active = 1''',
+               WHERE sel.owner_id = %s AND sel.is_active = true''',
             (user_id,),
             fetch='all'
         )
@@ -1920,7 +1940,7 @@ class CharacterCog(commands.Cog):
                        (location_id, ship_name, ship_type, ship_class, tier, price, 
                         cargo_capacity, speed_rating, combat_rating, fuel_efficiency, 
                         condition_rating, market_value, is_player_sold, original_owner_id)
-                       VALUES (?, ?, ?, 'civilian', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)''',
+                       VALUES (%s, %s, %s, 'civilian', %s, %s, %s, %s, %s, %s, %s, %s, 1, %s)''',
                     (location_id, ship_name, ship_type, tier, reduced_price, 
                      cargo_capacity, speed_rating, combat_rating, fuel_efficiency, 
                      condition, market_value, user_id)
@@ -1933,20 +1953,20 @@ class CharacterCog(commands.Cog):
         
         # Deactivate all ship exchange listings from this player
         self.db.execute_query(
-            "UPDATE ship_exchange_listings SET is_active = 0 WHERE owner_id = ?",
+            "UPDATE ship_exchange_listings SET is_active = false WHERE owner_id = %s",
             (user_id,)
         )
         
         # Cancel all pending offers made by this player
         self.db.execute_query(
-            "UPDATE ship_exchange_offers SET status = 'expired' WHERE offerer_id = ?",
+            "UPDATE ship_exchange_offers SET status = 'expired' WHERE offerer_id = %s",
             (user_id,)
         )
         
         # Cancel all pending offers on this player's ships
         offer_listings = [listing[0] for listing in listings]
         if offer_listings:
-            placeholders = ','.join(['?' for _ in offer_listings])
+            placeholders = ','.join(['%s' for _ in offer_listings])
             self.db.execute_query(
                 f"UPDATE ship_exchange_offers SET status = 'expired' WHERE listing_id IN ({placeholders})",
                 offer_listings
@@ -1955,7 +1975,7 @@ class CharacterCog(commands.Cog):
     async def check_character_death(self, user_id: int, guild: discord.Guild, reason: str = "unknown"):
         """Check if character has died (HP <= 0) and execute death if needed"""
         char_data = self.db.execute_query(
-            "SELECT name, hp FROM characters WHERE user_id = ?",
+            "SELECT name, hp FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -1975,7 +1995,7 @@ class CharacterCog(commands.Cog):
     async def check_ship_death(self, user_id: int, guild: discord.Guild, reason: str = "ship destruction"):
         """Check if ship has been destroyed (hull <= 0) and execute character death if needed"""
         ship_data = self.db.execute_query(
-            "SELECT hull_integrity FROM ships WHERE owner_id = ?",
+            "SELECT hull_integrity FROM ships WHERE owner_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -1988,7 +2008,7 @@ class CharacterCog(commands.Cog):
         if hull_integrity <= 0:
             # Ship is destroyed - this kills the character
             char_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -2015,7 +2035,7 @@ class CharacterCog(commands.Cog):
             "SELECT c.current_location, c.current_ship_id, l.name as loc_name "
             "FROM characters c "
             "LEFT JOIN locations l ON c.current_location = l.location_id "
-            "WHERE c.user_id = ?",
+            "WHERE c.user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -2027,13 +2047,13 @@ class CharacterCog(commands.Cog):
             location_id, ship_id, location_name = char_data
             if ship_id and not location_id:
                 ship_loc = self.db.execute_query(
-                    "SELECT docked_at_location FROM ships WHERE ship_id = ?",
+                    "SELECT docked_at_location FROM ships WHERE ship_id = %s",
                     (ship_id,), fetch='one'
                 )
                 if ship_loc and ship_loc[0]:
                     location_id = ship_loc[0]
                     loc_name_result = self.db.execute_query(
-                        "SELECT name FROM locations WHERE location_id = ?",
+                        "SELECT name FROM locations WHERE location_id = %s",
                         (location_id,), fetch='one'
                     )
                     if loc_name_result:
@@ -2046,31 +2066,31 @@ class CharacterCog(commands.Cog):
             await news_cog.post_obituary_news(char_name, location_id, reason)
 
         # Delete character and associated data
-        self.db.execute_query("DELETE FROM characters WHERE user_id = ?", (user_id,))
-        self.db.execute_query("DELETE FROM character_identity WHERE user_id = ?", (user_id,))
-        self.db.execute_query("DELETE FROM character_inventory WHERE user_id = ?", (user_id,))
-        self.db.execute_query("DELETE FROM inventory WHERE owner_id = ?", (user_id,))
+        self.db.execute_query("DELETE FROM characters WHERE user_id = %s", (user_id,))
+        self.db.execute_query("DELETE FROM character_identity WHERE user_id = %s", (user_id,))
+        self.db.execute_query("DELETE FROM character_inventory WHERE user_id = %s", (user_id,))
+        self.db.execute_query("DELETE FROM inventory WHERE owner_id = %s", (user_id,))
         
         # Handle ship exchange listings - transfer to location inventory before deleting ships
         await self._handle_ship_exchange_death_cleanup(user_id)
         
         # Comprehensive ship cleanup - delete ALL ships owned by the user
-        self.db.execute_query("DELETE FROM ships WHERE owner_id = ?", (user_id,))
-        self.db.execute_query("DELETE FROM player_ships WHERE owner_id = ?", (user_id,))
+        self.db.execute_query("DELETE FROM ships WHERE owner_id = %s", (user_id,))
+        self.db.execute_query("DELETE FROM player_ships WHERE owner_id = %s", (user_id,))
         
         # Clean up ship-related data
         if ship_id:
-            self.db.execute_query("DELETE FROM ship_upgrades WHERE ship_id = ?", (ship_id,))
-            self.db.execute_query("DELETE FROM ship_customizations WHERE ship_id = ?", (ship_id,))
-            self.db.execute_query("DELETE FROM ship_activities WHERE ship_id = ?", (ship_id,))
-            self.db.execute_query("DELETE FROM ship_interiors WHERE ship_id = ?", (ship_id,))
+            self.db.execute_query("DELETE FROM ship_upgrades WHERE ship_id = %s", (ship_id,))
+            self.db.execute_query("DELETE FROM ship_customizations WHERE ship_id = %s", (ship_id,))
+            self.db.execute_query("DELETE FROM ship_activities WHERE ship_id = %s", (ship_id,))
+            self.db.execute_query("DELETE FROM ship_interiors WHERE ship_id = %s", (ship_id,))
         self.db.execute_query(
-            "UPDATE travel_sessions SET status = 'character_death' WHERE user_id = ? AND status = 'traveling'",
+            "UPDATE travel_sessions SET status = 'character_death' WHERE user_id = %s AND status = 'traveling'",
             (user_id,)
         )
-        self.db.execute_query("UPDATE characters SET group_id = NULL WHERE user_id = ?", (user_id,))
+        self.db.execute_query("UPDATE characters SET group_id = NULL WHERE user_id = %s", (user_id,))
         self.db.execute_query(
-            "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL WHERE taken_by = ?",
+            "UPDATE jobs SET is_taken = false, taken_by = NULL, taken_at = NULL WHERE taken_by = %s",
             (user_id,)
         )
         await self.cleanup_character_homes(user_id)
@@ -2151,27 +2171,32 @@ class CharacterCog(commands.Cog):
             except Exception as e:
                 print(f"Error sending death DM to {member.display_name}: {e}")
 
-        # Announce in location channel if it exists
+        # Announce in all location channels using cross-guild broadcast
         if location_id:
-            location_channel_id_result = self.db.execute_query("SELECT channel_id FROM locations WHERE location_id = ?", (location_id,), fetch='one')
-            if location_channel_id_result and location_channel_id_result[0]:
-                location_channel = guild.get_channel(location_channel_id_result[0])
-                if location_channel:
+            try:
+                from utils.channel_manager import ChannelManager
+                channel_manager = ChannelManager(self.bot)
+                cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
+                
+                death_announcement = discord.Embed(
+                    title="💀 Tragedy Strikes",
+                    description=f"A grim discovery has been made at {location_name}. **{char_name}** is dead.",
+                    color=0x8b0000
+                )
+                death_announcement.add_field(
+                    name="Cause of Death",
+                    value=reason.title(),
+                    inline=False
+                )
+                death_announcement.set_footer(text="Another soul lost to the void.")
+                
+                for guild_channel, channel in cross_guild_channels:
                     try:
-                        death_announcement = discord.Embed(
-                            title="💀 Tragedy Strikes",
-                            description=f"A grim discovery has been made at {location_name}. **{char_name}** is dead.",
-                            color=0x8b0000
-                        )
-                        death_announcement.add_field(
-                            name="Cause of Death",
-                            value=reason.title(),
-                            inline=False
-                        )
-                        death_announcement.set_footer(text="Another soul lost to the void.")
-                        await location_channel.send(embed=death_announcement)
+                        await channel.send(embed=death_announcement)
                     except Exception as e:
                         print(f"Error sending death announcement to channel: {e}")
+            except Exception as e:
+                print(f"Error sending death announcement to location channels: {e}")
 
         print(f"💀 Character death (automatic): {char_name} (ID: {user_id}) - {reason}")
 
@@ -2180,7 +2205,7 @@ class CharacterCog(commands.Cog):
         # Handle healing (positive hp_change) normally
         if hp_change >= 0:
             self.db.execute_query(
-                "UPDATE characters SET hp = MAX(0, hp + ?) WHERE user_id = ?",
+                "UPDATE characters SET hp = GREATEST(0::bigint, hp + %s) WHERE user_id = %s",
                 (hp_change, user_id)
             )
             return await self.check_character_death(user_id, guild, reason)
@@ -2197,7 +2222,7 @@ class CharacterCog(commands.Cog):
         final_hp_change = -final_damage
         
         self.db.execute_query(
-            "UPDATE characters SET hp = MAX(0, hp + ?) WHERE user_id = ?",
+            "UPDATE characters SET hp = GREATEST(0::bigint, hp + %s) WHERE user_id = %s",
             (final_hp_change, user_id)
         )
         
@@ -2206,30 +2231,30 @@ class CharacterCog(commands.Cog):
             try:
                 # Get character's current location for notification
                 char_data = self.db.execute_query(
-                    "SELECT current_location FROM characters WHERE user_id = ?",
+                    "SELECT current_location FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
                 
                 if char_data and char_data[0]:
                     location_id = char_data[0]
-                    location_data = self.db.execute_query(
-                        "SELECT channel_id FROM locations WHERE location_id = ?",
-                        (location_id,),
-                        fetch='one'
-                    )
+                    # Use cross-guild broadcasting for armor protection notifications
+                    from utils.channel_manager import ChannelManager
+                    channel_manager = ChannelManager(self.bot)
+                    cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
                     
-                    if location_data and location_data[0]:
-                        channel = guild.get_channel(location_data[0])
-                        if channel:
-                            user = guild.get_member(user_id)
-                            if user:
-                                embed = discord.Embed(
-                                    title="🛡️ Armor Protection",
-                                    description=f"Damage reduced by: **{damage_reduced}** due to armor",
-                                    color=0x4169E1
-                                )
+                    user = guild.get_member(user_id)
+                    if user and cross_guild_channels:
+                        embed = discord.Embed(
+                            title="🛡️ Armor Protection",
+                            description=f"Damage reduced by: **{damage_reduced}** due to armor",
+                            color=0x4169E1
+                        )
+                        for guild_channel, channel in cross_guild_channels:
+                            try:
                                 await channel.send(embed=embed, delete_after=10)
+                            except:
+                                pass  # Skip if can't send to this guild
             except Exception as e:
                 # Don't let notification failures stop damage processing
                 print(f"Failed to send damage reduction notification: {e}")
@@ -2239,14 +2264,14 @@ class CharacterCog(commands.Cog):
     async def update_ship_hull(self, user_id: int, hull_change: int, guild: discord.Guild, reason: str = ""):
         """Update ship hull and check for death"""
         self.db.execute_query(
-            "UPDATE ships SET hull_integrity = MAX(0, hull_integrity + ?) WHERE owner_id = ?",
+            "UPDATE ships SET hull_integrity = GREATEST(0::bigint, hull_integrity + %s) WHERE owner_id = %s",
             (hull_change, user_id)
         )
         return await self.check_ship_death(user_id, guild, reason)    
     @character_group.command(name="login", description="Log into the game and restore your character")
     async def login_character(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(
-            "SELECT name, current_location, is_logged_in, group_id, current_ship_id FROM characters WHERE user_id = ?",
+            "SELECT name, current_location, is_logged_in, group_id, current_ship_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2269,8 +2294,8 @@ class CharacterCog(commands.Cog):
         
         # Log in the character
         self.db.execute_query(
-            "UPDATE characters SET is_logged_in = 1, login_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE user_id = ?",
-            (interaction.user.id,)
+            "UPDATE characters SET is_logged_in = true, guild_id = %s, login_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE user_id = %s",
+            (interaction.guild.id, interaction.user.id)
         )
         
         # Restore location access
@@ -2280,7 +2305,7 @@ class CharacterCog(commands.Cog):
 
         if current_ship_id:
             ship_info_raw = self.db.execute_query(
-                "SELECT ship_id, name, ship_type, interior_description, channel_id, owner_id FROM ships WHERE ship_id = ?",
+                "SELECT ship_id, name, ship_type, interior_description, channel_id, owner_id FROM ships WHERE ship_id = %s",
                 (current_ship_id,), fetch='one'
             )
             if ship_info_raw:
@@ -2292,16 +2317,16 @@ class CharacterCog(commands.Cog):
                     await channel_manager.give_user_ship_access(interaction.user, current_ship_id)
                     location_name = f"Aboard '{ship_name}'"
                 else:
-                    self.db.execute_query("UPDATE characters SET current_ship_id = NULL, current_location = NULL WHERE user_id = ?", (interaction.user.id,))
+                    self.db.execute_query("UPDATE characters SET current_ship_id = NULL, current_location = NULL WHERE user_id = %s", (interaction.user.id,))
                     location_name = "Lost in Space (Ship's owner not found)"
             else:
-                self.db.execute_query("UPDATE characters SET current_ship_id = NULL, current_location = NULL WHERE user_id = ?", (interaction.user.id,))
+                self.db.execute_query("UPDATE characters SET current_ship_id = NULL, current_location = NULL WHERE user_id = %s", (interaction.user.id,))
                 location_name = "Lost in Space (Ship was destroyed)"
 
         elif current_location:
             success = await channel_manager.restore_user_location_on_login(interaction.user, current_location)
             location_name = self.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (current_location,),
                 fetch='one'
             )[0]
@@ -2319,7 +2344,7 @@ class CharacterCog(commands.Cog):
                 colony_id, colony_name = colony_locations
                 # Set character location to the colony
                 self.db.execute_query(
-                    "UPDATE characters SET current_location = ? WHERE user_id = ?",
+                    "UPDATE characters SET current_location = %s WHERE user_id = %s",
                     (colony_id, interaction.user.id)
                 )
                 # Grant access to the colony
@@ -2333,13 +2358,13 @@ class CharacterCog(commands.Cog):
         if group_id:
             # Check if other group members are online
             online_members = self.db.execute_query(
-                "SELECT COUNT(*) FROM characters WHERE group_id = ? AND is_logged_in = 1",
+                "SELECT COUNT(*) FROM characters WHERE group_id = %s AND is_logged_in = true",
                 (group_id,),
                 fetch='one'
             )[0]
             
             group_info = self.db.execute_query(
-                "SELECT name, leader_id FROM groups WHERE group_id = ?",
+                "SELECT name, leader_id FROM groups WHERE group_id = %s",
                 (group_id,),
                 fetch='one'
             )
@@ -2361,7 +2386,7 @@ class CharacterCog(commands.Cog):
                 
                 # Notify other online group members
                 other_members = self.db.execute_query(
-                    "SELECT user_id, name FROM characters WHERE group_id = ? AND user_id != ? AND is_logged_in = 1",
+                    "SELECT user_id, name FROM characters WHERE group_id = %s AND user_id != %s AND is_logged_in = true",
                     (group_id, interaction.user.id),
                     fetch='all'
                 )
@@ -2378,7 +2403,7 @@ class CharacterCog(commands.Cog):
                     '''SELECT p.amount, f.name, f.emoji
                        FROM faction_payouts p
                        JOIN factions f ON p.faction_id = f.faction_id
-                       WHERE p.user_id = ? AND p.collected = 0''',
+                       WHERE p.user_id = %s AND p.collected = 0''',
                     (user_id,),
                     fetch='all'
                 )
@@ -2388,13 +2413,13 @@ class CharacterCog(commands.Cog):
                     
                     # Add to character's money
                     self.db.execute_query(
-                        "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                        "UPDATE characters SET money = money + %s WHERE user_id = %s",
                         (total_payout, user_id)
                     )
                     
                     # Mark as collected
                     self.db.execute_query(
-                        "UPDATE faction_payouts SET collected = 1 WHERE user_id = ? AND collected = 0",
+                        "UPDATE faction_payouts SET collected = 1 WHERE user_id = %s AND collected = 0",
                         (user_id,)
                     )
                     
@@ -2456,7 +2481,7 @@ class CharacterCog(commands.Cog):
     @character_group.command(name="logout", description="Log out of the game (saves your progress)")
     async def logout_character(self, interaction: discord.Interaction):
         char_data = self.db.execute_query(
-            "SELECT name, is_logged_in, group_id FROM characters WHERE user_id = ?",
+            "SELECT name, is_logged_in, group_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2479,7 +2504,7 @@ class CharacterCog(commands.Cog):
         
         # Check for active jobs
         active_jobs = self.db.execute_query(
-            "SELECT COUNT(*) FROM jobs WHERE taken_by = ? AND job_status = 'active'",
+            "SELECT COUNT(*) FROM jobs WHERE taken_by = %s AND job_status = 'active'",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -2498,7 +2523,7 @@ class CharacterCog(commands.Cog):
                 inline=False
             )
             embed.add_field(
-                name="Confirm Logout?",
+                name="Confirm Logout%s",
                 value="Choose below to proceed or cancel.",
                 inline=False
             )
@@ -2514,7 +2539,7 @@ class CharacterCog(commands.Cog):
         if member and interaction.guild.me.guild_permissions.manage_nicknames:
             # We only clear the nickname if it matches the character name and auto-rename is on.
             auto_rename_setting = self.db.execute_query(
-                "SELECT auto_rename FROM characters WHERE user_id = ?",
+                "SELECT auto_rename FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -2525,12 +2550,12 @@ class CharacterCog(commands.Cog):
                     print(f"Failed to clear nickname on logout for {member}: {e}")
         # Cancel any active jobs
         self.db.execute_query(
-            "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE taken_by = ?",
+            "UPDATE jobs SET is_taken = false, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE taken_by = %s",
             (user_id,)
         )
         # Handle group notifications and management
         group_info = self.db.execute_query(
-            "SELECT g.group_id, g.name FROM characters c JOIN groups g ON c.group_id = g.group_id WHERE c.user_id = ?",
+            "SELECT g.group_id, g.name FROM characters c JOIN groups g ON c.group_id = g.group_id WHERE c.user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -2540,7 +2565,7 @@ class CharacterCog(commands.Cog):
             
             # Notify other online group members
             other_members = self.db.execute_query(
-                "SELECT user_id, name FROM characters WHERE group_id = ? AND user_id != ? AND is_logged_in = 1",
+                "SELECT user_id, name FROM characters WHERE group_id = %s AND user_id != %s AND is_logged_in = true",
                 (group_id, user_id),
                 fetch='all'
             )
@@ -2555,7 +2580,7 @@ class CharacterCog(commands.Cog):
             
             # Check if this was the last online member and handle group state
             remaining_online = self.db.execute_query(
-                "SELECT COUNT(*) FROM characters WHERE group_id = ? AND is_logged_in = 1 AND user_id != ?",
+                "SELECT COUNT(*) FROM characters WHERE group_id = %s AND is_logged_in = true AND user_id != %s",
                 (group_id, user_id),
                 fetch='one'
             )[0]
@@ -2565,13 +2590,13 @@ class CharacterCog(commands.Cog):
                 print(f"🎯 Group {group_name} has no online members after {char_name} logout")
         # Remove from job tracking
         self.db.execute_query(
-            "DELETE FROM job_tracking WHERE user_id = ?",
+            "DELETE FROM job_tracking WHERE user_id = %s",
             (user_id,)
         )
         
         # Get current location, ship, and home for cleanup
         char_state = self.db.execute_query(
-            "SELECT current_location, current_ship_id, current_home_id FROM characters WHERE user_id = ?",
+            "SELECT current_location, current_ship_id, current_home_id FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -2579,7 +2604,7 @@ class CharacterCog(commands.Cog):
 
         # Log out the character
         self.db.execute_query(
-            "UPDATE characters SET is_logged_in = 0 WHERE user_id = ?",
+            "UPDATE characters SET is_logged_in = false WHERE user_id = %s",
             (user_id,)
         )
 
@@ -2636,7 +2661,7 @@ class CharacterCog(commands.Cog):
     async def _execute_auto_logout(self, user_id: int, reason: str):
         """Execute automatic logout (called by activity tracker)"""
         char_data = self.db.execute_query(
-            "SELECT name, current_location, current_ship_id, current_home_id FROM characters WHERE user_id = ?",
+            "SELECT name, current_location, current_ship_id, current_home_id FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -2648,18 +2673,18 @@ class CharacterCog(commands.Cog):
         
         # Cancel any active jobs
         self.db.execute_query(
-            "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE taken_by = ?",
+            "UPDATE jobs SET is_taken = false, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE taken_by = %s",
             (user_id,)
         )
         
         # Remove from job tracking
         self.db.execute_query(
-            "DELETE FROM job_tracking WHERE user_id = ?",
+            "DELETE FROM job_tracking WHERE user_id = %s",
             (user_id,)
         )
         # Handle group notifications - SAME AS ABOVE
         group_info = self.db.execute_query(
-            "SELECT c.group_id, g.name FROM characters c JOIN groups g ON c.group_id = g.group_id WHERE c.user_id = ?",            (user_id,),
+            "SELECT c.group_id, g.name FROM characters c JOIN groups g ON c.group_id = g.group_id WHERE c.user_id = %s",            (user_id,),
             fetch='one'
         )
 
@@ -2668,7 +2693,7 @@ class CharacterCog(commands.Cog):
             
             # Notify other online group members about AFK logout
             other_members = self.db.execute_query(
-                "SELECT user_id, name FROM characters WHERE group_id = ? AND user_id != ? AND is_logged_in = 1",
+                "SELECT user_id, name FROM characters WHERE group_id = %s AND user_id != %s AND is_logged_in = true",
                 (group_id, user_id),
                 fetch='all'
             )
@@ -2682,7 +2707,7 @@ class CharacterCog(commands.Cog):
                         pass
         # Log out the character
         self.db.execute_query(
-            "UPDATE characters SET is_logged_in = 0 WHERE user_id = ?",
+            "UPDATE characters SET is_logged_in = false WHERE user_id = %s",
             (user_id,)
         )
         
@@ -2750,7 +2775,7 @@ class CharacterCog(commands.Cog):
         
         # Get character info
         char_info = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2765,7 +2790,7 @@ class CharacterCog(commands.Cog):
         inventory_item = self.db.execute_query(
             '''SELECT item_id, item_name, quantity, item_type, description, value
                FROM inventory 
-               WHERE owner_id = ? AND LOWER(item_name) LIKE LOWER(?) AND quantity >= ?''',
+               WHERE owner_id = %s AND LOWER(item_name) LIKE LOWER(%s) AND quantity >= %s''',
             (interaction.user.id, f"%{item_name}%", quantity),
             fetch='one'
         )
@@ -2778,10 +2803,10 @@ class CharacterCog(commands.Cog):
         
         # Remove from inventory
         if current_qty == quantity:
-            self.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (inv_id,))
+            self.db.execute_query("DELETE FROM inventory WHERE item_id = %s", (inv_id,))
         else:
             self.db.execute_query(
-                "UPDATE inventory SET quantity = quantity - ? WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity - %s WHERE item_id = %s",
                 (quantity, inv_id)
             )
         
@@ -2789,7 +2814,7 @@ class CharacterCog(commands.Cog):
         self.db.execute_query(
             '''INSERT INTO location_items 
                (location_id, item_name, item_type, quantity, description, value, dropped_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s, %s, %s)''',
             (current_location, actual_name, item_type, quantity, description, value, interaction.user.id)
         )
         
@@ -2806,7 +2831,7 @@ class CharacterCog(commands.Cog):
     async def pickup_item(self, interaction: discord.Interaction, item_name: str):
         # Get character info
         char_info = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2821,7 +2846,7 @@ class CharacterCog(commands.Cog):
         location_item = self.db.execute_query(
             '''SELECT item_id, item_name, item_type, quantity, description, value
                FROM location_items 
-               WHERE location_id = ? AND LOWER(item_name) LIKE LOWER(?)
+               WHERE location_id = %s AND LOWER(item_name) LIKE LOWER(%s)
                ORDER BY dropped_at ASC LIMIT 1''',
             (current_location, f"%{item_name}%"),
             fetch='one'
@@ -2834,18 +2859,18 @@ class CharacterCog(commands.Cog):
         item_id, actual_name, item_type, quantity, description, value = location_item
         
         # Remove from location
-        self.db.execute_query("DELETE FROM location_items WHERE item_id = ?", (item_id,))
+        self.db.execute_query("DELETE FROM location_items WHERE item_id = %s", (item_id,))
         
         # Add to inventory
         existing_item = self.db.execute_query(
-            "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+            "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
             (interaction.user.id, actual_name),
             fetch='one'
         )
         
         if existing_item:
             self.db.execute_query(
-                "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity + %s WHERE item_id = %s",
                 (quantity, existing_item[0])
             )
         else:
@@ -2853,7 +2878,7 @@ class CharacterCog(commands.Cog):
             metadata = ItemConfig.create_item_metadata(actual_name)
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, actual_name, item_type, quantity, description, value, metadata)
             )
         
@@ -2869,7 +2894,7 @@ class CharacterCog(commands.Cog):
         char_data = self.db.execute_query(
             '''SELECT name, level, experience, skill_points, engineering, navigation, 
                       combat, medical
-               FROM characters WHERE user_id = ?''',
+               FROM characters WHERE user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -2967,7 +2992,7 @@ class CharacterCog(commands.Cog):
     async def level_up_check(self, user_id: int):
         """Check if character should level up and handle the process"""
         char_data = self.db.execute_query(
-            "SELECT level, experience FROM characters WHERE user_id = ?",
+            "SELECT level, experience FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -2986,7 +3011,7 @@ class CharacterCog(commands.Cog):
                 skill_points_gained = 1  # 2 skill points per level
                 
                 self.db.execute_query(
-                    "UPDATE characters SET level = ?, skill_points = skill_points + ? WHERE user_id = ?",
+                    "UPDATE characters SET level = %s, skill_points = skill_points + %s WHERE user_id = %s",
                     (current_level, skill_points_gained, user_id)
                 )
                 
@@ -2997,41 +3022,33 @@ class CharacterCog(commands.Cog):
                     try:
                         # Get user's current location
                         user_location = self.db.execute_query(
-                            "SELECT current_location FROM characters WHERE user_id = ?",
+                            "SELECT current_location FROM characters WHERE user_id = %s",
                             (user_id,),
                             fetch='one'
                         )
                         
                         if user_location and user_location[0]:
-                            location_channel_id = self.db.execute_query(
-                                "SELECT channel_id FROM locations WHERE location_id = ?",
-                                (user_location[0],),
-                                fetch='one'
-                            )
+                            # Use cross-guild broadcasting for level up notifications
+                            from utils.channel_manager import ChannelManager
+                            channel_manager = ChannelManager(self.bot)
+                            cross_guild_channels = await channel_manager.get_cross_guild_location_channels(user_location[0])
                             
-                            if location_channel_id and location_channel_id[0]:
-                                location_channel = None
-                                for guild in self.bot.guilds:
-                                    location_channel = guild.get_channel(location_channel_id[0])
-                                    if location_channel:
-                                        break
+                            if cross_guild_channels:
+                                embed.set_color(0xffd700)
+                                embed.add_field(name="Rewards", value=f"• +{skill_points_gained} skill points\n• +10 max HP", inline=False)
+                                embed.add_field(name="💡 Tip", value="Use the 'Character > Skills' menu in `/tqe` to spend your skill points!", inline=False)
                                 
-                                if location_channel:
-                                    embed = discord.Embed(
-                                        title="🎉 LEVEL UP!",
-                                        description=f"Congratulations! You've reached level {current_level}!",
-                                        color=0xffd700
-                                    )
-                                    embed.add_field(name="Rewards", value=f"• +{skill_points_gained} skill points\n• +10 max HP", inline=False)
-                                    embed.add_field(name="💡 Tip", value="Use the 'Character > Skills' menu in `/tqe` to spend your skill points!", inline=False)
-                                    
-                                    await location_channel.send(f"{user.mention}", embed=embed)
+                                for guild_channel, channel in cross_guild_channels:
+                                    try:
+                                        await channel.send(f"{user.mention}", embed=embed)
+                                    except:
+                                        pass  # Skip if can't send to this guild
                     except Exception as e:
                         print(f"Failed to send level up notification to location channel: {e}")
                 
                 # Increase max HP
                 self.db.execute_query(
-                    "UPDATE characters SET max_hp = max_hp + 10, hp = hp + 10 WHERE user_id = ?",
+                    "UPDATE characters SET max_hp = max_hp + 10, hp = hp + 10 WHERE user_id = %s",
                     (user_id,)
                 )
                 
@@ -3054,7 +3071,7 @@ class CharacterCog(commands.Cog):
             '''SELECT l.name, l.location_type, l.wealth_level, l.has_medical
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -3082,7 +3099,7 @@ class CharacterCog(commands.Cog):
         
         # Get character info
         char_info = self.db.execute_query(
-            f"SELECT money, {skill} FROM characters WHERE user_id = ?",
+            f"SELECT money, {skill} FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3139,7 +3156,7 @@ class CharacterCog(commands.Cog):
             return
         
         char_data = self.db.execute_query(
-            "SELECT name, hp, max_hp FROM characters WHERE user_id = ?",
+            "SELECT name, hp, max_hp FROM characters WHERE user_id = %s",
             (target_user.id,),
             fetch='one'
         )
@@ -3153,7 +3170,7 @@ class CharacterCog(commands.Cog):
         # Restore HP
         new_hp = min(hp_amount, max_hp)
         self.db.execute_query(
-            "UPDATE characters SET hp = ? WHERE user_id = ?",
+            "UPDATE characters SET hp = %s WHERE user_id = %s",
             (new_hp, target_user.id)
         )
         
@@ -3203,7 +3220,7 @@ class SkillUpgradeView(discord.ui.View):
         
         # Check skill points
         current_points = self.bot.db.execute_query(
-            "SELECT skill_points FROM characters WHERE user_id = ?",
+            "SELECT skill_points FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3214,13 +3231,13 @@ class SkillUpgradeView(discord.ui.View):
         
         # Upgrade skill
         self.bot.db.execute_query(
-            f"UPDATE characters SET {skill} = {skill} + 1, skill_points = skill_points - 1 WHERE user_id = ?",
+            f"UPDATE characters SET {skill} = {skill} + 1, skill_points = skill_points - 1 WHERE user_id = %s",
             (interaction.user.id,)
         )
         
         # Get new skill level
         new_skill = self.bot.db.execute_query(
-            f"SELECT {skill} FROM characters WHERE user_id = ?",
+            f"SELECT {skill} FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3251,7 +3268,7 @@ class TrainingConfirmView(discord.ui.View):
         
         # Check if user still has enough money
         current_money = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3265,7 +3282,7 @@ class TrainingConfirmView(discord.ui.View):
         
         # Deduct cost
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (self.cost, interaction.user.id)
         )
         
@@ -3279,7 +3296,7 @@ class TrainingConfirmView(discord.ui.View):
             exp_gain = random.randint(15, 30)
             
             self.bot.db.execute_query(
-                f"UPDATE characters SET {self.skill} = {self.skill} + ?, experience = experience + ? WHERE user_id = ?",
+                f"UPDATE characters SET {self.skill} = {self.skill} + %s, experience = experience + %s WHERE user_id = %s",
                 (skill_gain, exp_gain, interaction.user.id)
             )
             
@@ -3304,7 +3321,7 @@ class TrainingConfirmView(discord.ui.View):
             exp_gain = random.randint(5, 10)  # Small consolation experience
             
             self.bot.db.execute_query(
-                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                 (exp_gain, interaction.user.id)
             )
             
@@ -3341,7 +3358,7 @@ class IDScrubView(discord.ui.View):
         
         # Check if character has enough money (expensive service)
         char_money = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3355,12 +3372,12 @@ class IDScrubView(discord.ui.View):
         
         # Deduct money and scrub identity
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - 15000 WHERE user_id = ?",
+            "UPDATE characters SET money = money - 15000 WHERE user_id = %s",
             (interaction.user.id,)
         )
         
         self.bot.db.execute_query(
-            "UPDATE character_identity SET id_scrubbed = 1, scrubbed_at = datetime('now') WHERE user_id = ?",
+            "UPDATE character_identity SET id_scrubbed = 1, scrubbed_at = NOW() WHERE user_id = %s",
             (interaction.user.id,)
         )
         
@@ -3387,18 +3404,18 @@ class IDScrubView(discord.ui.View):
         """Execute the actual undocking process after job confirmation"""
         # Cancel any active jobs first
         self.db.execute_query(
-            "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE taken_by = ?",
+            "UPDATE jobs SET is_taken = false, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE taken_by = %s",
             (user_id,)
         )
         
         # Remove from job tracking
         self.db.execute_query(
-            "DELETE FROM job_tracking WHERE user_id = ?",
+            "DELETE FROM job_tracking WHERE user_id = %s",
             (user_id,)
         )
         
         char_data = self.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -3419,12 +3436,12 @@ class IDScrubView(discord.ui.View):
         
         # Undock the ship
         self.db.execute_query(
-            "UPDATE characters SET location_status = 'in_space' WHERE user_id = ?",
+            "UPDATE characters SET location_status = 'in_space' WHERE user_id = %s",
             (user_id,)
         )
         
         location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )[0]
@@ -3459,8 +3476,8 @@ class UndockJobConfirmView(discord.ui.View):
         active_jobs = self.bot.db.execute_query(
             '''SELECT j.job_id FROM jobs j 
                LEFT JOIN job_tracking jt ON j.job_id = jt.job_id
-               WHERE j.taken_by = ? AND j.job_status = 'active' 
-               AND (jt.start_location = ? OR (jt.start_location IS NULL AND j.location_id = ?))''',
+               WHERE j.taken_by = %s AND j.job_status = 'active' 
+               AND (jt.start_location = %s OR (jt.start_location IS NULL AND j.location_id = %s))''',
             (self.user_id, self.location_id, self.location_id),
             fetch='all'
         )
@@ -3468,11 +3485,11 @@ class UndockJobConfirmView(discord.ui.View):
         for job_data in active_jobs:
             job_id = job_data[0]
             self.bot.db.execute_query(
-                "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE job_id = ?",
+                "UPDATE jobs SET is_taken = false, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE job_id = %s",
                 (job_id,)
             )
             self.bot.db.execute_query(
-                "DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?",
+                "DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s",
                 (job_id, self.user_id)
             )
         
@@ -3508,7 +3525,7 @@ class CharacterPanelView(discord.ui.View):
                       qp.objectives_completed, q.reward_money
                FROM quest_progress qp
                JOIN quests q ON qp.quest_id = q.quest_id
-               WHERE qp.user_id = ? AND qp.quest_status = 'active' ''',
+               WHERE qp.user_id = %s AND qp.quest_status = 'active' ''',
             (self.user_id,),
             fetch='one'
         )
@@ -3520,7 +3537,7 @@ class CharacterPanelView(discord.ui.View):
         
         # Get total objectives for this quest
         total_objectives = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM quest_objectives WHERE quest_id = ?",
+            "SELECT COUNT(*) FROM quest_objectives WHERE quest_id = %s",
             (quest_id,),
             fetch='one'
         )[0]
@@ -3603,7 +3620,7 @@ class CharacterPanelView(discord.ui.View):
             '''SELECT objective_order, objective_type, description, target_location_id, 
                       target_item, target_quantity, target_amount
                FROM quest_objectives 
-               WHERE quest_id = ? 
+               WHERE quest_id = %s 
                ORDER BY objective_order''',
             (quest_id,),
             fetch='all'
@@ -3805,7 +3822,7 @@ class CharacterPanelView(discord.ui.View):
         
         # Check if already in a ship
         current_ship = self.bot.db.execute_query(
-            "SELECT current_ship_id FROM characters WHERE user_id = ?",
+            "SELECT current_ship_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3816,7 +3833,7 @@ class CharacterPanelView(discord.ui.View):
         
         # Get character location and status
         char_info = self.bot.db.execute_query(
-            "SELECT current_location, location_status, active_ship_id FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, active_ship_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3834,7 +3851,7 @@ class CharacterPanelView(discord.ui.View):
         # Get ship info
         ship_info = self.bot.db.execute_query(
             '''SELECT ship_id, name, ship_type, interior_description, channel_id
-               FROM ships WHERE ship_id = ?''',
+               FROM ships WHERE ship_id = %s''',
             (active_ship_id,),
             fetch='one'
         )
@@ -3856,7 +3873,7 @@ class CharacterPanelView(discord.ui.View):
         if ship_channel:
             # Send area movement embed to location channel BEFORE removing access
             char_name = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )[0]
@@ -3873,13 +3890,13 @@ class CharacterPanelView(discord.ui.View):
                     color=0x7289DA
                 )
                 try:
-                    await location_channel.send(embed=embed)
+                    await self.bot.send_with_cross_guild_broadcast(location_channel, embed=embed)
                 except Exception as e:
                     print(f"❌ Failed to send ship entry embed: {e}")
             
             # Update character to be inside ship
             self.bot.db.execute_query(
-                "UPDATE characters SET current_ship_id = ? WHERE user_id = ?",
+                "UPDATE characters SET current_ship_id = %s WHERE user_id = %s",
                 (active_ship_id, interaction.user.id)
             )
             
@@ -3901,7 +3918,7 @@ class CharacterPanelView(discord.ui.View):
         
         # Check if character is logged in
         char_data = self.bot.db.execute_query(
-            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3979,7 +3996,7 @@ class ActionsView(discord.ui.View):
         # Check if user has any items
         inventory = self.bot.db.execute_query(
             """SELECT item_name FROM inventory 
-               WHERE owner_id = ? AND quantity > 0 
+               WHERE owner_id = %s AND quantity > 0 
                LIMIT 1""",
             (self.user_id,),
             fetch='one'
@@ -3991,7 +4008,7 @@ class ActionsView(discord.ui.View):
         
         # Check if there are other players at the same location
         char_data = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -4002,7 +4019,7 @@ class ActionsView(discord.ui.View):
         
         other_players = self.bot.db.execute_query(
             """SELECT c.user_id FROM characters c 
-               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1
+               WHERE c.current_location = %s AND c.user_id != %s AND c.is_logged_in = true
                LIMIT 1""",
             (char_data[0], self.user_id),
             fetch='one'
@@ -4030,7 +4047,7 @@ class ActionsView(discord.ui.View):
         # Check if user has any items
         inventory = self.bot.db.execute_query(
             """SELECT item_name FROM inventory 
-               WHERE owner_id = ? AND quantity > 0 
+               WHERE owner_id = %s AND quantity > 0 
                LIMIT 1""",
             (self.user_id,),
             fetch='one'
@@ -4042,7 +4059,7 @@ class ActionsView(discord.ui.View):
         
         # Check if there are other players at the same location
         char_data = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -4053,7 +4070,7 @@ class ActionsView(discord.ui.View):
         
         other_players = self.bot.db.execute_query(
             """SELECT c.user_id FROM characters c 
-               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1
+               WHERE c.current_location = %s AND c.user_id != %s AND c.is_logged_in = true
                LIMIT 1""",
             (char_data[0], self.user_id),
             fetch='one'
@@ -4087,7 +4104,7 @@ class SayModal(discord.ui.Modal, title="Speak as Character"):
         self.bot = bot
     
     message = discord.ui.TextInput(
-        label="What does your character say?",
+        label="What does your character say%s",
         placeholder="Enter your character's dialogue...",
         style=discord.TextStyle.paragraph,
         max_length=2000
@@ -4107,7 +4124,7 @@ class ThinkModal(discord.ui.Modal, title="Character Thoughts"):
         self.bot = bot
     
     thought = discord.ui.TextInput(
-        label="What is your character thinking?",
+        label="What is your character thinking%s",
         placeholder="Enter your character's internal thoughts...",
         style=discord.TextStyle.paragraph,
         max_length=2000
@@ -4127,7 +4144,7 @@ class ActModal(discord.ui.Modal, title="Character Action"):
         self.bot = bot
     
     action = discord.ui.TextInput(
-        label="What action does your character perform?",
+        label="What action does your character perform%s",
         placeholder="Describe your character's action...",
         style=discord.TextStyle.paragraph,
         max_length=2000
@@ -4212,7 +4229,7 @@ class EquipmentManagementView(discord.ui.View):
         equippable_items = self.bot.db.execute_query(
             '''SELECT item_id, item_name, description 
                FROM inventory 
-               WHERE owner_id = ? AND quantity > 0''',
+               WHERE owner_id = %s AND quantity > 0''',
             (self.user_id,),
             fetch='all'
         )
@@ -4388,7 +4405,7 @@ class EquipmentSelect(discord.ui.Select):
         
         # Get item name
         item_data = self.bot.db.execute_query(
-            "SELECT item_name FROM inventory WHERE item_id = ?",
+            "SELECT item_name FROM inventory WHERE item_id = %s",
             (item_id,),
             fetch='one'
         )

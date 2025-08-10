@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 class PayoutConfirmView(discord.ui.View):
@@ -20,7 +20,7 @@ class PayoutConfirmView(discord.ui.View):
         
         # Get all members
         members = self.bot.db.execute_query(
-            "SELECT user_id FROM faction_members WHERE faction_id = ?",
+            "SELECT user_id FROM faction_members WHERE faction_id = %s",
             (self.faction_id,),
             fetch='all'
         )
@@ -28,14 +28,14 @@ class PayoutConfirmView(discord.ui.View):
         # Create payouts for each member
         for (member_id,) in members:
             self.bot.db.execute_query(
-                "INSERT INTO faction_payouts (faction_id, user_id, amount) VALUES (?, ?, ?)",
+                "INSERT INTO faction_payouts (faction_id, user_id, amount) VALUES (%s, %s, %s)",
                 (self.faction_id, member_id, self.amount_per_member)
             )
         
         # Clear faction bank
         total_payout = self.amount_per_member * len(members)
         self.bot.db.execute_query(
-            "UPDATE factions SET bank_balance = bank_balance - ? WHERE faction_id = ?",
+            "UPDATE factions SET bank_balance = bank_balance - %s WHERE faction_id = %s",
             (total_payout, self.faction_id)
         )
         
@@ -75,7 +75,7 @@ class DisbandConfirmView(discord.ui.View):
         
         # Get all members for payout
         members = self.bot.db.execute_query(
-            "SELECT user_id FROM faction_members WHERE faction_id = ?",
+            "SELECT user_id FROM faction_members WHERE faction_id = %s",
             (self.faction_id,),
             fetch='all'
         )
@@ -84,13 +84,13 @@ class DisbandConfirmView(discord.ui.View):
         if self.amount_per_member > 0:
             for (member_id,) in members:
                 self.bot.db.execute_query(
-                    "INSERT INTO faction_payouts (faction_id, user_id, amount) VALUES (?, ?, ?)",
+                    "INSERT INTO faction_payouts (faction_id, user_id, amount) VALUES (%s, %s, %s)",
                     (self.faction_id, member_id, self.amount_per_member)
                 )
         
         # Remove all members from faction
         self.bot.db.execute_query(
-            "DELETE FROM faction_members WHERE faction_id = ?",
+            "DELETE FROM faction_members WHERE faction_id = %s",
             (self.faction_id,)
         )
         
@@ -175,7 +175,7 @@ class FactionCreateModal(discord.ui.Modal, title="Create New Faction"):
         
         # Check if user has enough credits
         user_money = self.cog.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -191,7 +191,7 @@ class FactionCreateModal(discord.ui.Modal, title="Create New Faction"):
         
         # Check if name is unique
         existing = self.cog.db.execute_query(
-            "SELECT faction_id FROM factions WHERE name = ?",
+            "SELECT faction_id FROM factions WHERE name = %s",
             (self.faction_name.value,),
             fetch='one'
         )
@@ -205,25 +205,25 @@ class FactionCreateModal(discord.ui.Modal, title="Create New Faction"):
         # Create faction with initial bank balance of 2500
         self.cog.db.execute_query(
             '''INSERT INTO factions (name, emoji, description, leader_id, is_public, bank_balance) 
-               VALUES (?, ?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s, %s)''',
             (self.faction_name.value, emoji, self.faction_description.value, self.user_id, is_public, 2500)
         )
         
         # Deduct credits from player
         self.cog.db.execute_query(
-            "UPDATE characters SET money = money - 2500 WHERE user_id = ?",
+            "UPDATE characters SET money = money - 2500 WHERE user_id = %s",
             (self.user_id,)
         )
         
         faction_id = self.cog.db.execute_query(
-            "SELECT faction_id FROM factions WHERE leader_id = ? ORDER BY created_at DESC LIMIT 1",
+            "SELECT faction_id FROM factions WHERE leader_id = %s ORDER BY created_at DESC LIMIT 1",
             (self.user_id,),
             fetch='one'
         )[0]
         
         # Add leader as member
         self.cog.db.execute_query(
-            "INSERT INTO faction_members (faction_id, user_id) VALUES (?, ?)",
+            "INSERT INTO faction_members (faction_id, user_id) VALUES (%s, %s)",
             (faction_id, self.user_id)
         )
         
@@ -251,7 +251,7 @@ class FactionsCog(commands.Cog):
     async def faction_create(self, interaction: discord.Interaction):
         # Check if user has a character
         char_data = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE user_id = ?",
+            "SELECT user_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -261,7 +261,7 @@ class FactionsCog(commands.Cog):
         
         # Check if already in a faction
         existing_faction = self.db.execute_query(
-            "SELECT f.name FROM faction_members fm JOIN factions f ON fm.faction_id = f.faction_id WHERE fm.user_id = ?",
+            "SELECT f.name FROM faction_members fm JOIN factions f ON fm.faction_id = f.faction_id WHERE fm.user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -281,7 +281,7 @@ class FactionsCog(commands.Cog):
                FROM faction_members fm
                JOIN factions f ON fm.faction_id = f.faction_id
                LEFT JOIN characters c ON f.leader_id = c.user_id
-               WHERE fm.user_id = ?''',
+               WHERE fm.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -293,7 +293,7 @@ class FactionsCog(commands.Cog):
         
         # Get member count
         member_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM faction_members WHERE faction_id = ?",
+            "SELECT COUNT(*) FROM faction_members WHERE faction_id = %s",
             (faction_id,),
             fetch='one'
         )[0]
@@ -302,7 +302,7 @@ class FactionsCog(commands.Cog):
         locations = self.db.execute_query(
             '''SELECT l.name, l.location_type FROM locations l
                JOIN location_ownership lo ON l.location_id = lo.location_id
-               WHERE lo.faction_id = ?''',
+               WHERE lo.faction_id = %s''',
             (faction_id,),
             fetch='all'
         )
@@ -335,7 +335,7 @@ class FactionsCog(commands.Cog):
         faction_data = self.db.execute_query(
             '''SELECT f.faction_id, f.name, f.emoji, f.bank_balance
                FROM factions f
-               WHERE f.leader_id = ?''',
+               WHERE f.leader_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -347,7 +347,7 @@ class FactionsCog(commands.Cog):
         
         # Get member count
         member_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM faction_members WHERE faction_id = ?",
+            "SELECT COUNT(*) FROM faction_members WHERE faction_id = %s",
             (faction_id,),
             fetch='one'
         )[0]
@@ -360,7 +360,7 @@ class FactionsCog(commands.Cog):
         # Check if faction owns any locations
         owned_locations = self.db.execute_query(
             '''SELECT COUNT(*) FROM location_ownership 
-               WHERE faction_id = ?''',
+               WHERE faction_id = %s''',
             (faction_id,),
             fetch='one'
         )[0]
@@ -409,7 +409,7 @@ class FactionsCog(commands.Cog):
         faction_data = self.db.execute_query(
             '''SELECT f.faction_id, f.name, f.emoji, f.is_public
                FROM factions f
-               WHERE f.leader_id = ?''',
+               WHERE f.leader_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -421,7 +421,7 @@ class FactionsCog(commands.Cog):
         
         # Check if target has a character
         target_char = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (member.id,),
             fetch='one'
         )
@@ -431,7 +431,7 @@ class FactionsCog(commands.Cog):
         
         # Check if in same location
         user_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -441,7 +441,7 @@ class FactionsCog(commands.Cog):
         
         # Check if already in a faction
         existing_faction = self.db.execute_query(
-            "SELECT faction_id FROM faction_members WHERE user_id = ?",
+            "SELECT faction_id FROM faction_members WHERE user_id = %s",
             (member.id,),
             fetch='one'
         )
@@ -451,7 +451,7 @@ class FactionsCog(commands.Cog):
         
         # Check for existing invite
         existing_invite = self.db.execute_query(
-            "SELECT invite_id FROM faction_invites WHERE faction_id = ? AND invitee_id = ? AND expires_at > datetime('now')",
+            "SELECT invite_id FROM faction_invites WHERE faction_id = %s AND invitee_id = %s AND expires_at > NOW()",
             (faction_id, member.id),
             fetch='one'
         )
@@ -460,10 +460,10 @@ class FactionsCog(commands.Cog):
             return await interaction.response.send_message("You already have a pending invite to this player!", ephemeral=True)
         
         # Create invite
-        expires_at = datetime.utcnow() + timedelta(hours=24)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
         self.db.execute_query(
             '''INSERT INTO faction_invites (faction_id, inviter_id, invitee_id, expires_at)
-               VALUES (?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s)''',
             (faction_id, interaction.user.id, member.id, expires_at)
         )
         
@@ -493,7 +493,7 @@ class FactionsCog(commands.Cog):
                FROM faction_invites fi
                JOIN factions f ON fi.faction_id = f.faction_id
                LEFT JOIN characters c ON fi.inviter_id = c.user_id
-               WHERE fi.invitee_id = ? AND fi.expires_at > datetime('now')''',
+               WHERE fi.invitee_id = %s AND fi.expires_at > NOW()''',
             (interaction.user.id,),
             fetch='all'
         )
@@ -501,7 +501,7 @@ class FactionsCog(commands.Cog):
         if not invites:
             # Check for public factions in same location
             user_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -514,7 +514,7 @@ class FactionsCog(commands.Cog):
                    FROM factions f
                    JOIN faction_members fm ON f.faction_id = fm.faction_id
                    JOIN characters c ON fm.user_id = c.user_id
-                   WHERE f.is_public = 1 AND c.current_location = ?''',
+                   WHERE f.is_public = 1 AND c.current_location = %s''',
                 (user_location[0],),
                 fetch='all'
             )
@@ -549,19 +549,19 @@ class FactionsCog(commands.Cog):
     async def _join_faction(self, interaction: discord.Interaction, faction_id: int):
         # Add to faction
         self.db.execute_query(
-            "INSERT INTO faction_members (faction_id, user_id) VALUES (?, ?)",
+            "INSERT INTO faction_members (faction_id, user_id) VALUES (%s, %s)",
             (faction_id, interaction.user.id)
         )
         
         # Remove all invites for this user
         self.db.execute_query(
-            "DELETE FROM faction_invites WHERE invitee_id = ?",
+            "DELETE FROM faction_invites WHERE invitee_id = %s",
             (interaction.user.id,)
         )
         
         # Get faction info
         faction_info = self.db.execute_query(
-            "SELECT name, emoji FROM factions WHERE faction_id = ?",
+            "SELECT name, emoji FROM factions WHERE faction_id = %s",
             (faction_id,),
             fetch='one'
         )
@@ -584,7 +584,7 @@ class FactionsCog(commands.Cog):
             '''SELECT f.faction_id, f.name, f.leader_id
                FROM faction_members fm
                JOIN factions f ON fm.faction_id = f.faction_id
-               WHERE fm.user_id = ?''',
+               WHERE fm.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -597,7 +597,7 @@ class FactionsCog(commands.Cog):
         if leader_id == interaction.user.id:
             # Check if there are other members
             member_count = self.db.execute_query(
-                "SELECT COUNT(*) FROM faction_members WHERE faction_id = ?",
+                "SELECT COUNT(*) FROM faction_members WHERE faction_id = %s",
                 (faction_id,),
                 fetch='one'
             )[0]
@@ -610,7 +610,7 @@ class FactionsCog(commands.Cog):
         
         # Remove from faction
         self.db.execute_query(
-            "DELETE FROM faction_members WHERE user_id = ?",
+            "DELETE FROM faction_members WHERE user_id = %s",
             (interaction.user.id,)
         )
         
@@ -618,7 +618,7 @@ class FactionsCog(commands.Cog):
         
         # If last member, dissolve faction
         remaining = self.db.execute_query(
-            "SELECT COUNT(*) FROM faction_members WHERE faction_id = ?",
+            "SELECT COUNT(*) FROM faction_members WHERE faction_id = %s",
             (faction_id,),
             fetch='one'
         )[0]
@@ -638,7 +638,7 @@ class FactionsCog(commands.Cog):
                FROM characters c
                JOIN faction_members fm ON c.user_id = fm.user_id
                JOIN factions f ON fm.faction_id = f.faction_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -653,18 +653,18 @@ class FactionsCog(commands.Cog):
         
         # Transfer money
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (amount, interaction.user.id)
         )
         
         self.db.execute_query(
-            "UPDATE factions SET bank_balance = bank_balance + ? WHERE faction_id = ?",
+            "UPDATE factions SET bank_balance = bank_balance + %s WHERE faction_id = %s",
             (amount, faction_id)
         )
         
         # Get new balance
         new_balance = self.db.execute_query(
-            "SELECT bank_balance FROM factions WHERE faction_id = ?",
+            "SELECT bank_balance FROM factions WHERE faction_id = %s",
             (faction_id,),
             fetch='one'
         )[0]
@@ -685,7 +685,7 @@ class FactionsCog(commands.Cog):
         faction_data = self.db.execute_query(
             '''SELECT f.faction_id, f.name, f.emoji, f.bank_balance
                FROM factions f
-               WHERE f.leader_id = ?''',
+               WHERE f.leader_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -700,7 +700,7 @@ class FactionsCog(commands.Cog):
         
         # Get member count
         member_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM faction_members WHERE faction_id = ?",
+            "SELECT COUNT(*) FROM faction_members WHERE faction_id = %s",
             (faction_id,),
             fetch='one'
         )[0]
@@ -715,7 +715,7 @@ class FactionsCog(commands.Cog):
         # Show confirmation
         embed = discord.Embed(
             title=f"{emoji} Faction Payout",
-            description=f"Distribute faction bank funds to all members?",
+            description="Distribute faction bank funds to all members?",
             color=0x00ff00
         )
         embed.add_field(name="Total Funds", value=f"{bank_balance:,} credits", inline=True)
@@ -732,7 +732,7 @@ class FactionsCog(commands.Cog):
             '''SELECT f.faction_id, f.name, f.emoji, f.leader_id
                FROM faction_members fm
                JOIN factions f ON fm.faction_id = f.faction_id
-               WHERE fm.user_id = ?''',
+               WHERE fm.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -748,7 +748,7 @@ class FactionsCog(commands.Cog):
                FROM faction_members fm
                JOIN characters c ON fm.user_id = c.user_id
                LEFT JOIN locations l ON c.current_location = l.location_id
-               WHERE fm.faction_id = ?
+               WHERE fm.faction_id = %s
                ORDER BY c.level DESC''',
             (faction_id,),
             fetch='all'
@@ -777,15 +777,15 @@ class FactionsCog(commands.Cog):
         """Dissolve a faction and make its locations neutral"""
         # Make all faction locations neutral
         self.db.execute_query(
-            "UPDATE location_ownership SET faction_id = NULL, owner_id = NULL WHERE faction_id = ?",
+            "UPDATE location_ownership SET faction_id = NULL, owner_id = NULL WHERE faction_id = %s",
             (faction_id,)
         )
         
         # Delete faction data
-        self.db.execute_query("DELETE FROM faction_invites WHERE faction_id = ?", (faction_id,))
-        self.db.execute_query("DELETE FROM faction_sales_tax WHERE faction_id = ?", (faction_id,))
-        self.db.execute_query("DELETE FROM faction_payouts WHERE faction_id = ?", (faction_id,))
-        self.db.execute_query("DELETE FROM factions WHERE faction_id = ?", (faction_id,))
+        self.db.execute_query("DELETE FROM faction_invites WHERE faction_id = %s", (faction_id,))
+        self.db.execute_query("DELETE FROM faction_sales_tax WHERE faction_id = %s", (faction_id,))
+        self.db.execute_query("DELETE FROM faction_payouts WHERE faction_id = %s", (faction_id,))
+        self.db.execute_query("DELETE FROM factions WHERE faction_id = %s", (faction_id,))
     
     async def check_faction_dissolution(self):
         """Check if any factions have all members dead and dissolve them"""
@@ -796,7 +796,7 @@ class FactionsCog(commands.Cog):
                WHERE NOT EXISTS (
                    SELECT 1 FROM faction_members fm
                    JOIN characters c ON fm.user_id = c.user_id
-                   WHERE fm.faction_id = f.faction_id AND c.is_alive = 1
+                   WHERE fm.faction_id = f.faction_id AND c.is_alive = true
                )''',
             fetch='all'
         )

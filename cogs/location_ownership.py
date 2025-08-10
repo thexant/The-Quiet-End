@@ -27,7 +27,7 @@ class FactionPurchaseConfirmView(discord.ui.View):
                FROM characters c
                JOIN faction_members fm ON c.user_id = fm.user_id
                JOIN factions f ON fm.faction_id = f.faction_id
-               WHERE c.user_id = ? AND f.faction_id = ?''',
+               WHERE c.user_id = %s AND f.faction_id = %s''',
             (self.user_id, self.faction_id),
             fetch='one'
         )
@@ -49,26 +49,26 @@ class FactionPurchaseConfirmView(discord.ui.View):
         # Process purchase
         if faction_deduct > 0:
             self.bot.db.execute_query(
-                "UPDATE factions SET bank_balance = bank_balance - ? WHERE faction_id = ?",
+                "UPDATE factions SET bank_balance = bank_balance - %s WHERE faction_id = %s",
                 (faction_deduct, self.faction_id)
             )
         
         if personal_deduct > 0:
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (personal_deduct, self.user_id)
             )
         
         # Set ownership
         self.bot.db.execute_query(
             '''INSERT INTO location_ownership (location_id, faction_id, purchase_price, ownership_type)
-               VALUES (?, ?, ?, 'faction')''',
+               VALUES (%s, %s, %s, 'faction')''',
             (self.location_id, self.faction_id, self.price)
         )
         
         # Get location name
         location_name = self.bot.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (self.location_id,),
             fetch='one'
         )[0]
@@ -157,7 +157,7 @@ class LocationOwnershipCog(commands.Cog):
     def calculate_upkeep_cost(self, location_id: int) -> int:
         """Calculate monthly upkeep cost based on upgrades"""
         upgrades = self.db.execute_query(
-            "SELECT upgrade_type, upgrade_level FROM location_upgrades WHERE location_id = ?",
+            "SELECT upgrade_type, upgrade_level FROM location_upgrades WHERE location_id = %s",
             (location_id,),
             fetch='all'
         )
@@ -172,7 +172,7 @@ class LocationOwnershipCog(commands.Cog):
     async def location_info(self, interaction: discord.Interaction):
         # Get character's current location
         char_data = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -191,7 +191,7 @@ class LocationOwnershipCog(commands.Cog):
                LEFT JOIN location_ownership lo ON l.location_id = lo.location_id
                LEFT JOIN characters c ON lo.owner_id = c.user_id
                LEFT JOIN factions f ON lo.faction_id = f.faction_id
-               WHERE l.location_id = ?''',
+               WHERE l.location_id = %s''',
             (location_id,),
             fetch='one'
         )
@@ -225,7 +225,7 @@ class LocationOwnershipCog(commands.Cog):
             
             # Show upgrades if owned
             upgrades = self.db.execute_query(
-                "SELECT upgrade_type, upgrade_level FROM location_upgrades WHERE location_id = ?",
+                "SELECT upgrade_type, upgrade_level FROM location_upgrades WHERE location_id = %s",
                 (location_id,),
                 fetch='all'
             )
@@ -276,7 +276,7 @@ class LocationOwnershipCog(commands.Cog):
                LEFT JOIN faction_members fm ON c.user_id = fm.user_id
                LEFT JOIN factions f ON fm.faction_id = f.faction_id
                LEFT JOIN location_ownership lo ON c.current_location = lo.location_id AND lo.faction_id = f.faction_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -297,7 +297,7 @@ class LocationOwnershipCog(commands.Cog):
         
         # Update or insert docking fee
         self.db.execute_query(
-            "UPDATE location_ownership SET docking_fee = ? WHERE ownership_id = ?",
+            "UPDATE location_ownership SET docking_fee = %s WHERE ownership_id = %s",
             (fee, ownership_id)
         )
         
@@ -324,7 +324,7 @@ class LocationOwnershipCog(commands.Cog):
                FROM characters c
                LEFT JOIN faction_members fm ON c.user_id = fm.user_id
                LEFT JOIN factions f ON fm.faction_id = f.faction_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -365,7 +365,7 @@ class LocationOwnershipCog(commands.Cog):
         location_data = self.db.execute_query(
             '''SELECT l.location_type, l.name, l.wealth_level, l.population, l.is_derelict
                FROM locations l
-               WHERE l.location_id = ?''',
+               WHERE l.location_id = %s''',
             (location_id,),
             fetch='one'
         )
@@ -377,7 +377,7 @@ class LocationOwnershipCog(commands.Cog):
         
         # Check if already owned
         existing_owner = self.db.execute_query(
-            "SELECT faction_id, owner_id FROM location_ownership WHERE location_id = ?",
+            "SELECT faction_id, owner_id FROM location_ownership WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -406,7 +406,7 @@ class LocationOwnershipCog(commands.Cog):
         # Show purchase confirmation
         embed = discord.Embed(
             title=f"{faction_emoji} Purchase Location: {name}",
-            description=f"Buy this location for **{faction_name}**?",
+            description=f"Buy this location for **{faction_name}**%s",
             color=0x00ff00
         )
         embed.add_field(name="Location Type", value=location_type.replace('_', ' ').title(), inline=True)
@@ -432,7 +432,7 @@ class LocationOwnershipCog(commands.Cog):
     #           LEFT JOIN faction_members fm ON c.user_id = fm.user_id
     #           LEFT JOIN factions f ON fm.faction_id = f.faction_id
     #           LEFT JOIN location_ownership lo ON c.current_location = lo.location_id AND lo.faction_id = f.faction_id
-    #           WHERE c.user_id = ?''',
+    #           WHERE c.user_id = %s''',
     #        (interaction.user.id,),
     #        fetch='one'
      #   )
@@ -453,7 +453,7 @@ class LocationOwnershipCog(commands.Cog):
     #    
     #    # Update the custom name
     #    self.db.execute_query(
-    #        "UPDATE location_ownership SET custom_name = ? WHERE ownership_id = ?",
+    #        "UPDATE location_ownership SET custom_name = %s WHERE ownership_id = %s",
     #        (new_name, ownership_id)
     #    )
     #    
@@ -472,7 +472,7 @@ class LocationOwnershipCog(commands.Cog):
                LEFT JOIN faction_members fm ON c.user_id = fm.user_id
                LEFT JOIN factions f ON fm.faction_id = f.faction_id
                LEFT JOIN location_ownership lo ON c.current_location = lo.location_id AND lo.faction_id = f.faction_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -493,19 +493,19 @@ class LocationOwnershipCog(commands.Cog):
         
         # Update or insert tax rate
         existing = self.db.execute_query(
-            "SELECT tax_id FROM faction_sales_tax WHERE location_id = ?",
+            "SELECT tax_id FROM faction_sales_tax WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
         
         if existing:
             self.db.execute_query(
-                "UPDATE faction_sales_tax SET tax_percentage = ? WHERE location_id = ?",
+                "UPDATE faction_sales_tax SET tax_percentage = %s WHERE location_id = %s",
                 (percentage, location_id)
             )
         else:
             self.db.execute_query(
-                "INSERT INTO faction_sales_tax (faction_id, location_id, tax_percentage) VALUES (?, ?, ?)",
+                "INSERT INTO faction_sales_tax (faction_id, location_id, tax_percentage) VALUES (%s, %s, %s)",
                 (faction_id, location_id, percentage)
             )
         
@@ -533,7 +533,7 @@ class LocationOwnershipCog(commands.Cog):
             '''SELECT lo.location_id, l.name, l.location_type
                FROM location_ownership lo
                JOIN locations l ON lo.location_id = l.location_id
-               WHERE lo.owner_id = ?''',
+               WHERE lo.owner_id = %s''',
             (interaction.user.id,),
             fetch='all'
         )
@@ -568,7 +568,7 @@ class LocationOwnershipCog(commands.Cog):
         # Get current upgrades
         current_upgrades = {}
         upgrades = self.db.execute_query(
-            "SELECT upgrade_type, upgrade_level FROM location_upgrades WHERE location_id = ?",
+            "SELECT upgrade_type, upgrade_level FROM location_upgrades WHERE location_id = %s",
             (location_id,),
             fetch='all'
         )
@@ -578,7 +578,7 @@ class LocationOwnershipCog(commands.Cog):
         
         # Get location info
         location_info = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -628,14 +628,14 @@ class LocationOwnershipView(discord.ui.View):
         
         # Check if user owns this location
         ownership = self.bot.db.execute_query(
-            "SELECT owner_id FROM location_ownership WHERE location_id = ? AND owner_id = ?",
+            "SELECT owner_id FROM location_ownership WHERE location_id = %s AND owner_id = %s",
             (location_id, user_id),
             fetch='one'
         )
         
         # Check if location is purchasable
         location_data = self.bot.db.execute_query(
-            "SELECT location_type, wealth_level, is_derelict FROM locations WHERE location_id = ?",
+            "SELECT location_type, wealth_level, is_derelict FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -688,7 +688,7 @@ class CollectIncomeButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         # Check for uncollected income
         uncollected = self.view.bot.db.execute_query(
-            "SELECT SUM(amount) FROM location_income_log WHERE location_id = ? AND collected = 0",
+            "SELECT SUM(amount) FROM location_income_log WHERE location_id = %s AND collected = 0",
             (self.view.location_id,),
             fetch='one'
         )
@@ -701,13 +701,13 @@ class CollectIncomeButton(discord.ui.Button):
         
         # Collect income
         self.view.bot.db.execute_query(
-            "UPDATE location_income_log SET collected = 1 WHERE location_id = ? AND collected = 0",
+            "UPDATE location_income_log SET collected = 1 WHERE location_id = %s AND collected = 0",
             (self.view.location_id,)
         )
         
         # Add money to player
         self.view.bot.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (total_income, self.view.user_id)
         )
         
@@ -728,7 +728,7 @@ class PurchaseConfirmationView(discord.ui.View):
         
         # Double-check funds
         money = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -740,7 +740,7 @@ class PurchaseConfirmationView(discord.ui.View):
         try:
             # Deduct money
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (self.price, self.user_id)
             )
             
@@ -749,18 +749,18 @@ class PurchaseConfirmationView(discord.ui.View):
             self.bot.db.execute_query(
                 '''INSERT INTO location_ownership 
                    (location_id, owner_id, purchase_price, upkeep_due_date, total_invested)
-                   VALUES (?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s)''',
                 (self.location_id, self.user_id, self.price, upkeep_due, self.price)
             )
             
             # Update location status
             self.bot.db.execute_query(
-                "UPDATE locations SET is_derelict = 0 WHERE location_id = ?",
+                "UPDATE locations SET is_derelict = 0 WHERE location_id = %s",
                 (self.location_id,)
             )
             
             location_name = self.bot.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (self.location_id,),
                 fetch='one'
             )[0]
@@ -848,7 +848,7 @@ class UpgradeButton(discord.ui.Button):
         
         # Check if user can afford upgrade
         money = self.view.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (self.view.user_id,),
             fetch='one'
         )
@@ -860,13 +860,13 @@ class UpgradeButton(discord.ui.Button):
         try:
             # Deduct money
             self.view.bot.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (self.cost, self.view.user_id)
             )
             
             # Add or update upgrade
             existing = self.view.bot.db.execute_query(
-                "SELECT upgrade_level FROM location_upgrades WHERE location_id = ? AND upgrade_type = ?",
+                "SELECT upgrade_level FROM location_upgrades WHERE location_id = %s AND upgrade_type = %s",
                 (self.view.location_id, self.upgrade_type),
                 fetch='one'
             )
@@ -875,19 +875,19 @@ class UpgradeButton(discord.ui.Button):
             
             if existing:
                 self.view.bot.db.execute_query(
-                    "UPDATE location_upgrades SET upgrade_level = ?, cost = cost + ? WHERE location_id = ? AND upgrade_type = ?",
+                    "UPDATE location_upgrades SET upgrade_level = %s, cost = cost + %s WHERE location_id = %s AND upgrade_type = %s",
                     (new_level, self.cost, self.view.location_id, self.upgrade_type)
                 )
             else:
                 self.view.bot.db.execute_query(
                     '''INSERT INTO location_upgrades (location_id, upgrade_type, upgrade_level, cost, description)
-                       VALUES (?, ?, ?, ?, ?)''',
+                       VALUES (%s, %s, %s, %s, %s)''',
                     (self.view.location_id, self.upgrade_type, new_level, self.cost, self.upgrade_info['description'])
                 )
             
             # Update total invested
             self.view.bot.db.execute_query(
-                "UPDATE location_ownership SET total_invested = total_invested + ? WHERE location_id = ?",
+                "UPDATE location_ownership SET total_invested = total_invested + %s WHERE location_id = %s",
                 (self.cost, self.view.location_id)
             )
             
@@ -911,7 +911,7 @@ class UpgradeButton(discord.ui.Button):
         if self.upgrade_type == 'wealth':
             # Increase wealth level
             self.view.bot.db.execute_query(
-                "UPDATE locations SET wealth_level = LEAST(wealth_level + 1, 10) WHERE location_id = ?",
+                "UPDATE locations SET wealth_level = LEAST(wealth_level + 1, 10) WHERE location_id = %s",
                 (self.view.location_id,)
             )
         
@@ -919,7 +919,7 @@ class UpgradeButton(discord.ui.Button):
             # Increase population
             increase = new_level * 50
             self.view.bot.db.execute_query(
-                "UPDATE locations SET population = population + ? WHERE location_id = ?",
+                "UPDATE locations SET population = population + %s WHERE location_id = %s",
                 (increase, self.view.location_id)
             )
         
@@ -927,12 +927,12 @@ class UpgradeButton(discord.ui.Button):
             # Enable services based on level
             if new_level >= 2:
                 self.view.bot.db.execute_query(
-                    "UPDATE locations SET has_medical = 1 WHERE location_id = ?",
+                    "UPDATE locations SET has_medical = 1 WHERE location_id = %s",
                     (self.view.location_id,)
                 )
             if new_level >= 3:
                 self.view.bot.db.execute_query(
-                    "UPDATE locations SET has_repairs = 1, has_upgrades = 1 WHERE location_id = ?",
+                    "UPDATE locations SET has_repairs = 1, has_upgrades = 1 WHERE location_id = %s",
                     (self.view.location_id,)
                 )
 

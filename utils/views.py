@@ -11,6 +11,7 @@ import math
 from utils.ship_data import get_random_starter_ship
 from utils import stat_system
 from utils.item_config import ItemConfig
+from utils.datetime_utils import safe_datetime_parse
     
 # Replace the entire create_random_character function at the end of utils/views.py
 from cogs.factions import FactionCreateModal
@@ -86,13 +87,13 @@ async def create_random_character(bot, interaction: discord.Interaction):
     
     # Check if character already exists
     existing_char = bot.db.execute_query(
-        "SELECT user_id FROM characters WHERE user_id = ?",
+        "SELECT user_id FROM characters WHERE user_id = %s",
         (interaction.user.id,),
         fetch='one'
     )
 
     existing_identity = bot.db.execute_query(
-        "SELECT user_id FROM character_identity WHERE user_id = ?",
+        "SELECT user_id FROM character_identity WHERE user_id = %s",
         (interaction.user.id,),
         fetch='one'
     )
@@ -107,7 +108,7 @@ async def create_random_character(bot, interaction: discord.Interaction):
     # Clean up orphaned identity records (from incomplete deletions)
     if existing_identity and not existing_char:
         bot.db.execute_query(
-            "DELETE FROM character_identity WHERE user_id = ?",
+            "DELETE FROM character_identity WHERE user_id = %s",
             (interaction.user.id,)
         )
         print(f"🧹 Cleaned up orphaned identity record for user {interaction.user.id}")
@@ -155,7 +156,7 @@ async def create_random_character(bot, interaction: discord.Interaction):
         return f"{letters}-{numbers}"
     
     callsign = generate_callsign()
-    while bot.db.execute_query("SELECT user_id FROM characters WHERE callsign = ?", (callsign,), fetch='one'):
+    while bot.db.execute_query("SELECT user_id FROM characters WHERE callsign = %s", (callsign,), fetch='one'):
         callsign = generate_callsign()
     
     # Generate balanced starting stats (total of 50 points)
@@ -173,24 +174,24 @@ async def create_random_character(bot, interaction: discord.Interaction):
     ship_type, ship_name, exterior_desc, interior_desc = get_random_starter_ship()
 
     # Defensive cleanup: remove any existing ships (in case death cleanup was incomplete)
-    bot.db.execute_query("DELETE FROM ships WHERE owner_id = ?", (interaction.user.id,))
-    bot.db.execute_query("DELETE FROM player_ships WHERE owner_id = ?", (interaction.user.id,))
+    bot.db.execute_query("DELETE FROM ships WHERE owner_id = %s", (interaction.user.id,))
+    bot.db.execute_query("DELETE FROM player_ships WHERE owner_id = %s", (interaction.user.id,))
 
     # Create basic ship
     bot.db.execute_query(
-        "INSERT INTO ships (owner_id, name, ship_type, exterior_description, interior_description) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO ships (owner_id, name, ship_type, exterior_description, interior_description) VALUES (%s, %s, %s, %s, %s)",
         (interaction.user.id, ship_name, ship_type, exterior_desc, interior_desc)
     )
 
     ship_id = bot.db.execute_query(
-        "SELECT ship_id FROM ships WHERE owner_id = ? ORDER BY ship_id DESC LIMIT 1",
+        "SELECT ship_id FROM ships WHERE owner_id = %s ORDER BY ship_id DESC LIMIT 1",
         (interaction.user.id,),
         fetch='one'
     )[0]
 
     # Add the ship to player_ships table and set as active
     bot.db.execute_query(
-        '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (?, ?, 1)''',
+        '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (%s, %s, 1)''',
         (interaction.user.id, ship_id)
     )
     # Generate ship activities
@@ -215,7 +216,7 @@ async def create_random_character(bot, interaction: discord.Interaction):
     for row in rows:
         loc_id = row[0]
         has_route = bot.db.execute_query(
-            "SELECT 1 FROM corridors WHERE (origin_location = ? OR (destination_location = ? AND is_bidirectional = 1)) AND is_active = 1 LIMIT 1",
+            "SELECT 1 FROM corridors WHERE (origin_location = %s OR (destination_location = %s AND is_bidirectional = 1)) AND is_active = true LIMIT 1",
             (loc_id, loc_id),
             fetch='one'
         )
@@ -232,17 +233,23 @@ async def create_random_character(bot, interaction: discord.Interaction):
     bot.db.execute_query(
         '''INSERT INTO characters 
            (user_id, name, callsign, appearance, current_location, ship_id, active_ship_id,
-            engineering, navigation, combat, medical) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            engineering, navigation, combat, medical, guild_id) 
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
         (interaction.user.id, random_name, callsign, "", 
-         spawn_location, ship_id, ship_id, engineering, navigation, combat, medical)
+         spawn_location, ship_id, ship_id, engineering, navigation, combat, medical, interaction.guild.id)
     )
     
     # Create character identity record (no biography)
     bot.db.execute_query(
-        '''INSERT OR REPLACE INTO character_identity 
+        '''INSERT INTO character_identity 
            (user_id, birth_month, birth_day, birth_year, age, birthplace_id)
-           VALUES (?, ?, ?, ?, ?, ?)''',
+           VALUES (%s, %s, %s, %s, %s, %s)
+           ON CONFLICT (user_id) DO UPDATE SET
+           birth_month = EXCLUDED.birth_month,
+           birth_day = EXCLUDED.birth_day,
+           birth_year = EXCLUDED.birth_year,
+           age = EXCLUDED.age,
+           birthplace_id = EXCLUDED.birthplace_id''',
         (interaction.user.id, birth_month, birth_day, birth_year, age, spawn_location)
     )
     
@@ -263,21 +270,21 @@ async def create_random_character(bot, interaction: discord.Interaction):
             
             bot.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, item_name, item_def["type"], quantity, 
                  item_def["description"], item_def["base_value"], metadata)
             )
     
     # Get location info for response
     location_info = bot.db.execute_query(
-        "SELECT name FROM locations WHERE location_id = ?",
+        "SELECT name FROM locations WHERE location_id = %s",
         (spawn_location,),
         fetch='one'
     )
     
     # Auto-login the character
     bot.db.execute_query(
-        "UPDATE characters SET is_logged_in = 1, login_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE user_id = ?",
+        "UPDATE characters SET is_logged_in = true, login_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE user_id = %s",
         (interaction.user.id,)
     )
 
@@ -394,13 +401,13 @@ class CharacterCreationModal(discord.ui.Modal):
         
         # Check if character already exists
         existing_char = self.bot.db.execute_query(
-            "SELECT user_id FROM characters WHERE user_id = ?",
+            "SELECT user_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
 
         existing_identity = self.bot.db.execute_query(
-            "SELECT user_id FROM character_identity WHERE user_id = ?",
+            "SELECT user_id FROM character_identity WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -415,7 +422,7 @@ class CharacterCreationModal(discord.ui.Modal):
         # Clean up orphaned identity records (from incomplete deletions)
         if existing_identity and not existing_char:
             self.bot.db.execute_query(
-                "DELETE FROM character_identity WHERE user_id = ?",
+                "DELETE FROM character_identity WHERE user_id = %s",
                 (interaction.user.id,)
             )
             print(f"🧹 Cleaned up orphaned identity record for user {interaction.user.id}")
@@ -471,7 +478,7 @@ class CharacterCreationModal(discord.ui.Modal):
             return f"{letters}-{numbers}"
         
         callsign = generate_callsign()
-        while self.bot.db.execute_query("SELECT user_id FROM characters WHERE callsign = ?", (callsign,), fetch='one'):
+        while self.bot.db.execute_query("SELECT user_id FROM characters WHERE callsign = %s", (callsign,), fetch='one'):
             callsign = generate_callsign()
         
         # Generate balanced starting stats (total of 50 points)
@@ -489,24 +496,24 @@ class CharacterCreationModal(discord.ui.Modal):
         ship_type, ship_name, exterior_desc, interior_desc = get_random_starter_ship()
 
         # Defensive cleanup: remove any existing ships (in case death cleanup was incomplete)
-        self.bot.db.execute_query("DELETE FROM ships WHERE owner_id = ?", (interaction.user.id,))
-        self.bot.db.execute_query("DELETE FROM player_ships WHERE owner_id = ?", (interaction.user.id,))
+        self.bot.db.execute_query("DELETE FROM ships WHERE owner_id = %s", (interaction.user.id,))
+        self.bot.db.execute_query("DELETE FROM player_ships WHERE owner_id = %s", (interaction.user.id,))
 
         # Create basic ship
         self.bot.db.execute_query(
-            "INSERT INTO ships (owner_id, name, ship_type, exterior_description, interior_description) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO ships (owner_id, name, ship_type, exterior_description, interior_description) VALUES (%s, %s, %s, %s, %s)",
             (interaction.user.id, ship_name, ship_type, exterior_desc, interior_desc)
         )
 
         ship_id = self.bot.db.execute_query(
-            "SELECT ship_id FROM ships WHERE owner_id = ? ORDER BY ship_id DESC LIMIT 1",
+            "SELECT ship_id FROM ships WHERE owner_id = %s ORDER BY ship_id DESC LIMIT 1",
             (interaction.user.id,),
             fetch='one'
         )[0]
 
         # Add the ship to player_ships table and set as active
         self.bot.db.execute_query(
-            '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (?, ?, 1)''',
+            '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (%s, %s, 1)''',
             (interaction.user.id, ship_id)
         )
         # Generate ship activities
@@ -531,7 +538,7 @@ class CharacterCreationModal(discord.ui.Modal):
         for row in rows:
             loc_id = row[0]
             has_route = self.bot.db.execute_query(
-                "SELECT 1 FROM corridors WHERE (origin_location = ? OR (destination_location = ? AND is_bidirectional = 1)) AND is_active = 1 LIMIT 1",
+                "SELECT 1 FROM corridors WHERE (origin_location = %s OR (destination_location = %s AND is_bidirectional = 1)) AND is_active = true LIMIT 1",
                 (loc_id, loc_id),
                 fetch='one'
             )
@@ -552,17 +559,24 @@ class CharacterCreationModal(discord.ui.Modal):
         self.bot.db.execute_query(
             '''INSERT INTO characters 
                (user_id, name, callsign, appearance, image_url, current_location, ship_id, active_ship_id,
-                engineering, navigation, combat, medical) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                engineering, navigation, combat, medical, guild_id) 
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
             (interaction.user.id, self.name_input.value, callsign,
              self.appearance_input.value or "No description provided", image_url,
-             spawn_location, ship_id, ship_id, engineering, navigation, combat, medical)
+             spawn_location, ship_id, ship_id, engineering, navigation, combat, medical, interaction.guild.id)
         )
         # Create character identity record
         self.bot.db.execute_query(
-            '''INSERT OR REPLACE INTO character_identity 
+            '''INSERT INTO character_identity 
                (user_id, birth_month, birth_day, birth_year, age, biography, birthplace_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (user_id) DO UPDATE SET
+               birth_month = EXCLUDED.birth_month,
+               birth_day = EXCLUDED.birth_day,
+               birth_year = EXCLUDED.birth_year,
+               age = EXCLUDED.age,
+               biography = EXCLUDED.biography,
+               birthplace_id = EXCLUDED.birthplace_id''',
             (interaction.user.id, birth_month, birth_day, birth_year, age, 
              self.biography_input.value or None, spawn_location)
         )
@@ -584,21 +598,21 @@ class CharacterCreationModal(discord.ui.Modal):
                 
                 self.bot.db.execute_query(
                     '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                     (interaction.user.id, item_name, item_def["type"], quantity, 
                      item_def["description"], item_def["base_value"], metadata)
                 )
         
         # Get location info for response
         location_info = self.bot.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (spawn_location,),
             fetch='one'
         )
         
         # Auto-login the character
         self.bot.db.execute_query(
-            "UPDATE characters SET is_logged_in = 1, login_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE user_id = ?",
+            "UPDATE characters SET is_logged_in = true, login_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE user_id = %s",
             (interaction.user.id,)
         )
 
@@ -648,14 +662,14 @@ class LocationView(discord.ui.View):
         self.user_id = user_id
         # Fetch current location for travel
         loc_row = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
         self.current_location_id = loc_row[0] if loc_row else None
         # Determine current dock status
         status_row = self.bot.db.execute_query(
-            "SELECT location_status FROM characters WHERE user_id = ?",
+            "SELECT location_status FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -723,7 +737,7 @@ class LocationView(discord.ui.View):
                FROM location_ownership lo
                LEFT JOIN characters c ON lo.owner_id = c.user_id
                LEFT JOIN groups g ON lo.group_id = g.group_id
-               WHERE lo.location_id = ?''',
+               WHERE lo.location_id = %s''',
             (location_id,),
             fetch='one'
         )
@@ -748,7 +762,7 @@ class LocationView(discord.ui.View):
 
         # check if the character is currently docked
         row = self.bot.db.execute_query(
-            "SELECT location_status FROM characters WHERE user_id = ?",
+            "SELECT location_status FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -761,7 +775,7 @@ class LocationView(discord.ui.View):
 
         # check if already in a travel session
         traveling = self.bot.db.execute_query(
-            "SELECT session_id FROM travel_sessions WHERE user_id = ? AND status = 'traveling'",
+            "SELECT session_id FROM travel_sessions WHERE user_id = %s AND status = 'traveling'",
             (interaction.user.id,),
             fetch='one'
         )
@@ -787,14 +801,14 @@ class LocationView(discord.ui.View):
         
         # Get current location
         char_location = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
         
         # Check if location has jobs
         location_info = self.bot.db.execute_query(
-            "SELECT has_jobs, name FROM locations WHERE location_id = ?",
+            "SELECT has_jobs, name FROM locations WHERE location_id = %s",
             (char_location[0],),
             fetch='one'
         )
@@ -807,7 +821,7 @@ class LocationView(discord.ui.View):
         jobs = self.bot.db.execute_query(
             '''SELECT job_id, title, description, reward_money, required_skill, min_skill_level, danger_level, duration_minutes
                FROM jobs 
-               WHERE location_id = ? AND is_taken = 0 AND expires_at > datetime('now')
+               WHERE location_id = %s AND is_taken = 0 AND expires_at > NOW()
                ORDER BY reward_money DESC''',
             (char_location[0],),
             fetch='all'
@@ -819,7 +833,7 @@ class LocationView(discord.ui.View):
             jobs = self.bot.db.execute_query(
                 '''SELECT job_id, title, description, reward_money, required_skill, min_skill_level, danger_level, duration_minutes
                    FROM jobs 
-                   WHERE location_id = ? AND is_taken = 0 AND expires_at > datetime('now')
+                   WHERE location_id = %s AND is_taken = 0 AND expires_at > NOW()
                    ORDER BY reward_money DESC''',
                 (char_location[0],),
                 fetch='all'
@@ -875,14 +889,14 @@ class LocationView(discord.ui.View):
         
         # Get current location services
         char_location = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
         
         location_services = self.bot.db.execute_query(
             '''SELECT name, has_medical, has_repairs, has_fuel, has_upgrades, wealth_level, has_shipyard
-               FROM locations WHERE location_id = ?''',
+               FROM locations WHERE location_id = %s''',
             (char_location[0],),
             fetch='one'
         )
@@ -917,7 +931,7 @@ class LocationView(discord.ui.View):
             services.append(f"⬆️ **Ship Upgrades** - Performance enhancements available")
         # Check for logbook availability
         has_logbook = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = %s",
             (char_location[0],),
             fetch='one'
         )[0] > 0
@@ -946,7 +960,7 @@ class LocationView(discord.ui.View):
         
         # Get current location
         char_location = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -990,7 +1004,7 @@ class LocationView(discord.ui.View):
         
         # Get character's current location
         char_info = self.bot.db.execute_query(
-            "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT current_location, is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1007,7 +1021,7 @@ class LocationView(discord.ui.View):
         # Get NPCs at this location
         static_npcs = self.bot.db.execute_query(
             '''SELECT npc_id, name, age, occupation, personality, trade_specialty
-               FROM static_npcs WHERE location_id = ?''',
+               FROM static_npcs WHERE location_id = %s''',
             (location_id,),
             fetch='all'
         )
@@ -1015,7 +1029,7 @@ class LocationView(discord.ui.View):
         dynamic_npcs = self.bot.db.execute_query(
             '''SELECT npc_id, name, age, ship_name, ship_type
                FROM dynamic_npcs 
-               WHERE current_location = ? AND is_alive = 1 AND travel_start_time IS NULL''',
+               WHERE current_location = %s AND is_alive = true AND travel_start_time IS NULL''',
             (location_id,),
             fetch='all'
         )
@@ -1085,7 +1099,7 @@ class LocationView(discord.ui.View):
                 '''INSERT INTO jobs 
                    (location_id, title, description, reward_money, required_skill, 
                     min_skill_level, danger_level, duration_minutes, expires_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+{} hours'))'''.format(expire_hours),
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW() + INTERVAL '{} hours'))'''.format(expire_hours),
                 (location_id, title, desc, reward, skill, min_skill, danger, duration)
             )
 class RoutePlottingModal(discord.ui.Modal, title="Plot Route"):
@@ -1115,7 +1129,7 @@ class TravelSelectView(discord.ui.View):
         if corridors:
             # Get current location from character
             char_location = self.bot.db.execute_query(
-                "SELECT l.name FROM characters c JOIN locations l ON c.current_location = l.location_id WHERE c.user_id = ?",
+                "SELECT l.name FROM characters c JOIN locations l ON c.current_location = l.location_id WHERE c.user_id = %s",
                 (self.user_id,),
                 fetch='one'
             )
@@ -1169,7 +1183,7 @@ class TravelSelectView(discord.ui.View):
                FROM corridors c
                JOIN locations ol ON c.origin_location = ol.location_id
                JOIN locations dl ON c.destination_location = dl.location_id
-               WHERE c.corridor_id = ?''',
+               WHERE c.corridor_id = %s''',
             (corridor_id,),
             fetch='one'
         )
@@ -1178,7 +1192,7 @@ class TravelSelectView(discord.ui.View):
             '''SELECT s.current_fuel, s.fuel_capacity, c.group_id
                FROM characters c
                JOIN ships s ON c.ship_id = s.ship_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -1200,14 +1214,14 @@ class TravelSelectView(discord.ui.View):
         
         # Get current location name for clearer display
         current_location_name = self.bot.db.execute_query(
-            "SELECT l.name FROM characters c JOIN locations l ON c.current_location = l.location_id WHERE c.user_id = ?",
+            "SELECT l.name FROM characters c JOIN locations l ON c.current_location = l.location_id WHERE c.user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
 
         embed = discord.Embed(
             title="Confirm Travel",
-            description=f"Travel from **{current_location_name}** → **{corridor_info[8]}** via {corridor_info[1]}?",
+            description=f"Travel from **{current_location_name}** → **{corridor_info[8]}** via {corridor_info[1]}%s",
             color=0xff6600
         )
         
@@ -1252,12 +1266,12 @@ class TravelConfirmView(discord.ui.View):
             '''SELECT c.corridor_id, c.name, c.destination_location, c.travel_time, c.fuel_cost, 
                       l.name as dest_name, c.origin_location
                FROM corridors c JOIN locations l ON c.destination_location = l.location_id
-               WHERE c.corridor_id = ?''',
+               WHERE c.corridor_id = %s''',
             (self.corridor_id,), fetch='one'
         )
         char_info = self.db.execute_query(
             '''SELECT s.current_fuel FROM characters c JOIN ships s ON c.ship_id = s.ship_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (self.user_id,), fetch='one'
         )
 
@@ -1286,7 +1300,7 @@ class TravelConfirmView(discord.ui.View):
 
         # Deduct fuel
         self.bot.db.execute_query(
-            "UPDATE ships SET current_fuel = current_fuel - ? WHERE owner_id = ?",
+            "UPDATE ships SET current_fuel = current_fuel - %s WHERE owner_id = %s",
             (cost, interaction.user.id)
         )
 
@@ -1298,7 +1312,7 @@ class TravelConfirmView(discord.ui.View):
             INSERT INTO travel_sessions
               (user_id, corridor_id, origin_location, destination_location,
                start_time, end_time, temp_channel_id, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'traveling')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'traveling')
             """,
             (interaction.user.id, cid, origin_id, dest_loc_id, start.isoformat(), end.isoformat(), transit_chan.id if transit_chan else None)
         )
@@ -1324,18 +1338,18 @@ class TravelConfirmView(discord.ui.View):
 
             # Mark session completed
             self.bot.db.execute_query(
-                "UPDATE travel_sessions SET status='completed' WHERE user_id=? AND corridor_id=?",
+                "UPDATE travel_sessions SET status='completed' WHERE user_id=%s AND corridor_id=%s",
                 (interaction.user.id, cid)
             )
             # Move character
             self.bot.db.execute_query(
-                "UPDATE characters SET current_location=? WHERE user_id=?",
+                "UPDATE characters SET current_location=%s WHERE user_id=%s",
                 (dest_loc_id, interaction.user.id)
             )
             # Announce arrival
             dest_chan = await travel_cog.channel_mgr.get_or_create_location_channel(interaction.guild, dest_loc_id, interaction.user)
             if dest_chan:
-                await dest_chan.send(f"🚀 {interaction.user.mention} has arrived at **{dest_name}**! Welcome.")
+                await self.bot.send_with_cross_guild_broadcast(dest_chan, f"🚀 {interaction.user.mention} has arrived at **{dest_name}**! Welcome.")
 
             # Cleanup transit channel
             if transit_chan:
@@ -1374,7 +1388,7 @@ class TravelConfirmView(discord.ui.View):
         travelers = [user_id]
         if group_id:
             group_members = self.bot.db.execute_query(
-                "SELECT user_id FROM characters WHERE group_id = ? AND current_location = ?",
+                "SELECT user_id FROM characters WHERE group_id = %s AND current_location = %s",
                 (group_id, current_location),
                 fetch='all'
             )
@@ -1409,13 +1423,13 @@ class TravelConfirmView(discord.ui.View):
             
             # Update character status to traveling
             self.bot.db.execute_query(
-                "UPDATE characters SET status = 'traveling' WHERE user_id = ?",
+                "UPDATE characters SET status = 'traveling' WHERE user_id = %s",
                 (traveler_id,)
             )
             
             # Consume fuel for each traveler's ship
             self.bot.db.execute_query(
-                "UPDATE ships SET current_fuel = current_fuel - ? WHERE owner_id = ?",
+                "UPDATE ships SET current_fuel = current_fuel - %s WHERE owner_id = %s",
                 (fuel_cost, traveler_id)
             )
         
@@ -1428,7 +1442,7 @@ class TravelConfirmView(discord.ui.View):
                 '''INSERT INTO travel_sessions 
                    (user_id, group_id, origin_location, destination_location, corridor_id, 
                     temp_channel_id, end_time, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'traveling')''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, 'traveling')''',
                 (traveler_id, group_id, origin_location, destination_location, 
                  corridor_id, transit_channel.id, end_time)
             )
@@ -1437,7 +1451,7 @@ class TravelConfirmView(discord.ui.View):
         traveler_names = []
         for traveler_id in travelers:
             char_name = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (traveler_id,),
                 fetch='one'
             )
@@ -1496,7 +1510,7 @@ class TravelConfirmView(discord.ui.View):
             
             # Check if travel is still active
             active_sessions = self.bot.db.execute_query(
-                "SELECT COUNT(*) FROM travel_sessions WHERE corridor_id = ? AND status = 'traveling'",
+                "SELECT COUNT(*) FROM travel_sessions WHERE corridor_id = %s AND status = 'traveling'",
                 (corridor_id,),
                 fetch='one'
             )[0]
@@ -1573,7 +1587,7 @@ class TravelConfirmView(discord.ui.View):
                         await char_cog.update_ship_hull(traveler_id, -damage, channel.guild)
         
         try:
-            await channel.send(embed=embed)
+            await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
         except:
             pass
     
@@ -1592,7 +1606,7 @@ class TravelConfirmView(discord.ui.View):
         for traveler_id in travelers:
             # Update character location and status
             self.bot.db.execute_query(
-                "UPDATE characters SET current_location = ?, status = 'active' WHERE user_id = ?",
+                "UPDATE characters SET current_location = %s, status = 'active' WHERE user_id = %s",
                 (destination_location, traveler_id)
             )
             
@@ -1603,7 +1617,7 @@ class TravelConfirmView(discord.ui.View):
         
         # Update travel sessions
         self.bot.db.execute_query(
-            "UPDATE travel_sessions SET status = 'completed' WHERE temp_channel_id = ? AND status = 'traveling'",
+            "UPDATE travel_sessions SET status = 'completed' WHERE temp_channel_id = %s AND status = 'traveling'",
             (transit_channel.id,)
         )
         
@@ -1627,7 +1641,7 @@ class TravelConfirmView(discord.ui.View):
         )
         
         try:
-            await transit_channel.send(embed=completion_embed)
+            await self.bot.send_with_cross_guild_broadcast(transit_channel, embed=completion_embed)
         except:
             pass
         
@@ -1650,7 +1664,7 @@ class PersistentLocationView(discord.ui.View):
         
         # Get current location and status
         char_data = self.bot.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -1671,7 +1685,7 @@ class PersistentLocationView(discord.ui.View):
         
         # Get current location services to determine which buttons to show
         char_data = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -1689,7 +1703,7 @@ class PersistentLocationView(discord.ui.View):
                 """SELECT has_federal_supplies, has_black_market, location_type, 
                           wealth_level, has_medical, has_jobs, has_shops, 
                           has_repairs, has_fuel, has_upgrades, has_shipyard
-                   FROM locations WHERE location_id = ?""",
+                   FROM locations WHERE location_id = %s""",
                 (char_data[0],),
                 fetch='one'
             )
@@ -1723,7 +1737,7 @@ class PersistentLocationView(discord.ui.View):
         # Check search cooldown
         if can_search:
             cooldown_data = self.bot.db.execute_query(
-                "SELECT last_search_time FROM search_cooldowns WHERE user_id = ? AND location_id = ?",
+                "SELECT last_search_time FROM search_cooldowns WHERE user_id = %s AND location_id = %s",
                 (self.user_id, self.current_location_id),
                 fetch='one'
             )
@@ -1731,7 +1745,8 @@ class PersistentLocationView(discord.ui.View):
             if cooldown_data:
                 import datetime
                 current_time = datetime.datetime.now()
-                last_search = datetime.datetime.fromisoformat(cooldown_data[0])
+                # PostgreSQL returns datetime objects directly
+                last_search = cooldown_data[0]
                 time_diff = current_time - last_search
                 
                 # If still on cooldown, disable search
@@ -1787,7 +1802,7 @@ class PersistentLocationView(discord.ui.View):
     async def refresh_view(self, interaction: discord.Interaction = None):
         """Refresh the view when dock status changes"""
         char_data = self.bot.db.execute_query(
-            "SELECT location_status FROM characters WHERE user_id = ?",
+            "SELECT location_status FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -1823,7 +1838,7 @@ class PersistentLocationView(discord.ui.View):
             else:
                 # Update without interaction (for background updates)
                 panel_data = self.bot.db.execute_query(
-                    "SELECT message_id, channel_id FROM user_location_panels WHERE user_id = ?",
+                    "SELECT message_id, channel_id FROM user_location_panels WHERE user_id = %s",
                     (self.user_id,),
                     fetch='one'
                 )
@@ -1877,7 +1892,7 @@ class PersistentLocationView(discord.ui.View):
         
         # Same NPC logic as before
         char_info = self.bot.db.execute_query(
-            "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT current_location, is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1894,7 +1909,7 @@ class PersistentLocationView(discord.ui.View):
         # Get NPCs at this location
         static_npcs = self.bot.db.execute_query(
             '''SELECT npc_id, name, age, occupation, personality, trade_specialty
-               FROM static_npcs WHERE location_id = ?''',
+               FROM static_npcs WHERE location_id = %s''',
             (location_id,),
             fetch='all'
         )
@@ -1902,7 +1917,7 @@ class PersistentLocationView(discord.ui.View):
         dynamic_npcs = self.bot.db.execute_query(
             '''SELECT npc_id, name, age, ship_name, ship_type
                FROM dynamic_npcs 
-               WHERE current_location = ? AND is_alive = 1 AND travel_start_time IS NULL''',
+               WHERE current_location = %s AND is_alive = true AND travel_start_time IS NULL''',
             (location_id,),
             fetch='all'
         )
@@ -1981,7 +1996,7 @@ class PersistentLocationView(discord.ui.View):
         
         # Sub-areas logic (same as before)
         char_location = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2066,7 +2081,7 @@ class EphemeralLocationView(discord.ui.View):
         
         # Get current location and status
         char_data = self.bot.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -2092,7 +2107,7 @@ class EphemeralLocationView(discord.ui.View):
         
         # Check if user has a character
         char_info = self.bot.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2162,7 +2177,7 @@ class EphemeralLocationView(discord.ui.View):
         
         # Get current location services to determine which buttons to show
         char_data = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -2180,7 +2195,7 @@ class EphemeralLocationView(discord.ui.View):
                 """SELECT has_federal_supplies, has_black_market, location_type, 
                           wealth_level, has_medical, has_jobs, has_shops, 
                           has_repairs, has_fuel, has_upgrades, has_shipyard
-                   FROM locations WHERE location_id = ?""",
+                   FROM locations WHERE location_id = %s""",
                 (char_data[0],),
                 fetch='one'
             )
@@ -2214,7 +2229,7 @@ class EphemeralLocationView(discord.ui.View):
         # Check search cooldown
         if can_search:
             cooldown_data = self.bot.db.execute_query(
-                "SELECT last_search_time FROM search_cooldowns WHERE user_id = ? AND location_id = ?",
+                "SELECT last_search_time FROM search_cooldowns WHERE user_id = %s AND location_id = %s",
                 (self.user_id, self.current_location_id),
                 fetch='one'
             )
@@ -2222,7 +2237,8 @@ class EphemeralLocationView(discord.ui.View):
             if cooldown_data:
                 import datetime
                 current_time = datetime.datetime.now()
-                last_search = datetime.datetime.fromisoformat(cooldown_data[0])
+                # PostgreSQL returns datetime objects directly
+                last_search = cooldown_data[0]
                 time_diff = current_time - last_search
                 
                 # If still on cooldown, disable search
@@ -2277,7 +2293,7 @@ class EphemeralLocationView(discord.ui.View):
     async def refresh_view(self, interaction: discord.Interaction):
         """Refresh the view when dock status changes"""
         char_data = self.bot.db.execute_query(
-            "SELECT location_status, current_location FROM characters WHERE user_id = ?",
+            "SELECT location_status, current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -2290,7 +2306,7 @@ class EphemeralLocationView(discord.ui.View):
             location_name = "Unknown Location"
             if current_location:
                 location_info = self.bot.db.execute_query(
-                    "SELECT name FROM locations WHERE location_id = ?",
+                    "SELECT name FROM locations WHERE location_id = %s",
                     (current_location,),
                     fetch='one'
                 )
@@ -2361,7 +2377,7 @@ class EphemeralLocationView(discord.ui.View):
         
         # Same NPC logic as PersistentLocationView
         char_info = self.bot.db.execute_query(
-            "SELECT current_location, is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT current_location, is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2378,7 +2394,7 @@ class EphemeralLocationView(discord.ui.View):
         # Get NPCs at this location
         static_npcs = self.bot.db.execute_query(
             '''SELECT npc_id, name, age, occupation, personality, trade_specialty
-               FROM static_npcs WHERE location_id = ?''',
+               FROM static_npcs WHERE location_id = %s''',
             (location_id,),
             fetch='all'
         )
@@ -2386,7 +2402,7 @@ class EphemeralLocationView(discord.ui.View):
         dynamic_npcs = self.bot.db.execute_query(
             '''SELECT npc_id, name, age, ship_name, ship_type
                FROM dynamic_npcs 
-               WHERE current_location = ? AND is_alive = 1 AND travel_start_time IS NULL''',
+               WHERE current_location = %s AND is_alive = true AND travel_start_time IS NULL''',
             (location_id,),
             fetch='all'
         )
@@ -2431,7 +2447,7 @@ class EphemeralLocationView(discord.ui.View):
         
         # Get current location services
         char_location = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2442,7 +2458,7 @@ class EphemeralLocationView(discord.ui.View):
         
         location_services = self.bot.db.execute_query(
             '''SELECT name, has_medical, has_repairs, has_fuel, has_upgrades, wealth_level
-               FROM locations WHERE location_id = ?''',
+               FROM locations WHERE location_id = %s''',
             (char_location[0],),
             fetch='one'
         )
@@ -2477,7 +2493,7 @@ class EphemeralLocationView(discord.ui.View):
         
         # Check for logbook availability
         has_logbook = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = %s",
             (char_location[0],),
             fetch='one'
         )[0] > 0
@@ -2504,7 +2520,7 @@ class EphemeralLocationView(discord.ui.View):
 
         # Check if location has federal supplies
         char_location = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2513,7 +2529,7 @@ class EphemeralLocationView(discord.ui.View):
             return await interaction.response.send_message("Character not found!", ephemeral=True)
         
         location_info = self.bot.db.execute_query(
-            "SELECT has_federal_supplies FROM locations WHERE location_id = ?",
+            "SELECT has_federal_supplies FROM locations WHERE location_id = %s",
             (char_location[0],),
             fetch='one'
         )
@@ -2538,7 +2554,7 @@ class EphemeralLocationView(discord.ui.View):
 
         # Check if location has black market
         char_location = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2547,7 +2563,7 @@ class EphemeralLocationView(discord.ui.View):
             return await interaction.response.send_message("Character not found!", ephemeral=True)
         
         location_info = self.bot.db.execute_query(
-            "SELECT has_black_market FROM locations WHERE location_id = ?",
+            "SELECT has_black_market FROM locations WHERE location_id = %s",
             (char_location[0],),
             fetch='one'
         )
@@ -2607,7 +2623,7 @@ class EphemeralLocationView(discord.ui.View):
         
         # Same sub-areas logic as PersistentLocationView
         char_location = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2669,7 +2685,7 @@ class EphemeralLocationView(discord.ui.View):
             '''SELECT l.name, l.location_type, l.wealth_level, l.has_medical
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -2749,7 +2765,7 @@ class EphemeralLocationView(discord.ui.View):
         if char_cog:
             # Call the dock ship logic directly
             char_data = char_cog.db.execute_query(
-                "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+                "SELECT current_location, location_status FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -2770,19 +2786,19 @@ class EphemeralLocationView(discord.ui.View):
             
             # Dock the ship
             char_cog.db.execute_query(
-                "UPDATE characters SET location_status = 'docked' WHERE user_id = ?",
+                "UPDATE characters SET location_status = 'docked' WHERE user_id = %s",
                 (interaction.user.id,)
             )
             
             location_name = char_cog.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (current_location,),
                 fetch='one'
             )[0]
             
             # Get character name for roleplay message
             char_name = char_cog.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )[0]
@@ -2808,7 +2824,7 @@ class EphemeralLocationView(discord.ui.View):
         
         # Get full character data for all checks
         char_data = self.bot.db.execute_query(
-            "SELECT current_location, location_status, current_ship_id FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, current_ship_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2845,9 +2861,9 @@ class EphemeralLocationView(discord.ui.View):
         blocking_jobs = self.bot.db.execute_query(
             '''SELECT COUNT(*) FROM jobs j 
                LEFT JOIN job_tracking jt ON j.job_id = jt.job_id
-               WHERE j.taken_by = ? AND j.job_status = 'active' 
-               AND (jt.start_location = ? OR (jt.start_location IS NULL AND j.location_id = ?))
-               AND (j.destination_location_id IS NULL OR j.destination_location_id = ?)''',
+               WHERE j.taken_by = %s AND j.job_status = 'active' 
+               AND (jt.start_location = %s OR (jt.start_location IS NULL AND j.location_id = %s))
+               AND (j.destination_location_id IS NULL OR j.destination_location_id = %s)''',
             (interaction.user.id, current_location, current_location, current_location),
             fetch='one'
         )[0]
@@ -2866,19 +2882,19 @@ class EphemeralLocationView(discord.ui.View):
         
         # Execute the undock
         self.bot.db.execute_query(
-            "UPDATE characters SET location_status = 'in_space' WHERE user_id = ?",
+            "UPDATE characters SET location_status = 'in_space' WHERE user_id = %s",
             (interaction.user.id,)
         )
         
         # Get names for embed
         char_name = self.bot.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
         location_name = self.bot.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )[0]
@@ -2902,7 +2918,7 @@ class EphemeralLocationView(discord.ui.View):
         
         # Get current location
         char_location = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2918,7 +2934,7 @@ class EphemeralLocationView(discord.ui.View):
             '''SELECT location_id, channel_id, name, location_type, description, wealth_level,
                       population, has_jobs, has_shops, has_medical, has_repairs, has_fuel, 
                       has_upgrades, has_federal_supplies, has_black_market
-               FROM locations WHERE location_id = ?''',
+               FROM locations WHERE location_id = %s''',
             (location_id,),
             fetch='one'
         )
@@ -2926,7 +2942,7 @@ class EphemeralLocationView(discord.ui.View):
             '''SELECT f.name, f.emoji, lo.custom_name, lo.docking_fee
                FROM location_ownership lo
                JOIN factions f ON lo.faction_id = f.faction_id
-               WHERE lo.location_id = ?''',
+               WHERE lo.location_id = %s''',
             (location_id,),
             fetch='one'
         )
@@ -3057,7 +3073,7 @@ class EphemeralLocationView(discord.ui.View):
         homes_info = self.bot.db.execute_query(
             '''SELECT COUNT(*), MIN(price), MAX(price), home_type
                FROM location_homes 
-               WHERE location_id = ? AND is_available = 1
+               WHERE location_id = %s AND is_available = 1
                GROUP BY home_type''',
             (location_id,),
             fetch='all'
@@ -3100,7 +3116,7 @@ class EphemeralLocationView(discord.ui.View):
         
         # LOGBOOK PRESENCE
         log_count = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = %s",
             (loc_id,),
             fetch='one'
         )[0]
@@ -3114,26 +3130,26 @@ class EphemeralLocationView(discord.ui.View):
         routes = self.bot.db.execute_query(
             '''SELECT c.name, 
                       CASE 
-                          WHEN c.origin_location = ? THEN l_dest.name
+                          WHEN c.origin_location = %s THEN l_dest.name
                           ELSE l_orig.name
                       END as dest_name,
                       CASE 
-                          WHEN c.origin_location = ? THEN l_dest.location_type
+                          WHEN c.origin_location = %s THEN l_dest.location_type
                           ELSE l_orig.location_type
                       END as dest_type,
                       c.travel_time, c.danger_level,
                       lo.location_type as origin_type,
                       CASE WHEN lo.system_name = CASE 
-                          WHEN c.origin_location = ? THEN l_dest.system_name
+                          WHEN c.origin_location = %s THEN l_dest.system_name
                           ELSE l_orig.system_name
                       END THEN 1 ELSE 0 END AS same_system,
                       c.corridor_type
                FROM corridors c
                JOIN locations l_dest ON c.destination_location = l_dest.location_id
                JOIN locations l_orig ON c.origin_location = l_orig.location_id
-               JOIN locations lo ON ? = lo.location_id
-               WHERE (c.origin_location = ? OR (c.destination_location = ? AND c.is_bidirectional = 1)) 
-               AND c.is_active = 1
+               JOIN locations lo ON %s = lo.location_id
+               WHERE (c.origin_location = %s OR (c.destination_location = %s AND c.is_bidirectional = 1)) 
+               AND c.is_active = true
                ORDER BY c.travel_time
                LIMIT 8''',
             (loc_id, loc_id, loc_id, loc_id, loc_id, loc_id),
@@ -3253,7 +3269,7 @@ class JobSelectView(discord.ui.View):
         # Find the job details
         job_info = self.bot.db.execute_query(
             '''SELECT job_id, title, description, reward_money, required_skill, min_skill_level, danger_level, duration_minutes
-               FROM jobs WHERE job_id = ?''',
+               FROM jobs WHERE job_id = %s''',
             (job_id,),
             fetch='one'
         )
@@ -3264,7 +3280,7 @@ class JobSelectView(discord.ui.View):
         
         # Check if user already has a job
         has_job = self.bot.db.execute_query(
-            "SELECT job_id FROM jobs WHERE taken_by = ? AND is_taken = 1",
+            "SELECT job_id FROM jobs WHERE taken_by = %s AND is_taken = true",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3286,7 +3302,7 @@ class ServicesView(discord.ui.View):
             '''SELECT has_fuel, has_repairs, has_medical, has_upgrades, l.location_id, has_shipyard
                FROM locations l
                JOIN characters c ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (user_id,),
             fetch='one'
         )
@@ -3296,7 +3312,7 @@ class ServicesView(discord.ui.View):
             
             # Check for logbook
             has_logbook = self.bot.db.execute_query(
-                "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+                "SELECT COUNT(*) FROM location_logs WHERE location_id = %s",
                 (location_id,),
                 fetch='one'
             )[0] > 0
@@ -3316,7 +3332,7 @@ class ServicesView(discord.ui.View):
     def _get_fuel_cost_per_unit(self, location_id: int) -> int:
         """Get fuel cost based on location wealth"""
         wealth = self.bot.db.execute_query(
-            "SELECT wealth_level FROM locations WHERE location_id = ?",
+            "SELECT wealth_level FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -3337,7 +3353,7 @@ class ServicesView(discord.ui.View):
                       s.fuel_capacity, s.current_fuel
                FROM characters c
                JOIN ships s ON c.user_id = s.owner_id
-               WHERE c.user_id = ?""",
+               WHERE c.user_id = %s""",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3399,7 +3415,7 @@ class ServicesView(discord.ui.View):
             """SELECT c.name, c.money, s.ship_id, s.hull_integrity, s.max_hull
                FROM characters c
                JOIN ships s ON c.user_id = s.owner_id
-               WHERE c.user_id = ?""",
+               WHERE c.user_id = %s""",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3460,7 +3476,7 @@ class ServicesView(discord.ui.View):
         location_info = self.bot.db.execute_query(
             '''SELECT l.has_shipyard, l.name FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -3483,7 +3499,7 @@ class ServicesView(discord.ui.View):
             return
         
         char_info = self.bot.db.execute_query(
-            "SELECT name, hp, max_hp, money FROM characters WHERE user_id = ?",
+            "SELECT name, hp, max_hp, money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -3545,7 +3561,7 @@ class ServicesView(discord.ui.View):
             '''SELECT c.current_location, l.name, l.location_type
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -3558,7 +3574,7 @@ class ServicesView(discord.ui.View):
         
         # Check if this location has a logbook
         has_log = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )[0] > 0
@@ -3582,13 +3598,13 @@ class ServicesView(discord.ui.View):
         
         # Get recent entries count
         recent_count = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM location_logs WHERE location_id = ? AND posted_at > datetime('now', '-7 days')",
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = %s AND posted_at > NOW() - INTERVAL '7 days'",
             (location_id,),
             fetch='one'
         )[0]
         
         total_count = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )[0]
@@ -3734,11 +3750,11 @@ class FuelConfirmView(discord.ui.View):
         
         # Apply refueling
         self.bot.db.execute_query(
-            "UPDATE ships SET current_fuel = current_fuel + ? WHERE ship_id = ?",
+            "UPDATE ships SET current_fuel = current_fuel + %s WHERE ship_id = %s",
             (self.amount, self.ship_id)
         )
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (self.total_cost, self.user_id)
         )
         
@@ -3893,11 +3909,11 @@ class RepairConfirmView(discord.ui.View):
         
         # Apply repairs
         self.bot.db.execute_query(
-            "UPDATE ships SET hull_integrity = hull_integrity + ? WHERE ship_id = ?",
+            "UPDATE ships SET hull_integrity = hull_integrity + %s WHERE ship_id = %s",
             (self.amount, self.ship_id)
         )
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (self.total_cost, self.user_id)
         )
         
@@ -4055,7 +4071,7 @@ class MedicalConfirmView(discord.ui.View):
         
         # Apply healing
         self.bot.db.execute_query(
-            "UPDATE characters SET hp = hp + ?, money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET hp = hp + %s, money = money - %s WHERE user_id = %s",
             (self.amount, self.total_cost, self.user_id)
         )
         
@@ -4139,7 +4155,7 @@ class SubLocationSelectView(discord.ui.View):
 
         # Get character and location info
         char_info = self.bot.db.execute_query(
-            "SELECT name, current_location FROM characters WHERE user_id = ?",
+            "SELECT name, current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -4149,10 +4165,12 @@ class SubLocationSelectView(discord.ui.View):
         
         char_name, location_id = char_info
 
-        location_info = self.bot.db.execute_query(
-            "SELECT channel_id, name FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
+        # Get location channel using guild-specific system
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        location_info = channel_manager.get_channel_id_from_location(
+            interaction.guild.id, 
+            location_id
         )
         
         if not location_info or not location_info[0]:
@@ -4185,7 +4203,7 @@ class SubLocationSelectView(discord.ui.View):
                 description=f"**{char_name}** enters the **{thread.name}**.",
                 color=0x7289DA  # Discord Blurple
             )
-            await location_channel.send(embed=announce_embed)
+            await self.bot.send_with_cross_guild_broadcast(location_channel, embed=announce_embed)
 
             # Ephemeral confirmation for the user
             await interaction.followup.send(
@@ -4273,7 +4291,7 @@ class LogbookInteractionView(discord.ui.View):
         entries = self.bot.db.execute_query(
             '''SELECT author_name, message, posted_at, is_generated
                FROM location_logs
-               WHERE location_id = ?
+               WHERE location_id = %s
                ORDER BY posted_at DESC
                LIMIT 10''',
             (self.location_id,),
@@ -4296,14 +4314,14 @@ class LogbookInteractionView(discord.ui.View):
                     
                     # Convert stored time to display format
                     if posted_at:
-                        posted_time = datetime.fromisoformat(posted_at.replace('Z', '+00:00') if 'Z' in posted_at else posted_at)
+                        posted_time = safe_datetime_parse(posted_at.replace('Z', '+00:00') if 'Z' in posted_at else posted_at)
                         time_str = posted_time.strftime("%d-%m-%Y")
                     else:
                         time_str = "Unknown date"
                 except:
                     # Fallback to simple date format
                     if posted_at:
-                        posted_time = datetime.fromisoformat(posted_at.replace('Z', '+00:00') if 'Z' in posted_at else posted_at)
+                        posted_time = safe_datetime_parse(posted_at.replace('Z', '+00:00') if 'Z' in posted_at else posted_at)
                         time_str = posted_time.strftime("%Y-%m-%d")
                     else:
                         time_str = "Unknown date"
@@ -4379,7 +4397,7 @@ class LogbookEntryModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         # Get character info
         char_info = self.bot.db.execute_query(
-            '''SELECT name FROM characters WHERE user_id = ?''',
+            '''SELECT name FROM characters WHERE user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -4410,7 +4428,7 @@ class LogbookEntryModal(discord.ui.Modal):
         # Add entry with in-game timestamp
         self.bot.db.execute_query(
             '''INSERT INTO location_logs (location_id, author_id, author_name, message, posted_at)
-               VALUES (?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s)''',
             (self.location_id, interaction.user.id, char_name, message, timestamp)
         )
         
@@ -4444,7 +4462,7 @@ class PersonalLogMainView(discord.ui.View):
         entries = self.bot.db.execute_query(
             '''SELECT entry_id, entry_title, created_at, author_name 
                FROM logbook_entries 
-               WHERE logbook_id = ? 
+               WHERE logbook_id = %s 
                ORDER BY created_at DESC''',
             (self.logbook_id,),
             fetch='all'
@@ -4575,7 +4593,7 @@ class PersonalLogSelectView(discord.ui.View):
         entry = self.bot.db.execute_query(
             '''SELECT entry_title, entry_content, created_at, author_name, ingame_date
                FROM logbook_entries 
-               WHERE entry_id = ?''',
+               WHERE entry_id = %s''',
             (entry_id,),
             fetch='one'
         )
@@ -4661,7 +4679,7 @@ class PersonalLogSelectView(discord.ui.View):
         
         # Get character name
         char_name = self.bot.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )[0]
@@ -4747,7 +4765,7 @@ class PersonalLogEntryModal(discord.ui.Modal):
         self.bot.db.execute_query(
             '''INSERT INTO logbook_entries 
                (logbook_id, author_name, author_id, entry_title, entry_content, ingame_date)
-               VALUES (?, ?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s, %s)''',
             (self.logbook_id, self.char_name, user_id, 
              self.title_input.value, self.content_input.value, self.ingame_date)
         )
@@ -4817,14 +4835,14 @@ class TQEOverviewView(discord.ui.View):
         """Check if user is in any combat"""
         # Check NPC combat
         npc_combat = self.bot.db.execute_query(
-            "SELECT combat_id FROM combat_states WHERE player_id = ?",
+            "SELECT combat_id FROM combat_states WHERE player_id = %s",
             (self.user_id,),
             fetch='one'
         )
         
         # Check PvP combat
         pvp_combat = self.bot.db.execute_query(
-            "SELECT combat_id FROM pvp_combat_states WHERE attacker_id = ? OR defender_id = ?",
+            "SELECT combat_id FROM pvp_combat_states WHERE attacker_id = %s OR defender_id = %s",
             (self.user_id, self.user_id),
             fetch='one'
         )
@@ -4840,7 +4858,7 @@ class TQEOverviewView(discord.ui.View):
                       j.destination_location_id
                FROM jobs j
                JOIN locations l ON j.location_id = l.location_id
-               WHERE j.taken_by = ? AND j.is_taken = 1''',
+               WHERE j.taken_by = %s AND j.is_taken = true''',
             (self.user_id,),
             fetch='one'
         )
@@ -4880,7 +4898,7 @@ class TQEOverviewView(discord.ui.View):
                 if destination_location_id:
                     # Get player's current location
                     player_location = self.bot.db.execute_query(
-                        "SELECT current_location FROM characters WHERE user_id = ?",
+                        "SELECT current_location FROM characters WHERE user_id = %s",
                         (self.user_id,),
                         fetch='one'
                     )
@@ -4892,14 +4910,14 @@ class TQEOverviewView(discord.ui.View):
                 else:
                     # NPC transport job - check elapsed time
                     from datetime import datetime
-                    taken_time = datetime.fromisoformat(taken_at)
+                    taken_time = safe_datetime_parse(taken_at)
                     current_time = datetime.utcnow()
                     elapsed_minutes = (current_time - taken_time).total_seconds() / 60
                     is_ready = elapsed_minutes >= duration_minutes
             else:
                 # For stationary jobs, check location tracking
                 tracking = self.bot.db.execute_query(
-                    "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
+                    "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = %s AND user_id = %s",
                     (job_id, self.user_id),
                     fetch='one'
                 )
@@ -4919,7 +4937,7 @@ class TQEOverviewView(discord.ui.View):
         if job_info:
             # Check if player is docked
             location_status = self.bot.db.execute_query(
-                "SELECT location_status FROM characters WHERE user_id = ?",
+                "SELECT location_status FROM characters WHERE user_id = %s",
                 (self.user_id,),
                 fetch='one'
             )
@@ -5001,17 +5019,17 @@ class TQEOverviewView(discord.ui.View):
             """SELECT cs.combat_id, cs.target_npc_id, cs.target_npc_type, cs.combat_type, 
                       cs.player_can_act_time
                FROM combat_states cs
-               WHERE cs.player_id = ?""",
+               WHERE cs.player_id = %s""",
             (self.user_id,),
             fetch='one'
         )
         
         # Check for PvP combat
         pvp_combat_data = self.bot.db.execute_query(
-            """SELECT pcs.combat_id, pcs.attacker_id, pcs.defender_id, pcs.combat_type,
-                      pcs.current_turn, pcs.attacker_can_act_time, pcs.defender_can_act_time
+            """SELECT pcs.combat_id, pcs.attacker_id, pcs.defender_id, pcs.location_id, pcs.combat_type,
+                      pcs.attacker_can_act_time, pcs.defender_can_act_time, pcs.current_turn
                FROM pvp_combat_states pcs
-               WHERE pcs.attacker_id = ? OR pcs.defender_id = ?""",
+               WHERE pcs.attacker_id = %s OR pcs.defender_id = %s""",
             (self.user_id, self.user_id),
             fetch='one'
         )
@@ -5037,7 +5055,7 @@ class TQEOverviewView(discord.ui.View):
         
         # Check if character exists and is logged in
         char_data = self.bot.db.execute_query(
-            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -5105,7 +5123,7 @@ class TQEOverviewView(discord.ui.View):
         char_data = self.bot.db.execute_query(
             """SELECT name, is_logged_in, current_location, current_ship_id, 
                location_status, money
-               FROM characters WHERE user_id = ?""",
+               FROM characters WHERE user_id = %s""",
             (interaction.user.id,),
             fetch='one'
         )
@@ -5121,7 +5139,7 @@ class TQEOverviewView(discord.ui.View):
         
         # Get age from character_identity table
         age_data = self.bot.db.execute_query(
-            "SELECT age FROM character_identity WHERE user_id = ?",
+            "SELECT age FROM character_identity WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -5152,7 +5170,7 @@ class TQEOverviewView(discord.ui.View):
                 """SELECT destination_location, arrival_time, 
                    julianday(arrival_time) - julianday('now') as time_remaining
                    FROM travel_sessions 
-                   WHERE user_id = ? AND status = 'traveling'""",
+                   WHERE user_id = %s AND status = 'traveling'""",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -5160,7 +5178,7 @@ class TQEOverviewView(discord.ui.View):
             if travel_info:
                 dest_id, arrival_time, time_remaining = travel_info
                 dest_info = self.bot.db.execute_query(
-                    "SELECT name FROM locations WHERE location_id = ?",
+                    "SELECT name FROM locations WHERE location_id = %s",
                     (dest_id,),
                     fetch='one'
                 )
@@ -5188,7 +5206,7 @@ class TQEOverviewView(discord.ui.View):
             location_type = ""
             if current_location:
                 location_info = self.bot.db.execute_query(
-                    "SELECT name, location_type FROM locations WHERE location_id = ?",
+                    "SELECT name, location_type FROM locations WHERE location_id = %s",
                     (current_location,),
                     fetch='one'
                 )
@@ -5225,7 +5243,7 @@ class TQEOverviewView(discord.ui.View):
 
         # Get logged in players count
         logged_in_count = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
+            "SELECT COUNT(*) FROM characters WHERE is_logged_in = true",
             fetch='one'
         )[0]
 
@@ -5300,7 +5318,7 @@ class TQEOverviewView(discord.ui.View):
                       j.destination_location_id
                FROM jobs j
                JOIN locations l ON j.location_id = l.location_id
-               WHERE j.taken_by = ? AND j.is_taken = 1''',
+               WHERE j.taken_by = %s AND j.is_taken = true''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -5327,7 +5345,7 @@ class TQEOverviewView(discord.ui.View):
             is_transport_job = False
 
         from datetime import datetime
-        taken_time = datetime.fromisoformat(taken_at)
+        taken_time = safe_datetime_parse(taken_at)
         current_time = datetime.utcnow()
         elapsed_minutes = (current_time - taken_time).total_seconds() / 60
 
@@ -5360,7 +5378,7 @@ class TQEOverviewView(discord.ui.View):
         else:
             # Stationary job - check tracking
             tracking = self.bot.db.execute_query(
-                "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = ? AND user_id = ?",
+                "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = %s AND user_id = %s",
                 (job_id, interaction.user.id),
                 fetch='one'
             )
@@ -5394,7 +5412,7 @@ class TQEOverviewView(discord.ui.View):
             if destination_location_id:
                 # Get destination name for transport jobs with specific destination
                 dest_name = self.bot.db.execute_query(
-                    "SELECT name FROM locations WHERE location_id = ?",
+                    "SELECT name FROM locations WHERE location_id = %s",
                     (destination_location_id,),
                     fetch='one'
                 )
@@ -5471,7 +5489,7 @@ class BasicTQEView(discord.ui.View):
         
         # Check if the user has a character to customize the message
         char_data = self.bot.db.execute_query(
-            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -5550,13 +5568,13 @@ class SimpleShipUpgradeView(discord.ui.View):
             # Update the ship component
             column_name = f"{component}_level"
             self.bot.db.execute_query(
-                f"UPDATE ships SET {column_name} = {column_name} + 1 WHERE ship_id = ?",
+                f"UPDATE ships SET {column_name} = {column_name} + 1 WHERE ship_id = %s",
                 (self.ship_id,)
             )
             
             # Deduct credits
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (cost, self.user_id)
             )
             
@@ -5603,7 +5621,7 @@ class SkillTrainingSelectView(discord.ui.View):
             
             # Get character info for the selected skill
             char_info = self.bot.db.execute_query(
-                f"SELECT money, {skill} FROM characters WHERE user_id = ?",
+                f"SELECT money, {skill} FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -5628,7 +5646,7 @@ class SkillTrainingSelectView(discord.ui.View):
             
             # Get location wealth for success chance
             location_wealth = self.bot.db.execute_query(
-                "SELECT wealth_level FROM locations WHERE name = ?",
+                "SELECT wealth_level FROM locations WHERE name = %s",
                 (self.location_name,),
                 fetch='one'
             )[0]
@@ -5794,7 +5812,7 @@ class InteractiveInventoryView(discord.ui.View):
             if not is_equippable_static:
                 db_equippable = self.bot.db.execute_query(
                     '''SELECT equippable FROM inventory 
-                       WHERE owner_id = ? AND LOWER(item_name) = LOWER(?) AND quantity > 0 LIMIT 1''',
+                       WHERE owner_id = %s AND LOWER(item_name) = LOWER(%s) AND quantity > 0 LIMIT 1''',
                     (self.user_id, item_name),
                     fetch='one'
                 )
@@ -5826,7 +5844,7 @@ class InteractiveInventoryView(discord.ui.View):
         item_data = self.bot.db.execute_query(
             '''SELECT item_id, item_name, quantity, equipment_slot, stat_modifiers 
                FROM inventory 
-               WHERE owner_id = ? AND LOWER(item_name) = LOWER(?) AND quantity > 0''',
+               WHERE owner_id = %s AND LOWER(item_name) = LOWER(%s) AND quantity > 0''',
             (self.user_id, item_name),
             fetch='one'
         )
@@ -5858,7 +5876,7 @@ class InteractiveInventoryView(discord.ui.View):
         # Check if item is currently equipped
         equipped_data = self.bot.db.execute_query(
             '''SELECT equipment_id FROM character_equipment 
-               WHERE user_id = ? AND item_id = ?''',
+               WHERE user_id = %s AND item_id = %s''',
             (self.user_id, item_id),
             fetch='one'
         )
@@ -5870,7 +5888,7 @@ class InteractiveInventoryView(discord.ui.View):
             # Find which slot this item is in
             slot_data = self.bot.db.execute_query(
                 '''SELECT slot_name FROM character_equipment 
-                   WHERE user_id = ? AND item_id = ?''',
+                   WHERE user_id = %s AND item_id = %s''',
                 (self.user_id, item_id),
                 fetch='one'
             )
@@ -5975,7 +5993,7 @@ class CrimeView(discord.ui.View):
         
         # Create a simple select menu for players at location
         char_data = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -5988,7 +6006,7 @@ class CrimeView(discord.ui.View):
         other_players = self.bot.db.execute_query(
             """SELECT c.user_id, c.name 
                FROM characters c 
-               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1""",
+               WHERE c.current_location = %s AND c.user_id != %s AND c.is_logged_in = true""",
             (char_data[0], self.user_id),
             fetch='all'
         )
@@ -6026,7 +6044,7 @@ class CrimeView(discord.ui.View):
         
         # Get current location
         char_data = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -6039,7 +6057,7 @@ class CrimeView(discord.ui.View):
         other_players = self.bot.db.execute_query(
             """SELECT c.user_id, c.name 
                FROM characters c 
-               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1""",
+               WHERE c.current_location = %s AND c.user_id != %s AND c.is_logged_in = true""",
             (char_data[0], self.user_id),
             fetch='all'
         )
@@ -6208,7 +6226,7 @@ class FactionsRepView(discord.ui.View):
             
             # Check if user is a faction leader
             leader_result = db.execute_query(
-                "SELECT faction_id FROM factions WHERE leader_id = ?",
+                "SELECT faction_id FROM factions WHERE leader_id = %s",
                 (self.user_id,),
                 fetch='one'
             )
@@ -6218,7 +6236,7 @@ class FactionsRepView(discord.ui.View):
             else:
                 # Check if user is a faction member
                 member_result = db.execute_query(
-                    "SELECT faction_id FROM faction_members WHERE user_id = ?",
+                    "SELECT faction_id FROM faction_members WHERE user_id = %s",
                     (self.user_id,),
                     fetch='one'
                 )
@@ -6513,11 +6531,11 @@ class PostBountyPlayerSelect(discord.ui.View):
         
         # Create select menu with guild members who have characters
         options = []
-        guild = bot.get_guild(bot.config.ALLOWED_GUILD_ID) if hasattr(bot, 'config') else None
+        guild = interaction.guild
         if guild:
             # Get all characters and their user info
             characters = bot.db.execute_query(
-                "SELECT user_id, name FROM characters WHERE user_id != ?",
+                "SELECT user_id, name FROM characters WHERE user_id != %s",
                 (user_id,),
                 fetch='all'
             )
@@ -6638,14 +6656,14 @@ class ClaimBountyPlayerSelect(discord.ui.View):
         
         # Get user's current location
         user_location = bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
         
         # Create select menu with bountied players in same location
         options = []
-        guild = bot.get_guild(bot.config.ALLOWED_GUILD_ID) if hasattr(bot, 'config') else None
+        guild = interaction.guild
         if guild and user_location and user_location[0]:
             current_location = user_location[0]
             
@@ -6654,10 +6672,10 @@ class ClaimBountyPlayerSelect(discord.ui.View):
                 '''SELECT DISTINCT pb.target_id, pb.target_name, SUM(pb.amount) as total_bounty
                    FROM personal_bounties pb
                    JOIN characters c ON pb.target_id = c.user_id
-                   WHERE pb.is_active = 1 
-                   AND c.current_location = ?
-                   AND c.is_logged_in = 1
-                   AND pb.target_id != ?
+                   WHERE pb.is_active = true 
+                   AND c.current_location = %s
+                   AND c.is_logged_in = true
+                   AND pb.target_id != %s
                    GROUP BY pb.target_id, pb.target_name
                    ORDER BY total_bounty DESC''',
                 (current_location, user_id),
@@ -6715,7 +6733,7 @@ class HomeInvitePlayerSelect(discord.ui.View):
         
         # Create select menu with guild members
         options = []
-        guild = bot.get_guild(bot.config.ALLOWED_GUILD_ID) if hasattr(bot, 'config') else None
+        guild = interaction.guild
         if guild:
             for member in guild.members[:25]:  # Discord limit is 25 options
                 if member.id != user_id and not member.bot:
@@ -6767,7 +6785,7 @@ class HomesView(discord.ui.View):
             '''SELECT c.current_location, c.current_home_id, l.name as location_name
                FROM characters c
                LEFT JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (self.user_id,),
             fetch='one'
         )
@@ -6779,14 +6797,14 @@ class HomesView(discord.ui.View):
         
         # Check if user owns a home at current location
         owned_home = self.bot.db.execute_query(
-            "SELECT home_id FROM location_homes WHERE owner_id = ? AND location_id = ?",
+            "SELECT home_id FROM location_homes WHERE owner_id = %s AND location_id = %s",
             (self.user_id, current_location),
             fetch='one'
         )
         
         # Check if location has homes for sale
         available_homes = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM location_homes WHERE location_id = ? AND is_available = 1",
+            "SELECT COUNT(*) FROM location_homes WHERE location_id = %s AND is_available = 1",
             (current_location,),
             fetch='one'
         )
@@ -6794,14 +6812,14 @@ class HomesView(discord.ui.View):
         # Check if user has pending invitations
         pending_invitation = self.bot.db.execute_query(
             '''SELECT COUNT(*) FROM home_invitations
-               WHERE invitee_id = ? AND expires_at > datetime('now')''',
+               WHERE invitee_id = %s AND expires_at > NOW()''',
             (self.user_id,),
             fetch='one'
         )
         
         # Check if user owns any homes (for warp functionality)
         owned_homes_count = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM location_homes WHERE owner_id = ?",
+            "SELECT COUNT(*) FROM location_homes WHERE owner_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -6818,7 +6836,7 @@ class HomesView(discord.ui.View):
             own_home_check = self.bot.db.execute_query(
                 '''SELECT h.home_id FROM characters c
                    JOIN location_homes h ON c.current_home_id = h.home_id
-                   WHERE c.user_id = ? AND h.owner_id = ?''',
+                   WHERE c.user_id = %s AND h.owner_id = %s''',
                 (self.user_id, self.user_id),
                 fetch='one'
             )
@@ -6965,7 +6983,7 @@ class HomesView(discord.ui.View):
         
         # Get user's current location
         char_data = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -6982,7 +7000,7 @@ class HomesView(discord.ui.View):
                       h.price, h.purchase_date, h.value_modifier, h.location_id
                FROM location_homes h
                JOIN locations l ON h.location_id = l.location_id
-               WHERE h.owner_id = ?
+               WHERE h.owner_id = %s
                ORDER BY h.purchase_date DESC''',
             (interaction.user.id,),
             fetch='all'
@@ -7025,7 +7043,7 @@ class ShipInteriorView(discord.ui.View):
             '''SELECT s.ship_id, s.name, s.ship_type
                FROM characters c
                JOIN ships s ON c.current_ship_id = s.ship_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -7045,7 +7063,7 @@ class ShipInteriorView(discord.ui.View):
             if activities:
                 # Get character name for the view
                 char_name = self.bot.db.execute_query(
-                    "SELECT name FROM characters WHERE user_id = ?",
+                    "SELECT name FROM characters WHERE user_id = %s",
                     (interaction.user.id,),
                     fetch='one'
                 )[0]
@@ -7099,7 +7117,7 @@ class ShipInteriorView(discord.ui.View):
             '''SELECT s.owner_id
                FROM characters c
                JOIN ships s ON c.current_ship_id = s.ship_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -7110,7 +7128,7 @@ class ShipInteriorView(discord.ui.View):
         
         # Get players at the same location
         location_info = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -7125,8 +7143,8 @@ class ShipInteriorView(discord.ui.View):
         other_players = self.bot.db.execute_query(
             '''SELECT c.user_id, c.name
                FROM characters c
-               WHERE c.current_location = ? AND c.user_id != ? 
-               AND c.location_status = 'docked' AND c.is_logged_in = 1''',
+               WHERE c.current_location = %s AND c.user_id != %s 
+               AND c.location_status = 'docked' AND c.is_logged_in = true''',
             (location_id, interaction.user.id),
             fetch='all'
         )
@@ -7172,7 +7190,7 @@ class ShipInteriorView(discord.ui.View):
         
         # Check if character is logged in
         char_data = self.bot.db.execute_query(
-            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -7215,7 +7233,7 @@ class HomeInteriorView(discord.ui.View):
             '''SELECT lh.home_id, lh.home_name
                FROM location_homes lh 
                JOIN home_interiors hi ON lh.home_id = hi.home_id 
-               WHERE hi.channel_id = ?''',
+               WHERE hi.channel_id = %s''',
             (interaction.channel.id,),
             fetch='one'
         )
@@ -7235,7 +7253,7 @@ class HomeInteriorView(discord.ui.View):
             if activities:
                 # Get character name for the view
                 char_name = self.bot.db.execute_query(
-                    "SELECT name FROM characters WHERE user_id = ?",
+                    "SELECT name FROM characters WHERE user_id = %s",
                     (interaction.user.id,),
                     fetch='one'
                 )[0]
@@ -7331,7 +7349,7 @@ class HomeInteriorView(discord.ui.View):
             '''SELECT lh.owner_id
                FROM location_homes lh 
                JOIN home_interiors hi ON lh.home_id = hi.home_id 
-               WHERE hi.channel_id = ?''',
+               WHERE hi.channel_id = %s''',
             (interaction.channel.id,),
             fetch='one'
         )
@@ -7342,7 +7360,7 @@ class HomeInteriorView(discord.ui.View):
         
         # Get players at the same location
         location_info = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -7357,8 +7375,8 @@ class HomeInteriorView(discord.ui.View):
         other_players = self.bot.db.execute_query(
             '''SELECT c.user_id, c.name
                FROM characters c
-               WHERE c.current_location = ? AND c.user_id != ? 
-               AND c.location_status = 'docked' AND c.is_logged_in = 1''',
+               WHERE c.current_location = %s AND c.user_id != %s 
+               AND c.location_status = 'docked' AND c.is_logged_in = true''',
             (location_id, interaction.user.id),
             fetch='all'
         )
@@ -7761,7 +7779,7 @@ class GiveItemSelectView(discord.ui.View):
         
         # Get user's inventory
         char_data = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -7773,7 +7791,7 @@ class GiveItemSelectView(discord.ui.View):
         inventory = self.bot.db.execute_query(
             """SELECT item_name, item_type, quantity, description, value 
                FROM inventory 
-               WHERE owner_id = ? AND quantity > 0 
+               WHERE owner_id = %s AND quantity > 0 
                ORDER BY item_name""",
             (self.user_id,),
             fetch='all'
@@ -7833,7 +7851,7 @@ class GiveItemSelectView(discord.ui.View):
         
         # Get other players at same location
         char_data = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -7841,7 +7859,7 @@ class GiveItemSelectView(discord.ui.View):
         other_players = self.bot.db.execute_query(
             """SELECT c.user_id, c.name 
                FROM characters c 
-               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1""",
+               WHERE c.current_location = %s AND c.user_id != %s AND c.is_logged_in = true""",
             (char_data[0], self.user_id),
             fetch='all'
         )
@@ -7881,7 +7899,7 @@ class SellItemSelectView(discord.ui.View):
         
         # Get user's inventory
         char_data = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -7893,7 +7911,7 @@ class SellItemSelectView(discord.ui.View):
         inventory = self.bot.db.execute_query(
             """SELECT item_name, item_type, quantity, description, value 
                FROM inventory 
-               WHERE owner_id = ? AND quantity > 0 
+               WHERE owner_id = %s AND quantity > 0 
                ORDER BY item_name""",
             (self.user_id,),
             fetch='all'
@@ -7953,7 +7971,7 @@ class SellItemSelectView(discord.ui.View):
         
         # Get other players at same location
         char_data = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -7961,7 +7979,7 @@ class SellItemSelectView(discord.ui.View):
         other_players = self.bot.db.execute_query(
             """SELECT c.user_id, c.name 
                FROM characters c 
-               WHERE c.current_location = ? AND c.user_id != ? AND c.is_logged_in = 1""",
+               WHERE c.current_location = %s AND c.user_id != %s AND c.is_logged_in = true""",
             (char_data[0], self.user_id),
             fetch='all'
         )
@@ -8104,7 +8122,7 @@ class AdminInventoryDeleteView(discord.ui.View):
             # Create warning embed
             embed = discord.Embed(
                 title="⚠️ CONFIRM ITEM DELETION",
-                description=f"Are you sure you want to **permanently delete** this item from **{self.char_name}**'s inventory?",
+                description=f"Are you sure you want to **permanently delete** this item from **{self.char_name}**'s inventory%s",
                 color=0xff0000
             )
             embed.add_field(name="Item", value=item_name, inline=True)
@@ -8178,13 +8196,13 @@ class AdminDeleteConfirmView(discord.ui.View):
             # If item is equipped, unequip it first
             if is_equipped:
                 self.bot.db.execute_query(
-                    "DELETE FROM character_equipment WHERE item_id = ? AND user_id = ?",
+                    "DELETE FROM character_equipment WHERE item_id = %s AND user_id = %s",
                     (item_id, self.user_id)
                 )
             
             # Delete the item from database
             self.bot.db.execute_query(
-                "DELETE FROM inventory WHERE item_id = ?",
+                "DELETE FROM inventory WHERE item_id = %s",
                 (item_id,)
             )
             

@@ -116,7 +116,11 @@ class WebMapCog(commands.Cog):
         locations = {}
         for loc in locations_data:
             try:
-                loc_id = loc[0]
+                loc_id = loc[0] if loc[0] is not None else 0
+                if loc_id == 0:  # Skip invalid location IDs
+                    print(f"Skipping invalid location with ID 0: {loc}")
+                    continue
+                    
                 locations[loc_id] = {
                     'id': loc_id,
                     'name': loc[1],
@@ -129,13 +133,13 @@ class WebMapCog(commands.Cog):
                     'description': loc[8],
                     'faction': loc[9] if loc[9] else 'Independent',
                     'owner_id': loc[10],
-                    'owner_name': loc[12],
+                    'owner_name': loc[12] if len(loc) > 12 and loc[12] else None,
                     'docking_fee': loc[11] if loc[11] else 0,
-                    # Default values for non-existent columns
                     'stability': 75
                 }
             except Exception as e:
                 print(f"Error processing location {loc_id if 'loc_id' in locals() else 'unknown'}: {e}")
+                print(f"Location data: {loc}")
                 continue
         
         # Get corridors
@@ -143,7 +147,7 @@ class WebMapCog(commands.Cog):
             """SELECT corridor_id, origin_location, destination_location, 
                       name, travel_time, danger_level, corridor_type
                FROM corridors
-               WHERE is_active = 1""",
+               WHERE is_active = true""",
             fetch='all'
         )
         
@@ -168,7 +172,7 @@ class WebMapCog(commands.Cog):
                FROM characters c
                LEFT JOIN travel_sessions t ON c.user_id = t.user_id AND t.status = 'traveling'
                LEFT JOIN locations l ON c.current_location = l.location_id
-               WHERE c.is_logged_in = 1""",
+               WHERE c.is_logged_in = true""",
             fetch='all'
         )
         
@@ -201,7 +205,7 @@ class WebMapCog(commands.Cog):
                       l.x_coord, l.y_coord
                FROM dynamic_npcs n
                LEFT JOIN locations l ON n.current_location = l.location_id
-               WHERE n.is_alive = 1""",
+               WHERE n.is_alive = true""",
             fetch='all'
         )
         
@@ -229,7 +233,7 @@ class WebMapCog(commands.Cog):
         news_data = self.db.execute_query(
             """SELECT title, description, location_id, scheduled_delivery, news_type
                FROM news_queue
-               WHERE is_delivered = 1
+               WHERE is_delivered = true
                ORDER BY scheduled_delivery DESC
                LIMIT 20""",
             fetch='all'
@@ -252,7 +256,7 @@ class WebMapCog(commands.Cog):
         current_time = None
         
         if galaxy_info_data:
-            galaxy_name, start_date, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame, is_manually_paused = galaxy_info_data
+            galaxy_name, start_date, time_scale, time_started_at, created_at, is_paused, time_paused_at, current_ingame, is_manually_paused = galaxy_info_data
             current_time_obj = self.time_system.calculate_current_ingame_time()
             
             galaxy_info = {
@@ -285,12 +289,12 @@ class WebMapCog(commands.Cog):
         try:
             # Handle both string and datetime objects
             if isinstance(start_time, str):
-                start = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                start = safe_datetime_parse(start_time.replace('Z', '+00:00'))
             else:
                 start = start_time
                 
             if isinstance(end_time, str):
-                end = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                end = safe_datetime_parse(end_time.replace('Z', '+00:00'))
             else:
                 end = end_time
                 
@@ -319,7 +323,9 @@ class WebMapCog(commands.Cog):
             return 0
         
         try:
-            start = datetime.fromisoformat(start_time)
+            if not isinstance(start_time, str):
+                return 0
+            start = safe_datetime_parse(start_time)
             now = datetime.now()
             elapsed = (now - start).total_seconds()
             
@@ -333,7 +339,7 @@ class WebMapCog(commands.Cog):
         try:
             # Parse the provided timestamp
             if isinstance(timestamp, str):
-                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                dt = safe_datetime_parse(timestamp.replace('Z', '+00:00'))
             else:
                 dt = timestamp
             
@@ -364,7 +370,7 @@ class WebMapCog(commands.Cog):
         if not galaxy_info:
             return None
             
-        name, start_date_str, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame = galaxy_info
+        name, start_date_str, time_scale, time_started_at, created_at, is_paused, time_paused_at, current_ingame, is_manually_paused = galaxy_info
         
         # Parse start date
         start_date = time_system.parse_date_string(start_date_str)
@@ -372,7 +378,12 @@ class WebMapCog(commands.Cog):
             return None
         
         # Use time_started_at if available, otherwise use created_at
-        real_start_time = datetime.fromisoformat(time_started_at) if time_started_at else datetime.fromisoformat(created_at)
+        if time_started_at and isinstance(time_started_at, str):
+            real_start_time = safe_datetime_parse(time_started_at)
+        elif created_at and isinstance(created_at, str):
+            real_start_time = safe_datetime_parse(created_at)
+        else:
+            return None
         time_scale_factor = time_scale if time_scale else 4.0
         
         # If the historical time is before the galaxy started, return None
@@ -601,7 +612,7 @@ class WebMapCog(commands.Cog):
                LEFT JOIN locations dest_l ON cor.destination_location = dest_l.location_id
                LEFT JOIN job_tracking jt ON c.user_id = jt.user_id AND c.current_location = jt.start_location
                LEFT JOIN jobs j ON jt.job_id = j.job_id
-               WHERE c.user_id = ?""",
+               WHERE c.user_id = %s""",
             (user_id,),
             fetch='one'
         )
@@ -670,18 +681,18 @@ class WebMapCog(commands.Cog):
         if login_time and is_logged_in:
             try:
                 from datetime import datetime
-                if isinstance(login_time, str):
-                    timestamp = int(datetime.fromisoformat(login_time).timestamp())
-                else:
+                if isinstance(login_time, str) and login_time:
+                    timestamp = int(safe_datetime_parse(login_time).timestamp())
+                elif hasattr(login_time, 'timestamp'):
                     timestamp = int(login_time.timestamp())
             except:
                 pass
         elif travel_start and corridor_id:
             try:
                 from datetime import datetime
-                if isinstance(travel_start, str):
-                    timestamp = int(datetime.fromisoformat(travel_start).timestamp())
-                else:
+                if isinstance(travel_start, str) and travel_start:
+                    timestamp = int(safe_datetime_parse(travel_start).timestamp())
+                elif hasattr(travel_start, 'timestamp'):
                     timestamp = int(travel_start.timestamp())
             except:
                 pass
@@ -692,10 +703,12 @@ class WebMapCog(commands.Cog):
         if corridor_id and travel_start and travel_time_seconds:
             from datetime import datetime, timedelta
             try:
-                if isinstance(travel_start, str):
-                    start_time = datetime.fromisoformat(travel_start)
-                else:
+                if isinstance(travel_start, str) and travel_start:
+                    start_time = safe_datetime_parse(travel_start)
+                elif hasattr(travel_start, 'strftime'):
                     start_time = travel_start
+                else:
+                    return result
                 
                 current_time = datetime.utcnow()
                 elapsed_minutes = (current_time - start_time).total_seconds() / 60
@@ -743,7 +756,7 @@ class WebMapCog(commands.Cog):
         current_time = None
         
         if galaxy_info_data:
-            galaxy_name, start_date, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame, is_manually_paused = galaxy_info_data
+            galaxy_name, start_date, time_scale, time_started_at, created_at, is_paused, time_paused_at, current_ingame, is_manually_paused = galaxy_info_data
             current_time_obj = self.time_system.calculate_current_ingame_time()
             
             galaxy_info = {
@@ -765,7 +778,7 @@ class WebMapCog(commands.Cog):
                FROM locations l
                LEFT JOIN characters c ON l.location_id = c.current_location
                LEFT JOIN static_npcs sn ON l.location_id = sn.location_id
-               LEFT JOIN dynamic_npcs dn ON l.location_id = dn.current_location AND dn.is_alive = 1
+               LEFT JOIN dynamic_npcs dn ON l.location_id = dn.current_location AND dn.is_alive = true
                GROUP BY l.location_id""",
             fetch='all'
         )
@@ -779,7 +792,7 @@ class WebMapCog(commands.Cog):
                FROM corridors c
                JOIN locations ol ON c.origin_location = ol.location_id
                JOIN locations dl ON c.destination_location = dl.location_id
-               WHERE c.is_active = 1
+               WHERE c.is_active = true
                ORDER BY ol.name, dl.name""",
             fetch='all'
         )
@@ -792,7 +805,7 @@ class WebMapCog(commands.Cog):
                FROM characters c
                LEFT JOIN locations l ON c.current_location = l.location_id
                LEFT JOIN ships s ON c.ship_id = s.ship_id
-               WHERE c.is_logged_in = 1
+               WHERE c.is_logged_in = true
                ORDER BY c.name""",
             fetch='all'
         )
@@ -804,7 +817,7 @@ class WebMapCog(commands.Cog):
                       l.name as location_name
                FROM dynamic_npcs n
                LEFT JOIN locations l ON n.current_location = l.location_id
-               WHERE n.is_alive = 1
+               WHERE n.is_alive = true
                ORDER BY n.name""",
             fetch='all'
         )

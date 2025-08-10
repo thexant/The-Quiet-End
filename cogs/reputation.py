@@ -3,7 +3,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncio
-import sqlite3
+import psycopg2
 class ReputationCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -33,19 +33,19 @@ class ReputationCog(commands.Cog):
 
             # Update reputation for the current location
             existing_rep = self.db.execute_query(
-                "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+                "SELECT reputation FROM character_reputation WHERE user_id = %s AND location_id = %s",
                 (user_id, current_loc_id),
                 fetch='one'
             )
             if existing_rep:
                 new_rep = existing_rep[0] + current_karma_change
                 self.db.execute_query(
-                    "UPDATE character_reputation SET reputation = ? WHERE user_id = ? AND location_id = ?",
+                    "UPDATE character_reputation SET reputation = %s WHERE user_id = %s AND location_id = %s",
                     (new_rep, user_id, current_loc_id)
                 )
             else:
                 self.db.execute_query(
-                    "INSERT INTO character_reputation (user_id, location_id, reputation) VALUES (?, ?, ?)",
+                    "INSERT INTO character_reputation (user_id, location_id, reputation) VALUES (%s, %s, %s)",
                     (user_id, current_loc_id, current_karma_change)
                 )
             
@@ -56,12 +56,12 @@ class ReputationCog(commands.Cog):
             # Find neighbors and add to queue for propagation
             neighbors = self.db.execute_query(
                 """SELECT DISTINCT CASE 
-                       WHEN origin_location = ? THEN destination_location
+                       WHEN origin_location = %s THEN destination_location
                        ELSE origin_location
                    END as neighbor_location
                    FROM corridors 
-                   WHERE (origin_location = ? OR (destination_location = ? AND is_bidirectional = 1)) 
-                   AND is_active = 1""",
+                   WHERE (origin_location = %s OR (destination_location = %s AND is_bidirectional = true)) 
+                   AND is_active = true""",
                 (current_loc_id, current_loc_id, current_loc_id),
                 fetch='all'
             )
@@ -79,31 +79,15 @@ class ReputationCog(commands.Cog):
     async def view_reputation(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        try:
-            reputations = self.db.execute_query(
-                """SELECT l.name, l.faction, cr.reputation
-                   FROM character_reputation cr
-                   JOIN locations l ON cr.location_id = l.location_id
-                   WHERE cr.user_id = ?
-                   ORDER BY cr.reputation DESC""",
-                (interaction.user.id,),
-                fetch='all'
-            )
-        except sqlite3.OperationalError as e:
-            if "no such column: faction" in str(e):
-                # Fallback query without faction
-                reputations = self.db.execute_query(
-                    """SELECT l.name, 'neutral' as faction, cr.reputation
-                       FROM character_reputation cr
-                       JOIN locations l ON cr.location_id = l.location_id
-                       WHERE cr.user_id = ?
-                       ORDER BY cr.reputation DESC""",
-                    (interaction.user.id,),
-                    fetch='all'
-                )
-                print("⚠️ Faction column missing in reputation query, using 'neutral' as default")
-            else:
-                raise e
+        reputations = self.db.execute_query(
+            """SELECT l.name, COALESCE(l.faction, 'neutral') as faction, cr.reputation
+               FROM character_reputation cr
+               JOIN locations l ON cr.location_id = l.location_id
+               WHERE cr.user_id = %s
+               ORDER BY cr.reputation DESC""",
+            (interaction.user.id,),
+            fetch='all'
+        )
 
         if not reputations:
             await interaction.followup.send("You have a neutral standing everywhere.", ephemeral=True)
@@ -149,7 +133,7 @@ class ReputationCog(commands.Cog):
         
         # Check if target user has a character
         char_check = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE user_id = ?",
+            "SELECT user_id FROM characters WHERE user_id = %s",
             (user.id,),
             fetch='one'
         )
@@ -163,7 +147,7 @@ class ReputationCog(commands.Cog):
         
         # Find location by name (partial match)
         location_data = self.db.execute_query(
-            "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(?) LIMIT 1",
+            "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(%s) LIMIT 1",
             (f"%{location}%",),
             fetch='one'
         )
@@ -179,7 +163,7 @@ class ReputationCog(commands.Cog):
         
         # Get current reputation at this location
         current_rep = self.db.execute_query(
-            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            "SELECT reputation FROM character_reputation WHERE user_id = %s AND location_id = %s",
             (user.id, location_id),
             fetch='one'
         )

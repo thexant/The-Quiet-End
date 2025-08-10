@@ -11,11 +11,25 @@ class HelpCog(commands.Cog):
     @app_commands.command(name="help", description="Get help information based on your current location and context")
     async def help_command(self, interaction: discord.Interaction):
         # Check if this is a location channel
-        location_info = self.db.execute_query(
-            "SELECT location_id, name, location_type, has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades FROM locations WHERE channel_id = ?",
-            (interaction.channel.id,),
-            fetch='one'
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        basic_location_info = channel_manager.get_location_from_channel_id(
+            interaction.guild.id, 
+            interaction.channel.id
         )
+        
+        # If we found a location, get the full location details
+        location_info = None
+        if basic_location_info:
+            location_info = self.db.execute_query(
+                """SELECT l.location_id, l.name, l.location_type, l.has_jobs, l.has_shops, l.has_medical, 
+                          l.has_repairs, l.has_fuel, l.has_upgrades, l.wealth_level, lo.owner_id 
+                   FROM locations l 
+                   LEFT JOIN location_ownership lo ON l.location_id = lo.location_id 
+                   WHERE l.location_id = %s""",
+                (basic_location_info[0],),
+                fetch='one'
+            )
         
         if location_info:
             # This is a location channel - show contextual help
@@ -192,11 +206,14 @@ class HelpCog(commands.Cog):
     
     async def _show_location_help(self, interaction: discord.Interaction, location_info):
         """Show contextual help for location channels"""
-        location_id, name, location_type, has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades = location_info
+        location_id, name, location_type, has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, wealth_level, owner_id = location_info
+        
+        # Define derelict status based on wealth level and ownership
+        is_derelict = wealth_level <= 3 and owner_id is None
         
         # Get user's dock status to determine available actions
         user_data = self.db.execute_query(
-            "SELECT location_status, current_location FROM characters WHERE user_id = ?",
+            "SELECT location_status, current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )

@@ -6,6 +6,7 @@ from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 import asyncio
 from utils.leave_button import UniversalLeaveView
+from utils.datetime_utils import safe_datetime_parse
 
 
 class HomeBuyView(discord.ui.View):
@@ -79,7 +80,7 @@ class ConfirmPurchaseView(discord.ui.View):
         
         # Check money again
         money = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (self.buyer_id,),
             fetch='one'
         )[0]
@@ -94,14 +95,14 @@ class ConfirmPurchaseView(discord.ui.View):
         
         # Process purchase
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (self.home['price'], self.buyer_id)
         )
         
         self.db.execute_query(
             '''UPDATE location_homes 
-               SET owner_id = ?, purchase_date = CURRENT_TIMESTAMP, is_available = 0
-               WHERE home_id = ?''',
+               SET owner_id = %s, purchase_date = CURRENT_TIMESTAMP, is_available = false
+               WHERE home_id = %s''',
             (self.buyer_id, self.home['home_id'])
         )
         
@@ -142,7 +143,7 @@ class ConfirmPurchaseView(discord.ui.View):
         }.get(home_type, 50)
         
         self.db.execute_query(
-            "UPDATE location_homes SET storage_capacity = ? WHERE home_id = ?",
+            "UPDATE location_homes SET storage_capacity = %s WHERE home_id = %s",
             (storage_capacity, home_id)
         )
         
@@ -150,7 +151,7 @@ class ConfirmPurchaseView(discord.ui.View):
         self.db.execute_query(
             '''INSERT INTO home_customizations 
                (home_id, wall_color, floor_type, lighting_style, furniture_style, ambiance)
-               VALUES (?, 'Beige', 'Standard Tile', 'Standard', 'Basic', 'Cozy')''',
+               VALUES (%s, 'Beige', 'Standard Tile', 'Standard', 'Basic', 'Cozy')''',
             (home_id,)
         )
 
@@ -201,7 +202,7 @@ class HomeWarpView(discord.ui.View):
         
         # Check money
         money = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )[0]
@@ -218,13 +219,13 @@ class HomeWarpView(discord.ui.View):
         
         # Deduct fee
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (fee, self.user_id)
         )
         
         # Update location
         self.db.execute_query(
-            "UPDATE characters SET current_location = ?, location_status = 'docked' WHERE user_id = ?",
+            "UPDATE characters SET current_location = %s, location_status = 'docked' WHERE user_id = %s",
             (home['location_id'], self.user_id)
         )
         
@@ -243,13 +244,17 @@ class HomeWarpView(discord.ui.View):
         await interaction.response.defer()
         
         # Create home interior thread
-        location_channel = interaction.guild.get_channel(
-            self.db.execute_query(
-                "SELECT channel_id FROM locations WHERE location_id = ?",
-                (home['location_id'],),
-                fetch='one'
-            )[0]
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        location_info = channel_manager.get_channel_id_from_location(
+            interaction.guild.id, home['location_id']
         )
+        
+        if not location_info:
+            await interaction.followup.send("❌ Location channel not found!", ephemeral=True)
+            return
+        
+        location_channel = interaction.guild.get_channel(location_info[0])
         
         if location_channel:
             thread = await self._get_or_create_home_interior(
@@ -258,7 +263,7 @@ class HomeWarpView(discord.ui.View):
                 home_id,
                 home['home_name'],
                 self.db.execute_query(
-                    "SELECT interior_description FROM location_homes WHERE home_id = ?",
+                    "SELECT interior_description FROM location_homes WHERE home_id = %s",
                     (home_id,),
                     fetch='one'
                 )[0],
@@ -311,7 +316,7 @@ class HomeSellView(discord.ui.View):
         
         # Check buyer's money
         buyer_money = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (self.buyer.id,),
             fetch='one'
         )[0]
@@ -326,7 +331,7 @@ class HomeSellView(discord.ui.View):
         
         # Check buyer's home limit
         owned_homes = self.db.execute_query(
-            "SELECT COUNT(*) FROM location_homes WHERE owner_id = ?",
+            "SELECT COUNT(*) FROM location_homes WHERE owner_id = %s",
             (self.buyer.id,),
             fetch='one'
         )[0]
@@ -342,25 +347,25 @@ class HomeSellView(discord.ui.View):
         # Process transaction
         # Transfer money
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (self.price, self.buyer.id)
         )
         self.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (self.price, self.seller_id)
         )
         
         # Transfer ownership
         self.db.execute_query(
             '''UPDATE location_homes 
-               SET owner_id = ?, purchase_date = CURRENT_TIMESTAMP
-               WHERE home_id = ?''',
+               SET owner_id = %s, purchase_date = CURRENT_TIMESTAMP
+               WHERE home_id = %s''',
             (self.buyer.id, self.home['home_id'])
         )
         
         # Remove from market if listed
         self.db.execute_query(
-            "UPDATE home_market_listings SET is_active = 0 WHERE home_id = ?",
+            "UPDATE home_market_listings SET is_active = false WHERE home_id = %s",
             (self.home['home_id'],)
         )
         
@@ -463,7 +468,7 @@ class HomeUpgradeView(discord.ui.View):
         
         # Check money
         money = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )[0]
@@ -477,20 +482,21 @@ class HomeUpgradeView(discord.ui.View):
         
         # Purchase upgrade
         self.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (upgrade['price'], self.user_id)
         )
         
         self.db.execute_query(
             '''INSERT INTO home_upgrades (home_id, upgrade_type, upgrade_name, daily_income, purchase_price)
-               VALUES (?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s)''',
             (self.home_id, upgrade['type'], upgrade['name'], upgrade['income'], upgrade['price'])
         )
         
         # Initialize income tracking if needed
         self.db.execute_query(
-            '''INSERT OR IGNORE INTO home_income (home_id, accumulated_income, last_collected, last_calculated)
-               VALUES (?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+            '''INSERT INTO home_income (home_id, accumulated_income, last_collected, last_calculated)
+               VALUES (%s, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+               ON CONFLICT (home_id) DO NOTHING''',
             (self.home_id,)
         )
         
@@ -585,18 +591,18 @@ class HomesCog(commands.Cog):
             
             for user_id, home_id, hp, max_hp, entered_at, last_recovery in users_in_homes:
                 # Check if 20 minutes have passed since last recovery
-                last_recovery_time = datetime.fromisoformat(last_recovery)
+                last_recovery_time = safe_datetime_parse(last_recovery)
                 if datetime.now() - last_recovery_time >= timedelta(minutes=20):
                     # Heal 10 HP
                     new_hp = min(hp + 10, max_hp)
                     self.db.execute_query(
-                        "UPDATE characters SET hp = ? WHERE user_id = ?",
+                        "UPDATE characters SET hp = %s WHERE user_id = %s",
                         (new_hp, user_id)
                     )
                     
                     # Update last recovery time
                     self.db.execute_query(
-                        "UPDATE home_recovery_tracking SET last_recovery = CURRENT_TIMESTAMP WHERE user_id = ?",
+                        "UPDATE home_recovery_tracking SET last_recovery = CURRENT_TIMESTAMP WHERE user_id = %s",
                         (user_id,)
                     )
         except Exception as e:
@@ -615,7 +621,7 @@ class HomesCog(commands.Cog):
         
         # Check if already in a home
         current_home = self.db.execute_query(
-            "SELECT current_home_id FROM characters WHERE user_id = ?",
+            "SELECT current_home_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -626,7 +632,7 @@ class HomesCog(commands.Cog):
         
         # Get character location
         char_info = self.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -641,7 +647,7 @@ class HomesCog(commands.Cog):
         home = self.db.execute_query(
             '''SELECT home_id, home_name, interior_description
                FROM location_homes
-               WHERE owner_id = ? AND location_id = ?''',
+               WHERE owner_id = %s AND location_id = %s''',
             (interaction.user.id, location_id),
             fetch='one'
         )
@@ -654,7 +660,7 @@ class HomesCog(commands.Cog):
         
         # Get or create home channel
         home_channel_info = self.db.execute_query(
-            "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+            "SELECT channel_id FROM home_interiors WHERE home_id = %s",
             (home_id,),
             fetch='one'
         )
@@ -674,33 +680,31 @@ class HomesCog(commands.Cog):
         if home_channel:
             # Update character to be inside home
             self.db.execute_query(
-                "UPDATE characters SET current_home_id = ? WHERE user_id = ?",
+                "UPDATE characters SET current_home_id = %s WHERE user_id = %s",
                 (home_id, interaction.user.id)
             )
             
             # Send area movement embed to location channel
             char_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )[0]
             
-            # Get location channel
-            location_channel_id = self.db.execute_query(
-                "SELECT channel_id FROM locations WHERE location_id = ?",
-                (location_id,),
-                fetch='one'
+            # Send area movement announcement via cross-guild broadcast
+            from utils.channel_manager import ChannelManager
+            channel_manager = ChannelManager(self.bot)
+            embed = discord.Embed(
+                title="🚪 Area Movement",
+                description=f"**{char_name}** enters the **{home_name}**.",
+                color=0x7289DA
             )
-            
-            if location_channel_id:
-                location_channel = self.bot.get_channel(location_channel_id[0])
-                if location_channel:
-                    embed = discord.Embed(
-                        title="🚪 Area Movement",
-                        description=f"**{char_name}** enters the **{home_name}**.",
-                        color=0x7289DA
-                    )
-                    await location_channel.send(embed=embed)
+            cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
+            for guild_channel, channel in cross_guild_channels:
+                try:
+                    await channel.send(embed=embed)
+                except:
+                    pass  # Skip if can't send to this guild
             
             # Remove from location channel
             await channel_manager.remove_user_location_access(interaction.user, location_id)
@@ -708,7 +712,7 @@ class HomesCog(commands.Cog):
             # Get customizations for the response
             customizations = self.db.execute_query(
                 '''SELECT wall_color, floor_type, lighting_style, furniture_style, ambiance
-                   FROM home_customizations WHERE home_id = ?''',
+                   FROM home_customizations WHERE home_id = %s''',
                 (home_id,),
                 fetch='one'
             )
@@ -734,7 +738,7 @@ class HomesCog(commands.Cog):
             '''SELECT i.invitation_id, i.home_id, i.inviter_id, h.home_name, h.interior_description
                FROM home_invitations i
                JOIN location_homes h ON i.home_id = h.home_id
-               WHERE i.invitee_id = ? AND i.expires_at > datetime('now')
+               WHERE i.invitee_id = %s AND i.expires_at > NOW()
                ORDER BY i.created_at DESC
                LIMIT 1''',
             (interaction.user.id,),
@@ -749,7 +753,7 @@ class HomesCog(commands.Cog):
         
         # Check if already in a home
         current_home = self.db.execute_query(
-            "SELECT current_home_id FROM characters WHERE user_id = ?",
+            "SELECT current_home_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -760,7 +764,7 @@ class HomesCog(commands.Cog):
         
         # Get home channel
         home_channel_id = self.db.execute_query(
-            "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+            "SELECT channel_id FROM home_interiors WHERE home_id = %s",
             (home_id,),
             fetch='one'
         )
@@ -780,40 +784,38 @@ class HomesCog(commands.Cog):
         
         # Update character location
         self.db.execute_query(
-            "UPDATE characters SET current_home_id = ? WHERE user_id = ?",
+            "UPDATE characters SET current_home_id = %s WHERE user_id = %s",
             (home_id, interaction.user.id)
         )
         
         # Get current location to remove access
         current_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
         # Send area movement embed to location channel
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
-        # Get location channel
-        location_channel_id = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (current_location,),
-            fetch='one'
+        # Send area movement announcement via cross-guild broadcast
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        embed = discord.Embed(
+            title="🚪 Area Movement",
+            description=f"**{char_name}** enters the **{home_name}**.",
+            color=0x7289DA
         )
-        
-        if location_channel_id:
-            location_channel = self.bot.get_channel(location_channel_id[0])
-            if location_channel:
-                embed = discord.Embed(
-                    title="🚪 Area Movement",
-                    description=f"**{char_name}** enters the **{home_name}**.",
-                    color=0x7289DA
-                )
-                await location_channel.send(embed=embed)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(current_location)
+        for guild_channel, channel in cross_guild_channels:
+            try:
+                await channel.send(embed=embed)
+            except:
+                pass  # Skip if can't send to this guild
         
         # Remove from location channel
         await channel_manager.remove_user_location_access(interaction.user, current_location)
@@ -824,7 +826,7 @@ class HomesCog(commands.Cog):
         if success:
             # Delete the invitation
             self.db.execute_query(
-                "DELETE FROM home_invitations WHERE invitation_id = ?",
+                "DELETE FROM home_invitations WHERE invitation_id = %s",
                 (invitation_id,)
             )
             
@@ -837,7 +839,7 @@ class HomesCog(commands.Cog):
             try:
                 inviter = interaction.guild.get_member(inviter_id)
                 if inviter:
-                    await home_channel.send(f"{interaction.user.mention} has entered the home.")
+                    await self.bot.send_with_cross_guild_broadcast(home_channel, f"{interaction.user.mention} has entered the home.")
             except:
                 pass
         else:
@@ -857,7 +859,7 @@ class HomesCog(commands.Cog):
             '''SELECT h.home_id, h.home_name, h.location_id
                FROM characters c
                JOIN location_homes h ON c.current_home_id = h.home_id
-               WHERE c.user_id = ? AND h.owner_id = ?''',
+               WHERE c.user_id = %s AND h.owner_id = %s''',
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -870,7 +872,7 @@ class HomesCog(commands.Cog):
         
         # Check if target player is at the same location
         target_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ? AND location_status = 'docked'",
+            "SELECT current_location FROM characters WHERE user_id = %s AND location_status = 'docked'",
             (player.id,),
             fetch='one'
         )
@@ -885,7 +887,7 @@ class HomesCog(commands.Cog):
         
         self.db.execute_query(
             '''INSERT INTO home_invitations (home_id, inviter_id, invitee_id, location_id, expires_at)
-               VALUES (?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s)''',
             (home_id, interaction.user.id, player.id, location_id, expires_at)
         )
         
@@ -909,7 +911,7 @@ class HomesCog(commands.Cog):
             '''SELECT c.current_home_id, h.location_id, h.home_name
                FROM characters c
                JOIN location_homes h ON c.current_home_id = h.home_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -922,14 +924,14 @@ class HomesCog(commands.Cog):
         
         # Check if anyone else is in the home
         others_in_home = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE current_home_id = ? AND user_id != ?",
+            "SELECT user_id FROM characters WHERE current_home_id = %s AND user_id != %s",
             (home_id, interaction.user.id),
             fetch='all'
         )
         
         # Update character location
         self.db.execute_query(
-            "UPDATE characters SET current_home_id = NULL WHERE user_id = ?",
+            "UPDATE characters SET current_home_id = NULL WHERE user_id = %s",
             (interaction.user.id,)
         )
         
@@ -939,27 +941,25 @@ class HomesCog(commands.Cog):
         
         # Send area movement embed to location channel
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
-        # Get location channel
-        location_channel_id = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
+        # Send area movement announcement via cross-guild broadcast
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        embed = discord.Embed(
+            title="🚪 Area Movement",
+            description=f"**{char_name}** has exited the **{home_name}**.",
+            color=0xFF6600
         )
-        
-        if location_channel_id:
-            location_channel = self.bot.get_channel(location_channel_id[0])
-            if location_channel:
-                embed = discord.Embed(
-                    title="🚪 Area Movement",
-                    description=f"**{char_name}** has exited the **{home_name}**.",
-                    color=0xFF6600
-                )
-                await location_channel.send(embed=embed)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
+        for guild_channel, channel in cross_guild_channels:
+            try:
+                await channel.send(embed=embed)
+            except:
+                pass  # Skip if can't send to this guild
         
         # Give user access back to location (suppress arrival notification for home departures)
         await channel_manager.give_user_location_access(interaction.user, location_id, send_arrival_notification=False)
@@ -969,7 +969,7 @@ class HomesCog(commands.Cog):
         
         # If this was the owner and others are inside, move them out too
         owner_id = self.db.execute_query(
-            "SELECT owner_id FROM location_homes WHERE home_id = ?",
+            "SELECT owner_id FROM location_homes WHERE home_id = %s",
             (home_id,),
             fetch='one'
         )[0]
@@ -981,7 +981,7 @@ class HomesCog(commands.Cog):
                 if member:
                     # Update their location
                     self.db.execute_query(
-                        "UPDATE characters SET current_home_id = NULL WHERE user_id = ?",
+                        "UPDATE characters SET current_home_id = NULL WHERE user_id = %s",
                         (other_user_id,)
                     )
                     
@@ -999,7 +999,7 @@ class HomesCog(commands.Cog):
         
         # Clean up home channel if empty (check only logged-in users)
         remaining_users = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE current_home_id = ? AND is_logged_in = 1",
+            "SELECT COUNT(*) FROM characters WHERE current_home_id = %s AND is_logged_in = true",
             (home_id,),
             fetch='one'
         )[0]
@@ -1007,7 +1007,7 @@ class HomesCog(commands.Cog):
         if remaining_users == 0:
             # Get channel ID and clean up
             home_channel = self.db.execute_query(
-                "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+                "SELECT channel_id FROM home_interiors WHERE home_id = %s",
                 (home_id,),
                 fetch='one'
             )
@@ -1027,7 +1027,7 @@ class HomesCog(commands.Cog):
             '''SELECT c.current_location, c.money, c.name, l.name as location_name
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -1040,7 +1040,7 @@ class HomesCog(commands.Cog):
         
         # Check home ownership limit
         owned_homes = self.db.execute_query(
-            "SELECT COUNT(*) FROM location_homes WHERE owner_id = ?",
+            "SELECT COUNT(*) FROM location_homes WHERE owner_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -1053,7 +1053,7 @@ class HomesCog(commands.Cog):
         homes = self.db.execute_query(
             '''SELECT home_id, home_type, home_name, price, interior_description
                FROM location_homes
-               WHERE location_id = ? AND is_available = 1
+               WHERE location_id = %s AND is_available = true
                ORDER BY price ASC''',
             (location_id,),
             fetch='all'
@@ -1091,7 +1091,7 @@ class HomesCog(commands.Cog):
         
         # Get homes at current location
         location_id = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -1099,7 +1099,7 @@ class HomesCog(commands.Cog):
         homes = self.db.execute_query(
             '''SELECT home_id, home_name, price, value_modifier
                FROM location_homes
-               WHERE owner_id = ? AND location_id = ?''',
+               WHERE owner_id = %s AND location_id = %s''',
             (interaction.user.id, location_id),
             fetch='all'
         )
@@ -1114,7 +1114,7 @@ class HomesCog(commands.Cog):
             
             # Calculate market price based on economy
             wealth_level = self.db.execute_query(
-                "SELECT wealth_level FROM locations WHERE location_id = ?",
+                "SELECT wealth_level FROM locations WHERE location_id = %s",
                 (location_id,),
                 fetch='one'
             )[0]
@@ -1132,7 +1132,7 @@ class HomesCog(commands.Cog):
             self.db.execute_query(
                 '''INSERT INTO home_market_listings 
                    (home_id, seller_id, asking_price, original_price)
-                   VALUES (?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s)''',
                 (home_id, interaction.user.id, market_price, original_price)
             )
             
@@ -1160,14 +1160,14 @@ class HomesCog(commands.Cog):
         
         # Get homes at current location
         location_id = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
         
         # Check if buyer is at same location
         buyer_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (player.id,),
             fetch='one'
         )
@@ -1179,7 +1179,7 @@ class HomesCog(commands.Cog):
         homes = self.db.execute_query(
             '''SELECT home_id, home_name
                FROM location_homes
-               WHERE owner_id = ? AND location_id = ?''',
+               WHERE owner_id = %s AND location_id = %s''',
             (interaction.user.id, location_id),
             fetch='all'
         )
@@ -1238,7 +1238,7 @@ class HomesCog(commands.Cog):
             '''SELECT h.home_id, h.home_name, h.storage_capacity
                FROM characters c
                JOIN location_homes h ON c.current_home_id = h.home_id
-               WHERE c.user_id = ? AND h.owner_id = ?''',
+               WHERE c.user_id = %s AND h.owner_id = %s''',
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -1251,7 +1251,7 @@ class HomesCog(commands.Cog):
         
         # Check current storage usage
         current_usage = self.db.execute_query(
-            "SELECT COALESCE(SUM(quantity), 0) FROM home_storage WHERE home_id = ?",
+            "SELECT COALESCE(SUM(quantity), 0) FROM home_storage WHERE home_id = %s",
             (home_id,),
             fetch='one'
         )[0]
@@ -1267,7 +1267,7 @@ class HomesCog(commands.Cog):
         inventory_item = self.db.execute_query(
             '''SELECT item_id, item_name, item_type, quantity, description, value
                FROM inventory 
-               WHERE owner_id = ? AND LOWER(item_name) LIKE LOWER(?)
+               WHERE owner_id = %s AND LOWER(item_name) LIKE LOWER(%s)
                ORDER BY item_name LIMIT 1''',
             (interaction.user.id, f"%{item_name}%"),
             fetch='one'
@@ -1288,30 +1288,30 @@ class HomesCog(commands.Cog):
         
         # Transfer items
         if inv_quantity == quantity:
-            self.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (item_id,))
+            self.db.execute_query("DELETE FROM inventory WHERE item_id = %s", (item_id,))
         else:
             self.db.execute_query(
-                "UPDATE inventory SET quantity = quantity - ? WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity - %s WHERE item_id = %s",
                 (quantity, item_id)
             )
         
         # Add to home storage
         existing_storage = self.db.execute_query(
-            "SELECT storage_id, quantity FROM home_storage WHERE home_id = ? AND item_name = ?",
+            "SELECT storage_id, quantity FROM home_storage WHERE home_id = %s AND item_name = %s",
             (home_id, actual_name),
             fetch='one'
         )
         
         if existing_storage:
             self.db.execute_query(
-                "UPDATE home_storage SET quantity = quantity + ? WHERE storage_id = ?",
+                "UPDATE home_storage SET quantity = quantity + %s WHERE storage_id = %s",
                 (quantity, existing_storage[0])
             )
         else:
             self.db.execute_query(
                 '''INSERT INTO home_storage 
                    (home_id, item_name, item_type, quantity, description, value, stored_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (home_id, actual_name, item_type, quantity, description, value, interaction.user.id)
             )
         
@@ -1345,7 +1345,7 @@ class HomesCog(commands.Cog):
             '''SELECT h.home_id, h.home_name
                FROM characters c
                JOIN location_homes h ON c.current_home_id = h.home_id
-               WHERE c.user_id = ? AND h.owner_id = ?''',
+               WHERE c.user_id = %s AND h.owner_id = %s''',
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -1360,7 +1360,7 @@ class HomesCog(commands.Cog):
         storage_item = self.db.execute_query(
             '''SELECT storage_id, item_name, item_type, quantity, description, value
                FROM home_storage 
-               WHERE home_id = ? AND LOWER(item_name) LIKE LOWER(?)
+               WHERE home_id = %s AND LOWER(item_name) LIKE LOWER(%s)
                ORDER BY item_name LIMIT 1''',
             (home_id, f"%{item_name}%"),
             fetch='one'
@@ -1381,30 +1381,30 @@ class HomesCog(commands.Cog):
         
         # Transfer items
         if stored_quantity == quantity:
-            self.db.execute_query("DELETE FROM home_storage WHERE storage_id = ?", (storage_id,))
+            self.db.execute_query("DELETE FROM home_storage WHERE storage_id = %s", (storage_id,))
         else:
             self.db.execute_query(
-                "UPDATE home_storage SET quantity = quantity - ? WHERE storage_id = ?",
+                "UPDATE home_storage SET quantity = quantity - %s WHERE storage_id = %s",
                 (quantity, storage_id)
             )
         
         # Add to inventory
         existing_inv = self.db.execute_query(
-            "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+            "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
             (interaction.user.id, actual_name),
             fetch='one'
         )
         
         if existing_inv:
             self.db.execute_query(
-                "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity + %s WHERE item_id = %s",
                 (quantity, existing_inv[0])
             )
         else:
             self.db.execute_query(
                 '''INSERT INTO inventory 
                    (owner_id, item_name, item_type, quantity, description, value)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, actual_name, item_type, quantity, description, value)
             )
         
@@ -1425,7 +1425,7 @@ class HomesCog(commands.Cog):
             '''SELECT h.home_id, h.home_name, h.storage_capacity
                FROM characters c
                JOIN location_homes h ON c.current_home_id = h.home_id
-               WHERE c.user_id = ? AND h.owner_id = ?''',
+               WHERE c.user_id = %s AND h.owner_id = %s''',
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -1440,7 +1440,7 @@ class HomesCog(commands.Cog):
         items = self.db.execute_query(
             '''SELECT item_name, item_type, quantity, value
                FROM home_storage
-               WHERE home_id = ?
+               WHERE home_id = %s
                ORDER BY item_type, item_name''',
             (home_id,),
             fetch='all'
@@ -1498,7 +1498,7 @@ class HomesCog(commands.Cog):
             '''SELECT h.home_id, h.home_name, c.money
                FROM characters c
                JOIN location_homes h ON c.current_home_id = h.home_id
-               WHERE c.user_id = ? AND h.owner_id = ?''',
+               WHERE c.user_id = %s AND h.owner_id = %s''',
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -1511,7 +1511,7 @@ class HomesCog(commands.Cog):
         
         # Get existing upgrades
         existing = self.db.execute_query(
-            "SELECT upgrade_type FROM home_upgrades WHERE home_id = ?",
+            "SELECT upgrade_type FROM home_upgrades WHERE home_id = %s",
             (home_id,),
             fetch='all'
         )
@@ -1558,7 +1558,7 @@ class HomesCog(commands.Cog):
             '''SELECT h.home_id, h.home_name
                FROM characters c
                JOIN location_homes h ON c.current_home_id = h.home_id
-               WHERE c.user_id = ? AND h.owner_id = ?''',
+               WHERE c.user_id = %s AND h.owner_id = %s''',
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -1571,7 +1571,7 @@ class HomesCog(commands.Cog):
         
         # Get total daily income from upgrades
         daily_income = self.db.execute_query(
-            "SELECT COALESCE(SUM(daily_income), 0) FROM home_upgrades WHERE home_id = ?",
+            "SELECT COALESCE(SUM(daily_income), 0) FROM home_upgrades WHERE home_id = %s",
             (home_id,),
             fetch='one'
         )[0]
@@ -1583,7 +1583,7 @@ class HomesCog(commands.Cog):
         # Get or create income record
         income_data = self.db.execute_query(
             '''SELECT accumulated_income, last_collected, last_calculated
-               FROM home_income WHERE home_id = ?''',
+               FROM home_income WHERE home_id = %s''',
             (home_id,),
             fetch='one'
         )
@@ -1600,7 +1600,7 @@ class HomesCog(commands.Cog):
             # First time - initialize income tracking
             self.db.execute_query(
                 '''INSERT INTO home_income (home_id, accumulated_income, last_collected, last_calculated)
-                   VALUES (?, 0, ?, ?)''',
+                   VALUES (%s, 0, %s, %s)''',
                 (home_id, current_time.isoformat(), current_time.isoformat())
             )
             await interaction.followup.send("Income tracking initialized. Check back tomorrow!", ephemeral=True)
@@ -1610,7 +1610,7 @@ class HomesCog(commands.Cog):
         
         # Calculate days since last calculation
         if last_calculated_str:
-            last_calculated = datetime.fromisoformat(last_calculated_str)
+            last_calculated = safe_datetime_parse(last_calculated_str)
             # Get in-game days passed
             days_passed = (current_time - last_calculated).total_seconds() / 86400
         else:
@@ -1634,7 +1634,7 @@ class HomesCog(commands.Cog):
         
         # Update character money
         self.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (total_available, interaction.user.id)
         )
         
@@ -1642,9 +1642,9 @@ class HomesCog(commands.Cog):
         self.db.execute_query(
             '''UPDATE home_income 
                SET accumulated_income = 0, 
-                   last_collected = ?,
-                   last_calculated = ?
-               WHERE home_id = ?''',
+                   last_collected = %s,
+                   last_calculated = %s
+               WHERE home_id = %s''',
             (current_time.isoformat(), current_time.isoformat(), home_id)
         )
         
@@ -1676,7 +1676,7 @@ class HomesCog(commands.Cog):
         
         # Show upgrade details
         upgrades = self.db.execute_query(
-            "SELECT upgrade_name, daily_income FROM home_upgrades WHERE home_id = ?",
+            "SELECT upgrade_name, daily_income FROM home_upgrades WHERE home_id = %s",
             (home_id,),
             fetch='all'
         )
@@ -1710,7 +1710,7 @@ class HomesCog(commands.Cog):
             return
         
         self.db.execute_query(
-            "UPDATE home_customizations SET floor_type = ? WHERE home_id = ?",
+            "UPDATE home_customizations SET floor_type = %s WHERE home_id = %s",
             (floor, home_id)
         )
         
@@ -1737,7 +1737,7 @@ class HomesCog(commands.Cog):
             return
         
         self.db.execute_query(
-            "UPDATE home_customizations SET lighting_style = ? WHERE home_id = ?",
+            "UPDATE home_customizations SET lighting_style = %s WHERE home_id = %s",
             (lighting, home_id)
         )
         
@@ -1764,7 +1764,7 @@ class HomesCog(commands.Cog):
             return
         
         self.db.execute_query(
-            "UPDATE home_customizations SET furniture_style = ? WHERE home_id = ?",
+            "UPDATE home_customizations SET furniture_style = %s WHERE home_id = %s",
             (furniture, home_id)
         )
         
@@ -1791,7 +1791,7 @@ class HomesCog(commands.Cog):
             return
         
         self.db.execute_query(
-            "UPDATE home_customizations SET ambiance = ? WHERE home_id = ?",
+            "UPDATE home_customizations SET ambiance = %s WHERE home_id = %s",
             (ambiance, home_id)
         )
         
@@ -1810,7 +1810,7 @@ class HomesCog(commands.Cog):
             '''SELECT h.home_id, h.home_name
                FROM characters c
                JOIN location_homes h ON c.current_home_id = h.home_id
-               WHERE c.user_id = ? AND h.owner_id = ?''',
+               WHERE c.user_id = %s AND h.owner_id = %s''',
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -1824,7 +1824,7 @@ class HomesCog(commands.Cog):
         # Get current customization
         current = self.db.execute_query(
             '''SELECT wall_color, floor_type, lighting_style, furniture_style, ambiance
-               FROM home_customizations WHERE home_id = ?''',
+               FROM home_customizations WHERE home_id = %s''',
             (home_id,),
             fetch='one'
         )
@@ -1832,7 +1832,7 @@ class HomesCog(commands.Cog):
         if not current:
             # Create default customization
             self.db.execute_query(
-                "INSERT INTO home_customizations (home_id) VALUES (?)",
+                "INSERT INTO home_customizations (home_id) VALUES (%s)",
                 (home_id,)
             )
             current = ('Beige', 'Standard Tile', 'Standard', 'Basic', 'Cozy')
@@ -1883,7 +1883,7 @@ class HomesCog(commands.Cog):
             return
         
         self.db.execute_query(
-            "UPDATE home_customizations SET wall_color = ? WHERE home_id = ?",
+            "UPDATE home_customizations SET wall_color = %s WHERE home_id = %s",
             (color, home_id)
         )
         await self._update_home_channel_topic(home_id, interaction)
@@ -1898,7 +1898,7 @@ class HomesCog(commands.Cog):
             '''SELECT h.home_id
                FROM characters c
                JOIN location_homes h ON c.current_home_id = h.home_id
-               WHERE c.user_id = ? AND h.owner_id = ?''',
+               WHERE c.user_id = %s AND h.owner_id = %s''',
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -1912,7 +1912,7 @@ class HomesCog(commands.Cog):
         
         # Ensure customization record exists
         self.db.execute_query(
-            "INSERT OR IGNORE INTO home_customizations (home_id) VALUES (?)",
+            "INSERT INTO home_customizations (home_id) VALUES (%s) ON CONFLICT (home_id) DO NOTHING",
             (home_data[0],)
         )
         
@@ -1921,7 +1921,7 @@ class HomesCog(commands.Cog):
     async def _update_home_channel_topic(self, home_id: int, interaction: discord.Interaction):
         """Update home channel topic to reflect customizations"""
         channel_info = self.db.execute_query(
-            "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+            "SELECT channel_id FROM home_interiors WHERE home_id = %s",
             (home_id,),
             fetch='one'
         )
@@ -1935,14 +1935,14 @@ class HomesCog(commands.Cog):
         
         # Get home and customization info
         home_info = self.db.execute_query(
-            "SELECT home_name, interior_description FROM location_homes WHERE home_id = ?",
+            "SELECT home_name, interior_description FROM location_homes WHERE home_id = %s",
             (home_id,),
             fetch='one'
         )
         
         custom = self.db.execute_query(
             '''SELECT wall_color, floor_type, lighting_style, furniture_style, ambiance
-               FROM home_customizations WHERE home_id = ?''',
+               FROM home_customizations WHERE home_id = %s''',
             (home_id,),
             fetch='one'
         )
@@ -1968,7 +1968,7 @@ class HomesCog(commands.Cog):
             '''SELECT h.home_id, h.home_name, h.interior_description
                FROM characters c
                JOIN location_homes h ON c.current_home_id = h.home_id
-               WHERE c.user_id = ? AND h.owner_id = ?''',
+               WHERE c.user_id = %s AND h.owner_id = %s''',
             (interaction.user.id, interaction.user.id),
             fetch='one'
         )
@@ -1982,7 +1982,7 @@ class HomesCog(commands.Cog):
         # Get customizations
         custom = self.db.execute_query(
             '''SELECT wall_color, floor_type, lighting_style, furniture_style, ambiance
-               FROM home_customizations WHERE home_id = ?''',
+               FROM home_customizations WHERE home_id = %s''',
             (home_id,),
             fetch='one'
         )
@@ -2091,7 +2091,7 @@ class HomesCog(commands.Cog):
                       h.price, h.purchase_date, h.value_modifier
                FROM location_homes h
                JOIN locations l ON h.location_id = l.location_id
-               WHERE h.owner_id = ?
+               WHERE h.owner_id = %s
                ORDER BY h.purchase_date DESC''',
             (target_user.id,),
             fetch='all'
@@ -2106,7 +2106,7 @@ class HomesCog(commands.Cog):
         
         # Get character name
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (target_user.id,),
             fetch='one'
         )[0]
@@ -2126,14 +2126,14 @@ class HomesCog(commands.Cog):
             # Get customizations
             custom = self.db.execute_query(
                 '''SELECT wall_color, floor_type, lighting_style, furniture_style, ambiance
-                   FROM home_customizations WHERE home_id = ?''',
+                   FROM home_customizations WHERE home_id = %s''',
                 (home_id,),
                 fetch='one'
             )
             
             # Check if on market
             on_market = self.db.execute_query(
-                "SELECT asking_price FROM home_market_listings WHERE home_id = ? AND is_active = 1",
+                "SELECT asking_price FROM home_market_listings WHERE home_id = %s AND is_active = true",
                 (home_id,),
                 fetch='one'
             )
@@ -2188,7 +2188,7 @@ class HomesCog(commands.Cog):
             
             # Send welcome message
             char_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (user.id,),
                 fetch='one'
             )[0]
@@ -2253,8 +2253,9 @@ class HomesCog(commands.Cog):
             
             # Update database
             self.db.execute_query(
-                '''INSERT OR REPLACE INTO home_interiors (home_id, channel_id)
-                   VALUES (?, ?)''',
+                '''INSERT INTO home_interiors (home_id, channel_id)
+                   VALUES (%s, %s)
+                   ON CONFLICT (home_id) DO UPDATE SET channel_id = EXCLUDED.channel_id''',
                 (home_id, thread.id)
             )
             
@@ -2270,16 +2271,16 @@ class HomesCog(commands.Cog):
         # Make all owned homes available again
         self.db.execute_query(
             '''UPDATE location_homes 
-               SET owner_id = NULL, is_available = 1, purchase_date = NULL
-               WHERE owner_id = ?''',
+               SET owner_id = NULL, is_available = true, purchase_date = NULL
+               WHERE owner_id = %s''',
             (user_id,)
         )
         
         # Remove from market
         self.db.execute_query(
             '''UPDATE home_market_listings 
-               SET is_active = 0
-               WHERE seller_id = ?''',
+               SET is_active = false
+               WHERE seller_id = %s''',
             (user_id,)
         )
     
@@ -2290,9 +2291,13 @@ class HomesCog(commands.Cog):
         """Track when a user enters their home for health recovery"""
         # Initialize recovery tracking
         self.db.execute_query(
-            '''INSERT OR REPLACE INTO home_recovery_tracking 
+            '''INSERT INTO home_recovery_tracking 
                (user_id, home_id, entered_at, last_recovery)
-               VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+               VALUES (%s, %s, NOW(), NOW())
+               ON CONFLICT (user_id) DO UPDATE SET 
+               home_id = EXCLUDED.home_id,
+               entered_at = EXCLUDED.entered_at,
+               last_recovery = EXCLUDED.last_recovery''',
             (user_id, home_id)
         )
     
@@ -2300,7 +2305,7 @@ class HomesCog(commands.Cog):
     async def on_home_leave(self, user_id: int):
         """Clean up recovery tracking when user leaves home"""
         self.db.execute_query(
-            "DELETE FROM home_recovery_tracking WHERE user_id = ?",
+            "DELETE FROM home_recovery_tracking WHERE user_id = %s",
             (user_id,)
         )
 

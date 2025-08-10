@@ -7,6 +7,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
+from utils.datetime_utils import safe_datetime_parse
 
 class CorridorEventsCog(commands.Cog):
     def __init__(self, bot):
@@ -65,12 +66,12 @@ class CorridorEventsCog(commands.Cog):
         self.db.execute_query(
             '''INSERT INTO corridor_events 
                (transit_channel_id, event_type, severity, expires_at, affected_users)
-               VALUES (?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s)''',
             (transit_channel.id, event_type, severity, expires_at, affected_users_json)
         )
         
         event_id = self.db.execute_query(
-            "SELECT event_id FROM corridor_events WHERE transit_channel_id = ? ORDER BY event_id DESC LIMIT 1",
+            "SELECT event_id FROM corridor_events WHERE transit_channel_id = %s ORDER BY event_id DESC LIMIT 1",
             (transit_channel.id,),
             fetch='one'
         )[0]
@@ -98,14 +99,14 @@ class CorridorEventsCog(commands.Cog):
         """Get remaining travel time for a transit channel"""
         session_data = self.db.execute_query(
             """SELECT end_time FROM travel_sessions 
-               WHERE temp_channel_id = ? AND status = 'traveling'
+               WHERE temp_channel_id = %s AND status = %s
                ORDER BY session_id DESC LIMIT 1""",
-            (channel_id,),
+            (channel_id, 'traveling'),
             fetch='one'
         )
         
         if session_data and session_data[0]:
-            end_time = datetime.fromisoformat(session_data[0])
+            end_time = safe_datetime_parse(session_data[0])
             remaining = (end_time - datetime.utcnow()).total_seconds()
             return max(0, int(remaining))
         
@@ -327,8 +328,8 @@ class CorridorEventsCog(commands.Cog):
             del self.active_events[channel_id]
         
         self.db.execute_query(
-            "UPDATE corridor_events SET is_active = 0 WHERE event_id = ?",
-            (event_id,)
+            "UPDATE corridor_events SET is_active = %s WHERE event_id = %s",
+            (False, event_id)
         )
     async def _apply_timeout_consequences(self, channel_id: int, unresponsive_travelers: List[int], event_data: Dict):
         """Apply consequences to travelers who didn't respond in time"""
@@ -577,8 +578,8 @@ class CorridorEventView(discord.ui.View):
 
             # Mark the event as inactive in the database
             self.bot.db.execute_query(
-                "UPDATE corridor_events SET is_active = 0 WHERE event_id = ?",
-                (event_data['event_id'],)
+                "UPDATE corridor_events SET is_active = %s WHERE event_id = %s",
+                (False, event_data['event_id'])
             )
 
             # Post a concluding message in the channel
@@ -660,7 +661,7 @@ class CorridorEventView(discord.ui.View):
         """Perform skill check based on response type and character skills"""
         # Get character skills
         char_data = self.bot.db.execute_query(
-            "SELECT engineering, navigation, combat, medical FROM characters WHERE user_id = ?",
+            "SELECT engineering, navigation, combat, medical FROM characters WHERE user_id = %s",
             (user.id,),
             fetch='one'
         )
@@ -798,7 +799,7 @@ class CorridorEventView(discord.ui.View):
             
             # Apply damages
             self.bot.db.execute_query(
-                "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                "UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s",
                 (credit_loss, user.id)
             )
             # Create and send the damage result embed
@@ -833,7 +834,7 @@ class CorridorEventView(discord.ui.View):
             exp_gain = severity * 5
             
             self.bot.db.execute_query(
-                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                 (exp_gain, user.id)
             )
             if hp_damage > 0:

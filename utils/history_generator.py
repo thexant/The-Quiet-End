@@ -159,8 +159,8 @@ class HistoryGenerator:
                         print(f"⚠️ Error during connection cleanup: {cleanup_error}")
                     finally:
                         conn = None
-                if "database is locked" in str(e) and attempt < max_retries - 1:
-                    print(f"🔧 Database locked during history clear, retry {attempt + 1}/{max_retries}")
+                if attempt < max_retries - 1:
+                    print(f"🔧 Database error during history clear, retry {attempt + 1}/{max_retries}: {e}")
                     continue
                 raise e
     
@@ -193,7 +193,7 @@ class HistoryGenerator:
                     if conn:
                         self.db.rollback_transaction(conn)
                         conn = None
-                    if "no such column: establishment_date" in str(e):
+                    if "column" in str(e).lower() and "establishment_date" in str(e):
                         print("⚠️ establishment_date column missing, setting defaults...")
                         # Try again with simpler query using read-only operation
                         locations = self.db.execute_query(
@@ -213,8 +213,8 @@ class HistoryGenerator:
                         print(f"⚠️ Error during connection cleanup: {cleanup_error}")
                     finally:
                         conn = None
-                if "database is locked" in str(e) and attempt < max_retries - 1:
-                    print(f"🔧 Database locked getting locations, retry {attempt + 1}/{max_retries}")
+                if attempt < max_retries - 1:
+                    print(f"🔧 Database error getting locations, retry {attempt + 1}/{max_retries}: {e}")
                     continue
                 raise e
     
@@ -235,7 +235,7 @@ class HistoryGenerator:
                     
                     # Pre-fetch NPCs for this chunk
                     location_ids = [loc[0] for loc in locations_chunk]
-                    placeholders = ','.join(['?' for _ in location_ids])
+                    placeholders = ','.join(['%s' for _ in location_ids])
                     npc_query = f"SELECT location_id, name FROM static_npcs WHERE location_id IN ({placeholders})"
                     all_npcs_list = self.db.execute_in_transaction(conn, npc_query, location_ids, fetch='all')
                     
@@ -249,7 +249,7 @@ class HistoryGenerator:
                     # Process each location in this chunk
                     query = '''INSERT INTO galactic_history 
                                (location_id, event_title, event_description, historical_figure, event_date, event_type)
-                               VALUES (?, ?, ?, ?, ?, ?)'''
+                               VALUES (%s, %s, %s, %s, %s, %s)'''
                     
                     all_events = []
                     for location_id, name, location_type, establishment_date in locations_chunk:
@@ -285,8 +285,8 @@ class HistoryGenerator:
                         print(f"⚠️ Error during connection cleanup: {cleanup_error}")
                     finally:
                         conn = None
-                if "database is locked" in str(e) and attempt < max_retries - 1:
-                    print(f"🔧 Database locked processing chunk {chunk_index}, retry {attempt + 1}/{max_retries}")
+                if attempt < max_retries - 1:
+                    print(f"🔧 Database error processing chunk {chunk_index}, retry {attempt + 1}/{max_retries}: {e}")
                     continue
                 print(f"❌ Error processing location chunk {chunk_index}: {e}")
                 return 0  # Return 0 events for failed chunk but don't crash
@@ -309,7 +309,7 @@ class HistoryGenerator:
                     if general_events:
                         query = '''INSERT INTO galactic_history 
                                    (location_id, event_title, event_description, historical_figure, event_date, event_type)
-                                   VALUES (?, ?, ?, ?, ?, ?)'''
+                                   VALUES (%s, %s, %s, %s, %s, %s)'''
                         self.db.executemany_in_transaction(conn, query, general_events)
                     
                     self.db.commit_transaction(conn)
@@ -331,8 +331,8 @@ class HistoryGenerator:
                         print(f"⚠️ Error during connection cleanup: {cleanup_error}")
                     finally:
                         conn = None
-                if "database is locked" in str(e) and attempt < max_retries - 1:
-                    print(f"🔧 Database locked generating general history, retry {attempt + 1}/{max_retries}")
+                if attempt < max_retries - 1:
+                    print(f"🔧 Database error generating general history, retry {attempt + 1}/{max_retries}: {e}")
                     continue
                 print(f"❌ Error generating general history: {e}")
                 return 0  # Return 0 events but don't crash
@@ -350,7 +350,7 @@ class HistoryGenerator:
         
         # Get NPCs from this location for historical figures using the transaction connection
         npcs = self.db.execute_in_transaction(conn,
-            "SELECT name FROM static_npcs WHERE location_id = ? LIMIT 5",
+            "SELECT name FROM static_npcs WHERE location_id = %s LIMIT 5",
             (location_id,),
             fetch='all'
         )
@@ -456,7 +456,7 @@ class HistoryGenerator:
         
         # Get NPCs from this location for historical figures
         npcs = self.db.execute_query(
-            "SELECT name FROM static_npcs WHERE location_id = ? LIMIT 5",
+            "SELECT name FROM static_npcs WHERE location_id = %s LIMIT 5",
             (location_id,),
             fetch='all'
         )
@@ -517,7 +517,7 @@ class HistoryGenerator:
             self.db.execute_query(
                 '''INSERT INTO galactic_history 
                    (location_id, event_title, event_description, historical_figure, event_date, event_type)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s)''',
                 (location_id, event_title, event_description, figure, 
                  event_date.strftime('%Y-%m-%d'), event_type)
             )
@@ -556,7 +556,7 @@ class HistoryGenerator:
             self.db.execute_query(
                 '''INSERT INTO galactic_history 
                    (location_id, event_title, event_description, historical_figure, event_date, event_type)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s)''',
                 (None, event_title, event_description, figure, 
                  event_date.strftime('%Y-%m-%d'), 'general')
             )
@@ -700,7 +700,7 @@ class HistoryGenerator:
             event = self.db.execute_query(
                 '''SELECT event_title, event_description, historical_figure, event_date, event_type
                    FROM galactic_history 
-                   WHERE location_id = ? OR location_id IS NULL
+                   WHERE location_id = %s OR location_id IS NULL
                    ORDER BY RANDOM() LIMIT 1''',
                 (location_id,),
                 fetch='one'

@@ -8,6 +8,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 from utils.item_config import ItemConfig
+from utils.datetime_utils import safe_datetime_parse
 
 class QuestObjectiveModal(discord.ui.Modal):
     """Modal for creating quest objectives"""
@@ -285,7 +286,7 @@ class QuestsCog(commands.Cog):
             '''SELECT objective_type, target_location_id, target_item, target_quantity,
                       target_amount, description
                FROM quest_objectives
-               WHERE quest_id = ? AND objective_order = ?''',
+               WHERE quest_id = %s AND objective_order = %s''',
             (quest_id, current_objective),
             fetch='one'
         )
@@ -297,7 +298,7 @@ class QuestsCog(commands.Cog):
         
         # Get player's current status
         player_status = self.db.execute_query(
-            "SELECT current_location, money FROM characters WHERE user_id = ?",
+            "SELECT current_location, money FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -316,7 +317,7 @@ class QuestsCog(commands.Cog):
         elif obj_type == 'obtain_item':
             # Check if player has the required item quantity
             item_count = self.db.execute_query(
-                "SELECT SUM(quantity) FROM inventory WHERE owner_id = ? AND item_name = ?",
+                "SELECT SUM(quantity) FROM character_inventory WHERE user_id = %s AND item_name = %s",
                 (user_id, target_item),
                 fetch='one'
             )
@@ -336,7 +337,7 @@ class QuestsCog(commands.Cog):
             # Check if player is at target location and has item
             if current_location == target_location:
                 item_count = self.db.execute_query(
-                    "SELECT SUM(quantity) FROM inventory WHERE owner_id = ? AND item_name = ?",
+                    "SELECT SUM(quantity) FROM character_inventory WHERE user_id = %s AND item_name = %s",
                     (user_id, target_item),
                     fetch='one'
                 )
@@ -344,12 +345,12 @@ class QuestsCog(commands.Cog):
                 if item_count and item_count[0] and item_count[0] >= target_quantity:
                     # Remove the items for delivery
                     self.db.execute_query(
-                        "UPDATE inventory SET quantity = quantity - ? WHERE owner_id = ? AND item_name = ?",
+                        "UPDATE character_inventory SET quantity = quantity - %s WHERE user_id = %s AND item_name = %s",
                         (target_quantity, user_id, target_item)
                     )
                     # Remove items with 0 quantity
                     self.db.execute_query(
-                        "DELETE FROM inventory WHERE owner_id = ? AND quantity <= 0",
+                        "DELETE FROM character_inventory WHERE user_id = %s AND quantity <= 0",
                         (user_id,)
                     )
                     completed = True
@@ -375,7 +376,7 @@ class QuestsCog(commands.Cog):
             
             # Get total objectives for this quest
             total_objectives = self.db.execute_query(
-                "SELECT COUNT(*) FROM quest_objectives WHERE quest_id = ?",
+                "SELECT COUNT(*) FROM quest_objectives WHERE quest_id = %s",
                 (quest_id,),
                 fetch='one'
             )[0]
@@ -389,8 +390,8 @@ class QuestsCog(commands.Cog):
                 next_objective = current_objective + 1
                 self.db.execute_query(
                     '''UPDATE quest_progress 
-                       SET current_objective = ?, objectives_completed = ?
-                       WHERE quest_id = ? AND user_id = ?''',
+                       SET current_objective = %s, objectives_completed = %s
+                       WHERE quest_id = %s AND user_id = %s''',
                     (next_objective, json.dumps(completed_objectives), quest_id, user_id)
                 )
                 
@@ -405,7 +406,7 @@ class QuestsCog(commands.Cog):
         try:
             # Get quest details
             quest_data = self.db.execute_query(
-                "SELECT title, reward_money, reward_experience FROM quests WHERE quest_id = ?",
+                "SELECT title, reward_money, reward_experience FROM quests WHERE quest_id = %s",
                 (quest_id,),
                 fetch='one'
             )
@@ -417,32 +418,32 @@ class QuestsCog(commands.Cog):
             
             # Mark quest as completed
             self.db.execute_query(
-                "UPDATE quest_progress SET quest_status = 'completed' WHERE quest_id = ? AND user_id = ?",
+                "UPDATE quest_progress SET quest_status = 'completed' WHERE quest_id = %s AND user_id = %s",
                 (quest_id, user_id)
             )
             
             # Give rewards
             if reward_money > 0:
                 self.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward_money, user_id)
                 )
             
             if reward_exp > 0:
                 self.db.execute_query(
-                    "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                    "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                     (reward_exp, user_id)
                 )
             
             # Increment quest completion count
             self.db.execute_query(
-                "UPDATE quests SET current_completions = current_completions + 1 WHERE quest_id = ?",
+                "UPDATE quests SET current_completions = current_completions + 1 WHERE quest_id = %s",
                 (quest_id,)
             )
             
             # Record completion
             completion_time = self.db.execute_query(
-                "SELECT (julianday('now') - julianday(started_at)) * 24 * 60 FROM quest_progress WHERE quest_id = ? AND user_id = ?",
+                "SELECT EXTRACT(EPOCH FROM (NOW() - started_at)) / 60 FROM quest_progress WHERE quest_id = %s AND user_id = %s",
                 (quest_id, user_id),
                 fetch='one'
             )
@@ -452,7 +453,7 @@ class QuestsCog(commands.Cog):
             self.db.execute_query(
                 '''INSERT INTO quest_completions 
                    (quest_id, user_id, completion_time_minutes, reward_received)
-                   VALUES (?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s)''',
                 (quest_id, user_id, completion_minutes, json.dumps({'money': reward_money, 'experience': reward_exp}))
             )
             
@@ -471,7 +472,7 @@ class QuestsCog(commands.Cog):
             
             # Get objective description
             objective = self.db.execute_query(
-                "SELECT description FROM quest_objectives WHERE quest_id = ? AND objective_order = ?",
+                "SELECT description FROM quest_objectives WHERE quest_id = %s AND objective_order = %s",
                 (quest_id, objective_order),
                 fetch='one'
             )
@@ -501,7 +502,7 @@ class QuestsCog(commands.Cog):
         try:
             # Get user's current location channel
             user_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -511,9 +512,9 @@ class QuestsCog(commands.Cog):
             
             location_id = user_location[0]
             
-            # Get location channel
+            # Get location name for footer
             location_data = self.db.execute_query(
-                "SELECT channel_id, name FROM locations WHERE location_id = ?",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (location_id,),
                 fetch='one'
             )
@@ -521,11 +522,7 @@ class QuestsCog(commands.Cog):
             if not location_data:
                 return
             
-            channel_id, location_name = location_data
-            channel = self.bot.get_channel(channel_id)
-            
-            if not channel:
-                return
+            location_name = location_data[0]
             
             user = self.bot.get_user(user_id)
             if not user:
@@ -551,7 +548,7 @@ class QuestsCog(commands.Cog):
                 )
             
             embed.add_field(
-                name="What's Next?",
+                name="What's Next%s",
                 value="Look for new quests at job boards throughout the galaxy!",
                 inline=False
             )
@@ -559,10 +556,21 @@ class QuestsCog(commands.Cog):
             embed.set_footer(text=f"Completed at {location_name}")
             
             try:
-                # Send ephemeral message that only the user can see
-                await channel.send(f"{user.mention}", embed=embed, delete_after=30)
+                # Use cross-guild broadcasting to notify all guilds where this player is active
+                from utils.channel_manager import ChannelManager
+                channel_manager = ChannelManager(self.bot)
+                
+                # Get cross-guild location channels for this location
+                cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
+                
+                # Send to all relevant guilds
+                for guild, channel in cross_guild_channels:
+                    try:
+                        await channel.send(f"{user.mention}", embed=embed, delete_after=30)
+                    except:
+                        continue  # Skip if channel not accessible
             except:
-                pass  # Channel might not be accessible
+                pass  # Failed to broadcast
                 
         except Exception as e:
             print(f"Error notifying quest completion: {e}")
@@ -633,7 +641,7 @@ class QuestsCog(commands.Cog):
             return None
         
         location = self.db.execute_query(
-            "SELECT location_id FROM locations WHERE LOWER(name) = LOWER(?)",
+            "SELECT location_id FROM locations WHERE LOWER(name) = LOWER(%s)",
             (location_name.strip(),),
             fetch='one'
         )
@@ -644,16 +652,17 @@ class QuestsCog(commands.Cog):
         """Save the completed quest to database"""
         try:
             # Insert quest
-            quest_id = self.db.execute_query(
+            quest_id_result = self.db.execute_query(
                 '''INSERT INTO quests 
                    (title, description, start_location_id, reward_money, created_by, 
                     estimated_duration, danger_level)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING quest_id''',
                 (quest_data['title'], quest_data['description'], quest_data['start_location_id'],
                  quest_data['reward_money'], quest_data['created_by'],
                  quest_data['estimated_duration'], quest_data['danger_level']),
-                fetch='lastrowid'
+                fetch='one'
             )
+            quest_id = quest_id_result[0] if quest_id_result else None
             
             # Insert objectives
             for obj in quest_data['objectives']:
@@ -661,7 +670,7 @@ class QuestsCog(commands.Cog):
                     '''INSERT INTO quest_objectives 
                        (quest_id, objective_order, objective_type, target_location_id,
                         target_item, target_quantity, target_amount, description)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
                     (quest_id, obj['order'], obj['type'], obj['target_location_id'],
                      obj['target_item'], obj['target_quantity'], 
                      obj.get('target_amount', 0), obj['description'])
@@ -680,7 +689,7 @@ class QuestsCog(commands.Cog):
             )
             
             location_name = self.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (quest_data['start_location_id'],),
                 fetch='one'
             )[0]
@@ -748,7 +757,7 @@ class QuestsCog(commands.Cog):
             return
         
         quest = self.db.execute_query(
-            "SELECT title, is_active FROM quests WHERE quest_id = ?",
+            "SELECT title, is_active FROM quests WHERE quest_id = %s",
             (quest_id,),
             fetch='one'
         )
@@ -761,7 +770,7 @@ class QuestsCog(commands.Cog):
         new_status = not is_active
         
         self.db.execute_query(
-            "UPDATE quests SET is_active = ? WHERE quest_id = ?",
+            "UPDATE quests SET is_active = %s WHERE quest_id = %s",
             (new_status, quest_id)
         )
         
@@ -781,7 +790,7 @@ class QuestsCog(commands.Cog):
                       q.estimated_duration, q.danger_level, q.required_level,
                       q.max_completions, q.current_completions
                FROM quests q
-               WHERE q.start_location_id = ? AND q.is_active = 1
+               WHERE q.start_location_id = %s AND q.is_active = true
                AND (q.max_completions = -1 OR q.current_completions < q.max_completions)
                ORDER BY q.created_at DESC''',
             (location_id,),
@@ -809,7 +818,7 @@ class QuestsCog(commands.Cog):
         """Check if user can accept a quest"""
         # Check if user already has this quest
         existing = self.db.execute_query(
-            "SELECT quest_status FROM quest_progress WHERE user_id = ? AND quest_id = ?",
+            "SELECT quest_status FROM quest_progress WHERE user_id = %s AND quest_id = %s",
             (user_id, quest_id),
             fetch='one'
         )
@@ -823,7 +832,7 @@ class QuestsCog(commands.Cog):
         
         # Check if user has any other active quest
         active_quest = self.db.execute_query(
-            "SELECT COUNT(*) FROM quest_progress WHERE user_id = ? AND quest_status = 'active'",
+            "SELECT COUNT(*) FROM quest_progress WHERE user_id = %s AND quest_status = 'active'",
             (user_id,),
             fetch='one'
         )[0]
@@ -833,13 +842,13 @@ class QuestsCog(commands.Cog):
         
         # Check level requirement
         char_level = self.db.execute_query(
-            "SELECT level FROM characters WHERE user_id = ?",
+            "SELECT level FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
         
         quest_required_level = self.db.execute_query(
-            "SELECT required_level FROM quests WHERE quest_id = ?",
+            "SELECT required_level FROM quests WHERE quest_id = %s",
             (quest_id,),
             fetch='one'
         )
@@ -857,7 +866,7 @@ class QuestsCog(commands.Cog):
             self.db.execute_query(
                 '''INSERT INTO quest_progress 
                    (quest_id, user_id, current_objective, quest_status)
-                   VALUES (?, ?, 1, 'active')''',
+                   VALUES (%s, %s, 1, 'active')''',
                 (quest_id, user_id)
             )
             return True
@@ -873,7 +882,7 @@ class QuestsCog(commands.Cog):
                       qp.started_at, q.reward_money
                FROM quest_progress qp
                JOIN quests q ON qp.quest_id = q.quest_id
-               WHERE qp.user_id = ? AND qp.quest_status = 'active' ''',
+               WHERE qp.user_id = %s AND qp.quest_status = 'active' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -889,7 +898,7 @@ class QuestsCog(commands.Cog):
             '''SELECT objective_order, objective_type, description, target_location_id,
                       target_item, target_quantity, target_amount
                FROM quest_objectives
-               WHERE quest_id = ?
+               WHERE quest_id = %s
                ORDER BY objective_order''',
             (quest_id,),
             fetch='all'
@@ -897,7 +906,7 @@ class QuestsCog(commands.Cog):
         
         # Get completed objectives
         progress_data = self.db.execute_query(
-            "SELECT objectives_completed FROM quest_progress WHERE quest_id = ? AND user_id = ?",
+            "SELECT objectives_completed FROM quest_progress WHERE quest_id = %s AND user_id = %s",
             (quest_id, interaction.user.id),
             fetch='one'
         )
@@ -919,7 +928,7 @@ class QuestsCog(commands.Cog):
         
         if started_at:
             try:
-                started_dt = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                started_dt = safe_datetime_parse(started_at.replace('Z', '+00:00'))
                 timestamp = int(started_dt.timestamp())
                 embed.add_field(name="📅 Started", value=f"<t:{timestamp}:R>", inline=True)
             except:
@@ -959,7 +968,7 @@ class QuestsCog(commands.Cog):
             '''SELECT qp.quest_id, q.title
                FROM quest_progress qp
                JOIN quests q ON qp.quest_id = q.quest_id
-               WHERE qp.user_id = ? AND qp.quest_status = 'active' ''',
+               WHERE qp.user_id = %s AND qp.quest_status = 'active' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -972,7 +981,7 @@ class QuestsCog(commands.Cog):
         
         # Update quest status to abandoned
         self.db.execute_query(
-            "UPDATE quest_progress SET quest_status = 'abandoned' WHERE quest_id = ? AND user_id = ?",
+            "UPDATE quest_progress SET quest_status = 'abandoned' WHERE quest_id = %s AND user_id = %s",
             (quest_id, interaction.user.id)
         )
         

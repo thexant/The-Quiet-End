@@ -36,7 +36,7 @@ class SubLocationCog(commands.Cog):
 
         # Check if user has a character
         char_info = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -51,11 +51,12 @@ class SubLocationCog(commands.Cog):
             await interaction.followup.send("You need to be at a location to enter its areas!", ephemeral=True)
             return
         
-        # Get location channel
-        location_info = self.db.execute_query(
-            "SELECT channel_id, name FROM locations WHERE location_id = ?",
-            (current_location,),
-            fetch='one'
+        # Get location channel using guild-specific system
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        location_info = channel_manager.get_channel_id_from_location(
+            interaction.guild.id, 
+            current_location
         )
         
         if not location_info or not location_info[0]:
@@ -91,7 +92,7 @@ class SubLocationCog(commands.Cog):
                 description=f"**{char_name}** enters the **{thread.name}**.",
                 color=0x7289DA  # Discord Blurple
             )
-            await location_channel.send(embed=announce_embed)
+            await self.bot.send_with_cross_guild_broadcast(location_channel, embed=announce_embed)
 
             # Ephemeral confirmation for the user
             await interaction.followup.send(
@@ -109,7 +110,7 @@ class SubLocationCog(commands.Cog):
         
         # Check if user has a character
         char_info = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -129,7 +130,7 @@ class SubLocationCog(commands.Cog):
         
         # Look up this thread in the sub_locations table
         sub_location_info = self.db.execute_query(
-            "SELECT parent_location_id, name, sub_type FROM sub_locations WHERE thread_id = ? AND is_active = 1",
+            "SELECT parent_location_id, name, sub_type FROM sub_locations WHERE thread_id = %s AND is_active = true",
             (thread.id,),
             fetch='one'
         )
@@ -147,7 +148,7 @@ class SubLocationCog(commands.Cog):
         
         # Get the main location channel for announcements
         location_info = self.db.execute_query(
-            "SELECT channel_id, name FROM locations WHERE location_id = ?",
+            "SELECT channel_id, name FROM locations WHERE location_id = %s",
             (parent_location_id,),
             fetch='one'
         )
@@ -176,7 +177,7 @@ class SubLocationCog(commands.Cog):
                 description=f"**{char_name}** has exited the **{sub_location_name}**.",
                 color=0xFF6600  # Orange color for exit
             )
-            await location_channel.send(embed=announce_embed)
+            await self.bot.send_with_cross_guild_broadcast(location_channel, embed=announce_embed)
             
             # Check if thread is now empty and clean it up if so
             await asyncio.sleep(1)  # Brief delay to ensure user removal is processed
@@ -191,7 +192,7 @@ class SubLocationCog(commands.Cog):
                     
                     # Clear thread_id from database
                     self.db.execute_query(
-                        "UPDATE sub_locations SET thread_id = NULL WHERE thread_id = ?",
+                        "UPDATE sub_locations SET thread_id = NULL WHERE thread_id = %s",
                         (thread.id,)
                     )
                     
@@ -214,7 +215,7 @@ class SubLocationCog(commands.Cog):
         
         # Check if user has a character
         char_info = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -234,7 +235,7 @@ class SubLocationCog(commands.Cog):
         
         # Get location name
         location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )[0]

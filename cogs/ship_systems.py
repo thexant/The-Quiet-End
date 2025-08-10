@@ -21,7 +21,7 @@ class ShipSystemsCog(commands.Cog):
             '''SELECT c.current_location, c.money, l.has_shipyard, l.wealth_level, l.name as location_name
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -38,7 +38,7 @@ class ShipSystemsCog(commands.Cog):
         
         # Get current ship count for fleet management
         ship_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM player_ships WHERE owner_id = ?",
+            "SELECT COUNT(*) FROM player_ships WHERE owner_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -48,7 +48,7 @@ class ShipSystemsCog(commands.Cog):
             '''SELECT s.ship_id, s.name, s.ship_type, s.condition_rating, s.market_value
                FROM player_ships ps
                JOIN ships s ON ps.ship_id = s.ship_id
-               WHERE ps.owner_id = ? AND ps.is_active = 1''',
+               WHERE ps.owner_id = %s AND ps.is_active = true''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -86,7 +86,7 @@ class ShipSystemsCog(commands.Cog):
         if location_id is None:
             # Get current location if not specified
             char_info = self.bot.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -97,7 +97,7 @@ class ShipSystemsCog(commands.Cog):
         
         # Check if location has shipyard
         location_info = self.bot.db.execute_query(
-            "SELECT name, has_shipyard, wealth_level FROM locations WHERE location_id = ?",
+            "SELECT name, has_shipyard, wealth_level FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -129,7 +129,7 @@ class ShipSystemsCog(commands.Cog):
             '''SELECT c.current_location, c.money, l.has_upgrades, l.wealth_level, l.name as location_name
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -151,7 +151,7 @@ class ShipSystemsCog(commands.Cog):
                       s.max_upgrade_slots, s.used_upgrade_slots
                FROM player_ships ps
                JOIN ships s ON ps.ship_id = s.ship_id
-               WHERE ps.owner_id = ? AND ps.is_active = 1''',
+               WHERE ps.owner_id = %s AND ps.is_active = true''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -198,7 +198,7 @@ class ShipSystemsCog(commands.Cog):
             '''SELECT l.location_id, l.name, l.has_shipyard, l.has_upgrades, l.wealth_level, c.money
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -219,7 +219,7 @@ class ShipSystemsCog(commands.Cog):
                       ps.is_active, s.market_value
                FROM player_ships ps
                JOIN ships s ON ps.ship_id = s.ship_id
-               WHERE ps.owner_id = ?
+               WHERE ps.owner_id = %s
                ORDER BY ps.is_active DESC, ps.acquired_date DESC''',
             (interaction.user.id,),
             fetch='all'
@@ -776,14 +776,14 @@ class PurchaseConfirmView(discord.ui.View):
             if 'inventory_id' in self.ship_data:
                 self.bot.db.execute_in_transaction(
                     conn,
-                    "DELETE FROM shipyard_inventory WHERE inventory_id = ?",
+                    "DELETE FROM shipyard_inventory WHERE inventory_id = %s",
                     (self.ship_data['inventory_id'],)
                 )
             
             # Deduct credits
             self.bot.db.execute_in_transaction(
                 conn,
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (self.final_price, self.user_id)
             )
             
@@ -800,7 +800,7 @@ class PurchaseConfirmView(discord.ui.View):
             fuel_capacity = 100 + (self.ship_data['tier'] * 20)
             
             # Create the ship with current_fuel initialized to fuel_capacity (full tank)
-            self.bot.db.execute_in_transaction(
+            new_ship_id = self.bot.db.execute_in_transaction(
                 conn,
                 '''INSERT INTO ships 
                    (owner_id, name, ship_type, tier, condition_rating,
@@ -808,18 +808,13 @@ class PurchaseConfirmView(discord.ui.View):
                     exterior_description, interior_description,
                     engine_level, hull_level, systems_level,
                     max_upgrade_slots, market_value, special_mods, current_fuel)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING ship_id''',
                 (self.user_id, self.ship_data['name'], ship_type, self.ship_data['tier'], 100,
                  fuel_capacity, self.ship_data['cargo_capacity'],
                  self.ship_data['combat_rating'], self.ship_data['fuel_efficiency'],
                  exterior, interior, 1, 1, 1, 3 + self.ship_data['tier'],
-                 self.ship_data['price'], json.dumps([]), fuel_capacity)  # Initialize current_fuel to fuel_capacity
-            )
-            
-            # Get the new ship ID
-            new_ship_id = self.bot.db.execute_in_transaction(
-                conn,
-                "SELECT last_insert_rowid()",
+                 self.ship_data['price'], json.dumps([]), fuel_capacity),  # Initialize current_fuel to fuel_capacity
                 fetch='one'
             )[0]
             
@@ -827,14 +822,14 @@ class PurchaseConfirmView(discord.ui.View):
             self.bot.db.execute_in_transaction(
                 conn,
                 '''INSERT INTO player_ships (owner_id, ship_id, is_active)
-                   VALUES (?, ?, ?)''',
+                   VALUES (%s, %s, %s)''',
                 (self.user_id, new_ship_id, 1 if not self.has_trade else 1)
             )
             
             # Update BOTH ship_id and active_ship_id to the new ship
             self.bot.db.execute_in_transaction(
                 conn,
-                "UPDATE characters SET ship_id = ?, active_ship_id = ? WHERE user_id = ?",
+                "UPDATE characters SET ship_id = %s, active_ship_id = %s WHERE user_id = %s",
                 (new_ship_id, new_ship_id, self.user_id)
             )
             
@@ -843,7 +838,7 @@ class PurchaseConfirmView(discord.ui.View):
                 # Get the old active ship ID BEFORE deactivating it
                 old_active_ship = self.bot.db.execute_in_transaction(
                     conn,
-                    "SELECT ship_id FROM player_ships WHERE owner_id = ? AND is_active = 1 AND ship_id != ?",
+                    "SELECT ship_id FROM player_ships WHERE owner_id = %s AND is_active = true AND ship_id != %s",
                     (self.user_id, new_ship_id),
                     fetch='one'
                 )
@@ -851,7 +846,7 @@ class PurchaseConfirmView(discord.ui.View):
                 # Deactivate old ship
                 self.bot.db.execute_in_transaction(
                     conn,
-                    "UPDATE player_ships SET is_active = 0 WHERE owner_id = ? AND is_active = 1 AND ship_id != ?",
+                    "UPDATE player_ships SET is_active = false WHERE owner_id = %s AND is_active = true AND ship_id != %s",
                     (self.user_id, new_ship_id)
                 )
                 
@@ -859,12 +854,12 @@ class PurchaseConfirmView(discord.ui.View):
                 if old_active_ship:
                     self.bot.db.execute_in_transaction(
                         conn,
-                        "DELETE FROM player_ships WHERE ship_id = ?",
+                        "DELETE FROM player_ships WHERE ship_id = %s",
                         (old_active_ship[0],)
                     )
                     self.bot.db.execute_in_transaction(
                         conn,
-                        "DELETE FROM ships WHERE ship_id = ?",
+                        "DELETE FROM ships WHERE ship_id = %s",
                         (old_active_ship[0],)
                     )
             
@@ -1096,7 +1091,7 @@ class UpgradeWorkshopView(discord.ui.View):
         current_custom = self.bot.db.execute_query(
             '''SELECT paint_job, decals, interior_style, name_plate
                FROM ship_customization
-               WHERE ship_id = ?''',
+               WHERE ship_id = %s''',
             (self.ship_info[0],),
             fetch='one'
         )
@@ -1166,7 +1161,7 @@ class UpgradeWorkshopView(discord.ui.View):
         items = self.bot.db.execute_query(
             '''SELECT i.item_id, i.item_name, i.quantity, i.metadata
                FROM inventory i
-               WHERE i.owner_id = ? AND i.item_type = 'ship_upgrade'
+               WHERE i.owner_id = %s AND i.item_type = 'ship_upgrade'
                ORDER BY i.item_name''',
             (self.user_id,),
             fetch='all'
@@ -1342,12 +1337,12 @@ class ComponentUpgradeView(discord.ui.View):
             
             # Process upgrade
             self.bot.db.execute_query(
-                f"UPDATE ships SET {component}_level = {component}_level + 1 WHERE ship_id = ?",
+                f"UPDATE ships SET {component}_level = {component}_level + 1 WHERE ship_id = %s",
                 (self.ship_info[0],)
             )
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (cost, self.user_id)
             )
             
@@ -1410,12 +1405,12 @@ class SpecialModView(discord.ui.View):
         current_mods.append(mod['name'])
         
         self.bot.db.execute_query(
-            "UPDATE ships SET special_mods = ?, used_upgrade_slots = used_upgrade_slots + 1 WHERE ship_id = ?",
+            "UPDATE ships SET special_mods = %s, used_upgrade_slots = used_upgrade_slots + 1 WHERE ship_id = %s",
             (json.dumps(current_mods), self.ship_info[0])
         )
         
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (mod['cost'], self.user_id)
         )
         
@@ -1469,12 +1464,12 @@ class MaintenanceView(discord.ui.View):
             
             # Process repair
             self.bot.db.execute_query(
-                "UPDATE ships SET condition_rating = LEAST(condition_rating + ?, 100) WHERE ship_id = ?",
+                "UPDATE ships SET condition_rating = LEAST(condition_rating + %s, 100) WHERE ship_id = %s",
                 (amount, self.ship_id)
             )
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (cost, self.user_id)
             )
             
@@ -1534,7 +1529,7 @@ class CosmeticView(discord.ui.View):
         """Show ship renaming interface"""
         # Get current ship name
         ship_info = self.bot.db.execute_query(
-            "SELECT name, ship_type FROM ships WHERE ship_id = ?",
+            "SELECT name, ship_type FROM ships WHERE ship_id = %s",
             (self.ship_id,),
             fetch='one'
         )
@@ -1574,7 +1569,7 @@ class CosmeticView(discord.ui.View):
         
         # Get current paint job
         current_custom = self.bot.db.execute_query(
-            "SELECT paint_job FROM ship_customization WHERE ship_id = ?",
+            "SELECT paint_job FROM ship_customization WHERE ship_id = %s",
             (self.ship_id,),
             fetch='one'
         )
@@ -1612,7 +1607,7 @@ class CosmeticView(discord.ui.View):
         from utils.ship_data import COSMETIC_OPTIONS
         
         current_custom = self.bot.db.execute_query(
-            "SELECT decals FROM ship_customization WHERE ship_id = ?",
+            "SELECT decals FROM ship_customization WHERE ship_id = %s",
             (self.ship_id,),
             fetch='one'
         )
@@ -1642,7 +1637,7 @@ class CosmeticView(discord.ui.View):
         from utils.ship_data import COSMETIC_OPTIONS
         
         current_custom = self.bot.db.execute_query(
-            "SELECT interior_style FROM ship_customization WHERE ship_id = ?",
+            "SELECT interior_style FROM ship_customization WHERE ship_id = %s",
             (self.ship_id,),
             fetch='one'
         )
@@ -1716,7 +1711,7 @@ class ItemApplicationView(discord.ui.View):
         
         # Get item details
         item = self.bot.db.execute_query(
-            "SELECT item_name, metadata FROM inventory WHERE item_id = ?",
+            "SELECT item_name, metadata FROM inventory WHERE item_id = %s",
             (item_id,),
             fetch='one'
         )
@@ -1734,28 +1729,28 @@ class ItemApplicationView(discord.ui.View):
             # Apply based on type
             if upgrade_type == 'fuel_efficiency':
                 self.bot.db.execute_query(
-                    "UPDATE ships SET fuel_efficiency = fuel_efficiency + ? WHERE ship_id = ?",
+                    "UPDATE ships SET fuel_efficiency = fuel_efficiency + %s WHERE ship_id = %s",
                     (bonus, self.ship_id)
                 )
             elif upgrade_type == 'cargo_capacity':
                 self.bot.db.execute_query(
-                    "UPDATE ships SET cargo_capacity = cargo_capacity + ? WHERE ship_id = ?",
+                    "UPDATE ships SET cargo_capacity = cargo_capacity + %s WHERE ship_id = %s",
                     (bonus, self.ship_id)
                 )
             elif upgrade_type == 'combat_rating':
                 self.bot.db.execute_query(
-                    "UPDATE ships SET combat_rating = combat_rating + ? WHERE ship_id = ?",
+                    "UPDATE ships SET combat_rating = combat_rating + %s WHERE ship_id = %s",
                     (bonus, self.ship_id)
                 )
             
             # Remove item from inventory
             self.bot.db.execute_query(
-                "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = %s",
                 (item_id,)
             )
             
             self.bot.db.execute_query(
-                "DELETE FROM inventory WHERE item_id = ? AND quantity <= 0",
+                "DELETE FROM inventory WHERE item_id = %s AND quantity <= 0",
                 (item_id,)
             )
             
@@ -1853,7 +1848,7 @@ class ShipyardHubView(discord.ui.View):
         
         # Get user's current location for the exchange
         char_info = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1924,19 +1919,19 @@ class FleetManagementView(discord.ui.View):
         
         # Deactivate all ships first
         self.bot.db.execute_query(
-            "UPDATE player_ships SET is_active = 0 WHERE owner_id = ?",
+            "UPDATE player_ships SET is_active = false WHERE owner_id = %s",
             (self.user_id,)
         )
         
         # Activate the selected ship
         self.bot.db.execute_query(
-            "UPDATE player_ships SET is_active = 1 WHERE owner_id = ? AND ship_id = ?",
+            "UPDATE player_ships SET is_active = true WHERE owner_id = %s AND ship_id = %s",
             (self.user_id, new_ship_id)
         )
         
         # UPDATE BOTH ship_id AND active_ship_id
         self.bot.db.execute_query(
-            "UPDATE characters SET ship_id = ?, active_ship_id = ? WHERE user_id = ?",
+            "UPDATE characters SET ship_id = %s, active_ship_id = %s WHERE user_id = %s",
             (new_ship_id, new_ship_id, self.user_id)
         )
         
@@ -1997,7 +1992,7 @@ class ShipSellView(discord.ui.View):
         # Confirm sale
         embed = discord.Embed(
             title="💰 Confirm Ship Sale",
-            description=f"Are you sure you want to sell **{ship[1]}**?",
+            description=f"Are you sure you want to sell **{ship[1]}**%s",
             color=0xff0000
         )
         
@@ -2027,7 +2022,7 @@ class SaleConfirmView(discord.ui.View):
         # Process sale
         # Get player's current location
         location_info = self.bot.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -2043,7 +2038,7 @@ class SaleConfirmView(discord.ui.View):
             """SELECT s.name, s.ship_type, s.ship_class, s.tier, s.condition_rating, 
                       s.market_value, s.cargo_capacity, s.speed_rating, s.combat_rating, 
                       s.fuel_efficiency, s.special_mods
-               FROM ships s WHERE s.ship_id = ?""",
+               FROM ships s WHERE s.ship_id = %s""",
             (self.ship_id,),
             fetch='one'
         )
@@ -2075,19 +2070,19 @@ class SaleConfirmView(discord.ui.View):
         
         # Remove from player_ships
         self.bot.db.execute_query(
-            "DELETE FROM player_ships WHERE ship_id = ? AND owner_id = ?",
+            "DELETE FROM player_ships WHERE ship_id = %s AND owner_id = %s",
             (self.ship_id, self.user_id)
         )
         
         # Delete ship from ships table
         self.bot.db.execute_query(
-            "DELETE FROM ships WHERE ship_id = ?",
+            "DELETE FROM ships WHERE ship_id = %s",
             (self.ship_id,)
         )
         
         # Add credits
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money + ? WHERE user_id = ?",
+            "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (self.sell_value, self.user_id)
         )
         
@@ -2163,20 +2158,21 @@ class PaintJobSelectionView(discord.ui.View):
         """Apply the paint job and deduct credits"""
         # Ensure customization record exists
         self.bot.db.execute_query(
-            '''INSERT OR IGNORE INTO ship_customization (ship_id, paint_job, decals, interior_style)
-               VALUES (?, ?, ?, ?)''',
+            '''INSERT INTO ship_customization (ship_id, paint_job, decals, interior_style)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (ship_id) DO NOTHING''',
             (self.ship_id, 'Default', 'None', 'Standard')
         )
         
         # Update paint job
         self.bot.db.execute_query(
-            "UPDATE ship_customization SET paint_job = ? WHERE ship_id = ?",
+            "UPDATE ship_customization SET paint_job = %s WHERE ship_id = %s",
             (paint_name, self.ship_id)
         )
         
         # Deduct credits
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, self.user_id)
         )
 
@@ -2234,20 +2230,21 @@ class DecalSelectionView(discord.ui.View):
         """Apply the decals and deduct credits"""
         # Ensure customization record exists
         self.bot.db.execute_query(
-            '''INSERT OR IGNORE INTO ship_customization (ship_id, paint_job, decals, interior_style)
-               VALUES (?, ?, ?, ?)''',
+            '''INSERT INTO ship_customization (ship_id, paint_job, decals, interior_style)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (ship_id) DO NOTHING''',
             (self.ship_id, 'Default', 'None', 'Standard')
         )
         
         # Update decals
         self.bot.db.execute_query(
-            "UPDATE ship_customization SET decals = ? WHERE ship_id = ?",
+            "UPDATE ship_customization SET decals = %s WHERE ship_id = %s",
             (decal_name, self.ship_id)
         )
         
         # Deduct credits
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, self.user_id)
         )
 
@@ -2305,20 +2302,21 @@ class InteriorThemeView(discord.ui.View):
         """Apply the interior theme and deduct credits"""
         # Ensure customization record exists
         self.bot.db.execute_query(
-            '''INSERT OR IGNORE INTO ship_customization (ship_id, paint_job, decals, interior_style)
-               VALUES (?, ?, ?, ?)''',
+            '''INSERT INTO ship_customization (ship_id, paint_job, decals, interior_style)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (ship_id) DO NOTHING''',
             (self.ship_id, 'Default', 'None', 'Standard')
         )
         
         # Update interior theme
         self.bot.db.execute_query(
-            "UPDATE ship_customization SET interior_style = ? WHERE ship_id = ?",
+            "UPDATE ship_customization SET interior_style = %s WHERE ship_id = %s",
             (theme_name, self.ship_id)
         )
         
         # Deduct credits
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, self.user_id)
         )
 
@@ -2377,7 +2375,7 @@ class ShipRenameModal(discord.ui.Modal, title="Rename Your Ship"):
         existing = self.bot.db.execute_query(
             '''SELECT COUNT(*) FROM ships s
                JOIN player_ships ps ON s.ship_id = ps.ship_id
-               WHERE ps.owner_id = ? AND s.name = ? AND s.ship_id != ?''',
+               WHERE ps.owner_id = %s AND s.name = %s AND s.ship_id != %s''',
             (self.user_id, new_name, self.ship_id),
             fetch='one'
         )[0]
@@ -2400,13 +2398,13 @@ class ShipRenameModal(discord.ui.Modal, title="Rename Your Ship"):
         
         # Update ship name
         self.bot.db.execute_query(
-            "UPDATE ships SET name = ? WHERE ship_id = ?",
+            "UPDATE ships SET name = %s WHERE ship_id = %s",
             (new_name, self.ship_id)
         )
         
         # Deduct credits
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+            "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, self.user_id)
         )
         
@@ -2468,7 +2466,7 @@ class ShipExchangeView(discord.ui.View):
         """Create and display the ship exchange interface"""
         # Get location name
         location_info = self.bot.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (self.location_id,),
             fetch='one'
         )
@@ -2483,8 +2481,8 @@ class ShipExchangeView(discord.ui.View):
                FROM ship_exchange_listings sel
                JOIN ships s ON sel.ship_id = s.ship_id
                JOIN characters c ON sel.owner_id = c.user_id
-               WHERE sel.listed_at_location = ? AND sel.is_active = 1 
-               AND sel.expires_at > datetime('now')
+               WHERE sel.listed_at_location = %s AND sel.is_active = true 
+               AND sel.expires_at > NOW()
                ORDER BY sel.created_at DESC''',
             (self.location_id,),
             fetch='all'
@@ -2557,7 +2555,7 @@ class ShipExchangeView(discord.ui.View):
                FROM ship_exchange_listings sel
                JOIN ships s ON sel.ship_id = s.ship_id
                JOIN locations l ON sel.listed_at_location = l.location_id
-               WHERE sel.owner_id = ? AND sel.is_active = 1
+               WHERE sel.owner_id = %s AND sel.is_active = true
                ORDER BY sel.created_at DESC''',
             (self.user_id,),
             fetch='all'
@@ -2599,11 +2597,11 @@ class ListShipView(discord.ui.View):
             '''SELECT s.ship_id, s.name, s.ship_type, s.tier, s.condition_rating, s.market_value
                FROM player_ships ps
                JOIN ships s ON ps.ship_id = s.ship_id
-               WHERE ps.owner_id = ? AND ps.is_active = 0 
-               AND s.docked_at_location = ?
+               WHERE ps.owner_id = %s AND ps.is_active = false 
+               AND s.docked_at_location = %s
                AND s.ship_id NOT IN (
                    SELECT ship_id FROM ship_exchange_listings 
-                   WHERE is_active = 1 AND expires_at > datetime('now')
+                   WHERE is_active = true AND expires_at > NOW()
                )''',
             (self.user_id, self.location_id),
             fetch='all'
@@ -2658,7 +2656,7 @@ class ShipSelectionDropdown(discord.ui.Select):
         # Get ship details
         ship_info = self.bot.db.execute_query(
             '''SELECT s.name, s.ship_type, s.tier, s.condition_rating, s.market_value
-               FROM ships s WHERE s.ship_id = ?''',
+               FROM ships s WHERE s.ship_id = %s''',
             (ship_id,),
             fetch='one'
         )
@@ -2732,7 +2730,7 @@ class ListingConfigModal(discord.ui.Modal):
             '''INSERT INTO ship_exchange_listings 
                (ship_id, owner_id, listed_at_location, asking_price, desired_ship_types, 
                 listing_description, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s, %s, %s)''',
             (self.ship_id, self.user_id, self.location_id, asking_price, 
              json.dumps(desired_list), self.description.value, expires_at)
         )
@@ -2770,9 +2768,9 @@ class BrowseListingsView(discord.ui.View):
                FROM ship_exchange_listings sel
                JOIN ships s ON sel.ship_id = s.ship_id
                JOIN characters c ON sel.owner_id = c.user_id
-               WHERE sel.listed_at_location = ? AND sel.is_active = 1 
-               AND sel.expires_at > datetime('now')
-               AND sel.owner_id != ?
+               WHERE sel.listed_at_location = %s AND sel.is_active = true 
+               AND sel.expires_at > NOW()
+               AND sel.owner_id != %s
                ORDER BY sel.created_at DESC''',
             (self.location_id, self.user_id),
             fetch='all'
@@ -2864,10 +2862,10 @@ class MakeOfferView(discord.ui.View):
             '''SELECT s.ship_id, s.name, s.ship_type, s.tier, s.condition_rating, s.market_value
                FROM player_ships ps
                JOIN ships s ON ps.ship_id = s.ship_id
-               WHERE ps.owner_id = ? AND s.docked_at_location = ?
+               WHERE ps.owner_id = %s AND s.docked_at_location = %s
                AND s.ship_id NOT IN (
                    SELECT ship_id FROM ship_exchange_listings 
-                   WHERE is_active = 1 AND expires_at > datetime('now')
+                   WHERE is_active = true AND expires_at > NOW()
                )''',
             (self.user_id, self.location_id),
             fetch='all'
@@ -2960,7 +2958,7 @@ class OfferDetailsModal(discord.ui.Modal):
             '''SELECT sel.owner_id, s.name as ship_name
                FROM ship_exchange_listings sel
                JOIN ships s ON sel.ship_id = s.ship_id
-               WHERE sel.listing_id = ?''',
+               WHERE sel.listing_id = %s''',
             (self.listing_id,),
             fetch='one'
         )
@@ -2978,11 +2976,12 @@ class OfferDetailsModal(discord.ui.Modal):
             '''INSERT INTO ship_exchange_offers 
                (listing_id, offerer_id, offered_ship_id, credits_adjustment, 
                 offer_message, offer_expires_at)
-               VALUES (?, ?, ?, ?, ?, ?)''',
+               VALUES (%s, %s, %s, %s, %s, %s)
+               RETURNING offer_id''',
             (self.listing_id, self.user_id, self.offered_ship_id, credits_adj, 
              self.offer_message.value, offer_expires_at),
-            fetch='lastrowid'
-        )
+            fetch='one'
+        )[0]
         
         # Send DM to listing owner
         try:
@@ -3013,7 +3012,7 @@ class OfferDetailsModal(discord.ui.Modal):
                FROM ship_exchange_offers seo
                JOIN ships s ON seo.offered_ship_id = s.ship_id
                JOIN characters c ON seo.offerer_id = c.user_id
-               WHERE seo.offer_id = ?''',
+               WHERE seo.offer_id = %s''',
             (offer_id,),
             fetch='one'
         )
@@ -3074,7 +3073,7 @@ class OfferResponseView(discord.ui.View):
                JOIN ship_exchange_listings sel ON seo.listing_id = sel.listing_id
                JOIN ships s1 ON seo.offered_ship_id = s1.ship_id
                JOIN ships s2 ON sel.ship_id = s2.ship_id
-               WHERE seo.offer_id = ? AND seo.status = 'pending' ''',
+               WHERE seo.offer_id = %s AND seo.status = 'pending' ''',
             (self.offer_id,),
             fetch='one'
         )
@@ -3085,7 +3084,7 @@ class OfferResponseView(discord.ui.View):
         
         # Update offer status
         self.bot.db.execute_query(
-            "UPDATE ship_exchange_offers SET status = ?, responded_at = datetime('now') WHERE offer_id = ?",
+            "UPDATE ship_exchange_offers SET status = %s, responded_at = NOW() WHERE offer_id = %s",
             (response, self.offer_id)
         )
         
@@ -3111,12 +3110,12 @@ class OfferResponseView(discord.ui.View):
             
             # Transfer ships
             self.bot.db.execute_in_transaction(conn,
-                "UPDATE player_ships SET owner_id = ? WHERE ship_id = ?",
+                "UPDATE player_ships SET owner_id = %s WHERE ship_id = %s",
                 (owner_id, offered_ship_id)
             )
             
             self.bot.db.execute_in_transaction(conn,
-                "UPDATE player_ships SET owner_id = ? WHERE ship_id = ?",
+                "UPDATE player_ships SET owner_id = %s WHERE ship_id = %s",
                 (offerer_id, listed_ship_id)
             )
             
@@ -3124,21 +3123,21 @@ class OfferResponseView(discord.ui.View):
             if credits_adj > 0:
                 # Offerer pays additional credits to owner
                 self.bot.db.execute_in_transaction(conn,
-                    "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money - %s WHERE user_id = %s",
                     (abs(credits_adj), offerer_id)
                 )
                 self.bot.db.execute_in_transaction(conn,
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (abs(credits_adj), owner_id)
                 )
             elif credits_adj < 0:
                 # Owner pays additional credits to offerer
                 self.bot.db.execute_in_transaction(conn,
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (abs(credits_adj), offerer_id)
                 )
                 self.bot.db.execute_in_transaction(conn,
-                    "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money - %s WHERE user_id = %s",
                     (abs(credits_adj), owner_id)
                 )
             
@@ -3147,14 +3146,14 @@ class OfferResponseView(discord.ui.View):
                 '''INSERT INTO ship_exchange_history 
                    (original_listing_id, seller_id, buyer_id, seller_ship_id, buyer_ship_id, 
                     credits_exchanged, exchange_location)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (listing_id, owner_id, offerer_id, listed_ship_id, offered_ship_id, 
                  credits_adj, location_id)
             )
             
             # Deactivate listing
             self.bot.db.execute_in_transaction(conn,
-                "UPDATE ship_exchange_listings SET is_active = 0 WHERE listing_id = ?",
+                "UPDATE ship_exchange_listings SET is_active = false WHERE listing_id = %s",
                 (listing_id,)
             )
             

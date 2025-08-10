@@ -187,8 +187,8 @@ class BeaconSystemCog(commands.Cog):
                 """SELECT beacon_id, beacon_type, user_id, location_id, message_content, 
                           transmissions_sent, max_transmissions, interval_minutes
                    FROM active_beacons 
-                   WHERE is_active = 1 
-                   AND next_transmission <= datetime('now')
+                   WHERE is_active = true 
+                   AND next_transmission <= NOW()
                    AND transmissions_sent < max_transmissions""",
                 fetch='all'
             )
@@ -206,7 +206,7 @@ class BeaconSystemCog(commands.Cog):
                 if new_sent >= max_trans:
                     # Beacon finished - deactivate
                     self.db.execute_query(
-                        "UPDATE active_beacons SET is_active = 0 WHERE beacon_id = ?",
+                        "UPDATE active_beacons SET is_active = false WHERE beacon_id = %s",
                         (beacon_id,)
                     )
                 else:
@@ -215,9 +215,9 @@ class BeaconSystemCog(commands.Cog):
                     next_time = datetime.utcnow() + timedelta(minutes=interval_minutes)
                     self.db.execute_query(
                         """UPDATE active_beacons 
-                           SET transmissions_sent = ?, next_transmission = ?
-                           WHERE beacon_id = ?""",
-                        (new_sent, next_time.isoformat(), beacon_id)
+                           SET transmissions_sent = %s, next_transmission = %s
+                           WHERE beacon_id = %s""",
+                        (new_sent, next_time, beacon_id)
                     )
                 
         except Exception as e:
@@ -232,7 +232,7 @@ class BeaconSystemCog(commands.Cog):
         try:
             # Remove item from inventory
             existing_item = self.db.execute_query(
-                "SELECT quantity FROM inventory WHERE item_id = ?",
+                "SELECT quantity FROM inventory WHERE item_id = %s",
                 (item_id,), fetch='one'
             )
             
@@ -240,10 +240,10 @@ class BeaconSystemCog(commands.Cog):
                 return False
             
             if existing_item[0] == 1:
-                self.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (item_id,))
+                self.db.execute_query("DELETE FROM inventory WHERE item_id = %s", (item_id,))
             else:
                 self.db.execute_query(
-                    "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = ?", 
+                    "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = %s", 
                     (item_id,)
                 )
             
@@ -253,8 +253,8 @@ class BeaconSystemCog(commands.Cog):
             self.db.execute_query(
                 """INSERT INTO active_beacons 
                    (beacon_type, user_id, location_id, message_content, next_transmission)
-                   VALUES (?, ?, ?, ?, ?)""",
-                ("emergency_beacon", user_id, location_id, message, first_transmission.isoformat())
+                   VALUES (%s, %s, %s, %s, %s)""",
+                ("emergency_beacon", user_id, location_id, message, first_transmission)
             )
             
             return True
@@ -268,7 +268,7 @@ class BeaconSystemCog(commands.Cog):
         try:
             # Remove item from inventory
             existing_item = self.db.execute_query(
-                "SELECT quantity FROM inventory WHERE item_id = ?",
+                "SELECT quantity FROM inventory WHERE item_id = %s",
                 (item_id,), fetch='one'
             )
             
@@ -276,10 +276,10 @@ class BeaconSystemCog(commands.Cog):
                 return False
             
             if existing_item[0] == 1:
-                self.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (item_id,))
+                self.db.execute_query("DELETE FROM inventory WHERE item_id = %s", (item_id,))
             else:
                 self.db.execute_query(
-                    "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = ?", 
+                    "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = %s", 
                     (item_id,)
                 )
             
@@ -290,8 +290,8 @@ class BeaconSystemCog(commands.Cog):
                 """INSERT INTO active_beacons 
                    (beacon_type, user_id, location_id, message_content, next_transmission, 
                     max_transmissions, interval_minutes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                ("radio_beacon", user_id, location_id, message, first_transmission.isoformat(), 6, 60)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                ("radio_beacon", user_id, location_id, message, first_transmission, 6, 60)
             )
             
             return True
@@ -305,7 +305,7 @@ class BeaconSystemCog(commands.Cog):
         try:
             # Remove item from inventory
             existing_item = self.db.execute_query(
-                "SELECT quantity FROM inventory WHERE item_id = ?",
+                "SELECT quantity FROM inventory WHERE item_id = %s",
                 (item_id,), fetch='one'
             )
             
@@ -313,16 +313,16 @@ class BeaconSystemCog(commands.Cog):
                 return False
             
             if existing_item[0] == 1:
-                self.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (item_id,))
+                self.db.execute_query("DELETE FROM inventory WHERE item_id = %s", (item_id,))
             else:
                 self.db.execute_query(
-                    "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = ?", 
+                    "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = %s", 
                     (item_id,)
                 )
             
             # Get character info
             char_info = self.db.execute_query(
-                "SELECT name, callsign FROM characters WHERE user_id = ?",
+                "SELECT name, callsign FROM characters WHERE user_id = %s",
                 (user_id,), fetch='one'
             )
             
@@ -333,7 +333,7 @@ class BeaconSystemCog(commands.Cog):
             
             # Get location info
             location_info = self.db.execute_query(
-                "SELECT name, system_name FROM locations WHERE location_id = ?",
+                "SELECT name, system_name FROM locations WHERE location_id = %s",
                 (location_id,), fetch='one'
             )
             
@@ -377,7 +377,7 @@ class BeaconSystemCog(commands.Cog):
         try:
             # Get beacon location info
             location_info = self.db.execute_query(
-                "SELECT name, x_coord, y_coord, system_name FROM locations WHERE location_id = ?",
+                "SELECT name, x_coord, y_coord, system_name FROM locations WHERE location_id = %s",
                 (location_id,), fetch='one'
             )
             
@@ -388,7 +388,7 @@ class BeaconSystemCog(commands.Cog):
             
             # Get character info
             char_info = self.db.execute_query(
-                "SELECT name, callsign FROM characters WHERE user_id = ?",
+                "SELECT name, callsign FROM characters WHERE user_id = %s",
                 (user_id,), fetch='one'
             )
             
@@ -399,7 +399,7 @@ class BeaconSystemCog(commands.Cog):
             
             # Get beacon transmission count
             transmission_info = self.db.execute_query(
-                "SELECT transmissions_sent FROM active_beacons WHERE beacon_id = ?",
+                "SELECT transmissions_sent FROM active_beacons WHERE beacon_id = %s",
                 (beacon_id,), fetch='one'
             )
             
@@ -443,7 +443,7 @@ class BeaconSystemCog(commands.Cog):
         try:
             # Get beacon location info
             location_info = self.db.execute_query(
-                "SELECT name, x_coord, y_coord, system_name FROM locations WHERE location_id = ?",
+                "SELECT name, x_coord, y_coord, system_name FROM locations WHERE location_id = %s",
                 (location_id,), fetch='one'
             )
             
@@ -454,7 +454,7 @@ class BeaconSystemCog(commands.Cog):
             
             # Get character info
             char_info = self.db.execute_query(
-                "SELECT name, callsign FROM characters WHERE user_id = ?",
+                "SELECT name, callsign FROM characters WHERE user_id = %s",
                 (user_id,), fetch='one'
             )
             
@@ -465,7 +465,7 @@ class BeaconSystemCog(commands.Cog):
             
             # Get beacon transmission count
             transmission_info = self.db.execute_query(
-                "SELECT transmissions_sent FROM active_beacons WHERE beacon_id = ?",
+                "SELECT transmissions_sent FROM active_beacons WHERE beacon_id = %s",
                 (beacon_id,), fetch='one'
             )
             
@@ -545,7 +545,7 @@ class BeaconSystemCog(commands.Cog):
         
         # Get location data for channel creation
         location_data = self.db.execute_query(
-            "SELECT name, description, wealth_level FROM locations WHERE location_id = ?",
+            "SELECT name, description, wealth_level FROM locations WHERE location_id = %s",
             (location_id,), fetch='one'
         )
         
@@ -650,7 +650,7 @@ class BeaconSystemCog(commands.Cog):
         
         # Get location data for channel creation
         location_data = self.db.execute_query(
-            "SELECT name, description, wealth_level FROM locations WHERE location_id = ?",
+            "SELECT name, description, wealth_level FROM locations WHERE location_id = %s",
             (location_id,), fetch='one'
         )
         

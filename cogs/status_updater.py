@@ -5,6 +5,8 @@ from discord import app_commands # <--- 1. IMPORT app_commands
 import asyncio
 from datetime import datetime
 from utils.time_system import TimeSystem
+import psycopg2
+import psycopg2.errors
 
 class StatusUpdaterCog(commands.Cog):
     def __init__(self, bot):
@@ -38,16 +40,15 @@ class StatusUpdaterCog(commands.Cog):
                             retry_delay *= 2
                             continue
                         return (0, "Database is not accessible")
+                except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+                    if attempt < max_retries - 1:
+                        print(f"⚠️ Database connection issue during status update, retrying in {retry_delay}s...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2
+                        continue
+                    return (0, "Database connection unavailable")
                 except Exception as e:
-                    if "database is locked" in str(e).lower():
-                        if attempt < max_retries - 1:
-                            print(f"⚠️ Database locked during status update, retrying in {retry_delay}s...")
-                            await asyncio.sleep(retry_delay)
-                            retry_delay *= 2
-                            continue
-                        return (0, "Database is locked (galaxy generation may be running)")
-                    else:
-                        raise e
+                    raise e
                 
                 servers_with_status = self.db.execute_query(
                     "SELECT guild_id, status_voice_channel_id FROM server_config WHERE status_voice_channel_id IS NOT NULL",
@@ -77,20 +78,19 @@ class StatusUpdaterCog(commands.Cog):
                 # Get player counts with error handling
                 try:
                     active_players = self.db.execute_query(
-                        "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
+                        "SELECT COUNT(*) FROM characters WHERE is_logged_in = TRUE",
                         fetch='one'
                     )[0]
                     
                     dynamic_npcs = self.db.execute_query(
-                        "SELECT COUNT(*) FROM dynamic_npcs WHERE is_alive = 1",
+                        "SELECT COUNT(*) FROM dynamic_npcs WHERE is_alive = TRUE",
                         fetch='one'
                     )[0]
+                except psycopg2.errors.UndefinedTable as e:
+                    # Table doesn't exist - galaxy not yet generated
+                    return (0, "Galaxy not yet generated")
                 except Exception as e:
-                    if "no such table" in str(e).lower():
-                        # Galaxy not yet generated
-                        return (0, "Galaxy not yet generated")
-                    else:
-                        raise e
+                    raise e
                 
                 # Use the shortened name format
                 new_channel_name = f"🌐|{date_str}|⌚{approx_time}|🟢{active_players}"
@@ -122,20 +122,18 @@ class StatusUpdaterCog(commands.Cog):
                 else:
                     return (0, "Channel names were already up-to-date.")
                 
-            except Exception as e:
-                error_msg = str(e).lower()
-                if "database is locked" in error_msg:
-                    if attempt < max_retries - 1:
-                        print(f"⚠️ Database locked during status update (attempt {attempt + 1}), retrying in {retry_delay}s...")
-                        await asyncio.sleep(retry_delay)
-                        retry_delay *= 2
-                        continue
-                    else:
-                        print(f"❌ Database remained locked after {max_retries} attempts")
-                        return (0, "Database is locked (galaxy generation may be running)")
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+                if attempt < max_retries - 1:
+                    print(f"⚠️ Database connection issue during status update (attempt {attempt + 1}), retrying in {retry_delay}s...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
                 else:
-                    print(f"❌ Error in status channel update task: {e}")
-                    return (0, f"An unexpected error occurred: {e}")
+                    print(f"❌ Database connection remained unavailable after {max_retries} attempts")
+                    return (0, "Database connection unavailable")
+            except Exception as e:
+                print(f"❌ Error in status channel update task: {e}")
+                return (0, f"An unexpected error occurred: {e}")
         
         return (0, "Failed after maximum retries")
 

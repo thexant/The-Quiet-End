@@ -23,7 +23,7 @@ class TimeCog(commands.Cog, name="Time"):
             )
             return
         
-        galaxy_name, start_date_str, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame, is_manually_paused = galaxy_info
+        galaxy_name, start_date_str, time_scale, time_started_at, created_at, is_paused, time_paused_at, current_ingame, is_manually_paused = galaxy_info
         
         # Calculate current time
         current_datetime = self.time_system.calculate_current_ingame_time()
@@ -300,7 +300,7 @@ class TimeCog(commands.Cog, name="Time"):
             await interaction.response.send_message("❌ No galaxy found.", ephemeral=True)
             return
         
-        name, start_date, time_scale, time_started_at, created_at, is_paused, paused_at, current_ingame, is_manually_paused = galaxy_info
+        name, start_date, time_scale, time_started_at, created_at, is_paused, time_paused_at, current_ingame, is_manually_paused = galaxy_info
         
         embed = discord.Embed(title="🔧 Time System Debug", color=0xff9900)
         embed.add_field(name="Galaxy Name", value=name, inline=True)

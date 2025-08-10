@@ -66,7 +66,7 @@ class ChannelManager:
         """Load server-specific configuration"""
         config = self.db.execute_query(
             '''SELECT max_location_channels, channel_timeout_hours, auto_cleanup_enabled
-               FROM server_config WHERE guild_id = ?''',
+               FROM server_config WHERE guild_id = %s''',
             (guild.id,),
             fetch='one'
         )
@@ -80,7 +80,7 @@ class ChannelManager:
     def get_user_faction_id(self, user_id: int) -> int:
         """Get the faction ID for a user."""
         result = self.db.execute_query(
-            "SELECT faction_id FROM faction_members WHERE user_id = ?",
+            "SELECT faction_id FROM faction_members WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -102,7 +102,7 @@ class ChannelManager:
             '''SELECT l.name, lo.custom_name, lo.faction_id
                FROM locations l
                LEFT JOIN location_ownership lo ON l.location_id = lo.location_id
-               WHERE l.location_id = ?''',
+               WHERE l.location_id = %s''',
             (location_id,),
             fetch='one'
         )
@@ -132,7 +132,7 @@ class ChannelManager:
         # Get location info
         location_info = self.db.execute_query(
             '''SELECT location_id, channel_id, name, location_type, description, wealth_level
-               FROM locations WHERE location_id = ?''',
+               FROM locations WHERE location_id = %s''',
             (location_id,),
             fetch='one'
         )
@@ -151,18 +151,29 @@ class ChannelManager:
             print(f"DEBUG: location_info contents: {location_info}")
             raise
         
-        # Check if channel already exists
-        if channel_id:
+        # Check if guild-specific channel already exists
+        guild_channel_info = self.db.execute_query(
+            "SELECT channel_id FROM guild_location_channels WHERE guild_id = %s AND location_id = %s",
+            (guild.id, location_id),
+            fetch='one'
+        )
+        
+        if guild_channel_info and guild_channel_info[0]:
+            channel_id = guild_channel_info[0]
             channel = guild.get_channel(channel_id)
             if channel:
-                # Update last active time
-                await self._update_channel_activity(location_id)
+                # Update last active time for this guild's channel
+                current_time = datetime.now()
+                self.db.execute_query(
+                    "UPDATE guild_location_channels SET channel_last_active = %s WHERE guild_id = %s AND location_id = %s",
+                    (current_time, guild.id, location_id)
+                )
                 return channel
             else:
-                # Channel was deleted, clear the reference
+                # Channel was deleted, clear the guild-specific reference
                 self.db.execute_query(
-                    "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
-                    (location_id,)
+                    "DELETE FROM guild_location_channels WHERE guild_id = %s AND location_id = %s",
+                    (guild.id, location_id)
                 )
         
         # Need to create new channel
@@ -184,7 +195,7 @@ class ChannelManager:
             else:
                 # Channel was deleted, clear the reference
                 self.db.execute_query(
-                    "UPDATE home_interiors SET channel_id = NULL WHERE home_id = ?",
+                    "UPDATE home_interiors SET channel_id = NULL WHERE home_id = %s",
                     (home_id,)
                 )
         
@@ -230,7 +241,9 @@ class ChannelManager:
             
             # Update database with channel info
             self.db.execute_query(
-                "INSERT OR REPLACE INTO home_interiors (home_id, channel_id) VALUES (?, ?)",
+                """INSERT INTO home_interiors (home_id, channel_id) 
+                   VALUES (%s, %s)
+                   ON CONFLICT (home_id) DO UPDATE SET channel_id = EXCLUDED.channel_id""",
                 (home_id, channel.id)
             )
             
@@ -266,7 +279,7 @@ class ChannelManager:
         Get the residences category from the server config.
         """
         category_id = self.db.execute_query(
-            "SELECT residences_category_id FROM server_config WHERE guild_id = ?",
+            "SELECT residences_category_id FROM server_config WHERE guild_id = %s",
             (guild.id,),
             fetch='one'
         )
@@ -289,13 +302,13 @@ class ChannelManager:
         
         # Get owner info
         owner_id = self.db.execute_query(
-            "SELECT owner_id FROM location_homes WHERE home_id = ?",
+            "SELECT owner_id FROM location_homes WHERE home_id = %s",
             (home_id,),
             fetch='one'
         )[0]
         
         owner_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (owner_id,),
             fetch='one'
         )[0]
@@ -303,7 +316,7 @@ class ChannelManager:
         # Get home customizations
         customizations = self.db.execute_query(
             '''SELECT wall_color, floor_type, lighting_style, furniture_style, ambiance
-               FROM home_customizations WHERE home_id = ?''',
+               FROM home_customizations WHERE home_id = %s''',
             (home_id,),
             fetch='one'
         )
@@ -370,7 +383,7 @@ class ChannelManager:
         )
         
         try:
-            await channel.send(embed=embed)
+            await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
             
             # Send activity buttons if available
             if activities:
@@ -382,7 +395,7 @@ class ChannelManager:
                         description="Choose an activity:",
                         color=0x00ff88
                     )
-                    await channel.send(embed=activity_embed, view=activity_view)
+                    await self.bot.send_with_cross_guild_broadcast(channel, embed=activity_embed, view=activity_view)
                 except ImportError:
                     pass
                     
@@ -439,7 +452,7 @@ class ChannelManager:
     async def give_user_home_access(self, user: discord.Member, home_id: int) -> bool:
         """Give a user access to a home's channel"""
         home_channel = self.db.execute_query(
-            "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+            "SELECT channel_id FROM home_interiors WHERE home_id = %s",
             (home_id,),
             fetch='one'
         )
@@ -461,7 +474,7 @@ class ChannelManager:
     async def remove_user_home_access(self, user: discord.Member, home_id: int) -> bool:
         """Remove a user's access to a home channel"""
         home_channel = self.db.execute_query(
-            "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+            "SELECT channel_id FROM home_interiors WHERE home_id = %s",
             (home_id,),
             fetch='one'
         )
@@ -492,7 +505,7 @@ class ChannelManager:
         
         # Clear from database
         self.db.execute_query(
-            "UPDATE home_interiors SET channel_id = NULL WHERE channel_id = ?",
+            "UPDATE home_interiors SET channel_id = NULL WHERE channel_id = %s",
             (channel_id,)
         )
     async def get_location_statistics(self, guild: discord.Guild) -> dict:
@@ -516,7 +529,7 @@ class ChannelManager:
         
         # Get recently active channels (last 24 hours)
         recently_active = self.db.execute_query(
-            "SELECT COUNT(*) FROM locations WHERE channel_id IS NOT NULL AND channel_last_active > datetime('now', '-24 hours')",
+            "SELECT COUNT(*) FROM locations WHERE channel_id IS NOT NULL AND channel_last_active > NOW() - INTERVAL '24 hours'",
             fetch='one'
         )[0]
         
@@ -587,13 +600,16 @@ class ChannelManager:
                 reason=f"On-demand creation for location: {name}"
             )
             
-            # Update database with channel info
+            # Store channel in guild-specific tracking table
             current_time = datetime.now()
             self.db.execute_query(
-                '''UPDATE locations 
-                   SET channel_id = ?, channel_last_active = ?
-                   WHERE location_id = ?''',
-                (channel.id, current_time, loc_id)
+                '''INSERT INTO guild_location_channels 
+                   (guild_id, location_id, channel_id, channel_last_active)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (guild_id, location_id) DO UPDATE SET
+                   channel_id = EXCLUDED.channel_id,
+                   channel_last_active = EXCLUDED.channel_last_active''',
+                (guild.id, loc_id, channel.id, current_time)
             )
             
             # Send welcome message to channel with available routes
@@ -646,7 +662,7 @@ class ChannelManager:
         
         # Get category ID from server config
         category_id = self.db.execute_query(
-            f"SELECT {config_column} FROM server_config WHERE guild_id = ?",
+            f"SELECT {config_column} FROM server_config WHERE guild_id = %s",
             (guild.id,),
             fetch='one'
         )
@@ -704,7 +720,7 @@ class ChannelManager:
             '''SELECT f.name, f.emoji, lo.custom_name, lo.docking_fee
                FROM location_ownership lo
                JOIN factions f ON lo.faction_id = f.faction_id
-               WHERE lo.location_id = ?''',
+               WHERE lo.location_id = %s''',
             (loc_id,),
             fetch='one'
         )
@@ -713,7 +729,7 @@ class ChannelManager:
         services_info = self.db.execute_query(
             '''SELECT has_jobs, has_shops, has_medical, has_repairs, has_fuel, has_upgrades, population,
                       has_federal_supplies, has_black_market, has_shipyard, gate_status, reconnection_eta
-               FROM locations WHERE location_id = ?''',
+               FROM locations WHERE location_id = %s''',
             (loc_id,),
             fetch='one'
         )
@@ -728,7 +744,7 @@ class ChannelManager:
         homes_info = self.db.execute_query(
             '''SELECT COUNT(*), MIN(price), MAX(price), home_type
                FROM location_homes 
-               WHERE location_id = ? AND is_available = 1
+               WHERE location_id = %s AND is_available = 1
                GROUP BY home_type''',
             (loc_id,),
             fetch='all'
@@ -778,7 +794,7 @@ class ChannelManager:
                 if reconnection_eta:
                     from datetime import datetime
                     try:
-                        eta = datetime.fromisoformat(reconnection_eta.replace('Z', '+00:00'))
+                        eta = safe_datetime_parse(reconnection_eta.replace('Z', '+00:00'))
                         now = datetime.now()
                         time_diff = eta - now
                         if time_diff.total_seconds() > 0:
@@ -913,7 +929,7 @@ class ChannelManager:
         
         # LOGBOOK PRESENCE
         log_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM location_logs WHERE location_id = ?",
+            "SELECT COUNT(*) FROM location_logs WHERE location_id = %s",
             (loc_id,),
             fetch='one'
         )[0]
@@ -926,30 +942,30 @@ class ChannelManager:
         routes = self.db.execute_query(
             '''SELECT c.name,
                       CASE 
-                          WHEN c.origin_location = ? THEN l_dest.name
+                          WHEN c.origin_location = %s THEN l_dest.name
                           ELSE l_orig.name
                       END AS dest_name,
                       CASE 
-                          WHEN c.origin_location = ? THEN l_dest.location_type
+                          WHEN c.origin_location = %s THEN l_dest.location_type
                           ELSE l_orig.location_type
                       END AS dest_type,
                       c.travel_time, c.danger_level,
                       CASE 
-                          WHEN c.origin_location = ? THEN l_dest.location_id
+                          WHEN c.origin_location = %s THEN l_dest.location_id
                           ELSE l_orig.location_id
                       END AS dest_id,
                       lo.location_type as origin_type,
                       CASE WHEN lo.system_name = CASE 
-                          WHEN c.origin_location = ? THEN l_dest.system_name
+                          WHEN c.origin_location = %s THEN l_dest.system_name
                           ELSE l_orig.system_name
                       END THEN 1 ELSE 0 END AS same_system,
                       c.corridor_type
                FROM corridors c
                JOIN locations l_dest ON c.destination_location = l_dest.location_id
                JOIN locations l_orig ON c.origin_location = l_orig.location_id
-               JOIN locations lo ON ? = lo.location_id
-               WHERE (c.origin_location = ? OR (c.destination_location = ? AND c.is_bidirectional = 1)) 
-               AND c.is_active = 1
+               JOIN locations lo ON %s = lo.location_id
+               WHERE (c.origin_location = %s OR (c.destination_location = %s AND c.is_bidirectional = 1)) 
+               AND c.is_active = true
                ORDER BY c.travel_time''',
             (loc_id, loc_id, loc_id, loc_id, loc_id, loc_id, loc_id),
             fetch='all'
@@ -1071,7 +1087,7 @@ class ChannelManager:
         """Update channel name when location is renamed by faction"""
         # Get current channel
         channel_info = self.db.execute_query(
-            "SELECT channel_id, location_type FROM locations WHERE location_id = ?",
+            "SELECT channel_id, location_type FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -1097,7 +1113,7 @@ class ChannelManager:
         
         # Get character name and reputation
         char_data = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (user.id,),
             fetch='one'
         )
@@ -1109,7 +1125,7 @@ class ChannelManager:
         
         # Get location name
         location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )[0]
@@ -1124,7 +1140,7 @@ class ChannelManager:
         )
         
         try:
-            await channel.send(embed=embed)
+            await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
         except Exception as e:
             print(f"❌ Failed to send arrival message to {channel.name}: {e}")
 
@@ -1133,14 +1149,14 @@ class ChannelManager:
         
         # Check if other players are present (excluding the departing player)
         other_players = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE current_location = ? AND user_id != ? AND is_logged_in = 1",
+            "SELECT COUNT(*) FROM characters WHERE current_location = %s AND user_id != %s AND is_logged_in = true",
             (location_id, user.id),
             fetch='one'
         )[0]
         
         # Also check if anyone is traveling TO this location
         travelers_coming = self.db.execute_query(
-            "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = ? AND status = 'traveling'",
+            "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = %s AND status = 'traveling'",
             (location_id,),
             fetch='one'
         )[0]
@@ -1151,7 +1167,7 @@ class ChannelManager:
         
         # Get character name
         char_data = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (user.id,),
             fetch='one'
         )
@@ -1163,7 +1179,7 @@ class ChannelManager:
         
         # Get location name
         location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )[0]
@@ -1178,7 +1194,7 @@ class ChannelManager:
         )
         
         try:
-            await channel.send(embed=embed)
+            await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
         except Exception as e:
             print(f"❌ Failed to send departure message to {channel.name}: {e}")
 
@@ -1192,7 +1208,7 @@ class ChannelManager:
         
         # Get user's reputation at this location
         reputation_data = self.db.execute_query(
-            "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+            "SELECT reputation FROM character_reputation WHERE user_id = %s AND location_id = %s",
             (user_id, location_id),
             fetch='one'
         )
@@ -1242,7 +1258,7 @@ class ChannelManager:
         """
         current_time = datetime.now()
         self.db.execute_query(
-            "UPDATE locations SET channel_last_active = ? WHERE location_id = ?",
+            "UPDATE locations SET channel_last_active = %s WHERE location_id = %s",
             (current_time, location_id)
         )
     
@@ -1302,11 +1318,8 @@ class ChannelManager:
         """
         Remove a user's access to a location channel and clean up their messages
         """
-        location_info = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
+        # Use guild-specific channel lookup
+        location_info = self.get_channel_id_from_location(user.guild.id, location_id)
         
         if not location_info or not location_info[0]:
             return True  # No channel exists, so access is already "removed"
@@ -1339,29 +1352,31 @@ class ChannelManager:
         
         try:
             # Use read-only query with timeout
+            # Get empty channels for this specific guild
             empty_channels = self.db.execute_read_query(
-                '''SELECT l.location_id, l.channel_id, l.name,
-                          COUNT(CASE WHEN c.is_logged_in = 1 THEN c.user_id END) as logged_in_count
-                   FROM locations l
-                   LEFT JOIN characters c ON l.location_id = c.current_location
-                   WHERE l.channel_id IS NOT NULL 
-                   AND (l.channel_last_active IS NULL OR l.channel_last_active < ?)
-                   GROUP BY l.location_id, l.channel_id, l.name
-                   HAVING logged_in_count = 0
+                '''SELECT glc.location_id, glc.channel_id, l.name,
+                          COUNT(CASE WHEN c.is_logged_in = true AND c.guild_id = %s THEN c.user_id END) as logged_in_count
+                   FROM guild_location_channels glc
+                   JOIN locations l ON glc.location_id = l.location_id
+                   LEFT JOIN characters c ON l.location_id = c.current_location AND c.guild_id = %s
+                   WHERE glc.guild_id = %s
+                   AND (glc.channel_last_active IS NULL OR glc.channel_last_active < %s)
+                   GROUP BY glc.location_id, glc.channel_id, l.name
+                   HAVING COUNT(CASE WHEN c.is_logged_in = true AND c.guild_id = %s THEN c.user_id END) = 0
                    LIMIT 3''',  # Reduced from 5 to avoid conflicts
-                (cutoff_time,),
+                (guild.id, guild.id, guild.id, cutoff_time, guild.id),
                 fetch='all'
             )
             
             # Also check for empty ship channels with read-only query
             empty_ship_channels = self.db.execute_read_query(
                 '''SELECT s.ship_id, s.channel_id, s.name,
-                          COUNT(CASE WHEN c.is_logged_in = 1 THEN c.user_id END) as logged_in_count
+                          COUNT(CASE WHEN c.is_logged_in = true THEN c.user_id END) as logged_in_count
                    FROM ships s
                    LEFT JOIN characters c ON s.ship_id = c.current_ship_id
                    WHERE s.channel_id IS NOT NULL
                    GROUP BY s.ship_id, s.channel_id, s.name
-                   HAVING logged_in_count = 0
+                   HAVING COUNT(CASE WHEN c.is_logged_in = true THEN c.user_id END) = 0
                    LIMIT 2''',  # Reduced limit
                 fetch='all'
             )
@@ -1369,13 +1384,13 @@ class ChannelManager:
             # Also check for empty home channels with read-only query
             empty_home_channels = self.db.execute_read_query(
                 '''SELECT hi.home_id, hi.channel_id, lh.home_name,
-                          COUNT(CASE WHEN c.is_logged_in = 1 THEN c.user_id END) as logged_in_count
+                          COUNT(CASE WHEN c.is_logged_in = true THEN c.user_id END) as logged_in_count
                    FROM home_interiors hi
                    JOIN location_homes lh ON hi.home_id = lh.home_id
                    LEFT JOIN characters c ON lh.home_id = c.current_home_id
                    WHERE hi.channel_id IS NOT NULL
                    GROUP BY hi.home_id, hi.channel_id, lh.home_name
-                   HAVING logged_in_count = 0
+                   HAVING COUNT(CASE WHEN c.is_logged_in = true THEN c.user_id END) = 0
                    LIMIT 2''',  # Reduced limit
                 fetch='all'
             )
@@ -1393,24 +1408,28 @@ class ChannelManager:
                 try:
                     # Additional check: make sure no one is traveling TO this location
                     travelers_coming = self.db.execute_read_query(
-                        "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = ? AND status = 'traveling'",
+                        "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = %s AND status = 'traveling'",
                         (location_id,),
                         fetch='one'
                     )[0]
                     
                     if travelers_coming == 0:
-                        await channel.delete(reason="Automated cleanup - no logged-in players")
-                        print(f"🧹 Auto-cleaned channel #{channel.name} for {location_name} (no logged-in players)")
+                        await channel.delete(reason="Automated cleanup - no guild members")
+                        print(f"🧹 Auto-cleaned channel #{channel.name} for {location_name} (no guild members)")
                         cleaned_count += 1
                         
-                        # Update database after successful deletion
+                        # Remove from guild-specific channel tracking
                         self.db.execute_query(
-                            "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
-                            (location_id,)
+                            "DELETE FROM guild_location_channels WHERE guild_id = %s AND location_id = %s",
+                            (guild.id, location_id)
                         )
                     else:
                         # Someone is traveling here, update activity to keep channel
-                        await self._update_channel_activity(location_id)
+                        current_time = datetime.now()
+                        self.db.execute_query(
+                            "UPDATE guild_location_channels SET channel_last_active = %s WHERE guild_id = %s AND location_id = %s",
+                            (current_time, guild.id, location_id)
+                        )
                         continue
                             
                 except Exception as e:
@@ -1430,7 +1449,7 @@ class ChannelManager:
                     
                     # Update database after successful deletion
                     self.db.execute_query(
-                        "UPDATE ships SET channel_id = NULL WHERE ship_id = ?",
+                        "UPDATE ships SET channel_id = NULL WHERE ship_id = %s",
                         (ship_id,)
                     )
                 except Exception as e:
@@ -1450,7 +1469,7 @@ class ChannelManager:
                     
                     # Update database after successful deletion
                     self.db.execute_query(
-                        "UPDATE home_interiors SET channel_id = NULL WHERE home_id = ?",
+                        "UPDATE home_interiors SET channel_id = NULL WHERE home_id = %s",
                         (home_id,)
                     )
                 except Exception as e:
@@ -1469,7 +1488,7 @@ class ChannelManager:
         
         # Check if ship has any LOGGED-IN players
         logged_in_players = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE current_ship_id = ? AND is_logged_in = 1",
+            "SELECT COUNT(*) FROM characters WHERE current_ship_id = %s AND is_logged_in = true",
             (ship_id,),
             fetch='one'
         )[0]
@@ -1477,7 +1496,7 @@ class ChannelManager:
         if logged_in_players == 0:
             # Get ship channel info
             ship_info = self.db.execute_query(
-                "SELECT channel_id, name FROM ships WHERE ship_id = ?",
+                "SELECT channel_id, name FROM ships WHERE ship_id = %s",
                 (ship_id,),
                 fetch='one'
             )
@@ -1490,7 +1509,7 @@ class ChannelManager:
                         print(f"🧹 Immediately cleaned up ship channel for: {ship_info[1]} (no logged-in players)")
                         
                         self.db.execute_query(
-                            "UPDATE ships SET channel_id = NULL WHERE ship_id = ?",
+                            "UPDATE ships SET channel_id = NULL WHERE ship_id = %s",
                             (ship_id,)
                         )
                     except Exception as e:
@@ -1503,7 +1522,7 @@ class ChannelManager:
         
         # Check if home has any LOGGED-IN players
         logged_in_players = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE current_home_id = ? AND is_logged_in = 1",
+            "SELECT COUNT(*) FROM characters WHERE current_home_id = %s AND is_logged_in = true",
             (home_id,),
             fetch='one'
         )[0]
@@ -1511,7 +1530,7 @@ class ChannelManager:
         if logged_in_players == 0:
             # Get home channel info
             home_info = self.db.execute_query(
-                "SELECT hi.channel_id, lh.home_name FROM home_interiors hi JOIN location_homes lh ON hi.home_id = lh.home_id WHERE hi.home_id = ?",
+                "SELECT hi.channel_id, lh.home_name FROM home_interiors hi JOIN location_homes lh ON hi.home_id = lh.home_id WHERE hi.home_id = %s",
                 (home_id,),
                 fetch='one'
             )
@@ -1524,7 +1543,7 @@ class ChannelManager:
                         print(f"🧹 Immediately cleaned up home channel for: {home_info[1]} (no logged-in players)")
                         
                         self.db.execute_query(
-                            "UPDATE home_interiors SET channel_id = NULL WHERE home_id = ?",
+                            "UPDATE home_interiors SET channel_id = NULL WHERE home_id = %s",
                             (home_id,)
                         )
                     except Exception as e:
@@ -1538,9 +1557,9 @@ class ChannelManager:
         current_channels = self.db.execute_query(
             '''SELECT COUNT(DISTINCT l.location_id)
                FROM locations l
-               LEFT JOIN characters c ON l.location_id = c.current_location AND c.is_logged_in = 1
+               LEFT JOIN characters c ON l.location_id = c.current_location AND c.is_logged_in = true
                WHERE l.channel_id IS NOT NULL 
-               AND (c.user_id IS NOT NULL OR l.channel_last_active > datetime('now', '-1 hour'))''',
+               AND (c.user_id IS NOT NULL OR l.channel_last_active > NOW() - INTERVAL '1 hours')''',
             fetch='one'
         )[0]
         
@@ -1563,11 +1582,11 @@ class ChannelManager:
                FROM locations l
                LEFT JOIN characters c ON l.location_id = c.current_location
                WHERE l.channel_id IS NOT NULL 
-               AND (l.channel_last_active IS NULL OR l.channel_last_active < ?)
+               AND (l.channel_last_active IS NULL OR l.channel_last_active < %s)
                GROUP BY l.location_id, l.channel_id, l.name, l.channel_last_active
                HAVING player_count = 0
                ORDER BY l.channel_last_active ASC
-               LIMIT ?''',
+               LIMIT %s''',
             (cutoff_time, self.cleanup_batch_size),
             fetch='all'
         )
@@ -1598,7 +1617,7 @@ class ChannelManager:
             
             # Clear channel reference from database
             self.db.execute_query(
-                "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
+                "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = %s",
                 (location_id,)
             )
         
@@ -1628,16 +1647,16 @@ class ChannelManager:
         # Wait just a moment for database to update
         await asyncio.sleep(5)
         
-        # IMPROVED: Check if location has any LOGGED-IN players (excluding those inside ships)
+        # Check if location has any LOGGED-IN players from this guild (excluding those inside ships)
         logged_in_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE current_location = ? AND is_logged_in = 1 AND current_ship_id IS NULL",
-            (location_id,),
+            "SELECT COUNT(*) FROM characters WHERE current_location = %s AND is_logged_in = true AND current_ship_id IS NULL AND guild_id = %s",
+            (location_id, guild.id),
             fetch='one'
         )[0]
         
         # Also check if anyone is traveling TO this location
         travelers_coming = self.db.execute_query(
-            "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = ? AND status = 'traveling'",
+            "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = %s AND status = 'traveling'",
             (location_id,),
             fetch='one'
         )[0]
@@ -1645,23 +1664,24 @@ class ChannelManager:
         print(f"🔍 Cleanup check for location {location_id}: logged_in_count={logged_in_count}, travelers_coming={travelers_coming}")
         
         if logged_in_count == 0 and travelers_coming == 0:
-            # Get channel info
-            location_info = self.db.execute_query(
-                "SELECT channel_id, name FROM locations WHERE location_id = ?",
-                (location_id,),
+            # Get guild-specific channel info
+            guild_channel_info = self.db.execute_query(
+                "SELECT glc.channel_id, l.name FROM guild_location_channels glc JOIN locations l ON glc.location_id = l.location_id WHERE glc.guild_id = %s AND glc.location_id = %s",
+                (guild.id, location_id),
                 fetch='one'
             )
             
-            if location_info and location_info[0]:
-                channel = guild.get_channel(location_info[0])
+            if guild_channel_info and guild_channel_info[0]:
+                channel = guild.get_channel(guild_channel_info[0])
                 if channel:
                     try:
-                        await channel.delete(reason="No logged-in players at location")
-                        print(f"🧹 Immediately cleaned up channel for location: {location_info[1]} (no logged-in players)")
+                        await channel.delete(reason="No guild members at location")
+                        print(f"🧹 Immediately cleaned up channel for location: {guild_channel_info[1]} (no guild members)")
                         
+                        # Remove from guild-specific channel tracking
                         self.db.execute_query(
-                            "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
-                            (location_id,)
+                            "DELETE FROM guild_location_channels WHERE guild_id = %s AND location_id = %s",
+                            (guild.id, location_id)
                         )
                     except Exception as e:
                         print(f"❌ Failed to cleanup empty location channel: {e}")
@@ -1673,7 +1693,7 @@ class ChannelManager:
         try:
             # Get transit category from config
             transit_category_id = self.db.execute_query(
-                "SELECT transit_category_id FROM server_config WHERE guild_id = ?",
+                "SELECT transit_category_id FROM server_config WHERE guild_id = %s",
                 (guild.id,),
                 fetch='one'
             )
@@ -1719,7 +1739,7 @@ class ChannelManager:
                 
             # Get custom destination name (removed the extra 'try' from here)
             dest_location = self.db.execute_query(
-                "SELECT location_id FROM locations WHERE name = ?",
+                "SELECT location_id FROM locations WHERE name = %s",
                 (destination,),
                 fetch='one'
             )
@@ -1739,7 +1759,7 @@ class ChannelManager:
                        FROM corridors c
                        JOIN locations lo ON c.origin_location = lo.location_id
                        JOIN locations ld ON c.destination_location = ld.location_id
-                       WHERE c.name = ? AND c.is_active = 1
+                       WHERE c.name = %s AND c.is_active = true
                        LIMIT 1''',
                     (corridor_name,),
                     fetch='one'
@@ -1756,7 +1776,7 @@ class ChannelManager:
                            FROM corridors c
                            JOIN locations lo ON c.origin_location = lo.location_id
                            JOIN locations ld ON c.destination_location = ld.location_id
-                           WHERE c.name = ? AND c.is_active = 1
+                           WHERE c.name = %s AND c.is_active = true
                            LIMIT 1''',
                         (corridor_name,),
                         fetch='one'
@@ -1845,7 +1865,7 @@ class ChannelManager:
                        FROM characters c
                        JOIN ships s ON c.active_ship_id = s.ship_id
                        LEFT JOIN ship_customization sc ON s.ship_id = sc.ship_id
-                       WHERE c.user_id = ?''',
+                       WHERE c.user_id = %s''',
                     (target.id,),
                     fetch='one'
                 )
@@ -1914,7 +1934,7 @@ class ChannelManager:
                     paint_job = ship_data[4] if len(ship_data) >= 5 else None
                     
                     char_name = self.db.execute_query(
-                        "SELECT name FROM characters WHERE user_id = ?",
+                        "SELECT name FROM characters WHERE user_id = %s",
                         (traveler.id,),
                         fetch='one'
                     )[0]
@@ -1971,14 +1991,14 @@ class ChannelManager:
         )
         
         try:
-            await channel.send(embed=embed)
+            await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
             
             # Send ship activity buttons for single traveler
             if len(travelers) == 1 and travelers[0].id in member_ships:
                 ship_data = member_ships[travelers[0].id]
                 ship_id, ship_name, _, _ = ship_data[:4]
                 char_name = self.db.execute_query(
-                    "SELECT name FROM characters WHERE user_id = ?",
+                    "SELECT name FROM characters WHERE user_id = %s",
                     (travelers[0].id,),
                     fetch='one'
                 )[0]
@@ -1993,7 +2013,7 @@ class ChannelManager:
                         description="Pass the time during transit with your ship's facilities:",
                         color=0x00ff88
                     )
-                    await channel.send(embed=activity_embed, view=activity_view)
+                    await self.bot.send_with_cross_guild_broadcast(channel, embed=activity_embed, view=activity_view)
                     
         except Exception as e:
             print(f"❌ Failed to send transit welcome: {e}")
@@ -2004,38 +2024,39 @@ class ChannelManager:
         
         # Handle location cleanup if provided
         if location_id:
-            # Check if location has any LOGGED-IN players
+            # Check if location has any LOGGED-IN players from this specific guild
             logged_in_players = self.db.execute_query(
-                "SELECT COUNT(*) FROM characters WHERE current_location = ? AND is_logged_in = 1",
-                (location_id,),
+                "SELECT COUNT(*) FROM characters WHERE current_location = %s AND is_logged_in = true AND guild_id = %s",
+                (location_id, guild.id),
                 fetch='one'
             )[0]
             
             # Also check if anyone is traveling TO this location
             travelers_coming = self.db.execute_query(
-                "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = ? AND status = 'traveling'",
+                "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = %s AND status = 'traveling'",
                 (location_id,),
                 fetch='one'
             )[0]
             
             if logged_in_players == 0 and travelers_coming == 0:
-                # Get channel info
-                location_info = self.db.execute_query(
-                    "SELECT channel_id, name FROM locations WHERE location_id = ?",
-                    (location_id,),
+                # Get guild-specific channel info
+                guild_channel_info = self.db.execute_query(
+                    "SELECT glc.channel_id, l.name FROM guild_location_channels glc JOIN locations l ON glc.location_id = l.location_id WHERE glc.guild_id = %s AND glc.location_id = %s",
+                    (guild.id, location_id),
                     fetch='one'
                 )
                 
-                if location_info and location_info[0]:
-                    channel = guild.get_channel(location_info[0])
+                if guild_channel_info and guild_channel_info[0]:
+                    channel = guild.get_channel(guild_channel_info[0])
                     if channel:
                         try:
-                            await channel.delete(reason="Last logged-in player left location")
-                            print(f"🧹 Logout cleanup: removed channel for {location_info[1]} (no logged-in players)")
+                            await channel.delete(reason="Last guild member left location")
+                            print(f"🧹 Logout cleanup: removed channel for {guild_channel_info[1]} (no guild members)")
                             
+                            # Remove from guild-specific channel tracking
                             self.db.execute_query(
-                                "UPDATE locations SET channel_id = NULL, channel_last_active = NULL WHERE location_id = ?",
-                                (location_id,)
+                                "DELETE FROM guild_location_channels WHERE guild_id = %s AND location_id = %s",
+                                (guild.id, location_id)
                             )
                         except Exception as e:
                             print(f"❌ Failed to cleanup location channel during logout: {e}")
@@ -2080,7 +2101,7 @@ class ChannelManager:
             '''SELECT colony_category_id, station_category_id, outpost_category_id,
                       gate_category_id, transit_category_id, max_location_channels,
                       channel_timeout_hours, auto_cleanup_enabled, setup_completed
-               FROM server_config WHERE guild_id = ?''',
+               FROM server_config WHERE guild_id = %s''',
             (guild.id,),
             fetch='one'
         )
@@ -2118,7 +2139,7 @@ class ChannelManager:
             else:
                 # Channel was deleted, clear the reference
                 self.db.execute_query(
-                    "UPDATE ships SET channel_id = NULL WHERE ship_id = ?",
+                    "UPDATE ships SET channel_id = NULL WHERE ship_id = %s",
                     (ship_id,)
                 )
         
@@ -2164,7 +2185,7 @@ class ChannelManager:
             
             # Update database with channel info
             self.db.execute_query(
-                "UPDATE ships SET channel_id = ? WHERE ship_id = ?",
+                "UPDATE ships SET channel_id = %s WHERE ship_id = %s",
                 (channel.id, ship_id)
             )
             
@@ -2196,12 +2217,227 @@ class ChannelManager:
         
         return f"{ship_prefix}-{safe_name}"
 
+    async def get_cross_guild_location_channels(self, location_id: int, exclude_guild_id: int = None) -> List[Tuple[discord.Guild, discord.TextChannel]]:
+        """
+        Get equivalent location channels across all guilds for cross-guild broadcasting.
+        Returns list of (guild, channel) tuples for guilds with active players in the location.
+        """
+        cross_guild_channels = []
+        
+        # Get location info for reference
+        location_info = self.db.execute_query(
+            "SELECT name, location_type FROM locations WHERE location_id = %s",
+            (location_id,),
+            fetch='one'
+        )
+        
+        if not location_info:
+            print(f"DEBUG: Location {location_id} not found in database")
+            return []
+            
+        location_name, location_type = location_info
+        print(f"DEBUG: Looking for cross-guild channels for location {location_name} (ID: {location_id})")
+        
+        # Get all guilds the bot is connected to
+        for guild in self.bot.guilds:
+            # Skip the originating guild to prevent duplication
+            if exclude_guild_id and guild.id == exclude_guild_id:
+                print(f"DEBUG: Skipping originating guild {guild.name}")
+                continue
+                
+            print(f"DEBUG: Checking guild {guild.name} for players at location {location_id}")
+            
+            # Check if any logged-in players are present in this location
+            players_present = self.db.execute_query(
+                "SELECT COUNT(*) FROM characters WHERE current_location = %s AND is_logged_in = true",
+                (location_id,),
+                fetch='one'
+            )[0]
+            
+            print(f"DEBUG: Guild {guild.name} has {players_present} players at location {location_id}")
+            
+            if players_present == 0:
+                continue
+            
+            # Find the location channel in this guild using multiple methods
+            channel = await self._find_location_channel_in_guild(guild, location_id, location_name, location_type)
+            
+            if channel and channel.permissions_for(guild.me).send_messages:
+                print(f"DEBUG: Found channel {channel.name} in guild {guild.name}")
+                cross_guild_channels.append((guild, channel))
+            else:
+                print(f"DEBUG: No suitable channel found in guild {guild.name}")
+        
+        print(f"DEBUG: Total cross-guild channels found: {len(cross_guild_channels)}")
+        return cross_guild_channels
+
+    async def _find_location_channel_in_guild(self, guild: discord.Guild, location_id: int, location_name: str, location_type: str) -> Optional[discord.TextChannel]:
+        """
+        Find the location channel that corresponds to the given location_id in a specific guild.
+        Uses exact name matching as primary method for multi-guild support.
+        """
+        print(f"DEBUG: Searching for location channel in guild {guild.name} for location {location_name}")
+        
+        # PRIMARY METHOD: Exact channel name matching
+        expected_name = self._generate_channel_name(location_name, location_type)
+        print(f"DEBUG: Looking for channel with EXACT name: {expected_name}")
+        
+        for channel in guild.text_channels:
+            if channel.name == expected_name:
+                print(f"DEBUG: Found channel via EXACT name match: {channel.name}")
+                return channel
+        
+        print(f"DEBUG: No channel with exact name '{expected_name}' found in guild {guild.name}")
+        
+        # FALLBACK METHOD 1: Check stored channel_id in guild-specific table
+        stored_channel_ids = self.db.execute_query(
+            "SELECT channel_id FROM guild_location_channels WHERE guild_id = %s AND location_id = %s",
+            (guild.id, location_id),
+            fetch='one'
+        )
+        
+        if stored_channel_ids and stored_channel_ids[0]:
+            channel_id = stored_channel_ids[0]
+            print(f"DEBUG: Fallback - Looking for stored channel_id {channel_id} in guild {guild.name}")
+            channel = guild.get_channel(channel_id)
+            if channel:
+                print(f"DEBUG: Found channel via stored channel_id: {channel.name}")
+                return channel
+        
+        # FALLBACK METHOD 2: Reverse database lookup (least reliable for multi-guild)
+        print(f"DEBUG: Final fallback - Checking {len(guild.text_channels)} channels via database reverse lookup")
+        for channel in guild.text_channels:
+            location_check = self.db.execute_query(
+                "SELECT location_id FROM locations WHERE channel_id = %s",
+                (channel.id,),
+                fetch='one'
+            )
+            
+            if location_check and location_check[0] == location_id:
+                print(f"DEBUG: Found channel via reverse lookup: {channel.name}")
+                return channel
+        
+        print(f"DEBUG: No channel found for location {location_name} in guild {guild.name}")
+        return None
+
+    async def get_cross_guild_sub_location_channels(self, parent_location_id: int, sub_location_name: str, exclude_guild_id: int = None) -> List[Tuple[discord.Guild, discord.Thread]]:
+        """
+        Get equivalent sub-location threads across all guilds.
+        """
+        cross_guild_channels = []
+        
+        for guild in self.bot.guilds:
+            if exclude_guild_id and guild.id == exclude_guild_id:
+                continue
+                
+            # Check if any players are present in the parent location
+            players_present = self.db.execute_query(
+                "SELECT COUNT(*) FROM characters WHERE current_location = %s AND is_logged_in = true",
+                (parent_location_id,),
+                fetch='one'
+            )[0]
+            
+            if players_present == 0:
+                continue
+            
+            # Get sub-location thread for this guild
+            sub_location_data = self.db.execute_query(
+                "SELECT thread_id FROM sub_locations WHERE parent_location_id = %s AND name = %s",
+                (parent_location_id, sub_location_name),
+                fetch='one'
+            )
+            
+            if sub_location_data and sub_location_data[0]:
+                thread = guild.get_thread(sub_location_data[0])
+                if thread and thread.permissions_for(guild.me).send_messages:
+                    cross_guild_channels.append((guild, thread))
+        
+        return cross_guild_channels
+
+    async def get_cross_guild_ship_channels(self, ship_id: int, exclude_guild_id: int = None) -> List[Tuple[discord.Guild, discord.TextChannel]]:
+        """
+        Get equivalent ship interior channels across all guilds.
+        """
+        cross_guild_channels = []
+        
+        for guild in self.bot.guilds:
+            if exclude_guild_id and guild.id == exclude_guild_id:
+                continue
+                
+            # Check if any players are aboard this ship
+            players_aboard = self.db.execute_query(
+                "SELECT COUNT(*) FROM characters WHERE current_ship_id = %s AND is_logged_in = true",
+                (ship_id,),
+                fetch='one'
+            )[0]
+            
+            if players_aboard == 0:
+                continue
+            
+            # Get ship data
+            ship_data = self.db.execute_query(
+                "SELECT ship_id, ship_name, ship_type, interior_description, channel_id FROM ships WHERE ship_id = %s",
+                (ship_id,),
+                fetch='one'
+            )
+            
+            if not ship_data:
+                continue
+                
+            # Only use existing ship channels for cross-guild broadcasting
+            channel = None
+            if ship_data[4]:  # channel_id exists
+                channel = guild.get_channel(ship_data[4])
+            if channel and channel.permissions_for(guild.me).send_messages:
+                cross_guild_channels.append((guild, channel))
+        
+        return cross_guild_channels
+
+    async def get_cross_guild_home_channels(self, home_id: int, exclude_guild_id: int = None) -> List[Tuple[discord.Guild, discord.TextChannel]]:
+        """
+        Get equivalent home interior channels across all guilds.
+        """
+        cross_guild_channels = []
+        
+        for guild in self.bot.guilds:
+            if exclude_guild_id and guild.id == exclude_guild_id:
+                continue
+                
+            # Check if any players are in this home
+            players_present = self.db.execute_query(
+                "SELECT COUNT(*) FROM characters WHERE current_home_id = %s AND is_logged_in = true",
+                (home_id,),
+                fetch='one'
+            )[0]
+            
+            if players_present == 0:
+                continue
+            
+            # Get home data
+            home_data = self.db.execute_query(
+                "SELECT home_id, home_name, location_id, interior_description, channel_id FROM home_interiors WHERE home_id = %s",
+                (home_id,),
+                fetch='one'
+            )
+            
+            if not home_data:
+                continue
+                
+            # Only use existing home channels for cross-guild broadcasting  
+            channel = None
+            if home_data[4]:  # channel_id exists
+                channel = guild.get_channel(home_data[4])
+            if channel and channel.permissions_for(guild.me).send_messages:
+                cross_guild_channels.append((guild, channel))
+        
+        return cross_guild_channels
+
     async def _get_or_create_ship_category(self, guild: discord.Guild) -> Optional[discord.CategoryChannel]:
         """
         Get the ship interiors category from the server config.
         """
         category_id = self.db.execute_query(
-            "SELECT ship_interiors_category_id FROM server_config WHERE guild_id = ?",
+            "SELECT ship_interiors_category_id FROM server_config WHERE guild_id = %s",
             (guild.id,),
             fetch='one'
         )
@@ -2224,13 +2460,13 @@ class ChannelManager:
         
         # Get owner info
         owner_id = self.db.execute_query(
-            "SELECT owner_id FROM ships WHERE ship_id = ?",
+            "SELECT owner_id FROM ships WHERE ship_id = %s",
             (ship_id,),
             fetch='one'
         )[0]
         
         owner_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (owner_id,),
             fetch='one'
         )[0]
@@ -2275,7 +2511,7 @@ class ChannelManager:
         )
         
         try:
-            await channel.send(embed=embed)
+            await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
             
             # Send activity buttons
             if activities:
@@ -2293,7 +2529,7 @@ class ChannelManager:
     async def give_user_ship_access(self, user: discord.Member, ship_id: int) -> bool:
         """Give a user access to a ship's channel"""
         ship_info = self.db.execute_query(
-            "SELECT channel_id FROM ships WHERE ship_id = ?",
+            "SELECT channel_id FROM ships WHERE ship_id = %s",
             (ship_id,),
             fetch='one'
         )
@@ -2315,7 +2551,7 @@ class ChannelManager:
     async def remove_user_ship_access(self, user: discord.Member, ship_id: int) -> bool:
         """Remove a user's access to a ship channel"""
         ship_info = self.db.execute_query(
-            "SELECT channel_id FROM ships WHERE ship_id = ?",
+            "SELECT channel_id FROM ships WHERE ship_id = %s",
             (ship_id,),
             fetch='one'
         )
@@ -2333,6 +2569,46 @@ class ChannelManager:
         except Exception as e:
             print(f"❌ Failed to remove {user.name} ship access: {e}")
             return False
+
+    def get_location_from_channel_id(self, guild_id: int, channel_id: int) -> Optional[tuple]:
+        """
+        Get location information from a channel ID using the guild-specific channel system.
+        
+        Args:
+            guild_id: The guild ID to search in
+            channel_id: The Discord channel ID to look up
+            
+        Returns:
+            Tuple of (location_id, name, location_type) or None if not found
+        """
+        return self.db.execute_query(
+            """SELECT l.location_id, l.name, l.location_type 
+               FROM guild_location_channels glc 
+               JOIN locations l ON glc.location_id = l.location_id 
+               WHERE glc.guild_id = %s AND glc.channel_id = %s""",
+            (guild_id, channel_id),
+            fetch='one'
+        )
+
+    def get_channel_id_from_location(self, guild_id: int, location_id: int) -> Optional[tuple]:
+        """
+        Get channel information from a location ID using the guild-specific channel system.
+        
+        Args:
+            guild_id: The guild ID to search in
+            location_id: The location ID to look up
+            
+        Returns:
+            Tuple of (channel_id, location_name) or None if not found
+        """
+        return self.db.execute_query(
+            """SELECT glc.channel_id, l.name 
+               FROM guild_location_channels glc 
+               JOIN locations l ON glc.location_id = l.location_id 
+               WHERE glc.guild_id = %s AND glc.location_id = %s""",
+            (guild_id, location_id),
+            fetch='one'
+        )
 class CharacterDeleteConfirmView(discord.ui.View):
     def __init__(self, bot, user_id: int, char_name: str):
         super().__init__(timeout=60)
@@ -2348,7 +2624,7 @@ class CharacterDeleteConfirmView(discord.ui.View):
         
         # Get current location for channel cleanup
         char_data = self.bot.db.execute_query(
-            "SELECT current_location, ship_id FROM characters WHERE user_id = ?",
+            "SELECT current_location, ship_id FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -2360,30 +2636,30 @@ class CharacterDeleteConfirmView(discord.ui.View):
         current_location, ship_id = char_data
         
         # Delete character and associated data
-        self.bot.db.execute_query("DELETE FROM characters WHERE user_id = ?", (self.user_id,))
+        self.bot.db.execute_query("DELETE FROM characters WHERE user_id = %s", (self.user_id,))
 
         # Delete character identity (add this line)
-        self.bot.db.execute_query("DELETE FROM character_identity WHERE user_id = ?", (self.user_id,))
+        self.bot.db.execute_query("DELETE FROM character_identity WHERE user_id = %s", (self.user_id,))
         
         # Delete character inventory
-        self.bot.db.execute_query("DELETE FROM character_inventory WHERE user_id = ?", (self.user_id,))
-        self.bot.db.execute_query("DELETE FROM inventory WHERE owner_id = ?", (self.user_id,))
+        self.bot.db.execute_query("DELETE FROM character_inventory WHERE user_id = %s", (self.user_id,))
+        self.bot.db.execute_query("DELETE FROM inventory WHERE owner_id = %s", (self.user_id,))
 
         if ship_id:
-            self.bot.db.execute_query("DELETE FROM ships WHERE ship_id = ?", (ship_id,))
+            self.bot.db.execute_query("DELETE FROM ships WHERE ship_id = %s", (ship_id,))
         
         # Cancel any active travel
         self.bot.db.execute_query(
-            "UPDATE travel_sessions SET status = 'manual_deletion' WHERE user_id = ? AND status = 'traveling'",
+            "UPDATE travel_sessions SET status = 'manual_deletion' WHERE user_id = %s AND status = 'traveling'",
             (self.user_id,)
         )
         
         # Remove from any group
-        self.bot.db.execute_query("UPDATE characters SET group_id = NULL WHERE user_id = ?", (self.user_id,))
+        self.bot.db.execute_query("UPDATE characters SET group_id = NULL WHERE user_id = %s", (self.user_id,))
         
         # Cancel any jobs
         self.bot.db.execute_query(
-            "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL WHERE taken_by = ?",
+            "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL WHERE taken_by = %s",
             (self.user_id,)
         )
         

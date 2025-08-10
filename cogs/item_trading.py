@@ -33,7 +33,7 @@ class ItemTradingCog(commands.Cog):
         
         # Check if both players have characters
         giver_char = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -43,7 +43,7 @@ class ItemTradingCog(commands.Cog):
             return
         
         receiver_char = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (player.id,),
             fetch='one'
         )
@@ -66,7 +66,7 @@ class ItemTradingCog(commands.Cog):
         
         # Find the item in giver's inventory
         inventory_item = self.db.execute_query(
-            "SELECT item_id, item_name, quantity, item_type, description, value, metadata FROM inventory WHERE owner_id = ? AND LOWER(item_name) LIKE LOWER(?) AND quantity >= ?",
+            "SELECT item_id, item_name, quantity, item_type, description, value, metadata FROM inventory WHERE owner_id = %s AND LOWER(item_name) LIKE LOWER(%s) AND quantity >= %s",
             (interaction.user.id, f"%{item}%", quantity),
             fetch='one'
         )
@@ -83,38 +83,36 @@ class ItemTradingCog(commands.Cog):
         
         # Remove from giver's inventory
         if current_qty == quantity:
-            self.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (item_id,))
+            self.db.execute_query("DELETE FROM inventory WHERE item_id = %s", (item_id,))
         else:
             self.db.execute_query(
-                "UPDATE inventory SET quantity = quantity - ? WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity - %s WHERE item_id = %s",
                 (quantity, item_id)
             )
         
         # Add to receiver's inventory
         existing_item = self.db.execute_query(
-            "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+            "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
             (player.id, actual_name),
             fetch='one'
         )
         
         if existing_item:
             self.db.execute_query(
-                "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
+                "UPDATE inventory SET quantity = quantity + %s WHERE item_id = %s",
                 (quantity, existing_item[0])
             )
         else:
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                 (player.id, actual_name, item_type, quantity, description, value, metadata)
             )
         
-        # Send success message to location channel
-        location_info = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (giver_location,),
-            fetch='one'
-        )
+        # Send success message to location channels via cross-guild broadcast
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(giver_location)
         
         embed = discord.Embed(
             title="🤝 Item Transfer",
@@ -125,10 +123,11 @@ class ItemTradingCog(commands.Cog):
         embed.add_field(name="Quantity", value=f"{quantity}", inline=True)
         embed.add_field(name="Value", value=f"{value * quantity:,} credits", inline=True)
         
-        if location_info and location_info[0]:
-            channel = self.bot.get_channel(location_info[0])
-            if channel:
+        for guild_channel, channel in cross_guild_channels:
+            try:
                 await channel.send(embed=embed)
+            except:
+                pass  # Skip if can't send to this guild
         
         await interaction.response.send_message(f"✅ Successfully gave {quantity}x **{actual_name}** to {player.mention}!", ephemeral=True)
     
@@ -154,7 +153,7 @@ class ItemTradingCog(commands.Cog):
         
         # Check if both players have characters
         seller_char = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -164,7 +163,7 @@ class ItemTradingCog(commands.Cog):
             return
         
         buyer_char = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (player.id,),
             fetch='one'
         )
@@ -187,7 +186,7 @@ class ItemTradingCog(commands.Cog):
         
         # Find the item in seller's inventory
         inventory_item = self.db.execute_query(
-            "SELECT item_id, item_name, quantity, item_type, description, value FROM inventory WHERE owner_id = ? AND LOWER(item_name) LIKE LOWER(?) AND quantity >= ?",
+            "SELECT item_id, item_name, quantity, item_type, description, value FROM inventory WHERE owner_id = %s AND LOWER(item_name) LIKE LOWER(%s) AND quantity >= %s",
             (interaction.user.id, f"%{item}%", quantity),
             fetch='one'
         )
@@ -205,20 +204,13 @@ class ItemTradingCog(commands.Cog):
             await interaction.response.send_message("Price cannot be negative.", ephemeral=True)
             return
         
-        # Get location channel
-        location_info = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (seller_location,),
-            fetch='one'
-        )
+        # Get location channels for cross-guild broadcasting
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(seller_location)
         
-        if not location_info or not location_info[0]:
-            await interaction.response.send_message("Unable to find location channel for this trade.", ephemeral=True)
-            return
-        
-        channel = self.bot.get_channel(location_info[0])
-        if not channel:
-            await interaction.response.send_message("Location channel not accessible.", ephemeral=True)
+        if not cross_guild_channels:
+            await interaction.response.send_message("Unable to find location channels for this trade.", ephemeral=True)
             return
         
         # Create the trade offer view
@@ -250,9 +242,18 @@ class ItemTradingCog(commands.Cog):
         embed.add_field(name="💡 Instructions", value=f"{player.mention} can accept or decline this offer using the buttons below.", inline=False)
         embed.set_footer(text="This offer will expire in 5 minutes")
         
-        # Send to location channel
-        offer_message = await channel.send(embed=embed, view=view)
-        view.message = offer_message
+        # Send to location channels via cross-guild broadcast
+        offer_message = None
+        for guild_channel, channel in cross_guild_channels:
+            try:
+                msg = await channel.send(embed=embed, view=view)
+                if not offer_message:
+                    offer_message = msg  # Store first successful message for view
+            except:
+                pass  # Skip if can't send to this guild
+        
+        if offer_message:
+            view.message = offer_message
         
         await interaction.response.send_message(f"✅ Trade offer sent to {player.mention} in the location channel!", ephemeral=True)
 
@@ -302,7 +303,7 @@ class ItemTradingCog(commands.Cog):
         cleaned_count = 0
         for equipment_id, user_id, slot_name, item_id, character_name in ghost_equipment:
             self.db.execute_query(
-                "DELETE FROM character_equipment WHERE equipment_id = ?",
+                "DELETE FROM character_equipment WHERE equipment_id = %s",
                 (equipment_id,)
             )
             cleaned_count += 1
@@ -388,7 +389,7 @@ class TradeOfferView(discord.ui.View):
         
         # Check if buyer has enough money
         buyer_money = self.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?",
+            "SELECT money FROM characters WHERE user_id = %s",
             (self.buyer_id,),
             fetch='one'
         )
@@ -412,7 +413,7 @@ class TradeOfferView(discord.ui.View):
         
         # Check if seller still has the item
         seller_item = self.db.execute_query(
-            "SELECT quantity FROM inventory WHERE item_id = ? AND owner_id = ?",
+            "SELECT quantity FROM inventory WHERE item_id = %s AND owner_id = %s",
             (self.item_id, self.seller_id),
             fetch='one'
         )
@@ -435,17 +436,17 @@ class TradeOfferView(discord.ui.View):
         try:
             # Transfer money from buyer to seller
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                "UPDATE characters SET money = money - %s WHERE user_id = %s",
                 (self.price, self.buyer_id)
             )
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (self.price, self.seller_id)
             )
             
             # Get item details for transfer
             item_details = self.bot.db.execute_query(
-                "SELECT item_name, item_type, description, value, metadata FROM inventory WHERE item_id = ?",
+                "SELECT item_name, item_type, description, value, metadata FROM inventory WHERE item_id = %s",
                 (self.item_id,),
                 fetch='one'
             )
@@ -473,29 +474,29 @@ class TradeOfferView(discord.ui.View):
             
             # Remove item from seller
             if seller_item[0] == self.quantity:
-                self.bot.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (self.item_id,))
+                self.bot.db.execute_query("DELETE FROM inventory WHERE item_id = %s", (self.item_id,))
             else:
                 self.bot.db.execute_query(
-                    "UPDATE inventory SET quantity = quantity - ? WHERE item_id = ?",
+                    "UPDATE inventory SET quantity = quantity - %s WHERE item_id = %s",
                     (self.quantity, self.item_id)
                 )
             
             # Add item to buyer
             existing_item = self.bot.db.execute_query(
-                "SELECT item_id, quantity FROM inventory WHERE owner_id = ? AND item_name = ?",
+                "SELECT item_id, quantity FROM inventory WHERE owner_id = %s AND item_name = %s",
                 (self.buyer_id, actual_name),
                 fetch='one'
             )
             
             if existing_item:
                 self.bot.db.execute_query(
-                    "UPDATE inventory SET quantity = quantity + ? WHERE item_id = ?",
+                    "UPDATE inventory SET quantity = quantity + %s WHERE item_id = %s",
                     (self.quantity, existing_item[0])
                 )
             else:
                 self.bot.db.execute_query(
                     '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)''',
                     (self.buyer_id, actual_name, item_type, self.quantity, description, value, metadata)
                 )
             

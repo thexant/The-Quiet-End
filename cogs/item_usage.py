@@ -25,7 +25,7 @@ class ItemUsageCog(commands.Cog):
     async def use_item(self, interaction: discord.Interaction, item_name: str):
         # MODIFY THIS QUERY TO INCLUDE CHARACTER NAME
         char_data = self.db.execute_query(
-            "SELECT user_id, current_location, hp, max_hp, name FROM characters WHERE user_id = ?",
+            "SELECT user_id, current_location, hp, max_hp, name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -41,7 +41,7 @@ class ItemUsageCog(commands.Cog):
         item_data = self.db.execute_query(
             '''SELECT item_id, item_name, item_type, quantity, description, value, metadata
                FROM inventory 
-               WHERE owner_id = ? AND LOWER(item_name) LIKE LOWER(?) AND quantity > 0''',
+               WHERE owner_id = %s AND LOWER(item_name) LIKE LOWER(%s) AND quantity > 0''',
             (interaction.user.id, f"%{item_name}%"),
             fetch='one'
         )
@@ -93,10 +93,10 @@ class ItemUsageCog(commands.Cog):
                 if single_use or uses_remaining == 1:
                     # Remove item completely
                     if quantity == 1:
-                        self.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (item_id,))
+                        self.db.execute_query("DELETE FROM inventory WHERE item_id = %s", (item_id,))
                     else:
                         self.db.execute_query(
-                            "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = ?",
+                            "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = %s",
                             (item_id,)
                         )
                     item_consumed = True
@@ -109,7 +109,7 @@ class ItemUsageCog(commands.Cog):
                     new_metadata = json.dumps(metadata)
                     
                     self.db.execute_query(
-                        "UPDATE inventory SET metadata = ? WHERE item_id = ?",
+                        "UPDATE inventory SET metadata = %s WHERE item_id = %s",
                         (new_metadata, item_id)
                     )
                     
@@ -161,10 +161,10 @@ class ItemUsageCog(commands.Cog):
         if single_use or (uses_remaining and uses_remaining <= 1):
             # Remove item completely
             if quantity == 1:
-                self.db.execute_query("DELETE FROM inventory WHERE item_id = ?", (item_id,))
+                self.db.execute_query("DELETE FROM inventory WHERE item_id = %s", (item_id,))
             else:
                 self.db.execute_query(
-                    "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = ?", 
+                    "UPDATE inventory SET quantity = quantity - 1 WHERE item_id = %s", 
                     (item_id,)
                 )
         elif uses_remaining:
@@ -172,7 +172,7 @@ class ItemUsageCog(commands.Cog):
             metadata["uses_remaining"] = uses_remaining - 1
             new_metadata = json.dumps(metadata)
             self.db.execute_query(
-                "UPDATE inventory SET metadata = ? WHERE item_id = ?",
+                "UPDATE inventory SET metadata = %s WHERE item_id = %s",
                 (new_metadata, item_id)
             )
         
@@ -197,7 +197,7 @@ class ItemUsageCog(commands.Cog):
         
         # Get all effect items
         query = '''SELECT item_name, metadata FROM inventory 
-                   WHERE owner_id = ? AND item_type IN ('effect', 'permit')'''
+                   WHERE owner_id = %s AND item_type IN ('effect', 'permit')'''
         effects = self.db.execute_query(query, (user_id,), fetch='all')
         
         active_effects = {}
@@ -212,7 +212,7 @@ class ItemUsageCog(commands.Cog):
                 
                 # Check if it's a temporary effect that expired
                 if 'active_until' in metadata:
-                    expire_time = datetime.fromisoformat(metadata['active_until'])
+                    expire_time = safe_datetime_parse(metadata['active_until'])
                     if expire_time < datetime.utcnow():
                         expired_items.append(item_name)
                         continue
@@ -233,7 +233,7 @@ class ItemUsageCog(commands.Cog):
         # Clean up expired effects
         for item in expired_items:
             self.db.execute_query(
-                "DELETE FROM inventory WHERE owner_id = ? AND item_name = ?",
+                "DELETE FROM inventory WHERE owner_id = %s AND item_name = %s",
                 (user_id, item)
             )
         
@@ -246,7 +246,7 @@ class ItemUsageCog(commands.Cog):
         if usage_type == "heal_hp":
             # Heal HP
             char_data = self.db.execute_query(
-                "SELECT hp, max_hp FROM characters WHERE user_id = ?",
+                "SELECT hp, max_hp FROM characters WHERE user_id = %s",
                 (user_id,), fetch='one'
             )
             if not char_data:
@@ -259,7 +259,7 @@ class ItemUsageCog(commands.Cog):
                 return {"success": False, "message": "You are already at full health!"}
             
             self.db.execute_query(
-                "UPDATE characters SET hp = hp + ? WHERE user_id = ?",
+                "UPDATE characters SET hp = hp + %s WHERE user_id = %s",
                 (heal_amount, user_id)
             )
             
@@ -268,7 +268,7 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "restore_fuel":
             # Restore ship fuel
             ship_data = self.db.execute_query(
-                "SELECT current_fuel, fuel_capacity FROM ships WHERE owner_id = ?",
+                "SELECT current_fuel, fuel_capacity FROM ships WHERE owner_id = %s",
                 (user_id,), fetch='one'
             )
             if not ship_data:
@@ -281,7 +281,7 @@ class ItemUsageCog(commands.Cog):
                 return {"success": False, "message": "Ship fuel tank is already full!"}
             
             self.db.execute_query(
-                "UPDATE ships SET current_fuel = current_fuel + ? WHERE owner_id = ?",
+                "UPDATE ships SET current_fuel = current_fuel + %s WHERE owner_id = %s",
                 (fuel_amount, user_id)
             )
             
@@ -290,7 +290,7 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "repair_hull":
             # Repair ship hull
             ship_data = self.db.execute_query(
-                "SELECT hull_integrity, max_hull FROM ships WHERE owner_id = ?",
+                "SELECT hull_integrity, max_hull FROM ships WHERE owner_id = %s",
                 (user_id,), fetch='one'
             )
             if not ship_data:
@@ -303,7 +303,7 @@ class ItemUsageCog(commands.Cog):
                 return {"success": False, "message": "Ship hull is already at maximum integrity!"}
             
             self.db.execute_query(
-                "UPDATE ships SET hull_integrity = hull_integrity + ? WHERE owner_id = ?",
+                "UPDATE ships SET hull_integrity = hull_integrity + %s WHERE owner_id = %s",
                 (repair_amount, user_id)
             )
             
@@ -320,7 +320,7 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "deploy_repeater":
             # Deploy radio repeater
             char_data = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (user_id,), fetch='one'
             )
             
@@ -331,7 +331,7 @@ class ItemUsageCog(commands.Cog):
             
             # Check if there's already a repeater at this location
             existing_repeater = self.db.execute_query(
-                "SELECT repeater_id FROM repeaters WHERE location_id = ? AND is_active = 1",
+                "SELECT repeater_id FROM repeaters WHERE location_id = %s AND is_active = TRUE",
                 (location_id,), fetch='one'
             )
             
@@ -341,12 +341,12 @@ class ItemUsageCog(commands.Cog):
             # Deploy the repeater
             self.db.execute_query(
                 '''INSERT INTO repeaters (location_id, owner_id, repeater_type, receive_range, transmit_range, is_active)
-                   VALUES (?, ?, 'portable', 10, 8, 1)''',
+                   VALUES (%s, %s, 'portable', 10, 8, 1)''',
                 (location_id, user_id)
             )
             
             location_name = self.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (location_id,), fetch='one'
             )[0]
             
@@ -358,7 +358,7 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "emergency_beacon":
             # Emergency beacon - deploy with custom message
             char_data = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (user_id,), fetch='one'
             )
             
@@ -398,7 +398,7 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "radio_beacon":
             # Radio beacon - deploy with custom message (6 transmissions, 1 hour apart)
             char_data = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (user_id,), fetch='one'
             )
             
@@ -438,7 +438,7 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "add_credits":
             # Unmarked Credits - adds credits directly (WORKS WITH EXISTING characters TABLE)
             self.db.execute_query(
-                "UPDATE characters SET credits = credits + ? WHERE user_id = ?",
+                "UPDATE characters SET credits = credits + %s WHERE user_id = %s",
                 (effect_value, user_id)
             )
             return {"success": True, "message": f"Added {effect_value:,} unmarked credits to your account"}
@@ -452,23 +452,23 @@ class ItemUsageCog(commands.Cog):
             
             # Check if effect already exists
             existing = self.db.execute_query(
-                "SELECT item_id FROM inventory WHERE owner_id = ? AND item_name = 'Active: Security Bypass'",
+                "SELECT item_id FROM inventory WHERE owner_id = %s AND item_name = 'Active: Security Bypass'",
                 (user_id,), fetch='one'
             )
             
             if existing:
                 self.db.execute_query(
-                    "UPDATE inventory SET metadata = ? WHERE item_id = ?",
+                    "UPDATE inventory SET metadata = %s WHERE item_id = %s",
                     (metadata, existing[0])
                 )
             else:
                 self.db.execute_query(
                     '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (?, 'Active: Security Bypass', 'effect', 1, 'Bypassing security checks', 0, ?)''',
+                       VALUES (%s, 'Active: Security Bypass', 'effect', 1, 'Bypassing security checks', 0, %s)''',
                     (user_id, metadata)
                 )
             
-            expire_dt = datetime.fromisoformat(expire_time).replace(tzinfo=timezone.utc)
+            expire_dt = safe_datetime_parse(expire_time).replace(tzinfo=timezone.utc)
             discord_timestamp = f"<t:{int(expire_dt.timestamp())}:R>"  # Shows "in 2 hours"
             
             return {"success": True, "message": f"Transit papers activated. Security checks bypassed {discord_timestamp}."}
@@ -477,14 +477,14 @@ class ItemUsageCog(commands.Cog):
             # Identity Scrubber - clears negative reputation (WORKS WITH EXISTING character_reputation TABLE)
             # Get all negative reputations
             negative_reps = self.db.execute_query(
-                "SELECT location_id FROM character_reputation WHERE user_id = ? AND reputation < 0",
+                "SELECT location_id FROM character_reputation WHERE user_id = %s AND reputation < 0",
                 (user_id,), fetch='all'
             )
             
             # Set all negative reputations to 0
             for loc in negative_reps:
                 self.db.execute_query(
-                    "UPDATE character_reputation SET reputation = 0 WHERE user_id = ? AND location_id = ?",
+                    "UPDATE character_reputation SET reputation = 0 WHERE user_id = %s AND location_id = %s",
                     (user_id, loc[0])
                 )
             
@@ -497,7 +497,7 @@ class ItemUsageCog(commands.Cog):
             
             # Check if already has federal access
             existing = self.db.execute_query(
-                "SELECT item_id FROM inventory WHERE owner_id = ? AND item_name = 'Active: Federal Access'",
+                "SELECT item_id FROM inventory WHERE owner_id = %s AND item_name = 'Active: Federal Access'",
                 (user_id,), fetch='one'
             )
             
@@ -507,7 +507,7 @@ class ItemUsageCog(commands.Cog):
             # Add permanent federal access
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, 'Active: Federal Access', 'permit', 1, 'Authorized federal personnel', 0, ?)''',
+                   VALUES (%s, 'Active: Federal Access', 'permit', 1, 'Authorized federal personnel', 0, %s)''',
                 (user_id, metadata)
             )
             
@@ -519,7 +519,7 @@ class ItemUsageCog(commands.Cog):
                 metadata = json.dumps({"comm_channels": ["federal", "emergency", "classified"]})
                 
                 existing = self.db.execute_query(
-                    "SELECT item_id FROM inventory WHERE owner_id = ? AND item_name = 'Active: Federal Comms'",
+                    "SELECT item_id FROM inventory WHERE owner_id = %s AND item_name = 'Active: Federal Comms'",
                     (user_id,), fetch='one'
                 )
                 
@@ -528,7 +528,7 @@ class ItemUsageCog(commands.Cog):
                 
                 self.db.execute_query(
                     '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (?, 'Active: Federal Comms', 'permit', 1, 'Federal communication access', 0, ?)''',
+                       VALUES (%s, 'Active: Federal Comms', 'permit', 1, 'Federal communication access', 0, %s)''',
                     (user_id, metadata)
                 )
                 
@@ -550,18 +550,18 @@ class ItemUsageCog(commands.Cog):
                 for loc_id, loc_name in federal_locations:
                     # Check existing reputation
                     existing = self.db.execute_query(
-                        "SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?",
+                        "SELECT reputation FROM character_reputation WHERE user_id = %s AND location_id = %s",
                         (user_id, loc_id), fetch='one'
                     )
                     
                     if existing:
                         self.db.execute_query(
-                            "UPDATE character_reputation SET reputation = reputation + ? WHERE user_id = ? AND location_id = ?",
+                            "UPDATE character_reputation SET reputation = reputation + %s WHERE user_id = %s AND location_id = %s",
                             (boost_amount, user_id, loc_id)
                         )
                     else:
                         self.db.execute_query(
-                            "INSERT INTO character_reputation (user_id, location_id, reputation) VALUES (?, ?, ?)",
+                            "INSERT INTO character_reputation (user_id, location_id, reputation) VALUES (%s, %s, %s)",
                             (user_id, loc_id, boost_amount)
                         )
                     updated_count += 1
@@ -573,7 +573,7 @@ class ItemUsageCog(commands.Cog):
             metadata = json.dumps({"zones": ["restricted", "classified", "military"], "clearance_level": 3})
             
             existing = self.db.execute_query(
-                "SELECT item_id FROM inventory WHERE owner_id = ? AND item_name = 'Active: Federal Permit'",
+                "SELECT item_id FROM inventory WHERE owner_id = %s AND item_name = 'Active: Federal Permit'",
                 (user_id,), fetch='one'
             )
             
@@ -582,7 +582,7 @@ class ItemUsageCog(commands.Cog):
             
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, 'Active: Federal Permit', 'permit', 1, 'Access to restricted zones', 0, ?)''',
+                   VALUES (%s, 'Active: Federal Permit', 'permit', 1, 'Access to restricted zones', 0, %s)''',
                 (user_id, metadata)
             )
             
@@ -599,14 +599,14 @@ class ItemUsageCog(commands.Cog):
             
             # Remove any existing search boost
             self.db.execute_query(
-                "DELETE FROM inventory WHERE owner_id = ? AND item_name = 'Active: Scanner Boost'",
+                "DELETE FROM inventory WHERE owner_id = %s AND item_name = 'Active: Scanner Boost'",
                 (user_id,)
             )
             
             # Add new boost
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, 'Active: Scanner Boost', 'effect', 1, 'Enhanced scanning capability', 0, ?)''',
+                   VALUES (%s, 'Active: Scanner Boost', 'effect', 1, 'Enhanced scanning capability', 0, %s)''',
                 (user_id, metadata)
             )
             
@@ -623,13 +623,13 @@ class ItemUsageCog(commands.Cog):
                 
                 # Remove existing override
                 self.db.execute_query(
-                    "DELETE FROM inventory WHERE owner_id = ? AND item_name = 'Active: Security Override'",
+                    "DELETE FROM inventory WHERE owner_id = %s AND item_name = 'Active: Security Override'",
                     (user_id,)
                 )
                 
                 self.db.execute_query(
                     '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (?, 'Active: Security Override', 'effect', 1, 'Federal security bypassed', 0, ?)''',
+                       VALUES (%s, 'Active: Security Override', 'effect', 1, 'Federal security bypassed', 0, %s)''',
                     (user_id, metadata)
                 )
                 
@@ -648,13 +648,13 @@ class ItemUsageCog(commands.Cog):
             
             # Remove existing combat boost
             self.db.execute_query(
-                "DELETE FROM inventory WHERE owner_id = ? AND item_name = 'Active: Combat Stims'",
+                "DELETE FROM inventory WHERE owner_id = %s AND item_name = 'Active: Combat Stims'",
                 (user_id,)
             )
             
             self.db.execute_query(
                 '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (?, 'Active: Combat Stims', 'effect', 1, 'Enhanced combat effectiveness', 0, ?)''',
+                   VALUES (%s, 'Active: Combat Stims', 'effect', 1, 'Enhanced combat effectiveness', 0, %s)''',
                 (user_id, boost_metadata)
             )
             
@@ -664,7 +664,7 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "weapon_override":
             # Weapon System Override - adds ship upgrade (WORKS WITH ship_upgrades TABLE)
             ship_data = self.db.execute_query(
-                "SELECT ship_id FROM ships WHERE owner_id = ?",
+                "SELECT ship_id FROM ships WHERE owner_id = %s",
                 (user_id,), fetch='one'
             )
             
@@ -675,7 +675,7 @@ class ItemUsageCog(commands.Cog):
             
             # Check if already has weapon override
             existing = self.db.execute_query(
-                "SELECT upgrade_id FROM ship_upgrades WHERE ship_id = ? AND upgrade_type = 'weapon_override'",
+                "SELECT upgrade_id FROM ship_upgrades WHERE ship_id = %s AND upgrade_type = 'weapon_override'",
                 (ship_id,), fetch='one'
             )
             
@@ -685,7 +685,7 @@ class ItemUsageCog(commands.Cog):
             # Add weapon override upgrade
             self.db.execute_query(
                 '''INSERT INTO ship_upgrades (ship_id, upgrade_type, upgrade_name, bonus_value)
-                   VALUES (?, 'weapon_override', 'Illegal Weapon Protocol', 1)''',
+                   VALUES (%s, 'weapon_override', 'Illegal Weapon Protocol', 1)''',
                 (ship_id,)
             )
             
@@ -693,7 +693,7 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "news_beacon":
             # News beacon - inject data into news stream
             char_data = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (user_id,), fetch='one'
             )
             
@@ -740,14 +740,14 @@ class ItemUsageCog(commands.Cog):
             
             if upgrade_type == "fuel_efficiency":
                 self.db.execute_query(
-                    "UPDATE ships SET fuel_efficiency = fuel_efficiency + ? WHERE owner_id = ?",
+                    "UPDATE ships SET fuel_efficiency = fuel_efficiency + %s WHERE owner_id = %s",
                     (upgrade_value, user_id)
                 )
                 return {"success": True, "message": f"Ship fuel efficiency improved by {upgrade_value}"}
             
             elif upgrade_type == "max_hull":
                 self.db.execute_query(
-                    "UPDATE ships SET max_hull = max_hull + ?, hull_integrity = hull_integrity + ? WHERE owner_id = ?",
+                    "UPDATE ships SET max_hull = max_hull + %s, hull_integrity = hull_integrity + %s WHERE owner_id = %s",
                     (upgrade_value, upgrade_value, user_id)
                 )
                 return {"success": True, "message": f"Ship hull capacity increased by {upgrade_value}"}
@@ -799,7 +799,7 @@ class ItemUsageCog(commands.Cog):
         elif usage_type == "personal_log":
             # Handle personal log usage
             char_data = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (user_id,), fetch='one'
             )
             
@@ -817,7 +817,7 @@ class ItemUsageCog(commands.Cog):
                 
                 # Update item metadata in database
                 self.db.execute_query(
-                    "UPDATE inventory SET metadata = ? WHERE item_id = ?",
+                    "UPDATE inventory SET metadata = %s WHERE item_id = %s",
                     (json.dumps(metadata), item_id)
                 )
             
@@ -839,7 +839,7 @@ class ItemUsageCog(commands.Cog):
             
             # Count existing entries
             entry_count = self.db.execute_query(
-                "SELECT COUNT(*) FROM logbook_entries WHERE logbook_id = ?",
+                "SELECT COUNT(*) FROM logbook_entries WHERE logbook_id = %s",
                 (logbook_id,),
                 fetch='one'
             )[0]

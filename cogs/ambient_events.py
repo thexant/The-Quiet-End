@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from config import AMBIENT_EVENTS_CONFIG
+from utils.datetime_utils import safe_datetime_parse
 
 class AmbientEventsCog(commands.Cog):
     def __init__(self, bot):
@@ -217,8 +218,8 @@ class AmbientEventsCog(commands.Cog):
                    FROM characters c 
                    JOIN locations l ON c.current_location = l.location_id
                    WHERE c.current_location IS NOT NULL 
-                     AND c.is_logged_in = 1
-                   GROUP BY c.current_location''',
+                     AND c.is_logged_in = true
+                   GROUP BY c.current_location, l.name, l.location_type, l.wealth_level, l.population''',
                 fetch='all'
             )
             
@@ -230,7 +231,19 @@ class AmbientEventsCog(commands.Cog):
             events_generated = 0
             current_time = datetime.utcnow()
             
-            for location_id, location_name, location_type, wealth, population, player_count in active_locations:
+            for location_data in active_locations:
+                # Handle both tuple (SQLite) and dict-like (PostgreSQL) results
+                if isinstance(location_data, dict):
+                    location_id = int(location_data['current_location'])
+                    location_name = location_data['name']
+                    location_type = location_data['location_type']
+                    wealth = location_data['wealth_level']
+                    population = location_data['population']
+                    player_count = location_data['player_count']
+                else:
+                    location_id, location_name, location_type, wealth, population, player_count = location_data
+                    location_id = int(location_id) if location_id is not None else 0
+                
                 # Check if enough time has passed since last ambient event at this location
                 if not self._can_generate_ambient_event(location_id, current_time):
                     continue
@@ -333,8 +346,8 @@ class AmbientEventsCog(commands.Cog):
         characters = self.db.execute_query(
             '''SELECT c.name 
                FROM characters c 
-               WHERE c.current_location = ? 
-                 AND c.is_logged_in = 1
+               WHERE c.current_location = %s 
+                 AND c.is_logged_in = true
                  AND c.name IS NOT NULL
                LIMIT 5''',
             (location_id,),
@@ -355,7 +368,7 @@ class AmbientEventsCog(commands.Cog):
             last_event = self.db.execute_query(
                 '''SELECT last_ambient_event 
                    FROM ambient_event_tracking 
-                   WHERE location_id = ?''',
+                   WHERE location_id = %s''',
                 (location_id,),
                 fetch='one'
             )
@@ -364,11 +377,16 @@ class AmbientEventsCog(commands.Cog):
                 return True  # No previous events, can generate
             
             # Parse the last event time
-            last_event_time = datetime.fromisoformat(last_event[0].replace('Z', '+00:00'))
-            time_diff = current_time - last_event_time
-            
-            # Check if enough time has passed
-            return time_diff.total_seconds() >= (min_spacing_minutes * 60)
+            try:
+                last_event_str = str(last_event[0])
+                last_event_time = safe_datetime_parse(last_event_str.replace('Z', '+00:00'))
+                time_diff = current_time - last_event_time
+                
+                # Check if enough time has passed
+                return time_diff.total_seconds() >= (min_spacing_minutes * 60)
+            except (ValueError, TypeError) as parse_error:
+                print(f"Error parsing datetime for location {location_id}: {last_event[0]} -> {parse_error}")
+                return True  # Allow event if parsing fails
             
         except Exception as e:
             error_msg = f"⚠️ Error checking event timing for location {location_id}: {e}"
@@ -381,11 +399,13 @@ class AmbientEventsCog(commands.Cog):
         try:
             # Insert or update the tracking record
             self.db.execute_query(
-                '''INSERT OR REPLACE INTO ambient_event_tracking 
+                '''INSERT INTO ambient_event_tracking 
                    (location_id, last_ambient_event, total_events_generated)
-                   VALUES (?, ?, 
-                           COALESCE((SELECT total_events_generated FROM ambient_event_tracking WHERE location_id = ?), 0) + 1)''',
-                (location_id, event_time.isoformat(), location_id)
+                   VALUES (%s, %s, 1)
+                   ON CONFLICT (location_id) DO UPDATE SET 
+                   last_ambient_event = EXCLUDED.last_ambient_event,
+                   total_events_generated = ambient_event_tracking.total_events_generated + 1''',
+                (location_id, event_time.isoformat())
             )
         except Exception as e:
             error_msg = f"⚠️ Error updating event tracking for location {location_id}: {e}"
@@ -490,17 +510,15 @@ class AmbientEventsCog(commands.Cog):
             traceback.print_exc()
 
     async def _get_location_channel(self, location_id: int) -> Optional[discord.TextChannel]:
-        """Get the Discord channel for a location"""
-        channel_info = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
+        """Get the Discord channel for a location - returns first available channel for backwards compatibility"""
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
         
-        if not channel_info or not channel_info[0]:
-            return None
-        
-        return self.bot.get_channel(channel_info[0])
+        if cross_guild_channels:
+            # Return the first available channel for backwards compatibility
+            return cross_guild_channels[0][1]
+        return None
 
     # Admin commands for testing and management
     ambient_admin_group = app_commands.Group(name="ambient_admin", description="Ambient events administration")
@@ -528,12 +546,12 @@ class AmbientEventsCog(commands.Cog):
             '''SELECT COUNT(DISTINCT c.current_location) 
                FROM characters c 
                WHERE c.current_location IS NOT NULL 
-                 AND c.is_logged_in = 1''',
+                 AND c.is_logged_in = true''',
             fetch='one'
         )[0]
         
         total_players = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE is_logged_in = 1",
+            "SELECT COUNT(*) FROM characters WHERE is_logged_in = true",
             fetch='one'
         )[0]
         
@@ -545,8 +563,8 @@ class AmbientEventsCog(commands.Cog):
                JOIN locations l ON c.current_location = l.location_id
                LEFT JOIN ambient_event_tracking aet ON l.location_id = aet.location_id
                WHERE c.current_location IS NOT NULL 
-                 AND c.is_logged_in = 1
-               GROUP BY c.current_location
+                 AND c.is_logged_in = true
+               GROUP BY c.current_location, l.name, l.location_type, aet.total_events_generated
                ORDER BY players DESC
                LIMIT 10''',
             fetch='all'
@@ -589,7 +607,7 @@ class AmbientEventsCog(commands.Cog):
         # Recent events (last 24 hours)
         recent_events = self.db.execute_query(
             '''SELECT COUNT(*) FROM ambient_event_tracking 
-               WHERE last_ambient_event > datetime('now', '-24 hours')''',
+               WHERE last_ambient_event > NOW() - INTERVAL '24 hours' ''',
             fetch='one'
         )[0]
         embed.add_field(name="📅 Events (24h)", value=str(recent_events), inline=True)
@@ -616,7 +634,7 @@ class AmbientEventsCog(commands.Cog):
             '''SELECT c.current_location, l.name, l.location_type, l.wealth_level, l.population
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -763,7 +781,7 @@ class AmbientEventsCog(commands.Cog):
         # Recent activity (last hour)
         recent_activity = self.db.execute_query(
             '''SELECT COUNT(*) FROM ambient_event_tracking 
-               WHERE last_ambient_event > datetime('now', '-1 hour')''',
+               WHERE last_ambient_event > NOW() - INTERVAL '1 hours' ''',
             fetch='one'
         )[0]
         
@@ -796,8 +814,8 @@ class AmbientEventsCog(commands.Cog):
                FROM characters c 
                JOIN locations l ON c.current_location = l.location_id
                WHERE c.current_location IS NOT NULL 
-                 AND c.is_logged_in = 1
-                 AND l.location_type = ?
+                 AND c.is_logged_in = true
+                 AND l.location_type = %s
                GROUP BY c.current_location''',
             (location_type,),
             fetch='all'
@@ -848,7 +866,7 @@ class AmbientEventsCog(commands.Cog):
             # Reset tracking for locations that haven't had events recently
             old_events = self.db.execute_query(
                 '''SELECT COUNT(*) FROM ambient_event_tracking 
-                   WHERE last_ambient_event < ?''',
+                   WHERE last_ambient_event < %s''',
                 (cutoff_time.isoformat(),),
                 fetch='one'
             )[0]
@@ -857,7 +875,7 @@ class AmbientEventsCog(commands.Cog):
                 self.db.execute_query(
                     '''UPDATE ambient_event_tracking 
                        SET last_ambient_event = NULL 
-                       WHERE last_ambient_event < ?''',
+                       WHERE last_ambient_event < %s''',
                     (cutoff_time.isoformat(),)
                 )
             
@@ -1145,7 +1163,7 @@ class AmbientEventsCog(commands.Cog):
                 cleaned = self.db.execute_query(
                     '''UPDATE ambient_event_tracking 
                        SET last_ambient_event = NULL 
-                       WHERE last_ambient_event < ?
+                       WHERE last_ambient_event < %s
                        RETURNING 1''',
                     (cutoff_time.isoformat(),),
                     fetch='all'

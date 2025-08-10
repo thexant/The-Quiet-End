@@ -21,7 +21,7 @@ class RadioCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         # Check if user has a character
         char_data = self.db.execute_query(
-            "SELECT current_location, name, callsign FROM characters WHERE user_id = ?",
+            "SELECT current_location, name, callsign FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -36,12 +36,12 @@ class RadioCog(commands.Cog):
         if not callsign:
             callsign = generate_callsign()
             # Ensure uniqueness
-            while self.db.execute_query("SELECT user_id FROM characters WHERE callsign = ?", (callsign,), fetch='one'):
+            while self.db.execute_query("SELECT user_id FROM characters WHERE callsign = %s", (callsign,), fetch='one'):
                 callsign = generate_callsign()
             
             # Update character with new callsign
             self.db.execute_query(
-                "UPDATE characters SET callsign = ? WHERE user_id = ?",
+                "UPDATE characters SET callsign = %s WHERE user_id = %s",
                 (callsign, interaction.user.id)
             )
             
@@ -67,7 +67,7 @@ class RadioCog(commands.Cog):
         
         # Get sender's location and coordinates (use ship's physical location if applicable)
         sender_location_info = self.db.execute_query(
-            "SELECT name, x_coord, y_coord, system_name FROM locations WHERE location_id = ?",
+            "SELECT name, x_coordinate, y_coordinate, system_name FROM locations WHERE location_id = %s",
             (current_location_id,),
             fetch='one'
         )
@@ -142,11 +142,11 @@ class RadioCog(commands.Cog):
 
         # Get location info and coordinates for both ends of the corridor
         origin_loc_info = self.db.execute_query(
-            "SELECT x_coord, y_coord, system_name FROM locations WHERE location_id = ?",
+            "SELECT x_coordinate, y_coordinate, system_name FROM locations WHERE location_id = %s",
             (origin_id,), fetch='one'
         )
         dest_loc_info = self.db.execute_query(
-            "SELECT x_coord, y_coord, system_name FROM locations WHERE location_id = ?",
+            "SELECT x_coordinate, y_coordinate, system_name FROM locations WHERE location_id = %s",
             (dest_id,), fetch='one'
         )
         
@@ -267,10 +267,10 @@ class RadioCog(commands.Cog):
         # Get all players and their locations
         all_players = self.db.execute_query(
             '''SELECT c.user_id, c.name, c.callsign, l.location_id, l.name as loc_name,
-                      l.x_coord, l.y_coord, l.system_name
+                      l.x_coordinate, l.y_coordinate, l.system_name
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.current_location IS NOT NULL AND c.is_logged_in = 1''',
+               WHERE c.current_location IS NOT NULL AND c.is_logged_in = TRUE''',
             fetch='all'
         )
         
@@ -311,15 +311,15 @@ class RadioCog(commands.Cog):
             '''SELECT ts.user_id, c.name, c.callsign, ts.corridor_id,
                       cor.name as corridor_name, cor.corridor_type,
                       ol.location_id as origin_id, ol.name as origin_name, 
-                      ol.x_coord as origin_x, ol.y_coord as origin_y, ol.system_name as origin_system,
+                      ol.x_coordinate as origin_x, ol.y_coordinate as origin_y, ol.system_name as origin_system,
                       dl.location_id as dest_id, dl.name as dest_name,
-                      dl.x_coord as dest_x, dl.y_coord as dest_y, dl.system_name as dest_system
+                      dl.x_coordinate as dest_x, dl.y_coordinate as dest_y, dl.system_name as dest_system
                FROM travel_sessions ts
                JOIN characters c ON ts.user_id = c.user_id
                JOIN corridors cor ON ts.corridor_id = cor.corridor_id
                JOIN locations ol ON ts.origin_location = ol.location_id
                JOIN locations dl ON ts.destination_location = dl.location_id
-               WHERE ts.status = 'traveling' AND c.is_logged_in = 1''',
+               WHERE ts.status = 'traveling' AND c.is_logged_in = TRUE''',
             fetch='all'
         )
         
@@ -422,20 +422,20 @@ class RadioCog(commands.Cog):
         # Get all players to calculate repeater coverage against
         all_players = self.db.execute_query(
             '''SELECT c.user_id, c.name, c.callsign, l.location_id, l.name as loc_name,
-                      l.x_coord, l.y_coord, l.system_name
+                      l.x_coordinate, l.y_coordinate, l.system_name
                FROM characters c
                JOIN locations l ON c.current_location = l.location_id
-               WHERE c.current_location IS NOT NULL AND c.is_logged_in = 1''',
+               WHERE c.current_location IS NOT NULL AND c.is_logged_in = TRUE''',
             fetch='all'
         )
 
         # Get all active repeaters
         repeaters = self.db.execute_query(
             '''SELECT r.repeater_id, r.receive_range, r.transmit_range,
-                      l.x_coord, l.y_coord, l.name as loc_name, l.system_name
+                      l.x_coordinate, l.y_coordinate, l.name as loc_name, l.system_name
                FROM repeaters r
                JOIN locations l ON r.location_id = l.location_id
-               WHERE r.is_active = 1''',
+               WHERE r.is_active = TRUE''',
             fetch='all'
         )
 
@@ -638,7 +638,7 @@ class RadioCog(commands.Cog):
         for recipient in recipients:
             # Get the user's current travel session to find their transit channel
             travel_session = self.db.execute_query(
-                "SELECT temp_channel_id FROM travel_sessions WHERE user_id = ? AND status = 'traveling'",
+                "SELECT temp_channel_id FROM travel_sessions WHERE user_id = %s AND status = 'traveling'",
                 (recipient['user_id'],),
                 fetch='one'
             )
@@ -753,7 +753,7 @@ class RadioCog(commands.Cog):
         
         # Get location name
         location_info = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )

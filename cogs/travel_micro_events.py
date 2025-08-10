@@ -6,6 +6,7 @@ import random
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import json
+from utils.datetime_utils import safe_datetime_parse
 
 class MicroEventView(ui.View):
     def __init__(self, event_data: dict, bot, timeout: int = 30):
@@ -110,7 +111,7 @@ class TravelMicroEventsCog(commands.Cog):
                    JOIN locations l ON ts.destination_location = l.location_id
                    WHERE ts.status = 'traveling' 
                    AND ts.temp_channel_id IS NOT NULL
-                   AND ts.end_time > datetime('now')""",
+                   AND ts.end_time > NOW()""",
                 fetch='all'
             )
             
@@ -125,8 +126,8 @@ class TravelMicroEventsCog(commands.Cog):
                     continue
                 
                 # Calculate travel progress
-                start_dt = datetime.fromisoformat(start_time)
-                end_dt = datetime.fromisoformat(end_time)
+                start_dt = safe_datetime_parse(start_time)
+                end_dt = safe_datetime_parse(end_time)
                 now = datetime.utcnow()
                 
                 total_duration = (end_dt - start_dt).total_seconds()
@@ -141,7 +142,7 @@ class TravelMicroEventsCog(commands.Cog):
                 time_since_last_event = elapsed
                 if last_event_time:
                     try:
-                        last_event_dt = datetime.fromisoformat(last_event_time)
+                        last_event_dt = safe_datetime_parse(last_event_time)
                         time_since_last_event = (now - last_event_dt).total_seconds()
                     except (ValueError, TypeError):
                         # If there's an issue parsing, fall back to elapsed time
@@ -187,7 +188,7 @@ class TravelMicroEventsCog(commands.Cog):
             # Update last event time for this session
             if session_id:
                 self.db.execute_query(
-                    "UPDATE travel_sessions SET last_event_time = datetime('now') WHERE session_id = ?",
+                    "UPDATE travel_sessions SET last_event_time = NOW() WHERE session_id = %s",
                     (session_id,)
                 )
             
@@ -196,7 +197,7 @@ class TravelMicroEventsCog(commands.Cog):
             
             # Calculate success percentage for display
             user_skills = self.db.execute_query(
-                f"SELECT {event_data['skill']} FROM characters WHERE user_id = ?",
+                f"SELECT {event_data['skill']} FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -244,21 +245,25 @@ class TravelMicroEventsCog(commands.Cog):
             # Get travel session info for logging (if not already provided)
             if not session_id:
                 session_info = self.db.execute_query(
-                    "SELECT session_id FROM travel_sessions WHERE user_id = ? AND temp_channel_id = ? AND status = 'traveling'",
+                    "SELECT session_id FROM travel_sessions WHERE user_id = %s AND temp_channel_id = %s AND status = 'traveling'",
                     (user_id, channel_id),
                     fetch='one'
                 )
                 session_id = session_info[0] if session_info else None
             
             # Log the event to database
-            event_log_id = self.db.execute_query(
+            result = self.db.execute_query(
                 """INSERT INTO travel_micro_events 
                    (travel_session_id, transit_channel_id, user_id, event_type, 
                     triggered_at, skill_used, difficulty)
-                   VALUES (?, ?, ?, ?, datetime('now'), ?, ?)""",
+                   VALUES (%s, %s, %s, %s, NOW(), %s, %s)
+                   RETURNING event_id""",
                 (session_id, channel_id, user_id, event_data['title'], event_data['skill'], event_data['expected_skill']),
-                fetch='lastrowid'
+                fetch='one'
             )
+            
+            # Extract the event ID from the result tuple
+            event_log_id = result[0] if result else None
             
             # Store event log ID for later updates
             event_data['event_log_id'] = event_log_id
@@ -286,7 +291,7 @@ class TravelMicroEventsCog(commands.Cog):
         
         # Get user's skills for appropriate challenge scaling
         user_skills = self.db.execute_query(
-            "SELECT engineering, navigation, combat, medical FROM characters WHERE user_id = ?",
+            "SELECT engineering, navigation, combat, medical FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -367,7 +372,7 @@ class TravelMicroEventsCog(commands.Cog):
         
         # Get user's skill level
         user_skills = self.db.execute_query(
-            f"SELECT {skill_name} FROM characters WHERE user_id = ?",
+            f"SELECT {skill_name} FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -393,9 +398,9 @@ class TravelMicroEventsCog(commands.Cog):
         if 'event_log_id' in event_data:
             self.db.execute_query(
                 """UPDATE travel_micro_events 
-                   SET responded = 1, roll_result = ?, success = ?, 
-                       xp_awarded = ?, damage_taken = ?
-                   WHERE event_id = ?""",
+                   SET responded = true, roll_result = %s, success = %s, 
+                       xp_awarded = %s, damage_taken = %s
+                   WHERE event_id = %s""",
                 (success_rate, success, event_data['xp_reward'] if success else 0, 
                  0 if success else event_data['damage'], event_data['event_log_id'])
             )
@@ -403,7 +408,7 @@ class TravelMicroEventsCog(commands.Cog):
         if success:
             # Success - award XP
             self.db.execute_query(
-                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                 (event_data['xp_reward'], user_id)
             )
             
@@ -438,8 +443,8 @@ class TravelMicroEventsCog(commands.Cog):
         if 'event_log_id' in event_data:
             self.db.execute_query(
                 """UPDATE travel_micro_events 
-                   SET responded = 0, success = 0, damage_taken = ?, damage_type = ?
-                   WHERE event_id = ?""",
+                   SET responded = false, success = false, damage_taken = %s, damage_type = %s
+                   WHERE event_id = %s""",
                 (damage, damage_type, event_data['event_log_id'])
             )
         
@@ -454,7 +459,7 @@ class TravelMicroEventsCog(commands.Cog):
                 await char_cog.update_ship_hull(event_data['user_id'], -damage, interaction.guild)
         elif damage_type == 'fuel':
             self.db.execute_query(
-                "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
+                "UPDATE ships SET current_fuel = GREATEST(0::bigint, current_fuel - %s) WHERE owner_id = %s",
                 (damage, event_data['user_id'])
             )
             
@@ -498,7 +503,7 @@ class TravelMicroEventsCog(commands.Cog):
                 await char_cog.update_ship_hull(event_data['user_id'], -damage, interaction.guild)
         elif damage_type == 'fuel':
             self.db.execute_query(
-                "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
+                "UPDATE ships SET current_fuel = GREATEST(0::bigint, current_fuel - %s) WHERE owner_id = %s",
                 (damage, event_data['user_id'])
             )
             
@@ -530,8 +535,8 @@ class TravelMicroEventsCog(commands.Cog):
         if 'event_log_id' in event_data:
             self.db.execute_query(
                 """UPDATE travel_micro_events 
-                   SET responded = 0, success = 0, damage_taken = ?, damage_type = ?
-                   WHERE event_id = ?""",
+                   SET responded = false, success = false, damage_taken = %s, damage_type = %s
+                   WHERE event_id = %s""",
                 (damage, damage_type, event_data['event_log_id'])
             )
         
@@ -546,7 +551,7 @@ class TravelMicroEventsCog(commands.Cog):
                 await char_cog.update_ship_hull(user_id, -damage, channel.guild)
         elif damage_type == 'fuel':
             self.db.execute_query(
-                "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
+                "UPDATE ships SET current_fuel = GREATEST(0::bigint, current_fuel - %s) WHERE owner_id = %s",
                 (damage, user_id)
             )
         

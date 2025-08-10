@@ -15,7 +15,7 @@ class StatSystem:
     def get_base_stats(self, user_id: int) -> Dict[str, int]:
         """Get base character stats from the database"""
         char_data = self.db.execute_query(
-            "SELECT hp, max_hp, engineering, navigation, combat, medical, defense FROM characters WHERE user_id = ?",
+            "SELECT hp, max_hp, engineering, navigation, combat, medical, defense FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -42,7 +42,7 @@ class StatSystem:
             '''SELECT i.item_name, ce.slot_name
                FROM character_equipment ce
                JOIN inventory i ON ce.item_id = i.item_id
-               WHERE ce.user_id = ?''',
+               WHERE ce.user_id = %s''',
             (user_id,),
             fetch='all'
         )
@@ -71,7 +71,7 @@ class StatSystem:
         
         # Clean up expired modifiers first
         self.db.execute_query(
-            "DELETE FROM active_stat_modifiers WHERE expires_at < ?",
+            "DELETE FROM active_stat_modifiers WHERE expires_at < %s",
             (current_time,)
         )
         
@@ -79,8 +79,8 @@ class StatSystem:
         active_modifiers = self.db.execute_query(
             '''SELECT stat_name, modifier_value
                FROM active_stat_modifiers
-               WHERE user_id = ? AND source_type = 'consumable' 
-               AND (expires_at IS NULL OR expires_at > ?)''',
+               WHERE user_id = %s AND source_type = 'consumable' 
+               AND (expires_at IS NULL OR expires_at > %s)''',
             (user_id, current_time),
             fetch='all'
         )
@@ -149,7 +149,7 @@ class StatSystem:
         # If not found in predefined items, check custom item metadata
         if not is_equippable or not slot:
             custom_item = self.db.execute_query(
-                "SELECT metadata FROM inventory WHERE item_id = ? AND item_name = ?",
+                "SELECT metadata FROM inventory WHERE item_id = %s AND item_name = %s",
                 (item_id, item_name),
                 fetch='one'
             )
@@ -176,29 +176,32 @@ class StatSystem:
             # Automatically unequip any conflicting items
             for check_slot in slots_to_check:
                 existing = self.db.execute_query(
-                    "SELECT equipment_id FROM character_equipment WHERE user_id = ? AND slot_name = ?",
+                    "SELECT equipment_id FROM character_equipment WHERE user_id = %s AND slot_name = %s",
                     (user_id, check_slot),
                     fetch='one'
                 )
                 if existing:
                     # Unequip the conflicting item
                     self.db.execute_query(
-                        "DELETE FROM character_equipment WHERE user_id = ? AND slot_name = ?",
+                        "DELETE FROM character_equipment WHERE user_id = %s AND slot_name = %s",
                         (user_id, check_slot)
                     )
             
             # Equip to both slots
             for slot_name in slots_to_check:
                 self.db.execute_query(
-                    '''INSERT OR REPLACE INTO character_equipment (user_id, slot_name, item_id)
-                       VALUES (?, ?, ?)''',
+                    '''INSERT INTO character_equipment (user_id, slot_name, item_id)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (user_id, slot_name) DO UPDATE SET
+                       item_id = EXCLUDED.item_id,
+                       equipped_at = NOW()''',
                     (user_id, slot_name, item_id)
                 )
         else:
             # Regular single slot
             # Check if slot is occupied
             existing = self.db.execute_query(
-                "SELECT equipment_id FROM character_equipment WHERE user_id = ? AND slot_name = ?",
+                "SELECT equipment_id FROM character_equipment WHERE user_id = %s AND slot_name = %s",
                 (user_id, slot),
                 fetch='one'
             )
@@ -207,8 +210,11 @@ class StatSystem:
             
             # Equip the item
             self.db.execute_query(
-                '''INSERT OR REPLACE INTO character_equipment (user_id, slot_name, item_id)
-                   VALUES (?, ?, ?)''',
+                '''INSERT INTO character_equipment (user_id, slot_name, item_id)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (user_id, slot_name) DO UPDATE SET
+                   item_id = EXCLUDED.item_id,
+                   equipped_at = NOW()''',
                 (user_id, slot, item_id)
             )
         
@@ -223,7 +229,7 @@ class StatSystem:
         """
         # Check if slot has an item
         existing = self.db.execute_query(
-            "SELECT equipment_id FROM character_equipment WHERE user_id = ? AND slot_name = ?",
+            "SELECT equipment_id FROM character_equipment WHERE user_id = %s AND slot_name = %s",
             (user_id, slot_name),
             fetch='one'
         )
@@ -241,7 +247,7 @@ class StatSystem:
                 '''SELECT i.item_name
                    FROM character_equipment ce
                    JOIN inventory i ON ce.item_id = i.item_id
-                   WHERE ce.user_id = ? AND ce.slot_name = ?''',
+                   WHERE ce.user_id = %s AND ce.slot_name = %s''',
                 (user_id, slot_name),
                 fetch='one'
             )
@@ -253,14 +259,14 @@ class StatSystem:
                 # If this is a paired item, unequip from both slots
                 if item_slot and item_slot.endswith('_both'):
                     self.db.execute_query(
-                        "DELETE FROM character_equipment WHERE user_id = ? AND slot_name IN (?, ?)",
+                        "DELETE FROM character_equipment WHERE user_id = %s AND slot_name IN (%s, %s)",
                         (user_id, slot_name, pair_slot)
                     )
                     return True
         
         # Regular single slot unequip
         self.db.execute_query(
-            "DELETE FROM character_equipment WHERE user_id = ? AND slot_name = ?",
+            "DELETE FROM character_equipment WHERE user_id = %s AND slot_name = %s",
             (user_id, slot_name)
         )
         
@@ -277,7 +283,7 @@ class StatSystem:
             '''SELECT ce.slot_name, i.item_name, i.description, i.item_id
                FROM character_equipment ce
                JOIN inventory i ON ce.item_id = i.item_id
-               WHERE ce.user_id = ?
+               WHERE ce.user_id = %s
                ORDER BY ce.slot_name''',
             (user_id,),
             fetch='all'
@@ -318,7 +324,7 @@ class StatSystem:
             self.db.execute_query(
                 '''INSERT INTO active_stat_modifiers 
                    (user_id, modifier_type, stat_name, modifier_value, source_type, source_item_name, expires_at)
-                   VALUES (?, 'buff', ?, ?, 'consumable', ?, ?)''',
+                   VALUES (%s, 'buff', %s, %s, 'consumable', %s, %s)''',
                 (user_id, stat_name, modifier_value, item_name, expires_at)
             )
         

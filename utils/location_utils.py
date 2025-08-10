@@ -1,6 +1,5 @@
 # utils/location_utils.py
 from typing import Optional, Tuple
-import sqlite3
 
 def get_character_location_status(db, user_id: int) -> Tuple[str, Optional[dict]]:
     """
@@ -9,7 +8,7 @@ def get_character_location_status(db, user_id: int) -> Tuple[str, Optional[dict]
     """
     # Check current character state
     char_data = db.execute_query(
-        "SELECT current_location, name, current_ship_id, location_status FROM characters WHERE user_id = ?",
+        "SELECT current_location, name, current_ship_id, location_status FROM characters WHERE user_id = %s",
         (user_id,),
         fetch='one'
     )
@@ -25,7 +24,7 @@ def get_character_location_status(db, user_id: int) -> Tuple[str, Optional[dict]
             "SELECT s.name, s.docked_at_location, l.name as loc_name "
             "FROM ships s "
             "LEFT JOIN locations l ON s.docked_at_location = l.location_id "
-            "WHERE s.ship_id = ?",
+            "WHERE s.ship_id = %s",
             (current_ship_id,),
             fetch='one'
         )
@@ -34,7 +33,7 @@ def get_character_location_status(db, user_id: int) -> Tuple[str, Optional[dict]
             if ship_location_id and ship_location_name:
                 # Get location status for where ship is docked
                 dock_location_info = db.execute_query(
-                    "SELECT location_type, is_derelict, gate_status FROM locations WHERE location_id = ?",
+                    "SELECT location_type, is_derelict, gate_status FROM locations WHERE location_id = %s",
                     (ship_location_id,),
                     fetch='one'
                 )
@@ -67,12 +66,12 @@ def get_character_location_status(db, user_id: int) -> Tuple[str, Optional[dict]
                 return status_text, {'type': 'ship', 'ship_id': current_ship_id, 'name': ship_name}
         else:
             # Data inconsistency, evict player from non-existent ship
-            db.execute_query("UPDATE characters SET current_ship_id = NULL, current_location = NULL WHERE user_id = ?", (user_id,))
+            db.execute_query("UPDATE characters SET current_ship_id = NULL, current_location = NULL WHERE user_id = %s", (user_id,))
 
     # Priority 2: Check if at a physical location
     if current_location_id:
         location_info = db.execute_query(
-            "SELECT name, location_type, is_derelict, gate_status FROM locations WHERE location_id = ?",
+            "SELECT name, location_type, is_derelict, gate_status FROM locations WHERE location_id = %s",
             (current_location_id,),
             fetch='one'
         )
@@ -111,7 +110,7 @@ def get_character_location_status(db, user_id: int) -> Tuple[str, Optional[dict]
            JOIN corridors c ON ts.corridor_id = c.corridor_id
            JOIN locations ol ON ts.origin_location = ol.location_id
            JOIN locations dl ON ts.destination_location = dl.location_id
-           WHERE ts.user_id = ? AND ts.status = 'traveling'""",
+           WHERE ts.user_id = %s AND ts.status = 'traveling'""",
         (user_id,),
         fetch='one'
     )

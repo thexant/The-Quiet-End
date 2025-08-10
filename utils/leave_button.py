@@ -47,7 +47,7 @@ class UniversalLeaveView(discord.ui.View):
         
         # Check if the channel ID is registered as a home interior in the database
         home_check = self.db.execute_query(
-            "SELECT home_id FROM home_interiors WHERE channel_id = ?",
+            "SELECT home_id FROM home_interiors WHERE channel_id = %s",
             (channel.id,),
             fetch='one'
         )
@@ -60,7 +60,7 @@ class UniversalLeaveView(discord.ui.View):
         
         # Check if this thread ID exists in the sub_locations table as an active sub-location
         sub_location_check = self.db.execute_query(
-            "SELECT 1 FROM sub_locations WHERE thread_id = ? AND is_active = 1",
+            "SELECT 1 FROM sub_locations WHERE thread_id = %s AND is_active = true",
             (channel.id,),
             fetch='one'
         )
@@ -91,7 +91,7 @@ class UniversalLeaveView(discord.ui.View):
             '''SELECT c.current_home_id, h.location_id, h.home_name
                FROM characters c
                JOIN location_homes h ON c.current_home_id = h.home_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (user_id,),
             fetch='one'
         )
@@ -104,14 +104,14 @@ class UniversalLeaveView(discord.ui.View):
         
         # Check if anyone else is in the home
         others_in_home = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE current_home_id = ? AND user_id != ?",
+            "SELECT user_id FROM characters WHERE current_home_id = %s AND user_id != %s",
             (home_id, user_id),
             fetch='all'
         )
         
         # Update character location
         self.db.execute_query(
-            "UPDATE characters SET current_home_id = NULL WHERE user_id = ?",
+            "UPDATE characters SET current_home_id = NULL WHERE user_id = %s",
             (user_id,)
         )
         
@@ -121,27 +121,23 @@ class UniversalLeaveView(discord.ui.View):
         
         # Send area movement embed to location channel
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )[0]
         
-        # Get location channel
-        location_channel_id = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
+        # Send area movement announcement via cross-guild broadcast
+        embed = discord.Embed(
+            title="🚪 Area Movement",
+            description=f"**{char_name}** has exited the **{home_name}**.",
+            color=0xFF6600
         )
-        
-        if location_channel_id:
-            location_channel = self.bot.get_channel(location_channel_id[0])
-            if location_channel:
-                embed = discord.Embed(
-                    title="🚪 Area Movement",
-                    description=f"**{char_name}** has exited the **{home_name}**.",
-                    color=0xFF6600
-                )
-                await location_channel.send(embed=embed)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
+        for guild_channel, channel in cross_guild_channels:
+            try:
+                await channel.send(embed=embed)
+            except:
+                pass  # Skip if can't send to this guild
         
         # Give user access back to location (suppress arrival notification for home departures)
         await channel_manager.give_user_location_access(interaction.user, location_id, send_arrival_notification=False)
@@ -151,7 +147,7 @@ class UniversalLeaveView(discord.ui.View):
         
         # If this was the owner and others are inside, move them out too
         owner_id = self.db.execute_query(
-            "SELECT owner_id FROM location_homes WHERE home_id = ?",
+            "SELECT owner_id FROM location_homes WHERE home_id = %s",
             (home_id,),
             fetch='one'
         )[0]
@@ -163,7 +159,7 @@ class UniversalLeaveView(discord.ui.View):
                 if member:
                     # Update their location
                     self.db.execute_query(
-                        "UPDATE characters SET current_home_id = NULL WHERE user_id = ?",
+                        "UPDATE characters SET current_home_id = NULL WHERE user_id = %s",
                         (other_user_id,)
                     )
                     
@@ -181,7 +177,7 @@ class UniversalLeaveView(discord.ui.View):
         
         # Check if home should be cleaned up (empty and not owned by anyone present)
         remaining_users = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE current_home_id = ? AND is_logged_in = 1",
+            "SELECT user_id FROM characters WHERE current_home_id = %s AND is_logged_in = true",
             (home_id,),
             fetch='all'
         )
@@ -189,7 +185,7 @@ class UniversalLeaveView(discord.ui.View):
         if not remaining_users:
             # Get home channel_id for cleanup
             home_channel_data = self.db.execute_query(
-                "SELECT channel_id FROM home_interiors WHERE home_id = ?",
+                "SELECT channel_id FROM home_interiors WHERE home_id = %s",
                 (home_id,),
                 fetch='one'
             )
@@ -212,7 +208,7 @@ class UniversalLeaveView(discord.ui.View):
         
         # Check if user has a character
         char_info = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -225,7 +221,7 @@ class UniversalLeaveView(discord.ui.View):
         
         # Look up this thread in the sub_locations table
         sub_location_info = self.db.execute_query(
-            "SELECT parent_location_id, name, sub_type FROM sub_locations WHERE thread_id = ? AND is_active = 1",
+            "SELECT parent_location_id, name, sub_type FROM sub_locations WHERE thread_id = %s AND is_active = true",
             (thread.id,),
             fetch='one'
         )
@@ -241,11 +237,12 @@ class UniversalLeaveView(discord.ui.View):
             await interaction.followup.send("You can only leave sub-locations at your current location!", ephemeral=True)
             return
         
-        # Get the main location channel for announcements
-        location_info = self.db.execute_query(
-            "SELECT channel_id, name FROM locations WHERE location_id = ?",
-            (parent_location_id,),
-            fetch='one'
+        # Get the main location channel for announcements using guild-specific system
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        location_info = channel_manager.get_channel_id_from_location(
+            interaction.guild.id, 
+            parent_location_id
         )
         
         if not location_info or not location_info[0]:
@@ -285,7 +282,7 @@ class UniversalLeaveView(discord.ui.View):
                     
                     # Clear thread_id from database
                     self.db.execute_query(
-                        "UPDATE sub_locations SET thread_id = NULL WHERE thread_id = ?",
+                        "UPDATE sub_locations SET thread_id = NULL WHERE thread_id = %s",
                         (thread.id,)
                     )
                     
@@ -310,7 +307,7 @@ class UniversalLeaveView(discord.ui.View):
             '''SELECT c.current_ship_id, s.name, c.current_location
                FROM characters c
                LEFT JOIN ships s ON c.current_ship_id = s.ship_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (user_id,),
             fetch='one'
         )
@@ -323,14 +320,14 @@ class UniversalLeaveView(discord.ui.View):
         
         # Check if anyone else is in the ship
         others_in_ship = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE current_ship_id = ? AND user_id != ?",
+            "SELECT user_id FROM characters WHERE current_ship_id = %s AND user_id != %s",
             (ship_id, user_id),
             fetch='all'
         )
         
         # Update character location
         self.db.execute_query(
-            "UPDATE characters SET current_ship_id = NULL WHERE user_id = ?",
+            "UPDATE characters SET current_ship_id = NULL WHERE user_id = %s",
             (user_id,)
         )
         
@@ -345,33 +342,27 @@ class UniversalLeaveView(discord.ui.View):
         
         # Send area movement embed to location channel
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )[0]
         
-        location_channel_id = self.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
+        # Send area movement announcement via cross-guild broadcast
+        embed = discord.Embed(
+            title="🚪 Area Movement",
+            description=f"**{char_name}** has exited the **{ship_name}**.",
+            color=0xFF6600
         )
-        
-        if location_channel_id and location_channel_id[0]:
-            location_channel = interaction.guild.get_channel(location_channel_id[0])
-            if location_channel:
-                embed = discord.Embed(
-                    title="🚪 Area Movement",
-                    description=f"**{char_name}** has exited the **{ship_name}**.",
-                    color=0xFF6600
-                )
-                try:
-                    await location_channel.send(embed=embed)
-                except:
-                    pass  # Failed to send movement notification
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
+        for guild_channel, channel in cross_guild_channels:
+            try:
+                await channel.send(embed=embed)
+            except:
+                pass  # Skip if can't send to this guild
         
         # Check if this was the owner and others are inside
         owner_id = self.db.execute_query(
-            "SELECT owner_id FROM ships WHERE ship_id = ?",
+            "SELECT owner_id FROM ships WHERE ship_id = %s",
             (ship_id,),
             fetch='one'
         )[0]
@@ -385,7 +376,7 @@ class UniversalLeaveView(discord.ui.View):
                     try:
                         # Send warning with location link
                         location_info = self.db.execute_query(
-                            "SELECT name, channel_id FROM locations WHERE location_id = ?",
+                            "SELECT name, channel_id FROM locations WHERE location_id = %s",
                             (location_id,),
                             fetch='one'
                         )
@@ -405,7 +396,7 @@ class UniversalLeaveView(discord.ui.View):
             
             # Move all remaining users out
             remaining_users = self.db.execute_query(
-                "SELECT user_id FROM characters WHERE current_ship_id = ? AND user_id != ?",
+                "SELECT user_id FROM characters WHERE current_ship_id = %s AND user_id != %s",
                 (ship_id, user_id),
                 fetch='all'
             )
@@ -415,7 +406,7 @@ class UniversalLeaveView(discord.ui.View):
                 if member:
                     # Update their location
                     self.db.execute_query(
-                        "UPDATE characters SET current_ship_id = NULL WHERE user_id = ?",
+                        "UPDATE characters SET current_ship_id = NULL WHERE user_id = %s",
                         (other_user_id,)
                     )
                     
@@ -427,33 +418,27 @@ class UniversalLeaveView(discord.ui.View):
                     
                     # Send area movement embed for forced exit
                     other_char_name = self.db.execute_query(
-                        "SELECT name FROM characters WHERE user_id = ?",
+                        "SELECT name FROM characters WHERE user_id = %s",
                         (other_user_id,),
                         fetch='one'
                     )[0]
                     
-                    location_channel_id = self.db.execute_query(
-                        "SELECT channel_id FROM locations WHERE location_id = ?",
-                        (location_id,),
-                        fetch='one'
+                    # Send area movement announcement via cross-guild broadcast
+                    embed = discord.Embed(
+                        title="🚪 Area Movement",
+                        description=f"**{other_char_name}** has exited the **{ship_name}**.",
+                        color=0xFF6600
                     )
-                    
-                    if location_channel_id and location_channel_id[0]:
-                        location_channel = interaction.guild.get_channel(location_channel_id[0])
-                        if location_channel:
-                            embed = discord.Embed(
-                                title="🚪 Area Movement",
-                                description=f"**{other_char_name}** has exited the **{ship_name}**.",
-                                color=0xFF6600
-                            )
-                            try:
-                                await location_channel.send(embed=embed)
-                            except:
-                                pass  # Failed to send movement notification
+                    cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
+                    for guild_channel, channel in cross_guild_channels:
+                        try:
+                            await channel.send(embed=embed)
+                        except:
+                            pass  # Skip if can't send to this guild
         
         # Clean up ship channel if empty
         remaining_users = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE current_ship_id = ?",
+            "SELECT COUNT(*) FROM characters WHERE current_ship_id = %s",
             (ship_id,),
             fetch='one'
         )[0]
@@ -461,7 +446,7 @@ class UniversalLeaveView(discord.ui.View):
         if remaining_users == 0:
             # Get ship channel info and clean up
             ship_channel = self.db.execute_query(
-                "SELECT channel_id FROM ships WHERE ship_id = ?",
+                "SELECT channel_id FROM ships WHERE ship_id = %s",
                 (ship_id,),
                 fetch='one'
             )
@@ -472,7 +457,7 @@ class UniversalLeaveView(discord.ui.View):
                     try:
                         await ship_channel_obj.delete(reason="Ship interior cleanup - no users aboard")
                         self.db.execute_query(
-                            "UPDATE ships SET channel_id = NULL WHERE ship_id = ?",
+                            "UPDATE ships SET channel_id = NULL WHERE ship_id = %s",
                             (ship_id,)
                         )
                     except:

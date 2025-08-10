@@ -144,12 +144,12 @@ class FugitiveAlertView(BaseEventView):
         if not await self.check_and_record_response(interaction):
             return
 
-        char_data = self.bot.db.execute_query("SELECT name, combat FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+        char_data = self.bot.db.execute_query("SELECT name, combat FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')
         char_name, combat_skill = char_data
 
         if combat_skill >= 15:
             bounty = random.randint(1000, 1500)
-            self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (bounty, interaction.user.id))
+            self.bot.db.execute_query("UPDATE characters SET money = money + %s WHERE user_id = %s", (bounty, interaction.user.id))
             
             # --- Reputation Logic Start ---
             rep_cog = self.bot.get_cog('ReputationCog')
@@ -166,12 +166,12 @@ class FugitiveAlertView(BaseEventView):
         if not await self.check_and_record_response(interaction):
             return
 
-        char_data = self.bot.db.execute_query("SELECT name, navigation FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+        char_data = self.bot.db.execute_query("SELECT name, navigation FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')
         char_name, nav_skill = char_data
 
         if nav_skill >= 15:
             reward = random.randint(2000, 3000)
-            self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (reward, interaction.user.id))
+            self.bot.db.execute_query("UPDATE characters SET money = money + %s WHERE user_id = %s", (reward, interaction.user.id))
             
             # --- Reputation Logic Start ---
             rep_cog = self.bot.get_cog('ReputationCog')
@@ -182,7 +182,7 @@ class FugitiveAlertView(BaseEventView):
             # --- Reputation Logic End ---
         else:
             fine = 500
-            self.bot.db.execute_query("UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?", (fine, interaction.user.id))
+            self.bot.db.execute_query("UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s", (fine, interaction.user.id))
             await interaction.response.send_message(f"🚨 **{char_name}**'s attempt to help the fugitive is clumsy and obvious. You're caught and fined {fine} credits for obstructing justice.", ephemeral=False)
 
     @discord.ui.button(label="Ignore Alert", style=discord.ButtonStyle.secondary, emoji="👀")
@@ -190,7 +190,7 @@ class FugitiveAlertView(BaseEventView):
         if not await self.check_and_record_response(interaction):
             return
             
-        char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
+        char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')[0]
         await interaction.response.send_message(f"👀 **{char_name}** decides this situation is too hot to handle and stays out of it.", ephemeral=False)
         
 
@@ -216,7 +216,7 @@ class EnhancedEventsCog(commands.Cog):
             '''SELECT DISTINCT l.location_id, l.name, l.location_type, l.wealth_level, l.population, l.channel_id
                FROM locations l
                JOIN characters c ON c.current_location = l.location_id
-               WHERE c.is_logged_in = 1''',
+               WHERE c.is_logged_in = true''',
             fetch='all'
         )
         
@@ -226,14 +226,14 @@ class EnhancedEventsCog(commands.Cog):
             # Check last event time to avoid spam
             last_event = self.bot.db.execute_query(
                 '''SELECT MAX(posted_at) FROM location_logs 
-                   WHERE location_id = ? AND is_generated = 1''',
+                   WHERE location_id = %s AND is_generated = true''',
                 (location_id,),
                 fetch='one'
             )
             
             if last_event and last_event[0]:
                 from datetime import datetime, timedelta
-                last_time = datetime.fromisoformat(last_event[0])
+                last_time = safe_datetime_parse(last_event[0])
                 if datetime.now() - last_time < timedelta(minutes=5):
                     continue  # Too recent
             
@@ -268,7 +268,7 @@ class EnhancedEventsCog(commands.Cog):
             
             # Check if event already occurred for this session
             existing_event = self.bot.db.execute_query(
-                "SELECT 1 FROM corridor_events WHERE transit_channel_id = ? AND is_active = 1",
+                "SELECT 1 FROM corridor_events WHERE transit_channel_id = %s AND is_active = true",
                 (travel_data[5],),  # temp_channel_id
                 fetch='one'
             )
@@ -278,7 +278,7 @@ class EnhancedEventsCog(commands.Cog):
             
             # Get corridor danger level for event probability
             corridor_info = self.bot.db.execute_query(
-                "SELECT danger_level FROM corridors WHERE corridor_id = ?",
+                "SELECT danger_level FROM corridors WHERE corridor_id = %s",
                 (travel_data[4],),  # corridor_id
                 fetch='one'
             )
@@ -325,7 +325,7 @@ class EnhancedEventsCog(commands.Cog):
             '''SELECT DISTINCT l.channel_id
                FROM locations l
                JOIN characters c ON c.current_location = l.location_id
-               WHERE c.is_logged_in = 1''',
+               WHERE c.is_logged_in = true''',
             fetch='all'
         )
         
@@ -339,7 +339,7 @@ class EnhancedEventsCog(commands.Cog):
             channel = self.bot.get_channel(channel_id)
             if channel:
                 try:
-                    await channel.send(embed=embed)
+                    await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
                 except:
                     pass  # Failed to send
         await self.apply_galaxy_wide_npc_effects(event['name'].lower().replace(' ', '_'), 2)
@@ -350,7 +350,7 @@ class EnhancedEventsCog(commands.Cog):
             return
         
         location_info = self.bot.db.execute_query(
-            "SELECT name, location_type, wealth_level, x_coord, y_coord FROM locations WHERE location_id = ?",
+            "SELECT name, location_type, wealth_level, x_coordinate, y_coordinate FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -358,7 +358,7 @@ class EnhancedEventsCog(commands.Cog):
         if not location_info:
             return
         
-        location_name, location_type, wealth, x_coord, y_coord = location_info
+        location_name, location_type, wealth, x_coordinate, y_coordinate = location_info
         
         # Different event pools based on location and situation
         space_phenomena = [
@@ -373,7 +373,7 @@ class EnhancedEventsCog(commands.Cog):
         hostile_encounters = [
             ("Pirate Raiders", "💀 **Pirate Raiders Detected!**\nHostile ships on intercept course. Prepare for combat or evasion.", 0x8b0000, self._handle_pirate_encounter),
             ("Scavenger Drones", "🤖 **Automated Scavengers!**\nRogue mining drones attempting to strip-mine your ship. Defensive measures required.", 0x708090, self._handle_scavenger_encounter),
-            ("Corporate Security", "🚔 **Corporate Security Patrol!**\nMega-corp enforcement demanding inspection. Compliance or resistance?", 0x000080, self._handle_security_encounter),
+            ("Corporate Security", "🚔 **Corporate Security Patrol!**\nMega-corp enforcement demanding inspection. Compliance or resistance%s", 0x000080, self._handle_security_encounter),
             ("Desperate Refugees", "😰 **Desperate Refugees!**\nRefugee ship requesting aid. They claim pirates destroyed their home.", 0x8fbc8f, self._handle_refugee_encounter)
         ]
         
@@ -438,7 +438,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         view = PirateEncounterView(self.bot, encounter_id, players, pirate_ships)
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.message = message
         
     async def _handle_scavenger_encounter(self, location_id, players, location_name, event_name, description, color):
@@ -505,7 +505,7 @@ class EnhancedEventsCog(commands.Cog):
                     return
                 
                 char_data = self.bot.db.execute_query(
-                    "SELECT name, tech FROM characters WHERE user_id = ?",
+                    "SELECT name, tech FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -538,7 +538,7 @@ class EnhancedEventsCog(commands.Cog):
                     return
                 
                 char_data = self.bot.db.execute_query(
-                    "SELECT name, navigation FROM characters WHERE user_id = ?",
+                    "SELECT name, navigation FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -557,7 +557,7 @@ class EnhancedEventsCog(commands.Cog):
                 else:
                     fuel_lost = random.randint(20, 40)
                     self.bot.db.execute_query(
-                        "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
+                        "UPDATE ships SET current_fuel = GREATEST(0::bigint, current_fuel - %s) WHERE owner_id = %s",
                         (fuel_lost, user_id)
                     )
                     
@@ -572,7 +572,7 @@ class EnhancedEventsCog(commands.Cog):
                     return
                 
                 char_data = self.bot.db.execute_query(
-                    "SELECT name, money FROM characters WHERE user_id = ?",
+                    "SELECT name, money FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -586,7 +586,7 @@ class EnhancedEventsCog(commands.Cog):
                 
                 if current_money >= cargo_value:
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                        "UPDATE characters SET money = money - %s WHERE user_id = %s",
                         (cargo_value, user_id)
                     )
                     
@@ -606,7 +606,7 @@ class EnhancedEventsCog(commands.Cog):
                     return
                 
                 char_data = self.bot.db.execute_query(
-                    "SELECT name, combat FROM characters WHERE user_id = ?",
+                    "SELECT name, combat FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -620,7 +620,7 @@ class EnhancedEventsCog(commands.Cog):
                 if random.random() < (0.4 + combat_skill * 0.02):
                     salvage = random.randint(150, 400)
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                        "UPDATE characters SET money = money + %s WHERE user_id = %s",
                         (salvage, user_id)
                     )
                     
@@ -649,7 +649,7 @@ class EnhancedEventsCog(commands.Cog):
             view.add_item(sacrifice_button)
             view.add_item(fight_button)
             
-            message = await channel.send(embed=embed, view=view)
+            message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
             view.message = message
             
     async def _handle_refugee_encounter(self, location_id, players, location_name, event_name, description, color):
@@ -717,7 +717,7 @@ class EnhancedEventsCog(commands.Cog):
                     return
                 
                 char_data = self.bot.db.execute_query(
-                    "SELECT name, money FROM characters WHERE user_id = ?",
+                    "SELECT name, money FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -739,7 +739,7 @@ class EnhancedEventsCog(commands.Cog):
                 # Deduct cost, gain reputation
                 rep_gain = random.randint(15, 25)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money - ?, major_reputation = major_reputation + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money - %s, major_reputation = major_reputation + %s WHERE user_id = %s",
                     (cost, rep_gain, user_id)
                 )
                 
@@ -754,7 +754,7 @@ class EnhancedEventsCog(commands.Cog):
                     return
                 
                 char_data = self.bot.db.execute_query(
-                    "SELECT name, medicine FROM characters WHERE user_id = ?",
+                    "SELECT name, medicine FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -771,7 +771,7 @@ class EnhancedEventsCog(commands.Cog):
                 if roll <= success_chance:
                     rep_gain = 10 + medicine_skill // 2
                     self.bot.db.execute_query(
-                        "UPDATE characters SET major_reputation = major_reputation + ? WHERE user_id = ?",
+                        "UPDATE characters SET major_reputation = major_reputation + %s WHERE user_id = %s",
                         (rep_gain, user_id)
                     )
                     
@@ -792,7 +792,7 @@ class EnhancedEventsCog(commands.Cog):
                 
                 # Check if player has a ship with fuel
                 ship_data = self.bot.db.execute_query(
-                    "SELECT s.ship_id, s.name, s.fuel FROM ships s WHERE s.owner_id = ?",
+                    "SELECT s.ship_id, s.name, s.fuel FROM ships s WHERE s.owner_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -803,7 +803,7 @@ class EnhancedEventsCog(commands.Cog):
                 
                 ship_id, ship_name, current_fuel = ship_data
                 char_name = self.bot.db.execute_query(
-                    "SELECT name FROM characters WHERE user_id = ?",
+                    "SELECT name FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )[0]
@@ -818,11 +818,11 @@ class EnhancedEventsCog(commands.Cog):
                 
                 rep_gain = random.randint(10, 20)
                 self.bot.db.execute_query(
-                    "UPDATE ships SET fuel = fuel - ? WHERE ship_id = ?",
+                    "UPDATE ships SET fuel = fuel - %s WHERE ship_id = %s",
                     (fuel_to_share, ship_id)
                 )
                 self.bot.db.execute_query(
-                    "UPDATE characters SET major_reputation = major_reputation + ? WHERE user_id = ?",
+                    "UPDATE characters SET major_reputation = major_reputation + %s WHERE user_id = %s",
                     (rep_gain, user_id)
                 )
                 
@@ -837,14 +837,14 @@ class EnhancedEventsCog(commands.Cog):
                     return
                 
                 char_name = self.bot.db.execute_query(
-                    "SELECT name FROM characters WHERE user_id = ?",
+                    "SELECT name FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )[0]
                 
                 rep_loss = random.randint(5, 15)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET minor_reputation = MAX(0, minor_reputation - ?) WHERE user_id = ?",
+                    "UPDATE characters SET minor_reputation = GREATEST(0::bigint, minor_reputation - %s) WHERE user_id = %s",
                     (rep_loss, user_id)
                 )
                 
@@ -863,7 +863,7 @@ class EnhancedEventsCog(commands.Cog):
             view.add_item(fuel_button)
             view.add_item(reject_button)
             
-            message = await channel.send(embed=embed, view=view)
+            message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
             view.message = message    
     async def _handle_fugitive_alert(self, channel, players, event_data):
         """Handle fugitive alert event"""
@@ -877,15 +877,17 @@ class EnhancedEventsCog(commands.Cog):
         player_ids = [p[0] for p in players]
         
         # Get location_id from the channel
-        location_id = self.bot.db.execute_query(
-            "SELECT location_id FROM locations WHERE channel_id = ?",
-            (channel.id,),
-            fetch='one'
-        )[0]
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        location_info = channel_manager.get_location_from_channel_id(
+            channel.guild.id, 
+            channel.id
+        )
+        location_id = location_info[0] if location_info else None
         
         view = FugitiveAlertView(self.bot, player_ids, location_id)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.message = message        
     async def _handle_security_encounter(self, location_id, players, location_name, event_name, description, color):
         """Handle corporate security patrol encounter during travel"""
@@ -951,7 +953,7 @@ class EnhancedEventsCog(commands.Cog):
                     return
                 
                 char_data = self.bot.db.execute_query(
-                    "SELECT name FROM characters WHERE user_id = ?",
+                    "SELECT name FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -966,7 +968,7 @@ class EnhancedEventsCog(commands.Cog):
                 if random.random() < 0.25:
                     fine = random.randint(200, 500)
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                        "UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s",
                         (fine, user_id)
                     )
                     
@@ -986,7 +988,7 @@ class EnhancedEventsCog(commands.Cog):
                     return
                 
                 char_data = self.bot.db.execute_query(
-                    "SELECT name, money, diplomacy FROM characters WHERE user_id = ?",
+                    "SELECT name, money, diplomacy FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -1003,7 +1005,7 @@ class EnhancedEventsCog(commands.Cog):
                     
                     if random.random() < success_chance:
                         self.bot.db.execute_query(
-                            "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                            "UPDATE characters SET money = money - %s WHERE user_id = %s",
                             (bribe_amount, user_id)
                         )
                         
@@ -1014,7 +1016,7 @@ class EnhancedEventsCog(commands.Cog):
                     else:
                         fine = bribe_amount * 2
                         self.bot.db.execute_query(
-                            "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                            "UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s",
                             (fine, user_id)
                         )
                         
@@ -1034,7 +1036,7 @@ class EnhancedEventsCog(commands.Cog):
                     return
                 
                 char_data = self.bot.db.execute_query(
-                    "SELECT name FROM characters WHERE user_id = ?",
+                    "SELECT name FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -1050,7 +1052,7 @@ class EnhancedEventsCog(commands.Cog):
                 if rep_cog:
                     # Get average reputation
                     reputations = self.bot.db.execute_query(
-                        "SELECT AVG(reputation_value) FROM reputation WHERE character_id = ?",
+                        "SELECT AVG(reputation_value) FROM reputation WHERE character_id = %s",
                         (user_id,),
                         fetch='one'
                     )
@@ -1075,7 +1077,7 @@ class EnhancedEventsCog(commands.Cog):
                     return
                 
                 char_data = self.bot.db.execute_query(
-                    "SELECT name, combat, navigation FROM characters WHERE user_id = ?",
+                    "SELECT name, combat, navigation FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -1092,7 +1094,7 @@ class EnhancedEventsCog(commands.Cog):
                 if random.random() < escape_chance:
                     fuel_cost = random.randint(30, 60)
                     self.bot.db.execute_query(
-                        "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
+                        "UPDATE ships SET current_fuel = GREATEST(0::bigint, current_fuel - %s) WHERE owner_id = %s",
                         (fuel_cost, user_id)
                     )
                     
@@ -1109,7 +1111,7 @@ class EnhancedEventsCog(commands.Cog):
                         await char_cog.update_ship_hull(user_id, -damage, interaction.guild)
                     
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                        "UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s",
                         (fine, user_id)
                     )
                     
@@ -1128,7 +1130,7 @@ class EnhancedEventsCog(commands.Cog):
             view.add_item(credentials_button)
             view.add_item(resist_button)
             
-            message = await channel.send(embed=embed, view=view)
+            message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
             view.message = message            
             
     # Add these methods to the EnhancedEventsCog class in cogs/enhanced_events.py
@@ -1137,7 +1139,7 @@ class EnhancedEventsCog(commands.Cog):
         
         # Get players at location
         players_present = self.bot.db.execute_query(
-            "SELECT user_id FROM characters WHERE current_location = ? AND is_logged_in = 1",
+            "SELECT user_id FROM characters WHERE current_location = %s AND is_logged_in = true",
             (location_id,),
             fetch='all'
         )
@@ -1147,7 +1149,7 @@ class EnhancedEventsCog(commands.Cog):
         
         # Get location info
         location_info = self.bot.db.execute_query(
-            "SELECT name, channel_id FROM locations WHERE location_id = ?",
+            "SELECT name, channel_id FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -1197,7 +1199,7 @@ class EnhancedEventsCog(commands.Cog):
         """Apply galaxy-wide events to all dynamic NPCs"""
         
         all_npcs = self.db.execute_query(
-            "SELECT npc_id, name, callsign, current_location FROM dynamic_npcs WHERE is_alive = 1",
+            "SELECT npc_id, name, callsign, current_location FROM dynamic_npcs WHERE is_alive = true",
             fetch='all'
         )
         
@@ -1211,7 +1213,7 @@ class EnhancedEventsCog(commands.Cog):
                     # Communication disruption, possible ship damage
                     if random.random() < 0.1:  # 10% chance of severe damage
                         self.db.execute_query(
-                            "UPDATE dynamic_npcs SET credits = MAX(0, credits - ?) WHERE npc_id = ?",
+                            "UPDATE dynamic_npcs SET credits = GREATEST(0::bigint, credits - %s) WHERE npc_id = %s",
                             (random.randint(500, 2000), npc_id)
                         )
                     affected_count += 1
@@ -1220,7 +1222,7 @@ class EnhancedEventsCog(commands.Cog):
                     # Widespread corridor instability
                     if location_id and random.random() < 0.05:  # 5% chance of being lost
                         self.db.execute_query(
-                            "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = ?",
+                            "UPDATE dynamic_npcs SET is_alive = false WHERE npc_id = %s",
                             (npc_id,)
                         )
                         casualties += 1
@@ -1238,7 +1240,7 @@ class EnhancedEventsCog(commands.Cog):
                     if random.random() < 0.2:  # 20% chance of being robbed
                         credits_lost = random.randint(1000, 5000)
                         self.db.execute_query(
-                            "UPDATE dynamic_npcs SET credits = MAX(0, credits - ?) WHERE npc_id = ?",
+                            "UPDATE dynamic_npcs SET credits = GREATEST(0::bigint, credits - %s) WHERE npc_id = %s",
                             (credits_lost, npc_id)
                         )
                     affected_count += 1
@@ -1256,7 +1258,7 @@ class EnhancedEventsCog(commands.Cog):
         # Get dynamic NPCs at this location
         dynamic_npcs = self.db.execute_query(
             '''SELECT npc_id, name, callsign, ship_name FROM dynamic_npcs
-               WHERE current_location = ? AND is_alive = 1 AND travel_start_time IS NULL''',
+               WHERE current_location = %s AND is_alive = true AND travel_start_time IS NULL''',
             (location_id,),
             fetch='all'
         )
@@ -1276,7 +1278,7 @@ class EnhancedEventsCog(commands.Cog):
                         # High severity - NPC might die or flee
                         if random.random() < 0.15:  # 15% death chance
                             self.db.execute_query(
-                                "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = ?",
+                                "UPDATE dynamic_npcs SET is_alive = false WHERE npc_id = %s",
                                 (npc_id,)
                             )
                             affected_npcs.append(f"💀 {name} ({callsign}) was lost to radiation exposure")
@@ -1303,7 +1305,7 @@ class EnhancedEventsCog(commands.Cog):
                     else:  # 30% capture/damage chance
                         if random.random() < 0.5:
                             self.db.execute_query(
-                                "UPDATE dynamic_npcs SET credits = MAX(0, credits - ?) WHERE npc_id = ?",
+                                "UPDATE dynamic_npcs SET credits = GREATEST(0::bigint, credits - %s) WHERE npc_id = %s",
                                 (random.randint(1000, 5000), npc_id)
                             )
                             affected_npcs.append(f"💸 {name} ({callsign}) lost credits to pirates")
@@ -1316,7 +1318,7 @@ class EnhancedEventsCog(commands.Cog):
         # Get available corridors
         corridors = self.db.execute_query(
             '''SELECT corridor_id, destination_location, travel_time FROM corridors
-               WHERE origin_location = ? AND is_active = 1''',
+               WHERE origin_location = %s AND is_active = true''',
             (current_location,),
             fetch='all'
         )
@@ -1329,8 +1331,8 @@ class EnhancedEventsCog(commands.Cog):
             start_time = datetime.now()
             self.db.execute_query(
                 '''UPDATE dynamic_npcs 
-                   SET destination_location = ?, travel_start_time = ?, travel_duration = ?
-                   WHERE npc_id = ?''',
+                   SET destination_location = %s, travel_start_time = %s, travel_duration = %s
+                   WHERE npc_id = %s''',
                 (dest_location, start_time.isoformat(), travel_time, npc_id)
             )
             
@@ -1342,13 +1344,13 @@ class EnhancedEventsCog(commands.Cog):
                 
                 if delay > 0:
                     npc_name = self.db.execute_query(
-                        "SELECT name FROM dynamic_npcs WHERE npc_id = ?",
+                        "SELECT name FROM dynamic_npcs WHERE npc_id = %s",
                         (npc_id,),
                         fetch='one'
                     )[0]
                     
                     dest_name = self.db.execute_query(
-                        "SELECT name FROM locations WHERE location_id = ?",
+                        "SELECT name FROM locations WHERE location_id = %s",
                         (dest_location,),
                         fetch='one'
                     )[0]
@@ -1634,7 +1636,7 @@ class EnhancedEventsCog(commands.Cog):
             if not track_event_response(event_id, interaction.user.id):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
-            char_data = self.bot.db.execute_query("SELECT name, navigation FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+            char_data = self.bot.db.execute_query("SELECT name, navigation FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')
             if not char_data:
                 await interaction.response.send_message("Character not found!", ephemeral=True)
                 return
@@ -1642,7 +1644,7 @@ class EnhancedEventsCog(commands.Cog):
             char_name, nav_skill = char_data
             if nav_skill >= 12:
                 reward = random.randint(200, 350) + (nav_skill * 10)
-                self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (reward, interaction.user.id))
+                self.bot.db.execute_query("UPDATE characters SET money = money + %s WHERE user_id = %s", (reward, interaction.user.id))
                 await interaction.response.send_message(f"🚀 **{char_name}** skillfully assists the convoy escort, clearing a path through the congestion. The convoy commander sends you {reward} credits for your trouble.", ephemeral=False)
             else:
                 await interaction.response.send_message(f"⚠️ **{char_name}** tries to help, but your maneuvers only add to the traffic chaos. The escort waves you off.", ephemeral=False)
@@ -1651,7 +1653,7 @@ class EnhancedEventsCog(commands.Cog):
             if not track_event_response(event_id, interaction.user.id):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return         
-            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')
             if not char_data:
                 await interaction.response.send_message("Character not found!", ephemeral=True)
                 return
@@ -1661,11 +1663,11 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message(f"📡 **{char_name}** discretely scans the convoy. The ships are running hot with high-energy weapon signatures and what appears to be classified cyberwarfare suites. This is a serious military force.", ephemeral=False)
             else:
                 fine = 150
-                self.bot.db.execute_query("UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?", (fine, interaction.user.id))
+                self.bot.db.execute_query("UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s", (fine, interaction.user.id))
                 await interaction.response.send_message(f"🚨 **{char_name}**'s scan is detected by the convoy's counter-intel systems! You receive a warning and a {fine} credit fine for unauthorized scanning of military assets.", ephemeral=False)
 
         async def wait_callback(interaction: discord.Interaction):
-            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
+            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')[0]
             await interaction.response.send_message(f"⏳ **{char_name}** decides to wait out the delay. The convoy eventually passes, and normal traffic resumes.", ephemeral=False)
         
         assist_button.callback = assist_callback
@@ -1676,7 +1678,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(scan_button)
         view.add_item(wait_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
     async def _handle_gate_energy_surge(self, channel, players, event_data):
@@ -1697,7 +1699,7 @@ class EnhancedEventsCog(commands.Cog):
             if not track_event_response(event_id, interaction.user.id):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return
-            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')
             if not char_data:
                 await interaction.response.send_message("Character not found!", ephemeral=True)
                 return
@@ -1705,7 +1707,7 @@ class EnhancedEventsCog(commands.Cog):
             char_name, eng_skill = char_data
             if eng_skill >= 18:
                 reward = random.randint(500, 750) + (eng_skill * 20)
-                self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (reward, interaction.user.id))
+                self.bot.db.execute_query("UPDATE characters SET money = money + %s WHERE user_id = %s", (reward, interaction.user.id))
                 await interaction.response.send_message(f"🔧 **{char_name}**'s expert engineering assistance helps stabilize the gate's energy core, preventing a catastrophe! Gate authorities award you {reward} credits.", ephemeral=False)
             else:
                 damage = random.randint(15, 30)
@@ -1718,21 +1720,21 @@ class EnhancedEventsCog(commands.Cog):
             if not track_event_response(event_id, interaction.user.id):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return
-            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')
             if not char_data:
                 await interaction.response.send_message("Character not found!", ephemeral=True)
                 return
 
             char_name, eng_skill = char_data
             reward = 150 + (eng_skill * 5)
-            self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (reward, interaction.user.id))
+            self.bot.db.execute_query("UPDATE characters SET money = money + %s WHERE user_id = %s", (reward, interaction.user.id))
             await interaction.response.send_message(f"🛡️ **{char_name}** helps reinforce the shields of nearby civilian ships, earning a {reward} credit reward from Gate Traffic Control for their service.", ephemeral=False)
             
         async def evacuate_callback(interaction: discord.Interaction):
             if not track_event_response(event_id, interaction.user.id):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
-            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
+            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')[0]
             await interaction.response.send_message(f"🏃 **{char_name}** wisely moves their ship to a safe distance to watch the events unfold.", ephemeral=False)
         
         contain_button.callback = contain_callback
@@ -1743,7 +1745,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(shields_button)
         view.add_item(evacuate_button)
 
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
         
@@ -1764,7 +1766,7 @@ class EnhancedEventsCog(commands.Cog):
             if not track_event_response(event_id, interaction.user.id):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
-            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')
+            char_data = self.bot.db.execute_query("SELECT name, engineering FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')
             if not char_data:
                 await interaction.response.send_message("Character not found!", ephemeral=True)
                 return
@@ -1772,7 +1774,7 @@ class EnhancedEventsCog(commands.Cog):
             char_name, eng_skill = char_data
             if eng_skill >= 12:
                 reward = random.randint(250, 500)
-                self.bot.db.execute_query("UPDATE characters SET money = money + ? WHERE user_id = ?", (reward, interaction.user.id))
+                self.bot.db.execute_query("UPDATE characters SET money = money + %s WHERE user_id = %s", (reward, interaction.user.id))
                 await interaction.response.send_message(f"🔬 **{char_name}** collects valuable temporal data from the echo, selling it to a research outpost for {reward} credits.", ephemeral=False)
             else:
                 await interaction.response.send_message(f"📉 **{char_name}**'s sensors can't make sense of the temporal distortions. The data is unusable.", ephemeral=False)
@@ -1781,14 +1783,14 @@ class EnhancedEventsCog(commands.Cog):
             if not track_event_response(event_id, interaction.user.id):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
-            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
+            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')[0]
             await interaction.response.send_message(f"👋 **{char_name}** hails the echo. You receive only static, but for a moment, you think you hear a faint whisper... *'...left something behind...'* The echo then fades.", ephemeral=False)
             
         async def fly_callback(interaction: discord.Interaction):
             if not track_event_response(event_id, interaction.user.id):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
-            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = ?", (interaction.user.id,), fetch='one')[0]
+            char_name = self.bot.db.execute_query("SELECT name FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')[0]
             roll = random.random()
             if roll < 0.25: # 25% chance of damage
                 damage = random.randint(5, 10)
@@ -1798,7 +1800,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message(f"💥 **{char_name}** flies through the echo and a wave of temporal feedback rattles the ship! It takes {damage} hull damage.", ephemeral=False)
             elif roll > 0.9: # 10% chance of a boon
                 fuel_gain = random.randint(10, 20)
-                self.bot.db.execute_query("UPDATE ships SET current_fuel = current_fuel + ? WHERE owner_id = ?", (fuel_gain, interaction.user.id))
+                self.bot.db.execute_query("UPDATE ships SET current_fuel = current_fuel + %s WHERE owner_id = %s", (fuel_gain, interaction.user.id))
                 await interaction.response.send_message(f"✨ **{char_name}** flies through the echo and the ship's fuel cells are mysteriously replenished, gaining {fuel_gain} fuel!", ephemeral=False)
             else: # 65% chance of nothing
                 await interaction.response.send_message(f"💨 **{char_name}** flies through the echo. The ship feels momentarily cold, but nothing else happens.", ephemeral=False)
@@ -1811,7 +1813,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(hail_button)
         view.add_item(fly_button)
 
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -1850,12 +1852,12 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
             char_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )[0]
             char_data = self.bot.db.execute_query(
-                    "SELECT name, medical FROM characters WHERE user_id = ?",
+                    "SELECT name, medical FROM characters WHERE user_id = %s",
                     (interaction.user.id,),
                     fetch='one'
                 )
@@ -1869,7 +1871,7 @@ class EnhancedEventsCog(commands.Cog):
             if medical_skill >= 15:
                 reward = 300 + (medical_skill * 10)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -1880,7 +1882,7 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 reward = 150
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -1894,12 +1896,12 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
             char_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )[0]       
             char_data = self.bot.db.execute_query(
-                "SELECT name, engineering FROM characters WHERE user_id = ?",
+                "SELECT name, engineering FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -1913,7 +1915,7 @@ class EnhancedEventsCog(commands.Cog):
             if engineering_skill >= 18:
                 reward = 400 + (engineering_skill * 8)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -1932,12 +1934,12 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
             char_name = self.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )[0]      
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -1950,7 +1952,7 @@ class EnhancedEventsCog(commands.Cog):
             reward = 200 + (navigation_skill * 5)
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, interaction.user.id)
             )
             
@@ -1966,7 +1968,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(repair_button)
         view.add_item(evacuate_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -2003,7 +2005,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return                  
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -2017,7 +2019,7 @@ class EnhancedEventsCog(commands.Cog):
             if nav_skill >= 12:
                 reward = 250 + (nav_skill * 10)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -2036,7 +2038,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return              
             char_data = self.bot.db.execute_query(
-                "SELECT name, money FROM characters WHERE user_id = ?",
+                "SELECT name, money FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -2050,7 +2052,7 @@ class EnhancedEventsCog(commands.Cog):
             
             if current_money >= cost:
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money - %s WHERE user_id = %s",
                     (cost, interaction.user.id)
                 )
                 
@@ -2069,7 +2071,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return              
             char_data = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -2082,7 +2084,7 @@ class EnhancedEventsCog(commands.Cog):
             reward = 150
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, interaction.user.id)
             )
             
@@ -2098,7 +2100,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(support_workers_button)
         view.add_item(support_management_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -2133,7 +2135,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name, engineering FROM characters WHERE user_id = ?",
+                "SELECT name, engineering FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -2173,7 +2175,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -2196,7 +2198,7 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 fuel_lost = random.randint(15, 30)
                 self.bot.db.execute_query(
-                    "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
+                    "UPDATE ships SET current_fuel = GREATEST(0::bigint, current_fuel - %s) WHERE owner_id = %s",
                     (fuel_lost, user_id)
                 )
                 
@@ -2210,7 +2212,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(defend_button)
         view.add_item(outrun_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -2251,7 +2253,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -2266,7 +2268,7 @@ class EnhancedEventsCog(commands.Cog):
             if random.random() < 0.3:
                 fine = random.randint(100, 250)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                    "UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s",
                     (fine, user_id)
                 )
                 
@@ -2289,7 +2291,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name, money FROM characters WHERE user_id = ?",
+                "SELECT name, money FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -2304,7 +2306,7 @@ class EnhancedEventsCog(commands.Cog):
             if current_money >= bribe_cost:
                 if random.random() < 0.7:  # 70% success chance
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                        "UPDATE characters SET money = money - %s WHERE user_id = %s",
                         (bribe_cost, user_id)
                     )
                     
@@ -2315,7 +2317,7 @@ class EnhancedEventsCog(commands.Cog):
                 else:
                     fine = bribe_cost + 200
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                        "UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s",
                         (fine, user_id)
                     )
                     
@@ -2338,7 +2340,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name, combat FROM characters WHERE user_id = ?",
+                "SELECT name, combat FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -2363,7 +2365,7 @@ class EnhancedEventsCog(commands.Cog):
                 credits_lost = random.randint(200, 500)
                 
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                    "UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s",
                     (credits_lost, user_id)
                 )
                 char_cog = self.bot.get_cog('CharacterCog')
@@ -2382,7 +2384,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(bribe_button)
         view.add_item(fight_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -2418,7 +2420,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -2440,7 +2442,7 @@ class EnhancedEventsCog(commands.Cog):
                 )
                 # Bonus: Reduce fuel consumption for this trip
                 self.bot.db.execute_query(
-                    "UPDATE ships SET current_fuel = current_fuel + 5 WHERE owner_id = ?",
+                    "UPDATE ships SET current_fuel = current_fuel + 5 WHERE owner_id = %s",
                     (user_id,)
                 )
             else:
@@ -2462,7 +2464,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -2487,7 +2489,7 @@ class EnhancedEventsCog(commands.Cog):
                 damage = random.randint(15, 35)
                 fuel_loss = random.randint(10, 20)
                 self.bot.db.execute_query(
-                    "UPDATE ships SET current_fuel = MAX(0, current_fuel - ?) WHERE owner_id = ?",
+                    "UPDATE ships SET current_fuel = GREATEST(0::bigint, current_fuel - %s) WHERE owner_id = %s",
                     (fuel_loss, user_id)
                 )
                 char_cog = self.bot.get_cog('CharacterCog')
@@ -2503,7 +2505,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(careful_button)
         view.add_item(speed_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -2555,7 +2557,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name, combat, medical FROM characters WHERE user_id = ?",
+                "SELECT name, combat, medical FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -2574,7 +2576,7 @@ class EnhancedEventsCog(commands.Cog):
                 if roll <= success_chance:
                     reward = random.randint(200, 500)
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                        "UPDATE characters SET money = money + %s WHERE user_id = %s",
                         (reward, user_id)
                     )
                     await interaction.response.send_message(
@@ -2585,7 +2587,7 @@ class EnhancedEventsCog(commands.Cog):
                     damage = random.randint(20, 40)
                     credits_lost = random.randint(50, 200)
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                        "UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s",
                         (credits_lost, user_id)
                     )
                     char_cog = self.bot.get_cog('CharacterCog')
@@ -2602,7 +2604,7 @@ class EnhancedEventsCog(commands.Cog):
                 total_reward = base_reward + medical_bonus
                 
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (total_reward, user_id)
                 )
                 
@@ -2620,7 +2622,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_name = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )[0]
@@ -2635,7 +2637,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(investigate_button)
         view.add_item(ignore_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
     # Add these methods to the EnhancedEventsCog class in enhanced_events.py
@@ -2649,7 +2651,7 @@ class EnhancedEventsCog(commands.Cog):
             return
         
         location_info = self.db.execute_query(
-            "SELECT name, location_type, wealth_level FROM locations WHERE location_id = ?",
+            "SELECT name, location_type, wealth_level FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -2882,7 +2884,7 @@ class EnhancedEventsCog(commands.Cog):
         view = ReputationEventView(self.bot, event_data, players_present, location_id)
         
         try:
-            message = await channel.send(embed=embed, view=view)
+            message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
             
             # Schedule timeout handling
             timeout_task = asyncio.create_task(self._handle_reputation_event_timeout(
@@ -2915,7 +2917,7 @@ class EnhancedEventsCog(commands.Cog):
                 inline=False
             )
             
-            await channel.send(embed=embed)
+            await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
             
         except Exception as e:
             print(f"❌ Error handling reputation event timeout: {e}")
@@ -2935,7 +2937,7 @@ class EnhancedEventsCog(commands.Cog):
         # Check if location has a channel
         channel = await self._get_location_channel(location_id)
         location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -2955,7 +2957,7 @@ class EnhancedEventsCog(commands.Cog):
             )
             
             try:
-                await channel.send(embed=embed)
+                await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
             except Exception as e:
                 print(f"❌ Failed to post ignored event outcome: {e}")
         else:
@@ -2967,7 +2969,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_lost_child_event(self, interaction, choice, rep_major, rep_minor):
         """Handle lost child event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -2991,7 +2993,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_medical_emergency_event(self, interaction, choice, rep_major, rep_minor):
         """Handle medical emergency event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3015,7 +3017,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_environmental_cleanup_event(self, interaction, choice, rep_major, rep_minor):
         """Handle environmental cleanup event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3039,7 +3041,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_refugee_assistance_event(self, interaction, choice, rep_major, rep_minor):
         """Handle refugee assistance event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3063,7 +3065,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_corporate_bribery_event(self, interaction, choice, rep_major, rep_minor):
         """Handle corporate bribery event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3087,7 +3089,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_illegal_cargo_event(self, interaction, choice, rep_major, rep_minor):
         """Handle illegal cargo event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3111,7 +3113,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_protection_racket_event(self, interaction, choice, rep_major, rep_minor):
         """Handle protection racket event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3135,7 +3137,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_witness_intimidation_event(self, interaction, choice, rep_major, rep_minor):
         """Handle witness intimidation event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3159,7 +3161,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_whistleblower_event(self, interaction, choice, rep_major, rep_minor):
         """Handle whistleblower event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3183,7 +3185,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_faction_dispute_event(self, interaction, choice, rep_major, rep_minor):
         """Handle faction dispute event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3207,7 +3209,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_information_broker_event(self, interaction, choice, rep_major, rep_minor):
         """Handle information broker event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3231,7 +3233,7 @@ class EnhancedEventsCog(commands.Cog):
     async def _handle_resource_distribution_event(self, interaction, choice, rep_major, rep_minor):
         """Handle resource distribution event response"""
         char_name = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
@@ -3486,7 +3488,7 @@ class EnhancedEventsCog(commands.Cog):
                 """SELECT c.current_location, l.name, l.location_type 
                    FROM characters c 
                    JOIN locations l ON c.current_location = l.location_id 
-                   WHERE c.user_id = ?""",
+                   WHERE c.user_id = %s""",
                 (player.id,),
                 fetch='one'
             )
@@ -3500,7 +3502,7 @@ class EnhancedEventsCog(commands.Cog):
         elif location:
             # Find location by name
             location_data = self.db.execute_query(
-                "SELECT location_id, name, location_type FROM locations WHERE LOWER(name) LIKE LOWER(?)",
+                "SELECT location_id, name, location_type FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
                 (f"%{location}%",),
                 fetch='one'
             )
@@ -3527,7 +3529,7 @@ class EnhancedEventsCog(commands.Cog):
         
         # Check for players at location
         players_present = self.db.execute_query(
-            "SELECT user_id FROM characters WHERE current_location = ?",
+            "SELECT user_id FROM characters WHERE current_location = %s",
             (target_location_id,),
             fetch='all'
         )
@@ -3644,7 +3646,7 @@ class EnhancedEventsCog(commands.Cog):
         # Execute the event
         channel = await self._get_location_channel(location_id)
         location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )[0]
@@ -3697,7 +3699,7 @@ class EnhancedEventsCog(commands.Cog):
         if target_event:
             channel = await self._get_location_channel(location_id)
             location_name = self.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (location_id,),
                 fetch='one'
             )[0]
@@ -3743,7 +3745,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return    
             char_data = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -3764,7 +3766,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return          
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -3783,7 +3785,7 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 fine = 75
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                    "UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s",
                     (fine, interaction.user.id)
                 )
                 
@@ -3797,7 +3799,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return          
             char_data = self.bot.db.execute_query(
-                "SELECT name, combat FROM characters WHERE user_id = ?",
+                "SELECT name, combat FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -3816,7 +3818,7 @@ class EnhancedEventsCog(commands.Cog):
             else:
                 fine = 200
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                    "UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s",
                     (fine, interaction.user.id)
                 )
                 
@@ -3832,7 +3834,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(partial_button)
         view.add_item(avoid_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -3869,7 +3871,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return          
             char_data = self.bot.db.execute_query(
-                "SELECT name, engineering FROM characters WHERE user_id = ?",
+                "SELECT name, engineering FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -3883,7 +3885,7 @@ class EnhancedEventsCog(commands.Cog):
             if eng_skill >= 18:
                 reward = 400 + (eng_skill * 15)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -3907,7 +3909,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return          
             char_data = self.bot.db.execute_query(
-                "SELECT name, engineering FROM characters WHERE user_id = ?",
+                "SELECT name, engineering FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -3920,7 +3922,7 @@ class EnhancedEventsCog(commands.Cog):
             reward = 150 + (eng_skill * 8)
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, interaction.user.id)
             )
             
@@ -3934,7 +3936,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return            
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -3947,7 +3949,7 @@ class EnhancedEventsCog(commands.Cog):
             reward = 200 + (nav_skill * 6)
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, interaction.user.id)
             )
             
@@ -3963,7 +3965,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(diagnose_button)
         view.add_item(evacuate_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -4007,7 +4009,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return              
             char_data = self.bot.db.execute_query(
-                "SELECT name, money FROM characters WHERE user_id = ?",
+                "SELECT name, money FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4021,7 +4023,7 @@ class EnhancedEventsCog(commands.Cog):
             
             if current_money >= aid_cost:
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money - %s WHERE user_id = %s",
                     (aid_cost, interaction.user.id)
                 )
                 
@@ -4040,7 +4042,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return          
             char_data = self.bot.db.execute_query(
-                "SELECT name, medical FROM characters WHERE user_id = ?",
+                "SELECT name, medical FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4054,7 +4056,7 @@ class EnhancedEventsCog(commands.Cog):
             if medical_skill >= 10:
                 reward = 200 + (medical_skill * 10)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -4073,7 +4075,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return          
             char_data = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4096,7 +4098,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(medical_button)
         view.add_item(ignore_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -4133,7 +4135,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return
             char_data = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4146,7 +4148,7 @@ class EnhancedEventsCog(commands.Cog):
             reward = random.randint(50, 150)
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, interaction.user.id)
             )
             
@@ -4160,7 +4162,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4174,7 +4176,7 @@ class EnhancedEventsCog(commands.Cog):
             if nav_skill >= 12:
                 reward = 300 + (nav_skill * 15)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -4193,7 +4195,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return            
             char_data = self.bot.db.execute_query(
-                "SELECT name, money FROM characters WHERE user_id = ?",
+                "SELECT name, money FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4206,7 +4208,7 @@ class EnhancedEventsCog(commands.Cog):
             profit = random.randint(100, 250)
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (profit, interaction.user.id)
             )
             
@@ -4223,7 +4225,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(organize_button)
         view.add_item(trade_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
         
@@ -4255,7 +4257,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return            
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4269,7 +4271,7 @@ class EnhancedEventsCog(commands.Cog):
             if nav_skill >= 15:
                 reward = 350 + (nav_skill * 12)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -4288,7 +4290,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
             char_data = self.bot.db.execute_query(
-                "SELECT name, engineering FROM characters WHERE user_id = ?",
+                "SELECT name, engineering FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4301,7 +4303,7 @@ class EnhancedEventsCog(commands.Cog):
             reward = 200 + (eng_skill * 8)
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, interaction.user.id)
             )
             
@@ -4315,7 +4317,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(assist_button)
         view.add_item(manual_dock_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -4346,7 +4348,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return                
             char_data = self.bot.db.execute_query(
-                "SELECT name, money FROM characters WHERE user_id = ?",
+                "SELECT name, money FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4362,7 +4364,7 @@ class EnhancedEventsCog(commands.Cog):
                 net_gain = profit - 200
                 
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (net_gain, interaction.user.id)
                 )
                 
@@ -4381,7 +4383,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return       
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4394,7 +4396,7 @@ class EnhancedEventsCog(commands.Cog):
             reward = 250 + (nav_skill * 10)
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, interaction.user.id)
             )
             
@@ -4408,7 +4410,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(trade_button)
         view.add_item(negotiate_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -4439,7 +4441,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
             char_data = self.bot.db.execute_query(
-                "SELECT name, combat FROM characters WHERE user_id = ?",
+                "SELECT name, combat FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4453,7 +4455,7 @@ class EnhancedEventsCog(commands.Cog):
             if combat_skill >= 15:
                 reward = 400 + (combat_skill * 15)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -4472,7 +4474,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
             char_data = self.bot.db.execute_query(
-                "SELECT name, money FROM characters WHERE user_id = ?",
+                "SELECT name, money FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4489,7 +4491,7 @@ class EnhancedEventsCog(commands.Cog):
                 net_gain = tip - service_cost
                 
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (net_gain, interaction.user.id)
                 )
                 
@@ -4508,7 +4510,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(security_button)
         view.add_item(service_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -4540,7 +4542,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
             char_data = self.bot.db.execute_query(
-                "SELECT name, money FROM characters WHERE user_id = ?",
+                "SELECT name, money FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4554,7 +4556,7 @@ class EnhancedEventsCog(commands.Cog):
             
             if current_money >= donation:
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money - %s WHERE user_id = %s",
                     (donation, interaction.user.id)
                 )
                 
@@ -4573,7 +4575,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return          
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4587,7 +4589,7 @@ class EnhancedEventsCog(commands.Cog):
             if nav_skill >= 12:
                 reward = 350 + (nav_skill * 20)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -4606,7 +4608,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(donate_button)
         view.add_item(emergency_run_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -4637,7 +4639,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
             char_data = self.bot.db.execute_query(
-                "SELECT name, engineering FROM characters WHERE user_id = ?",
+                "SELECT name, engineering FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4650,7 +4652,7 @@ class EnhancedEventsCog(commands.Cog):
             find_value = random.randint(100, 300) + (eng_skill * 10)
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (find_value, interaction.user.id)
             )
             
@@ -4664,7 +4666,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return         
             char_data = self.bot.db.execute_query(
-                "SELECT name, money FROM characters WHERE user_id = ?",
+                "SELECT name, money FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4681,7 +4683,7 @@ class EnhancedEventsCog(commands.Cog):
                 net_gain = potential_value - claim_cost
                 
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (net_gain, interaction.user.id)
                 )
                 
@@ -4700,7 +4702,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(investigate_button)
         view.add_item(claim_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -4731,7 +4733,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return         
             char_data = self.bot.db.execute_query(
-                "SELECT name, engineering FROM characters WHERE user_id = ?",
+                "SELECT name, engineering FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4745,7 +4747,7 @@ class EnhancedEventsCog(commands.Cog):
             if eng_skill >= 15:
                 reward = 400 + (eng_skill * 18)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -4769,7 +4771,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return          
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4782,7 +4784,7 @@ class EnhancedEventsCog(commands.Cog):
             reward = 200 + (nav_skill * 12)
             
             self.bot.db.execute_query(
-                "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, interaction.user.id)
             )
             
@@ -4796,7 +4798,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(repair_button)
         view.add_item(improvise_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
 
@@ -4834,7 +4836,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return        
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4850,7 +4852,7 @@ class EnhancedEventsCog(commands.Cog):
             if discovery_roll <= 30:  # 30% chance of finding something valuable
                 reward = random.randint(300, 600)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -4861,7 +4863,7 @@ class EnhancedEventsCog(commands.Cog):
             elif discovery_roll <= 60:  # 30% chance of neutral discovery
                 reward = random.randint(50, 150)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -4885,7 +4887,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return         
             char_data = self.bot.db.execute_query(
-                "SELECT name, engineering FROM characters WHERE user_id = ?",
+                "SELECT name, engineering FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4899,7 +4901,7 @@ class EnhancedEventsCog(commands.Cog):
             if eng_skill >= 12:
                 reward = 200 + (eng_skill * 15)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, interaction.user.id)
                 )
                 
@@ -4918,7 +4920,7 @@ class EnhancedEventsCog(commands.Cog):
                 await interaction.response.send_message("You've already responded to this event!", ephemeral=True)
                 return         
             char_data = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -4941,7 +4943,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(decode_button)
         view.add_item(ignore_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
     
@@ -4955,7 +4957,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         char_data = self.bot.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -4969,7 +4971,7 @@ class EnhancedEventsCog(commands.Cog):
         effects = []
         if random.random() < 0.6:  # 60% chance of fuel efficiency reduction
             self.bot.db.execute_query(
-                "UPDATE ships SET fuel_efficiency = MAX(1, fuel_efficiency - 2) WHERE owner_id = ?",
+                "UPDATE ships SET fuel_efficiency = MAX(1, fuel_efficiency - 2) WHERE owner_id = %s",
                 (user_id,)
             )
             effects.append("• Fuel efficiency reduced by 2")
@@ -4990,7 +4992,7 @@ class EnhancedEventsCog(commands.Cog):
             inline=False
         )
         
-        await channel.send(embed=embed)
+        await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
 
     async def _handle_travel_quantum_storm(self, channel, user_id, event_data):
         """Handle quantum storm during travel"""
@@ -5001,7 +5003,7 @@ class EnhancedEventsCog(commands.Cog):
         )
         
         char_data = self.bot.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -5027,12 +5029,12 @@ class EnhancedEventsCog(commands.Cog):
         else:  # Positive effect (rare)
             bonus_exp = random.randint(10, 25)
             self.bot.db.execute_query(
-                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                 (bonus_exp, user_id)
             )
             embed.add_field(name="✨ Effect", value=f"Quantum patterns provide scientific insights: +{bonus_exp} experience", inline=False)
         
-        await channel.send(embed=embed)
+        await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
 
     async def _handle_travel_radiation_nebula(self, channel, user_id, event_data):
         """Handle radiation nebula during travel"""
@@ -5063,7 +5065,7 @@ class EnhancedEventsCog(commands.Cog):
             inline=False
         )
         
-        await channel.send(embed=embed)
+        await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
 
 
 
@@ -5078,7 +5080,7 @@ class EnhancedEventsCog(commands.Cog):
         if event.get('interactive') and event.get('handler'):
             await event['handler'](channel, players, event)
         else:
-            await channel.send(embed=embed)
+            await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
             
             # Apply non-interactive event effects if location_id is provided
             if location_id and event.get('effects') and not event.get('interactive'):
@@ -5126,7 +5128,7 @@ class EnhancedEventsCog(commands.Cog):
             if random.random() < 0.6:  # 60% chance to be affected
                 # Temporary system failures
                 self.bot.db.execute_query(
-                    "UPDATE ships SET fuel_efficiency = MAX(1, fuel_efficiency - 2) WHERE owner_id = ?",
+                    "UPDATE ships SET fuel_efficiency = MAX(1, fuel_efficiency - 2) WHERE owner_id = %s",
                     (player_id,)
                 )
                 
@@ -5146,7 +5148,7 @@ class EnhancedEventsCog(commands.Cog):
                 inline=False
             )
         
-        await channel.send(embed=embed)
+        await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
 
     async def _handle_quantum_storm(self, location_id, players, location_name, event_name, description, color):
         """Handle quantum storm - reality distortions"""
@@ -5175,7 +5177,7 @@ class EnhancedEventsCog(commands.Cog):
                 else:  # Positive effect
                     bonus_exp = random.randint(10, 30)
                     self.bot.db.execute_query(
-                        "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                        "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                         (bonus_exp, player_id)
                     )
                     effect_text = f"You observe the static fog storm and learn: +{bonus_exp} experience"
@@ -5184,7 +5186,7 @@ class EnhancedEventsCog(commands.Cog):
                 if member:
                     embed.add_field(name=f"⚡ {member.display_name}", value=effect_text, inline=True)
         
-        await channel.send(embed=embed)
+        await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
 
     async def _handle_asteroid_field(self, location_id, players, location_name, event_name, description, color):
         """Handle asteroid field - evasion challenge"""
@@ -5202,7 +5204,7 @@ class EnhancedEventsCog(commands.Cog):
             inline=False
         )
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.message = message
 
     async def _handle_gravity_anomaly(self, location_id, players, location_name, event_name, description, color):
@@ -5220,7 +5222,7 @@ class EnhancedEventsCog(commands.Cog):
             if random.random() < 0.2:  # 20% chance
                 # Get random location
                 random_location = self.bot.db.execute_query(
-                    "SELECT location_id, name FROM locations WHERE location_id != ? ORDER BY RANDOM() LIMIT 1",
+                    "SELECT location_id, name FROM locations WHERE location_id != %s ORDER BY RANDOM() LIMIT 1",
                     (location_id,),
                     fetch='one'
                 )
@@ -5228,7 +5230,7 @@ class EnhancedEventsCog(commands.Cog):
                 if random_location:
                     new_loc_id, new_loc_name = random_location
                     self.bot.db.execute_query(
-                        "UPDATE characters SET current_location = ? WHERE user_id = ?",
+                        "UPDATE characters SET current_location = %s WHERE user_id = %s",
                         (new_loc_id, player_id)
                     )
                     
@@ -5249,7 +5251,7 @@ class EnhancedEventsCog(commands.Cog):
                 inline=False
             )
         
-        await channel.send(embed=embed)
+        await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
 
     async def _handle_radiation_nebula(self, location_id, players, location_name, event_name, description, color):
         """Handle radiation nebula - health hazard"""
@@ -5287,18 +5289,17 @@ class EnhancedEventsCog(commands.Cog):
             inline=False
         )
         
-        await channel.send(embed=embed)
+        await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
 
     async def _get_location_channel(self, location_id):
-        """Get the Discord channel for a location"""
-        channel_info = self.bot.db.execute_query(
-            "SELECT channel_id FROM locations WHERE location_id = ?",
-            (location_id,),
-            fetch='one'
-        )
+        """Get the Discord channel for a location - returns first available channel for backwards compatibility"""
+        from utils.channel_manager import ChannelManager
+        channel_manager = ChannelManager(self.bot)
+        cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
         
-        if channel_info and channel_info[0]:
-            return self.bot.get_channel(channel_info[0])
+        if cross_guild_channels:
+            # Return the first available channel for backwards compatibility
+            return cross_guild_channels[0][1]
         return None
 
     # Add these methods to enhance travel events in cogs/enhanced_events.py
@@ -5316,7 +5317,7 @@ class EnhancedEventsCog(commands.Cog):
         
         # Get corridor danger level
         corridor_info = self.bot.db.execute_query(
-            "SELECT danger_level, name FROM corridors WHERE corridor_id = ?",
+            "SELECT danger_level, name FROM corridors WHERE corridor_id = %s",
             (corridor_id,),
             fetch='one'
         )
@@ -5328,7 +5329,7 @@ class EnhancedEventsCog(commands.Cog):
         
         # Get traveler info
         char_data = self.bot.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (user_id,),
             fetch='one'
         )
@@ -5496,7 +5497,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name, money FROM characters WHERE user_id = ?",
+                "SELECT name, money FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -5520,7 +5521,7 @@ class EnhancedEventsCog(commands.Cog):
             if current_money >= cost:
                 profit = value - cost
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (profit, user_id)
                 )
                 
@@ -5543,7 +5544,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_name = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )[0]
@@ -5558,7 +5559,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(trade_button)
         view.add_item(ignore_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
     async def _handle_energy_readings(self, channel, user_id, event_data):
@@ -5592,7 +5593,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name, engineering FROM characters WHERE user_id = ?",
+                "SELECT name, engineering FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -5608,7 +5609,7 @@ class EnhancedEventsCog(commands.Cog):
             if discovery_roll <= 40:  # 40% chance of valuable discovery
                 reward = random.randint(200, 500) + (eng_skill * 10)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, user_id)
                 )
                 
@@ -5641,7 +5642,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_name = self.bot.db.execute_query(
-                "SELECT name FROM characters WHERE user_id = ?",
+                "SELECT name FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )[0]
@@ -5656,7 +5657,7 @@ class EnhancedEventsCog(commands.Cog):
         view.add_item(investigate_button)
         view.add_item(avoid_button)
         
-        message = await channel.send(embed=embed, view=view)
+        message = await self.bot.send_with_cross_guild_broadcast(channel, embed=embed, view=view)
         view.on_timeout = create_timeout_handler_with_cleanup(event_id, message)
         view.message = message
     async def _handle_travel_pirates(self, channel, user_id, event_data):
@@ -5690,7 +5691,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name, combat FROM characters WHERE user_id = ?",
+                "SELECT name, combat FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -5707,7 +5708,7 @@ class EnhancedEventsCog(commands.Cog):
             if roll <= success_chance:
                 reward = random.randint(200, 500)
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = money + ? WHERE user_id = ?",
+                    "UPDATE characters SET money = money + %s WHERE user_id = %s",
                     (reward, user_id)
                 )
                 
@@ -5720,7 +5721,7 @@ class EnhancedEventsCog(commands.Cog):
                 credits_lost = random.randint(100, 300)
                 
                 self.bot.db.execute_query(
-                    "UPDATE characters SET money = MAX(0, money - ?) WHERE user_id = ?",
+                    "UPDATE characters SET money = GREATEST(0, money - %s) WHERE user_id = %s",
                     (credits_lost, user_id)
                 )
                 char_cog = self.bot.get_cog('CharacterCog')
@@ -5741,7 +5742,7 @@ class EnhancedEventsCog(commands.Cog):
                 return
             
             char_data = self.bot.db.execute_query(
-                "SELECT name, navigation FROM characters WHERE user_id = ?",
+                "SELECT name, navigation FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
@@ -5829,12 +5830,12 @@ class PirateEncounterView(BaseEventView):
             
             for player_id in self.players:
                 player_money = self.bot.db.execute_query(
-                    "SELECT money FROM characters WHERE user_id = ?", (player_id,), fetch='one'
+                    "SELECT money FROM characters WHERE user_id = %s", (player_id,), fetch='one'
                 )[0]
                 
                 if player_money >= tribute_amount:
                     self.bot.db.execute_query(
-                        "UPDATE characters SET money = money - ? WHERE user_id = ?",
+                        "UPDATE characters SET money = money - %s WHERE user_id = %s",
                         (tribute_amount, player_id)
                     )
             
@@ -5854,7 +5855,7 @@ class PirateEncounterView(BaseEventView):
                 if combat_cog:
                     await combat_cog.start_pirate_combat(channel, self.players, self.pirate_ships)
         
-        await channel.send(embed=embed)
+        await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
 
 
 class AsteroidFieldView(BaseEventView):
@@ -5917,7 +5918,7 @@ class AsteroidFieldView(BaseEventView):
                     else:
                         results.append(f"💥 {member.display_name}: {strategy.title()} - {damage} hull damage")
         
-        await channel.send(embed=embed)
+        await self.bot.send_with_cross_guild_broadcast(channel, embed=embed)
 
 
 
@@ -5995,12 +5996,12 @@ class ReputationEventView(BaseEventView):
                 if rep_minor != 0:
                     nearby_locations = self.bot.db.execute_query(
                         """SELECT DISTINCT CASE 
-                               WHEN origin_location = ? THEN destination_location
+                               WHEN origin_location = %s THEN destination_location
                                ELSE origin_location
                            END as nearby_location
                            FROM corridors 
-                           WHERE (origin_location = ? OR (destination_location = ? AND is_bidirectional = 1)) 
-                           AND is_active = 1""",
+                           WHERE (origin_location = %s OR (destination_location = %s AND is_bidirectional = true)) 
+                           AND is_active = true""",
                         (self.location_id, self.location_id, self.location_id),
                         fetch='all'
                     )

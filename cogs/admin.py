@@ -26,13 +26,13 @@ class AdminCog(commands.Cog):
     @app_commands.describe(player="Player to send AFK warning to")
     async def admin_afk_warning(self, interaction: discord.Interaction, player: discord.Member):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Check if player has a character and is logged in
         char_info = self.db.execute_query(
-            "SELECT name, is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT name, is_logged_in FROM characters WHERE user_id = %s",
             (player.id,),
             fetch='one'
         )
@@ -49,7 +49,7 @@ class AdminCog(commands.Cog):
         
         # Check if player already has an active AFK warning
         existing_warning = self.db.execute_query(
-            "SELECT warning_id FROM afk_warnings WHERE user_id = ? AND is_active = 1",
+            "SELECT warning_id FROM afk_warnings WHERE user_id = %s AND is_active = true",
             (player.id,),
             fetch='one'
         )
@@ -88,15 +88,15 @@ class AdminCog(commands.Cog):
             
     @admin_group.command(name="setup", description="Initial server setup and configuration")
     async def setup_server(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.send_message("🔧 Starting server setup...", ephemeral=True)
         
         # Check if setup already completed
         existing_config = self.db.execute_query(
-            "SELECT setup_completed FROM server_config WHERE guild_id = ?",
+            "SELECT setup_completed FROM server_config WHERE guild_id = %s",
             (interaction.guild.id,),
             fetch='one'
         )
@@ -138,7 +138,7 @@ class AdminCog(commands.Cog):
             
             # First check database for existing configured channel
             existing_news_config = self.db.execute_query(
-                "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = ?",
+                "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = %s",
                 (interaction.guild.id,),
                 fetch='one'
             )
@@ -159,7 +159,7 @@ class AdminCog(commands.Cog):
                         
                         # Update database to point to this existing channel
                         self.db.execute_query(
-                            "UPDATE server_config SET galactic_updates_channel_id = ? WHERE guild_id = ?",
+                            "UPDATE server_config SET galactic_updates_channel_id = %s WHERE guild_id = %s",
                             (news_channel.id, interaction.guild.id)
                         )
                         break
@@ -201,7 +201,7 @@ class AdminCog(commands.Cog):
 
             # First check database for existing configured channel
             existing_status_config = self.db.execute_query(
-                "SELECT status_voice_channel_id FROM server_config WHERE guild_id = ?",
+                "SELECT status_voice_channel_id FROM server_config WHERE guild_id = %s",
                 (interaction.guild.id,),
                 fetch='one'
             )
@@ -243,19 +243,19 @@ class AdminCog(commands.Cog):
             # Immediately save news channel configuration if we created or found one
             if news_channel:
                 existing_config = self.db.execute_query(
-                    "SELECT guild_id FROM server_config WHERE guild_id = ?",
+                    "SELECT guild_id FROM server_config WHERE guild_id = %s",
                     (interaction.guild.id,),
                     fetch='one'
                 )
                 
                 if existing_config:
                     self.db.execute_query(
-                        "UPDATE server_config SET galactic_updates_channel_id = ? WHERE guild_id = ?",
+                        "UPDATE server_config SET galactic_updates_channel_id = %s WHERE guild_id = %s",
                         (news_channel.id, interaction.guild.id)
                     )
                 else:
                     self.db.execute_query(
-                        "INSERT INTO server_config (guild_id, galactic_updates_channel_id) VALUES (?, ?)",
+                        "INSERT INTO server_config (guild_id, galactic_updates_channel_id) VALUES (%s, %s)",
                         (interaction.guild.id, news_channel.id)
                     )
                 
@@ -305,11 +305,23 @@ class AdminCog(commands.Cog):
                         categories[cat_type] = None
             
             self.db.execute_query(
-                '''INSERT OR REPLACE INTO server_config 
+                '''INSERT INTO server_config 
                    (guild_id, colony_category_id, station_category_id, outpost_category_id, 
                     gate_category_id, transit_category_id, ship_interiors_category_id, residences_category_id, galactic_updates_channel_id, 
                     status_voice_channel_id, setup_completed)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true)
+                   ON CONFLICT (guild_id) DO UPDATE SET
+                   colony_category_id = EXCLUDED.colony_category_id,
+                   station_category_id = EXCLUDED.station_category_id,
+                   outpost_category_id = EXCLUDED.outpost_category_id,
+                   gate_category_id = EXCLUDED.gate_category_id,
+                   transit_category_id = EXCLUDED.transit_category_id,
+                   ship_interiors_category_id = EXCLUDED.ship_interiors_category_id,
+                   residences_category_id = EXCLUDED.residences_category_id,
+                   galactic_updates_channel_id = EXCLUDED.galactic_updates_channel_id,
+                   status_voice_channel_id = EXCLUDED.status_voice_channel_id,
+                   setup_completed = EXCLUDED.setup_completed,
+                   updated_at = NOW()''',
                 (
                     interaction.guild.id, 
                     categories.get('colony'), 
@@ -393,8 +405,8 @@ class AdminCog(commands.Cog):
     async def server_reset(self, interaction: discord.Interaction):
         """Complete server reset including all channels and database"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Show warning with confirmation view
@@ -432,7 +444,7 @@ class AdminCog(commands.Cog):
             '''SELECT colony_category_id, station_category_id, outpost_category_id,
                       gate_category_id, transit_category_id, max_location_channels,
                       channel_timeout_hours, auto_cleanup_enabled
-               FROM server_config WHERE guild_id = ?''',
+               FROM server_config WHERE guild_id = %s''',
             (interaction.guild.id,),
             fetch='one'
         )
@@ -524,8 +536,8 @@ class AdminCog(commands.Cog):
                                    description: str, location_name: str = None, 
                                    news_type: str = "admin_announcement"):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -546,7 +558,7 @@ class AdminCog(commands.Cog):
         # If location specified, find it and calculate delay
         if location_name:
             location = self.db.execute_query(
-                "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(?)",
+                "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
                 (f"%{location_name}%",),
                 fetch='one'
             )
@@ -623,13 +635,13 @@ class AdminCog(commands.Cog):
     )
     async def set_money(self, interaction: discord.Interaction, player: discord.Member, amount: int):
         """Set a player's money to a specific amount"""
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Check if player has a character
         char_data = self.db.execute_query(
-            "SELECT name, money FROM characters WHERE user_id = ?",
+            "SELECT name, money FROM characters WHERE user_id = %s",
             (player.id,),
             fetch='one'
         )
@@ -653,7 +665,7 @@ class AdminCog(commands.Cog):
         
         # Update the money
         self.db.execute_query(
-            "UPDATE characters SET money = ? WHERE user_id = ?",
+            "UPDATE characters SET money = %s WHERE user_id = %s",
             (amount, player.id)
         )
         
@@ -683,13 +695,13 @@ class AdminCog(commands.Cog):
     )
     async def set_xp(self, interaction: discord.Interaction, player: discord.Member, amount: int):
         """Set a player's XP to a specific amount and adjust level accordingly"""
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Check if player has a character
         char_data = self.db.execute_query(
-            "SELECT name, experience, level, skill_points FROM characters WHERE user_id = ?",
+            "SELECT name, experience, level, skill_points FROM characters WHERE user_id = %s",
             (player.id,),
             fetch='one'
         )
@@ -740,13 +752,13 @@ class AdminCog(commands.Cog):
         # Update the character
         self.db.execute_query(
             """UPDATE characters 
-               SET experience = ?, level = ?, skill_points = ?, 
-                   max_hp = max_hp + ?, hp = CASE 
-                       WHEN hp + ? > max_hp + ? THEN max_hp + ?
-                       WHEN hp + ? < 1 THEN 1
-                       ELSE hp + ?
+               SET experience = %s, level = %s, skill_points = %s, 
+                   max_hp = max_hp + %s, hp = CASE 
+                       WHEN hp + %s > max_hp + %s THEN max_hp + %s
+                       WHEN hp + %s < 1 THEN 1
+                       ELSE hp + %s
                    END
-               WHERE user_id = ?""",
+               WHERE user_id = %s""",
             (amount, new_level, new_skill_points, 
              hp_difference, hp_difference, hp_difference, hp_difference, 
              hp_difference, hp_difference, player.id)
@@ -754,7 +766,7 @@ class AdminCog(commands.Cog):
         
         # Get updated HP for display
         updated_hp_data = self.db.execute_query(
-            "SELECT hp, max_hp FROM characters WHERE user_id = ?",
+            "SELECT hp, max_hp FROM characters WHERE user_id = %s",
             (player.id,),
             fetch='one'
         )
@@ -818,8 +830,8 @@ class AdminCog(commands.Cog):
     
     @admin_group.command(name="fix_item_metadata", description="Fix metadata for items in shops and inventories")
     async def fix_item_metadata(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -840,7 +852,7 @@ class AdminCog(commands.Cog):
                 if item_def:
                     new_metadata = ItemConfig.create_item_metadata(item_name)
                     self.db.execute_query(
-                        "UPDATE shop_items SET metadata = ? WHERE item_id = ?",
+                        "UPDATE shop_items SET metadata = %s WHERE item_id = %s",
                         (new_metadata, item_id)
                     )
                     shop_fixed += 1
@@ -858,7 +870,7 @@ class AdminCog(commands.Cog):
                 if item_def:
                     new_metadata = ItemConfig.create_item_metadata(item_name)
                     self.db.execute_query(
-                        "UPDATE inventory SET metadata = ? WHERE item_id = ?",
+                        "UPDATE inventory SET metadata = %s WHERE item_id = %s",
                         (new_metadata, item_id)
                     )
                     inv_fixed += 1
@@ -880,13 +892,13 @@ class AdminCog(commands.Cog):
     )
     async def teleport_character(self, interaction: discord.Interaction, player: discord.Member, destination: str):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Check if player has a character
         char_info = self.db.execute_query(
-            "SELECT current_location, name FROM characters WHERE user_id = ?",
+            "SELECT current_location, name FROM characters WHERE user_id = %s",
             (player.id,),
             fetch='one'
         )
@@ -899,7 +911,7 @@ class AdminCog(commands.Cog):
         
         # Find destination location
         dest_location = self.db.execute_query(
-            "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(?)",
+            "SELECT location_id, name FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
             (f"%{destination}%",),
             fetch='one'
         )
@@ -916,20 +928,20 @@ class AdminCog(commands.Cog):
         
         # Get current location name for logging
         current_location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (current_location_id,),
             fetch='one'
         )[0] if current_location_id else "Unknown"
         
         # Cancel any active travel
         self.db.execute_query(
-            "UPDATE travel_sessions SET status = 'admin_teleport' WHERE user_id = ? AND status = 'traveling'",
+            "UPDATE travel_sessions SET status = 'admin_teleport' WHERE user_id = %s AND status = 'traveling'",
             (player.id,)
         )
         
         # Update character location
         self.db.execute_query(
-            "UPDATE characters SET current_location = ? WHERE user_id = ?",
+            "UPDATE characters SET current_location = %s WHERE user_id = %s",
             (dest_location_id, player.id)
         )
         
@@ -971,13 +983,13 @@ class AdminCog(commands.Cog):
     @admin_group.command(name="set_galactic_updates", description="Set the channel for galactic news updates")
     @app_commands.describe(channel="Channel to receive galactic news updates")
     async def set_galactic_updates_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Check if server config exists, create if not
         existing_config = self.db.execute_query(
-            "SELECT guild_id FROM server_config WHERE guild_id = ?",
+            "SELECT guild_id FROM server_config WHERE guild_id = %s",
             (interaction.guild.id,),
             fetch='one'
         )
@@ -985,7 +997,7 @@ class AdminCog(commands.Cog):
         if existing_config:
             # Update existing config
             self.db.execute_query(
-                "UPDATE server_config SET galactic_updates_channel_id = ? WHERE guild_id = ?",
+                "UPDATE server_config SET galactic_updates_channel_id = %s WHERE guild_id = %s",
                 (channel.id, interaction.guild.id)
             )
         else:
@@ -993,7 +1005,7 @@ class AdminCog(commands.Cog):
             self.db.execute_query(
                 """INSERT INTO server_config 
                    (guild_id, galactic_updates_channel_id) 
-                   VALUES (?, ?)""",
+                   VALUES (%s, %s)""",
                 (interaction.guild.id, channel.id)
             )
         
@@ -1038,8 +1050,8 @@ class AdminCog(commands.Cog):
         app_commands.Choice(name="All NPCs", value="all")
     ])
     async def npc_debug(self, interaction: discord.Interaction, npc_type: str, location_id: int = None):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         embed = discord.Embed(title="🤖 NPC Debug Information", color=0x9b59b6)
@@ -1050,7 +1062,7 @@ class AdminCog(commands.Cog):
                     """SELECT s.name, s.age, s.occupation, l.name as location_name
                        FROM static_npcs s
                        JOIN locations l ON s.location_id = l.location_id
-                       WHERE s.location_id = ?
+                       WHERE s.location_id = %s
                        ORDER BY s.name""",
                     (location_id,),
                     fetch='all'
@@ -1090,7 +1102,7 @@ class AdminCog(commands.Cog):
                     """SELECT n.name, n.callsign, n.ship_name, n.is_alive,
                               CASE WHEN n.travel_start_time IS NOT NULL THEN 'Traveling' ELSE 'Docked' END as status
                        FROM dynamic_npcs n
-                       WHERE n.current_location = ? OR n.destination_location = ?
+                       WHERE n.current_location = %s OR n.destination_location = %s
                        ORDER BY n.name""",
                     (location_id, location_id),
                     fetch='all'
@@ -1105,8 +1117,8 @@ class AdminCog(commands.Cog):
                 dynamic_stats = self.db.execute_query(
                     """SELECT
                        COALESCE(COUNT(*), 0),
-                       COALESCE(SUM(CASE WHEN is_alive = 1 THEN 1 ELSE 0 END), 0),
-                       COALESCE(SUM(CASE WHEN travel_start_time IS NOT NULL AND is_alive = 1 THEN 1 ELSE 0 END), 0)
+                       COALESCE(SUM(CASE WHEN is_alive = true THEN 1 ELSE 0 END), 0),
+                       COALESCE(SUM(CASE WHEN travel_start_time IS NOT NULL AND is_alive = true THEN 1 ELSE 0 END), 0)
                        FROM dynamic_npcs""",
                     fetch='one'
                 )
@@ -1125,7 +1137,7 @@ class AdminCog(commands.Cog):
                     """SELECT l.name, COUNT(n.npc_id) as npc_count
                        FROM locations l
                        JOIN dynamic_npcs n ON l.location_id = n.current_location
-                       WHERE n.is_alive = 1 AND n.travel_start_time IS NULL
+                       WHERE n.is_alive = true AND n.travel_start_time IS NULL
                        GROUP BY l.location_id, l.name
                        ORDER BY npc_count DESC
                        LIMIT 5""",
@@ -1145,13 +1157,13 @@ class AdminCog(commands.Cog):
     @admin_group.command(name="kill_npc", description="Kill a dynamic NPC")
     @app_commands.describe(callsign="Callsign of the NPC to kill")
     async def kill_npc(self, interaction: discord.Interaction, callsign: str):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Find the NPC
         npc_info = self.db.execute_query(
-            "SELECT npc_id, name, is_alive, current_location, destination_location FROM dynamic_npcs WHERE callsign = ?",
+            "SELECT npc_id, name, is_alive, current_location, destination_location FROM dynamic_npcs WHERE callsign = %s",
             (callsign.upper(),),
             fetch='one'
         )
@@ -1168,7 +1180,7 @@ class AdminCog(commands.Cog):
         
         # Kill the NPC
         self.db.execute_query(
-            "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = ?",
+            "UPDATE dynamic_npcs SET is_alive = false WHERE npc_id = %s",
             (npc_id,)
         )
         
@@ -1204,15 +1216,15 @@ class AdminCog(commands.Cog):
     @app_commands.describe(player="The player to diagnose")
     async def ship_diagnostic(self, interaction: discord.Interaction, player: discord.Member = None):
         """Diagnose ship and fuel issues"""
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         target = player or interaction.user
         
         # Get character data
         char_data = self.db.execute_query(
-            "SELECT name, ship_id, active_ship_id FROM characters WHERE user_id = ?",
+            "SELECT name, ship_id, active_ship_id FROM characters WHERE user_id = %s",
             (target.id,),
             fetch='one'
         )
@@ -1228,7 +1240,7 @@ class AdminCog(commands.Cog):
             '''SELECT ps.ship_id, s.name, s.current_fuel, s.fuel_capacity
                FROM player_ships ps
                JOIN ships s ON ps.ship_id = s.ship_id
-               WHERE ps.owner_id = ? AND ps.is_active = 1''',
+               WHERE ps.owner_id = %s AND ps.is_active = true''',
             (target.id,),
             fetch='one'
         )
@@ -1238,7 +1250,7 @@ class AdminCog(commands.Cog):
             '''SELECT s.current_fuel, s.fuel_capacity, s.name
                FROM characters c
                JOIN ships s ON c.ship_id = s.ship_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (target.id,),
             fetch='one'
         )
@@ -1248,7 +1260,7 @@ class AdminCog(commands.Cog):
             '''SELECT s.current_fuel, s.fuel_capacity, s.name
                FROM characters c
                JOIN ships s ON c.active_ship_id = s.ship_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (target.id,),
             fetch='one'
         )
@@ -1327,13 +1339,13 @@ class AdminCog(commands.Cog):
 
     @admin_group.command(name="news_status", description="Check galactic news system status")
     async def galactic_news_status(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Get configuration
         config = self.db.execute_query(
-            "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = ?",
+            "SELECT galactic_updates_channel_id FROM server_config WHERE guild_id = %s",
             (interaction.guild.id,),
             fetch='one'
         )
@@ -1366,7 +1378,7 @@ class AdminCog(commands.Cog):
         
         # Get pending news count
         pending_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM news_queue WHERE guild_id = ? AND is_delivered = 0",
+            "SELECT COUNT(*) FROM news_queue WHERE guild_id = %s AND is_delivered = 0",
             (interaction.guild.id,),
             fetch='one'
         )[0]
@@ -1379,7 +1391,7 @@ class AdminCog(commands.Cog):
         
         # Get recent news count
         recent_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM news_queue WHERE guild_id = ? AND created_at > datetime('now', '-24 hours')",
+            "SELECT COUNT(*) FROM news_queue WHERE guild_id = %s AND created_at > NOW() - INTERVAL '24 hours'",
             (interaction.guild.id,),
             fetch='one'
         )[0]
@@ -1398,8 +1410,8 @@ class AdminCog(commands.Cog):
     @admin_group.command(name="fix_all_ships", description="Fix all ship issues for all players")
     async def fix_all_ships(self, interaction: discord.Interaction):
         """Fix all ship-related issues for all players"""
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -1425,7 +1437,7 @@ class AdminCog(commands.Cog):
                 
             # Check if this ship exists in player_ships
             exists_in_player_ships = self.db.execute_query(
-                "SELECT 1 FROM player_ships WHERE owner_id = ? AND ship_id = ?",
+                "SELECT 1 FROM player_ships WHERE owner_id = %s AND ship_id = %s",
                 (user_id, ship_id),
                 fetch='one'
             )
@@ -1433,26 +1445,26 @@ class AdminCog(commands.Cog):
             if not exists_in_player_ships:
                 # Add to player_ships
                 self.db.execute_query(
-                    "INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (?, ?, 1)",
+                    "INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (%s, %s, 1)",
                     (user_id, ship_id)
                 )
                 fixed_count += 1
             else:
                 # Make sure it's active
                 self.db.execute_query(
-                    "UPDATE player_ships SET is_active = 1 WHERE owner_id = ? AND ship_id = ?",
+                    "UPDATE player_ships SET is_active = true WHERE owner_id = %s AND ship_id = %s",
                     (user_id, ship_id)
                 )
             
             # Deactivate any other ships for this player
             self.db.execute_query(
-                "UPDATE player_ships SET is_active = 0 WHERE owner_id = ? AND ship_id != ?",
+                "UPDATE player_ships SET is_active = false WHERE owner_id = %s AND ship_id != %s",
                 (user_id, ship_id)
             )
             
             # Update character's ship_id and active_ship_id
             self.db.execute_query(
-                "UPDATE characters SET ship_id = ?, active_ship_id = ? WHERE user_id = ?",
+                "UPDATE characters SET ship_id = %s, active_ship_id = %s WHERE user_id = %s",
                 (ship_id, ship_id, user_id)
             )
         
@@ -1483,8 +1495,8 @@ class AdminCog(commands.Cog):
     @admin_group.command(name="cleanup_channels", description="Manually trigger cleanup of unused location channels")
     @app_commands.describe(force="Force cleanup even for recently used channels")
     async def cleanup_channels(self, interaction: discord.Interaction, force: bool = False):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -1531,8 +1543,8 @@ class AdminCog(commands.Cog):
     @admin_group.command(name="cleanup_ship_exchange", description="Clean up expired ship exchange listings and offers")
     async def cleanup_ship_exchange(self, interaction: discord.Interaction):
         """Clean up expired ship exchange listings and offers"""
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -1540,12 +1552,12 @@ class AdminCog(commands.Cog):
         try:
             # Get counts before cleanup
             expired_listings = self.db.execute_query(
-                "SELECT COUNT(*) FROM ship_exchange_listings WHERE expires_at < datetime('now') AND is_active = 1",
+                "SELECT COUNT(*) FROM ship_exchange_listings WHERE expires_at < NOW() AND is_active = true",
                 fetch='one'
             )[0]
             
             expired_offers = self.db.execute_query(
-                "SELECT COUNT(*) FROM ship_exchange_offers WHERE offer_expires_at < datetime('now') AND status = 'pending'",
+                "SELECT COUNT(*) FROM ship_exchange_offers WHERE offer_expires_at < NOW() AND status = 'pending'",
                 fetch='one'
             )[0]
             
@@ -1583,8 +1595,8 @@ class AdminCog(commands.Cog):
     @admin_group.command(name="fix_ship_activities", description="Generate activities for ships that don't have them")
     async def fix_ship_activities(self, interaction: discord.Interaction):
         """Generate ship activities for all ships missing them"""
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -1634,12 +1646,12 @@ class AdminCog(commands.Cog):
     @admin_group.command(name="location_info", description="Get detailed information about a location")
     @app_commands.describe(location_name="Name of the location to inspect")
     async def admin_location_info(self, interaction: discord.Interaction, location_name: str):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         location = self.db.execute_query(
-            "SELECT * FROM locations WHERE LOWER(name) LIKE LOWER(?)",
+            "SELECT * FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
             (f"%{location_name}%",),
             fetch='one'
         )
@@ -1697,7 +1709,7 @@ class AdminCog(commands.Cog):
         
         # Character count
         char_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE current_location = ?",
+            "SELECT COUNT(*) FROM characters WHERE current_location = %s",
             (loc_id,),
             fetch='one'
         )[0]
@@ -1707,7 +1719,7 @@ class AdminCog(commands.Cog):
         # Corridor connections
         corridors = self.db.execute_query(
             '''SELECT COUNT(*) FROM corridors 
-               WHERE origin_location = ? AND is_active = 1''',
+               WHERE origin_location = %s AND is_active = true''',
             (loc_id,),
             fetch='one'
         )[0]
@@ -1733,8 +1745,8 @@ class AdminCog(commands.Cog):
     ])
     async def reset_data(self, interaction: discord.Interaction, reset_type: str, confirm: str = ""):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         if confirm.upper() != "CONFIRM":
@@ -1796,8 +1808,8 @@ class AdminCog(commands.Cog):
     async def emergency_reset(self, interaction: discord.Interaction):
         """Emergency reset with immediate confirmation dialog"""
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         view = EmergencyResetView(self.bot, interaction.user.id)
@@ -1939,12 +1951,8 @@ class AdminCog(commands.Cog):
                 "galaxy_settings", "galaxy_info"
             ]
             
-            # Temporarily disable foreign key constraints for faster clearing
-            try:
-                self.db.execute_query("PRAGMA foreign_keys=OFF")
-                print("🔧 Temporarily disabled foreign key constraints for reset")
-            except Exception as e:
-                print(f"⚠️ Could not disable foreign keys: {e}")
+            # PostgreSQL always enforces foreign key constraints
+            # No need to disable/enable them like in SQLite
             
             # Delete all data
             for table in tables_to_clear_in_order:
@@ -1954,20 +1962,11 @@ class AdminCog(commands.Cog):
                     # Some tables might not exist, which is fine
                     print(f"Note: Could not clear table {table}: {e}")
             
-            # Re-enable foreign key constraints
-            try:
-                self.db.execute_query("PRAGMA foreign_keys=ON")
-                print("🔧 Re-enabled foreign key constraints after reset")
-            except Exception as e:
-                print(f"⚠️ Could not re-enable foreign keys: {e}")
+            # PostgreSQL always enforces foreign key constraints
+            # No need to disable/enable them like in SQLite
             
-            # Force WAL checkpoint after major deletions to prevent deadlocks
-            try:
-                self.db.execute_query("PRAGMA wal_checkpoint(TRUNCATE)")
-                print("✅ WAL checkpoint completed after full reset")
-                await asyncio.sleep(0.5)  # Allow checkpoint to complete
-            except Exception as e:
-                print(f"⚠️ WAL checkpoint failed after reset: {e}")
+            # PostgreSQL doesn't use WAL checkpoints via PRAGMA
+            # Database changes are automatically persisted
             
             # Delete Discord channels
             channels_deleted = 0
@@ -2020,7 +2019,7 @@ class AdminCog(commands.Cog):
             if reset_type in ["galaxy_with_logout"]:
                 # Step 1: Force logout all logged in users
                 logged_in_users = self.db.execute_query(
-                    "SELECT user_id FROM characters WHERE is_logged_in = 1", 
+                    "SELECT user_id FROM characters WHERE is_logged_in = true", 
                     fetch='all'
                 )
                 
@@ -2052,7 +2051,7 @@ class AdminCog(commands.Cog):
                     for owner_id, home_value in home_refunds:
                         # Add credits to character account
                         self.db.execute_in_transaction(conn,
-                            "UPDATE characters SET credits = credits + ? WHERE user_id = ?",
+                            "UPDATE characters SET credits = credits + %s WHERE user_id = %s",
                             (home_value, owner_id)
                         )
                         total_refunds += home_value
@@ -2257,14 +2256,8 @@ class AdminCog(commands.Cog):
                 # Skip endgame tables - not essential for galaxy reset
             ]
             
-            # Temporarily disable foreign key constraints for faster clearing (with timeout protection)
-            fk_disabled = False
-            try:
-                self.db.execute_query("PRAGMA foreign_keys=OFF")
-                fk_disabled = True
-                print("🔧 Temporarily disabled foreign key constraints for galaxy clearing")
-            except Exception as e:
-                print(f"⚠️ Could not disable foreign keys (continuing anyway): {e}")
+            # PostgreSQL always enforces foreign key constraints
+            # No need to disable/enable them like in SQLite
             
             # Clear tables with timeout protection
             for i, table in enumerate(tables_to_clear):
@@ -2283,30 +2276,13 @@ class AdminCog(commands.Cog):
                     # Some tables might not exist, which is fine
                     print(f"Note: Could not clear table {table}: {e}")
             
-            # Re-enable foreign key constraints only if we disabled them
-            if fk_disabled:
-                try:
-                    self.db.execute_query("PRAGMA foreign_keys=ON")
-                    print("🔧 Re-enabled foreign key constraints after galaxy clearing")
-                except Exception as e:
-                    print(f"⚠️ Could not re-enable foreign keys: {e}")
-                    # Force re-enable with a new connection if needed
-                    try:
-                        self.db.execute_query("PRAGMA foreign_keys=ON")
-                    except:
-                        pass  # Give up gracefully
+            # PostgreSQL always enforces foreign key constraints
+            # No need to disable/enable them like in SQLite
             
             # Skip game panels deletion - they'll update automatically when new galaxy exists
             
-            # Force WAL checkpoint after major deletions (use PASSIVE for galaxy reset to avoid blocking)
-            try:
-                # Use PASSIVE checkpoint for galaxy reset - less aggressive but safer
-                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")
-                print("✅ WAL checkpoint (PASSIVE) completed after galaxy data clearing")
-                await asyncio.sleep(0.2)  # Shorter wait for PASSIVE checkpoint
-            except Exception as e:
-                print(f"⚠️ WAL checkpoint failed after galaxy clearing: {e}")
-                # Don't block the reset if checkpoint fails
+            # PostgreSQL doesn't use WAL checkpoints via PRAGMA
+            # Database changes are automatically persisted
             
             print("✅ Comprehensive galaxy data clearing complete")
             
@@ -2365,12 +2341,8 @@ class AdminCog(commands.Cog):
             
             # Skip game panels deletion - they'll update automatically when new galaxy exists
             
-            # Force WAL checkpoint after major deletions (note: checkpoint operations should not be in transactions)
-            try:
-                self.db.execute_query("PRAGMA wal_checkpoint(PASSIVE)")  # Use PASSIVE within transaction context
-                print("✅ WAL checkpoint completed after galaxy data clearing in transaction")
-            except Exception as e:
-                print(f"⚠️ WAL checkpoint failed after galaxy clearing in transaction: {e}")
+            # PostgreSQL doesn't use WAL checkpoints via PRAGMA
+            # Database changes are automatically persisted
             
             print("✅ Comprehensive galaxy data clearing in transaction complete")
             
@@ -2383,13 +2355,13 @@ class AdminCog(commands.Cog):
         player="Player to log out"
     )
     async def afk_player(self, interaction: discord.Interaction, player: discord.Member):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Check if player has a character and is logged in
         char_data = self.db.execute_query(
-            "SELECT name, is_logged_in, current_location, current_ship_id, group_id, current_home_id FROM characters WHERE user_id = ?",
+            "SELECT name, is_logged_in, current_location, current_ship_id, group_id, current_home_id FROM characters WHERE user_id = %s",
             (player.id,),
             fetch='one'
         )
@@ -2406,20 +2378,20 @@ class AdminCog(commands.Cog):
         
         # Cancel any active jobs
         self.db.execute_query(
-            "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE taken_by = ?",
+            "UPDATE jobs SET is_taken = false, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE taken_by = %s",
             (player.id,)
         )
         
         # Remove from job tracking
         self.db.execute_query(
-            "DELETE FROM job_tracking WHERE user_id = ?",
+            "DELETE FROM job_tracking WHERE user_id = %s",
             (player.id,)
         )
         
         # Clear nickname if auto-rename is enabled
         if interaction.guild.me.guild_permissions.manage_nicknames:
             auto_rename_setting = self.db.execute_query(
-                "SELECT auto_rename FROM characters WHERE user_id = ?",
+                "SELECT auto_rename FROM characters WHERE user_id = %s",
                 (player.id,),
                 fetch='one'
             )
@@ -2431,7 +2403,7 @@ class AdminCog(commands.Cog):
         
         # Log out the character
         self.db.execute_query(
-            "UPDATE characters SET is_logged_in = 0 WHERE user_id = ?",
+            "UPDATE characters SET is_logged_in = false WHERE user_id = %s",
             (player.id,)
         )
         
@@ -2475,8 +2447,8 @@ class AdminCog(commands.Cog):
     @app_commands.describe(channel="Channel to create the game panel in (optional - uses current channel if not specified)")
     async def create_game_panel(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
         """Create a game panel in the current or specified channel"""
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Use specified channel or default to current channel
@@ -2484,7 +2456,7 @@ class AdminCog(commands.Cog):
         
         # Check if a panel already exists in the target channel
         existing_panel = self.db.execute_query(
-            "SELECT message_id FROM game_panels WHERE guild_id = ? AND channel_id = ?",
+            "SELECT message_id FROM game_panels WHERE guild_id = %s AND channel_id = %s",
             (interaction.guild.id, target_channel.id),
             fetch='one'
         )
@@ -2511,7 +2483,7 @@ class AdminCog(commands.Cog):
                 # Store panel in database
                 self.db.execute_query(
                     """INSERT INTO game_panels (guild_id, channel_id, message_id, created_by)
-                       VALUES (?, ?, ?, ?)""",
+                       VALUES (%s, %s, %s, %s)""",
                     (interaction.guild.id, target_channel.id, message.id, interaction.user.id)
                 )
                 
@@ -2532,22 +2504,40 @@ class AdminCog(commands.Cog):
     @admin_group.command(name="backup", description="Create a backup of the current database")
     async def backup_database(self, interaction: discord.Interaction):
         
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
         
         try:
-            import shutil
+            import subprocess
             from datetime import datetime
+            import os
             
             # Create backup filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_filename = f"rpg_game_backup_{timestamp}.db"
+            backup_filename = f"rpg_game_backup_{timestamp}.sql"
             
-            # Copy the database file
-            shutil.copy2(self.db.db_path, backup_filename)
+            # Use pg_dump to create PostgreSQL backup
+            # Extract connection details from database URL
+            db_url = self.db.db_url
+            env = os.environ.copy()
+            if 'host=/tmp' in db_url:
+                env['PGHOST'] = '/tmp'
+            
+            # Run pg_dump command
+            result = subprocess.run([
+                'pg_dump', 
+                '-h', '/tmp',
+                '-U', 'thequietend_user', 
+                '-d', 'thequietend_db',
+                '-f', backup_filename,
+                '--no-password'
+            ], env=env, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                raise Exception(f"pg_dump failed: {result.stderr}")
             
             # Get database stats
             stats = {}
@@ -2560,7 +2550,7 @@ class AdminCog(commands.Cog):
                     stats[table] = 0
             
             embed = discord.Embed(
-                title="💾 Database Backup Created",
+                title="💾 PostgreSQL Database Backup Created",
                 description=f"Backup saved as: `{backup_filename}`",
                 color=0x00ff00
             )
@@ -2569,8 +2559,8 @@ class AdminCog(commands.Cog):
             embed.add_field(name="Backed Up Data", value=stats_text, inline=True)
             
             embed.add_field(
-                name="📁 File Location", 
-                value=f"Same directory as bot files\nFile: `{backup_filename}`",
+                name="📁 File Details", 
+                value=f"SQL dump file created with pg_dump\nFile: `{backup_filename}`\nFormat: Plain SQL",
                 inline=False
             )
             
@@ -2582,8 +2572,8 @@ class AdminCog(commands.Cog):
     @admin_group.command(name="item", description="Delete items from player inventory")
     @app_commands.describe(player="Player to delete items from (optional - defaults to yourself)")
     async def delete_item(self, interaction: discord.Interaction, player: Optional[discord.Member] = None):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         # Use specified player or default to admin
@@ -2591,7 +2581,7 @@ class AdminCog(commands.Cog):
         
         # Check if target has a character
         char_info = self.db.execute_query(
-            "SELECT name FROM characters WHERE user_id = ?",
+            "SELECT name FROM characters WHERE user_id = %s",
             (target_user.id,),
             fetch='one'
         )
@@ -2609,7 +2599,7 @@ class AdminCog(commands.Cog):
                       i.item_id, CASE WHEN ce.equipment_id IS NOT NULL THEN 1 ELSE 0 END as is_equipped
                FROM inventory i
                LEFT JOIN character_equipment ce ON i.item_id = ce.item_id AND ce.user_id = i.owner_id
-               WHERE i.owner_id = ?
+               WHERE i.owner_id = %s
                ORDER BY is_equipped DESC, i.item_type, i.item_name''',
             (target_user.id,),
             fetch='all'
@@ -2641,8 +2631,8 @@ class AdminCog(commands.Cog):
         dry_run="If True, only shows what would be killed without actually doing it"
     )
     async def cleanup_dead_characters(self, interaction: discord.Interaction, dry_run: bool = True):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator permissions required.", ephemeral=True)
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -2652,7 +2642,7 @@ class AdminCog(commands.Cog):
             dead_hp_chars = self.db.execute_query("""
                 SELECT c.user_id, c.name, c.hp 
                 FROM characters c 
-                WHERE c.hp <= 0 AND c.is_logged_in = 1
+                WHERE c.hp <= 0 AND c.is_logged_in = true
             """, fetch='all')
             
             # Find characters with hull ≤ 0  
@@ -2660,7 +2650,7 @@ class AdminCog(commands.Cog):
                 SELECT c.user_id, c.name, s.hull_integrity 
                 FROM characters c 
                 JOIN ships s ON c.user_id = s.owner_id 
-                WHERE s.hull_integrity <= 0 AND c.is_logged_in = 1
+                WHERE s.hull_integrity <= 0 AND c.is_logged_in = true
             """, fetch='all')
             
             total_found = len(dead_hp_chars) + len(dead_hull_chars)
@@ -2779,7 +2769,7 @@ class EmergencyResetView(discord.ui.View):
             
             # Also clear server config (fresh start)
             admin_cog.db.execute_query(
-                "DELETE FROM server_config WHERE guild_id = ?",
+                "DELETE FROM server_config WHERE guild_id = %s",
                 (interaction.guild.id,)
             )
             
@@ -2852,7 +2842,7 @@ class ServerResetConfirmView(discord.ui.View):
                 """SELECT colony_category_id, station_category_id, outpost_category_id,
                           gate_category_id, transit_category_id, ship_interiors_category_id,
                           galactic_updates_channel_id, residences_category_id, status_voice_channel_id
-                   FROM server_config WHERE guild_id = ?""",
+                   FROM server_config WHERE guild_id = %s""",
                 (interaction.guild.id,),
                 fetch='one'
             )
@@ -2930,7 +2920,7 @@ class ServerResetConfirmView(discord.ui.View):
             
             # Also clear server config completely
             admin_cog.db.execute_query(
-                "DELETE FROM server_config WHERE guild_id = ?",
+                "DELETE FROM server_config WHERE guild_id = %s",
                 (interaction.guild.id,)
             )
             

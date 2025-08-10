@@ -32,7 +32,7 @@ This guide explains how to deploy the Discord RPG Bot using Docker on a VPS with
    DISCORD_TOKEN=your_actual_bot_token_here
    COMMAND_PREFIX=!
    ACTIVITY_NAME=Entropy
-   ALLOWED_GUILD_ID=your_actual_guild_id_here
+   # ALLOWED_GUILD_ID=your_actual_guild_id_here  # Optional: uncomment to restrict to single guild
    ```
 
 5. **Restart the bot to apply changes:**

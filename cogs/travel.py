@@ -7,10 +7,11 @@ from datetime import datetime, timedelta, timezone
 import random
 from utils.channel_manager import ChannelManager
 from cogs.corridor_events import CorridorEventsCog
-import sqlite3
+import psycopg2
 from typing import Optional
 from utils.item_effects import ItemEffectChecker
 from utils.location_effects import LocationEffectsManager
+from utils.datetime_utils import safe_datetime_parse
 
 class DockingFeeView(discord.ui.View):
     def __init__(self, bot, user_id, location_id, fee, origin_location_id):
@@ -30,7 +31,7 @@ class DockingFeeView(discord.ui.View):
 
         # Check if user can afford it
         money = self.bot.db.execute_query(
-            "SELECT money FROM characters WHERE user_id = ?", (self.user_id,), fetch='one'
+            "SELECT money FROM characters WHERE user_id = %s", (self.user_id,), fetch='one'
         )[0]
 
         if money < self.fee:
@@ -41,19 +42,19 @@ class DockingFeeView(discord.ui.View):
 
         # Deduct fee from player
         self.bot.db.execute_query(
-            "UPDATE characters SET money = money - ? WHERE user_id = ?", (self.fee, self.user_id)
+            "UPDATE characters SET money = money - %s WHERE user_id = %s", (self.fee, self.user_id)
         )
         
         # Add fee to faction bank if this is a faction-owned location
         faction_data = self.bot.db.execute_query(
-            "SELECT faction_id, f.name FROM location_ownership lo JOIN factions f ON lo.faction_id = f.faction_id WHERE location_id = ?",
+            "SELECT faction_id, f.name FROM location_ownership lo JOIN factions f ON lo.faction_id = f.faction_id WHERE location_id = %s",
             (self.location_id,), fetch='one'
         )
         
         if faction_data:
             faction_id, faction_name = faction_data
             self.bot.db.execute_query(
-                "UPDATE factions SET bank_balance = bank_balance + ? WHERE faction_id = ?",
+                "UPDATE factions SET bank_balance = bank_balance + %s WHERE faction_id = %s",
                 (self.fee, faction_id)
             )
             await interaction.response.send_message(f"You paid the {self.fee:,} credit docking fee to {faction_name}.", ephemeral=True)
@@ -107,7 +108,7 @@ class TravelCog(commands.Cog):
         
         # Get corridor danger level first
         danger_info = self.db.execute_query(
-            "SELECT danger_level, name, is_active FROM corridors WHERE corridor_id = ?",
+            "SELECT danger_level, name, is_active FROM corridors WHERE corridor_id = %s",
             (corridor_id,),
             fetch='one'
         )
@@ -156,7 +157,7 @@ class TravelCog(commands.Cog):
             # Check remaining travel time
             session_data = self.db.execute_query(
                 """SELECT end_time FROM travel_sessions 
-                   WHERE temp_channel_id = ? AND status = 'traveling'
+                   WHERE temp_channel_id = %s AND status = 'traveling'
                    ORDER BY session_id DESC LIMIT 1""",
                 (transit_channel.id,),
                 fetch='one'
@@ -165,7 +166,7 @@ class TravelCog(commands.Cog):
             if not session_data:
                 return  # Travel already completed
                 
-            end_time = datetime.fromisoformat(session_data[0])
+            end_time = safe_datetime_parse(session_data[0])
             remaining_time = (end_time - datetime.utcnow()).total_seconds()
             
             # Don't trigger event if less than 45 seconds remaining
@@ -188,7 +189,7 @@ class TravelCog(commands.Cog):
                FROM travel_sessions ts
                JOIN corridors c ON ts.corridor_id = c.corridor_id
                JOIN locations l ON ts.destination_location = l.location_id
-               WHERE ts.user_id = ? AND ts.status = 'traveling' ''',
+               WHERE ts.user_id = %s AND ts.status = 'traveling' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -203,11 +204,11 @@ class TravelCog(commands.Cog):
         dest_name = session[11]
         
         # Parse timestamps and make them timezone-aware
-        start_dt = datetime.fromisoformat(start_time)
+        start_dt = safe_datetime_parse(start_time)
         if start_dt.tzinfo is None:
             start_dt = start_dt.replace(tzinfo=timezone.utc)
         
-        end_dt = datetime.fromisoformat(end_time)
+        end_dt = safe_datetime_parse(end_time)
         if end_dt.tzinfo is None:
             end_dt = end_dt.replace(tzinfo=timezone.utc)
         
@@ -245,7 +246,7 @@ class TravelCog(commands.Cog):
         )
         # Get ship efficiency and modify travel time
         ship_efficiency = self.db.execute_query(
-            "SELECT fuel_efficiency FROM ships WHERE owner_id = ?",
+            "SELECT fuel_efficiency FROM ships WHERE owner_id = %s",
             (interaction.user.id,), fetch='one'
         )[0]
 
@@ -286,7 +287,7 @@ class TravelCog(commands.Cog):
         cost = final_fuel_cost
         # Check fuel
         char_fuel = self.db.execute_query(
-            "SELECT s.current_fuel FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = ?",
+            "SELECT s.current_fuel FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = %s",
             (interaction.user.id,), fetch='one'
         )
         
@@ -299,7 +300,7 @@ class TravelCog(commands.Cog):
 
         # Deduct fuel
         self.db.execute_query(
-            "UPDATE ships SET current_fuel = current_fuel - ? WHERE owner_id = ?",
+            "UPDATE ships SET current_fuel = current_fuel - %s WHERE owner_id = %s",
             (cost, interaction.user.id)
         )
 
@@ -324,9 +325,9 @@ class TravelCog(commands.Cog):
             INSERT INTO travel_sessions
               (user_id, corridor_id, origin_location, destination_location,
                start_time, end_time, temp_channel_id, status)
-            VALUES (?, ?, ?, 
-                    (SELECT CASE WHEN origin_location = ? THEN destination_location ELSE origin_location END FROM corridors WHERE corridor_id = ?),
-                    ?, ?, ?, 'traveling')
+            VALUES (%s, %s, %s, 
+                    (SELECT CASE WHEN origin_location = %s THEN destination_location ELSE origin_location END FROM corridors WHERE corridor_id = %s),
+                    %s, %s, %s, 'traveling')
             """,
             (
                 interaction.user.id,
@@ -357,14 +358,14 @@ class TravelCog(commands.Cog):
 
         # Remove user from origin location immediately
         old_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,), fetch='one'
         )
         old_location_id = old_location[0] if old_location else None
         
         # Set character location to None (in transit)
         self.db.execute_query(
-            "UPDATE characters SET current_location = NULL WHERE user_id = ?",
+            "UPDATE characters SET current_location = NULL WHERE user_id = %s",
             (interaction.user.id,)
         )
         
@@ -398,7 +399,7 @@ class TravelCog(commands.Cog):
     async def travel_go(self, interaction: discord.Interaction):
         # fetch both current location, docking status, and ship interior status
         row = self.db.execute_query(
-            "SELECT current_location, location_status, current_ship_id FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status, current_ship_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -433,7 +434,7 @@ class TravelCog(commands.Cog):
             return  # User needs to confirm job cancellation first    
         # Check if user is in a group
         group_check = self.db.execute_query(
-            "SELECT group_id FROM characters WHERE user_id = ? AND group_id IS NOT NULL",
+            "SELECT group_id FROM characters WHERE user_id = %s AND group_id IS NOT NULL",
             (interaction.user.id,),
             fetch='one'
         )
@@ -446,7 +447,7 @@ class TravelCog(commands.Cog):
         
         # Check if user is logged in
         login_status = self.db.execute_query(
-            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -465,7 +466,7 @@ class TravelCog(commands.Cog):
             return
         # Check if user is in a home
         current_home = self.db.execute_query(
-            "SELECT current_home_id FROM characters WHERE user_id = ?",
+            "SELECT current_home_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -478,7 +479,7 @@ class TravelCog(commands.Cog):
             return
         # Check if character has an active ship    
         active_ship = self.db.execute_query(
-            "SELECT active_ship_id FROM characters WHERE user_id = ?",
+            "SELECT active_ship_id FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -495,27 +496,27 @@ class TravelCog(commands.Cog):
             SELECT c.corridor_id,
                    c.name,
                    CASE 
-                       WHEN c.origin_location = ? THEN l_dest.name
+                       WHEN c.origin_location = %s THEN l_dest.name
                        ELSE l_orig.name
                    END AS dest_name,
                    c.travel_time,
                    c.fuel_cost,
                    CASE 
-                       WHEN c.origin_location = ? THEN l_dest.location_type
+                       WHEN c.origin_location = %s THEN l_dest.location_type
                        ELSE l_orig.location_type
                    END AS dest_type,
                    lo.location_type AS origin_type,
                    CASE WHEN lo.system_name = CASE 
-                       WHEN c.origin_location = ? THEN l_dest.system_name
+                       WHEN c.origin_location = %s THEN l_dest.system_name
                        ELSE l_orig.system_name
                    END THEN 1 ELSE 0 END AS same_system,
                    c.corridor_type
               FROM corridors c
               JOIN locations l_dest ON c.destination_location = l_dest.location_id
               JOIN locations l_orig ON c.origin_location = l_orig.location_id
-              JOIN locations lo ON ? = lo.location_id
-             WHERE (c.origin_location = ? OR (c.destination_location = ? AND c.is_bidirectional = 1)) 
-               AND c.is_active = 1
+              JOIN locations lo ON %s = lo.location_id
+             WHERE (c.origin_location = %s OR (c.destination_location = %s AND c.is_bidirectional = 1)) 
+               AND c.is_active = true
             ''',
             (origin_id, origin_id, origin_id, origin_id, origin_id, origin_id),
             fetch='all'
@@ -539,7 +540,7 @@ class TravelCog(commands.Cog):
 
         # Get current location name for clearer route display
         current_location_name = self.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (origin_id,),
             fetch='one'
         )[0]
@@ -638,7 +639,7 @@ class TravelCog(commands.Cog):
             )
             # Get ship efficiency and modify travel time
             ship_efficiency = self.db.execute_query(
-                "SELECT fuel_efficiency FROM ships WHERE owner_id = ?",
+                "SELECT fuel_efficiency FROM ships WHERE owner_id = %s",
                 (inter.user.id,), fetch='one'
             )[0]
 
@@ -651,7 +652,7 @@ class TravelCog(commands.Cog):
             # Apply location effects
             # First need to get the current location (origin_id)
             origin_location = self.bot.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (inter.user.id,), fetch='one'
             )[0]
             
@@ -685,7 +686,7 @@ class TravelCog(commands.Cog):
             cost = final_fuel_cost
             # Check fuel
             char_fuel = self.db.execute_query(
-                "SELECT s.current_fuel FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = ?",
+                "SELECT s.current_fuel FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = %s",
                 (inter.user.id,), fetch='one'
             )
             
@@ -698,7 +699,7 @@ class TravelCog(commands.Cog):
 
             # Deduct fuel
             self.db.execute_query(
-                "UPDATE ships SET current_fuel = current_fuel - ? WHERE owner_id = ?",
+                "UPDATE ships SET current_fuel = current_fuel - %s WHERE owner_id = %s",
                 (cost, inter.user.id)
             )
 
@@ -723,9 +724,9 @@ class TravelCog(commands.Cog):
                 INSERT INTO travel_sessions
                   (user_id, corridor_id, origin_location, destination_location,
                    start_time, end_time, temp_channel_id, status)
-                VALUES (?, ?, ?, 
-                        (SELECT CASE WHEN origin_location = ? THEN destination_location ELSE origin_location END FROM corridors WHERE corridor_id = ?),
-                        ?, ?, ?, 'traveling')
+                VALUES (%s, %s, %s, 
+                        (SELECT CASE WHEN origin_location = %s THEN destination_location ELSE origin_location END FROM corridors WHERE corridor_id = %s),
+                        %s, %s, %s, 'traveling')
                 """,
                 (
                     inter.user.id,
@@ -756,14 +757,14 @@ class TravelCog(commands.Cog):
 
             # Remove user from origin location immediately
             old_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (inter.user.id,), fetch='one'
             )
             old_location_id = old_location[0] if old_location else None
             
             # Set character location to None (in transit)
             self.db.execute_query(
-                "UPDATE characters SET current_location = NULL WHERE user_id = ?",
+                "UPDATE characters SET current_location = NULL WHERE user_id = %s",
                 (inter.user.id,)
             )
             
@@ -796,8 +797,8 @@ class TravelCog(commands.Cog):
             '''SELECT j.job_id, j.title, j.reward_money 
                FROM jobs j 
                JOIN job_tracking jt ON j.job_id = jt.job_id
-               WHERE j.taken_by = ? AND j.job_status = 'active' AND jt.start_location = (
-                   SELECT current_location FROM characters WHERE user_id = ?
+               WHERE j.taken_by = %s AND j.job_status = 'active' AND jt.start_location = (
+                   SELECT current_location FROM characters WHERE user_id = %s
                )''',
             (user_id, user_id),
             fetch='all'
@@ -903,13 +904,13 @@ class TravelCog(commands.Cog):
                 # Check if travel is still active for solo or group
                 if 'group_id' in session_data:
                     active_session = self.db.execute_query(
-                        "SELECT status FROM travel_sessions WHERE group_id = ? AND corridor_id = ? AND status = 'traveling' LIMIT 1",
+                        "SELECT status FROM travel_sessions WHERE group_id = %s AND corridor_id = %s AND status = 'traveling' LIMIT 1",
                         (session_data['group_id'], session_data['corridor_id']),
                         fetch='one'
                     )
                 else:
                     active_session = self.db.execute_query(
-                        "SELECT status FROM travel_sessions WHERE user_id = ? AND corridor_id = ? AND status = 'traveling'",
+                        "SELECT status FROM travel_sessions WHERE user_id = %s AND corridor_id = %s AND status = 'traveling'",
                         (session_data['user_id'], session_data['corridor_id']),
                         fetch='one'
                     )
@@ -1046,7 +1047,7 @@ class TravelCog(commands.Cog):
 
         try:
             session_info = self.db.execute_query(
-                "SELECT destination_location, origin_location FROM travel_sessions WHERE user_id=? AND corridor_id=? AND status='traveling' ORDER BY session_id DESC LIMIT 1",
+                "SELECT destination_location, origin_location FROM travel_sessions WHERE user_id=%s AND corridor_id=%s AND status='traveling' ORDER BY session_id DESC LIMIT 1",
                 (user_id, corridor_id), fetch='one'
             )
             if not session_info:
@@ -1056,7 +1057,7 @@ class TravelCog(commands.Cog):
             dest_location_id, origin_location_id = session_info
 
             self.db.execute_query(
-                "UPDATE travel_sessions SET status='arrived' WHERE user_id=? AND corridor_id=? AND status='traveling'",
+                "UPDATE travel_sessions SET status='arrived' WHERE user_id=%s AND corridor_id=%s AND status='traveling'",
                 (user_id, corridor_id)
             )
             
@@ -1076,15 +1077,15 @@ class TravelCog(commands.Cog):
         print(f"🔍 DEBUG: _handle_arrival_access called for user {user_id}, dest {dest_location_id}, transit_chan: {transit_chan}")
         # Get destination and character info with fallback for missing faction column
         try:
-            location_info = self.db.execute_query("SELECT name, faction FROM locations WHERE location_id = ?", (dest_location_id,), fetch='one')
+            location_info = self.db.execute_query("SELECT name, faction FROM locations WHERE location_id = %s", (dest_location_id,), fetch='one')
             if not location_info: 
                 await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
                 return
             dest_name, faction = location_info
-        except sqlite3.OperationalError as e:
+        except psycopg2.OperationalError as e:
             if "no such column: faction" in str(e):
                 # Fallback to just getting name, assume neutral faction
-                location_info = self.db.execute_query("SELECT name FROM locations WHERE location_id = ?", (dest_location_id,), fetch='one')
+                location_info = self.db.execute_query("SELECT name FROM locations WHERE location_id = %s", (dest_location_id,), fetch='one')
                 if not location_info:
                     await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
                     return
@@ -1109,7 +1110,7 @@ class TravelCog(commands.Cog):
         
         # Check if this is a federal location
         is_federal_location = self.db.execute_query(
-            "SELECT has_federal_supplies FROM locations WHERE location_id = ?",
+            "SELECT has_federal_supplies FROM locations WHERE location_id = %s",
             (dest_location_id,),
             fetch='one'
         )
@@ -1127,8 +1128,8 @@ class TravelCog(commands.Cog):
             '''SELECT lo.faction_id, lo.docking_fee, f.name, f.emoji, fm.faction_id as member_faction_id
                FROM location_ownership lo
                JOIN factions f ON lo.faction_id = f.faction_id
-               LEFT JOIN faction_members fm ON fm.user_id = ? AND fm.faction_id = lo.faction_id
-               WHERE lo.location_id = ?''',
+               LEFT JOIN faction_members fm ON fm.user_id = %s AND fm.faction_id = lo.faction_id
+               WHERE lo.location_id = %s''',
             (user_id, dest_location_id),
             fetch='one'
         )
@@ -1166,7 +1167,7 @@ class TravelCog(commands.Cog):
                 await self._grant_final_access(user_id, dest_location_id, guild, transit_chan)
                 return
 
-            rep_entry = self.db.execute_query("SELECT reputation FROM character_reputation WHERE user_id = ? AND location_id = ?", (user_id, dest_location_id), fetch='one')
+            rep_entry = self.db.execute_query("SELECT reputation FROM character_reputation WHERE user_id = %s AND location_id = %s", (user_id, dest_location_id), fetch='one')
             reputation = rep_entry[0] if rep_entry else 0
             rep_tier = rep_cog.get_reputation_tier(reputation)
 
@@ -1240,14 +1241,14 @@ class TravelCog(commands.Cog):
         try:
             # Update character location first
             self.db.execute_query(
-                "UPDATE characters SET current_location=? WHERE user_id=?",
+                "UPDATE characters SET current_location=%s WHERE user_id=%s",
                 (dest_location_id, user_id)
             )
             
             # Update ship docking location
-            ship_id_result = self.db.execute_query("SELECT active_ship_id FROM characters WHERE user_id=?", (user_id,), fetch='one')
+            ship_id_result = self.db.execute_query("SELECT active_ship_id FROM characters WHERE user_id=%s", (user_id,), fetch='one')
             if ship_id_result and ship_id_result[0]:
-                self.db.execute_query("UPDATE ships SET docked_at_location=? WHERE ship_id=?", (dest_location_id, ship_id_result[0]))
+                self.db.execute_query("UPDATE ships SET docked_at_location=%s WHERE ship_id=%s", (dest_location_id, ship_id_result[0]))
 
             # Get member object - use fetch_member to ensure we get the member even if not in cache
             try:
@@ -1272,14 +1273,14 @@ class TravelCog(commands.Cog):
                 await self.channel_mgr.update_channel_on_player_movement(
                     guild, user_id, old_location_id=None, new_location_id=dest_location_id
                 )
-                # Try to get the channel again
-                channel_id = self.db.execute_query(
-                    "SELECT channel_id FROM locations WHERE location_id = ?",
-                    (dest_location_id,),
-                    fetch='one'
+                # Try to get the channel again using guild-specific lookup
+                from utils.channel_manager import ChannelManager
+                channel_manager = ChannelManager(self.bot)
+                location_info = channel_manager.get_channel_id_from_location(
+                    guild.id, dest_location_id
                 )
-                if channel_id and channel_id[0]:
-                    location_channel = guild.get_channel(channel_id[0])
+                if location_info and location_info[0]:
+                    location_channel = guild.get_channel(location_info[0])
             
             if location_channel:
                 # Ensure user has permissions (sometimes get_or_create doesn't set them properly)
@@ -1294,7 +1295,7 @@ class TravelCog(commands.Cog):
                 
                 # Get character name for arrival message
                 char_data = self.db.execute_query(
-                    "SELECT name FROM characters WHERE user_id = ?",
+                    "SELECT name FROM characters WHERE user_id = %s",
                     (user_id,),
                     fetch='one'
                 )
@@ -1307,7 +1308,7 @@ class TravelCog(commands.Cog):
                     color=0x00ff00
                 )
                 try:
-                    await location_channel.send(embed=embed)
+                    await self.bot.send_with_cross_guild_broadcast(location_channel, embed=embed)
                 except Exception as e:
                     print(f"❌ Failed to send arrival embed: {e}")
                 
@@ -1332,7 +1333,7 @@ class TravelCog(commands.Cog):
                         
                         if not arrival_message:
                             location_name = self.db.execute_query(
-                                "SELECT name FROM locations WHERE location_id = ?",
+                                "SELECT name FROM locations WHERE location_id = %s",
                                 (dest_location_id,),
                                 fetch='one'
                             )
@@ -1359,7 +1360,7 @@ class TravelCog(commands.Cog):
                 if transit_chan:
                     try:
                         location_name = self.db.execute_query(
-                            "SELECT name FROM locations WHERE location_id = ?",
+                            "SELECT name FROM locations WHERE location_id = %s",
                             (dest_location_id,),
                             fetch='one'
                         )
@@ -1385,7 +1386,7 @@ class TravelCog(commands.Cog):
             # Even if there's an error, try to ensure the character location is updated
             try:
                 self.db.execute_query(
-                    "UPDATE characters SET current_location=? WHERE user_id=?",
+                    "UPDATE characters SET current_location=%s WHERE user_id=%s",
                     (dest_location_id, user_id)
                 )
             except Exception as db_error:
@@ -1399,7 +1400,7 @@ class TravelCog(commands.Cog):
         
         # Move character back to origin
         self.db.execute_query(
-            "UPDATE characters SET current_location = ? WHERE user_id = ?",
+            "UPDATE characters SET current_location = %s WHERE user_id = %s",
             (origin_location_id, user_id)
         )
 
@@ -1428,9 +1429,9 @@ class TravelCog(commands.Cog):
             transport_jobs = self.db.execute_query(
                 '''SELECT job_id, title, reward_money 
                    FROM jobs 
-                   WHERE taken_by = ? 
-                   AND is_taken = 1 
-                   AND destination_location_id = ?
+                   WHERE taken_by = %s 
+                   AND is_taken = true 
+                   AND destination_location_id = %s
                    AND job_status != 'completed'
                    AND job_status != 'awaiting_finalization' ''',
                 (user_id, dest_location_id),
@@ -1441,18 +1442,31 @@ class TravelCog(commands.Cog):
                 return  # No transport jobs for this destination
             
             # Get location info for the notification
-            location_info = self.db.execute_query(
-                "SELECT name, channel_id FROM locations WHERE location_id = ?",
+            location_name = self.db.execute_query(
+                "SELECT name FROM locations WHERE location_id = %s",
                 (dest_location_id,),
                 fetch='one'
             )
             
-            if not location_info or not location_info[1]:
-                print(f"❌ Could not find channel for location {dest_location_id}")
+            if not location_name:
+                print(f"❌ Could not find location {dest_location_id}")
                 return
-                
-            location_name, channel_id = location_info
-            channel = self.bot.get_channel(channel_id)
+            
+            location_name = location_name[0]
+            
+            # Try to find which guild this user is in for the notification
+            channel = None
+            for guild in self.bot.guilds:
+                member = guild.get_member(user_id)
+                if member:
+                    from utils.channel_manager import ChannelManager
+                    channel_manager = ChannelManager(self.bot)
+                    location_info = channel_manager.get_channel_id_from_location(
+                        guild.id, dest_location_id
+                    )
+                    if location_info and location_info[0]:
+                        channel = guild.get_channel(location_info[0])
+                        break
             user = self.bot.get_user(user_id)
             
             if not channel or not user:
@@ -1470,7 +1484,7 @@ class TravelCog(commands.Cog):
                 embed.add_field(name="💰 Reward", value=f"{reward:,} credits", inline=True)
                 embed.add_field(name="💡 Next Step", value="Use `/tqe` to start unloading", inline=False)
                 
-                await channel.send(f"{user.mention}, your transport job is ready for completion!", embed=embed, delete_after=60)
+                await self.bot.send_with_cross_guild_broadcast(channel, f"{user.mention}, your transport job is ready for completion!", embed=embed, delete_after=60)
                 print(f"✅ Sent transport job notification for job {job_id} to {user.name} in {location_name}")
                 
         except Exception as e:
@@ -1481,7 +1495,7 @@ class TravelCog(commands.Cog):
     async def view_routes(self, interaction: discord.Interaction):
         try:
             char_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (interaction.user.id,),
                 fetch='one'
             )
@@ -1498,7 +1512,7 @@ class TravelCog(commands.Cog):
             
             # Get current location name and faction info with error checking
             location_info_result = self.db.execute_query(
-                "SELECT name, COALESCE(faction, 'Independent'), COALESCE(is_derelict, 0) FROM locations WHERE location_id = ?",
+                "SELECT name, COALESCE(faction, 'Independent'), COALESCE(is_derelict, 0) FROM locations WHERE location_id = %s",
                 (current_location_id,),
                 fetch='one'
             )
@@ -1513,35 +1527,35 @@ class TravelCog(commands.Cog):
                 '''SELECT c.corridor_id,
                           c.name,
                           CASE 
-                              WHEN c.origin_location = ? THEN l_dest.name
+                              WHEN c.origin_location = %s THEN l_dest.name
                               ELSE l_orig.name
                           END AS dest_name,
                           c.travel_time,
                           c.fuel_cost,
                           CASE 
-                              WHEN c.origin_location = ? THEN l_dest.location_type
+                              WHEN c.origin_location = %s THEN l_dest.location_type
                               ELSE l_orig.location_type
                           END AS location_type,
                           lo.location_type AS origin_type,
                           CASE WHEN lo.system_name = CASE 
-                              WHEN c.origin_location = ? THEN l_dest.system_name
+                              WHEN c.origin_location = %s THEN l_dest.system_name
                               ELSE l_orig.system_name
                           END THEN 1 ELSE 0 END AS same_system,
                           c.corridor_type,
                           CASE 
-                              WHEN c.origin_location = ? THEN COALESCE(l_dest.faction, 'Independent')
+                              WHEN c.origin_location = %s THEN COALESCE(l_dest.faction, 'Independent')
                               ELSE COALESCE(l_orig.faction, 'Independent')
                           END AS dest_faction,
                           CASE 
-                              WHEN c.origin_location = ? THEN COALESCE(l_dest.is_derelict, 0)
+                              WHEN c.origin_location = %s THEN COALESCE(l_dest.is_derelict, 0)
                               ELSE COALESCE(l_orig.is_derelict, 0)
                           END AS dest_is_derelict
                    FROM corridors c
                    JOIN locations l_dest ON c.destination_location = l_dest.location_id
                    JOIN locations l_orig ON c.origin_location = l_orig.location_id
-                   JOIN locations lo ON ? = lo.location_id
-                   WHERE (c.origin_location = ? OR (c.destination_location = ? AND c.is_bidirectional = 1)) 
-                   AND c.is_active = 1
+                   JOIN locations lo ON %s = lo.location_id
+                   WHERE (c.origin_location = %s OR (c.destination_location = %s AND c.is_bidirectional = 1)) 
+                   AND c.is_active = true
                    ORDER BY c.travel_time''',
                 (current_location_id, current_location_id, current_location_id, current_location_id, current_location_id, current_location_id, current_location_id, current_location_id),
                 fetch='all'
@@ -1625,7 +1639,7 @@ class TravelCog(commands.Cog):
                 
                 # Get ship efficiency for time estimates
                 ship_efficiency = self.db.execute_query(
-                    "SELECT fuel_efficiency FROM ships WHERE owner_id = ?",
+                    "SELECT fuel_efficiency FROM ships WHERE owner_id = %s",
                     (interaction.user.id,), fetch='one'
                 )
                 ship_eff = ship_efficiency[0] if ship_efficiency else 5
@@ -1733,7 +1747,7 @@ class TravelCog(commands.Cog):
             '''SELECT ts.*, c.danger_level, c.name as corridor_name
                FROM travel_sessions ts
                JOIN corridors c ON ts.corridor_id = c.corridor_id
-               WHERE ts.user_id = ? AND ts.status = 'traveling' ''',
+               WHERE ts.user_id = %s AND ts.status = 'traveling' ''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -1773,7 +1787,7 @@ class TravelCog(commands.Cog):
     @travel_group.command(name="fuel_estimate", description="Calculate fuel needed for various routes")
     async def fuel_estimate(self, interaction: discord.Interaction):
         char_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1791,7 +1805,7 @@ class TravelCog(commands.Cog):
             '''SELECT s.current_fuel, s.fuel_capacity, s.fuel_efficiency, c.name as owner_name
                FROM characters c
                JOIN ships s ON c.ship_id = s.ship_id
-               WHERE c.user_id = ?''',
+               WHERE c.user_id = %s''',
             (interaction.user.id,),
             fetch='one'
         )
@@ -1807,7 +1821,7 @@ class TravelCog(commands.Cog):
             '''SELECT l.name, c.fuel_cost, c.travel_time, c.danger_level
                FROM corridors c
                JOIN locations l ON c.destination_location = l.location_id
-               WHERE c.origin_location = ? AND c.is_active = 1
+               WHERE c.origin_location = %s AND c.is_active = true
                ORDER BY c.fuel_cost''',
             (char_location[0],),
             fetch='all'
@@ -1870,7 +1884,7 @@ class TravelCog(commands.Cog):
     async def plot_route(self, interaction: discord.Interaction, destination: str):
         # Check if user is logged in
         login_status = self.db.execute_query(
-            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1884,7 +1898,7 @@ class TravelCog(commands.Cog):
 
         # Get current location
         char_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -1903,7 +1917,7 @@ class TravelCog(commands.Cog):
         try:
             # Find destination location(s) with fuzzy matching
             destination_matches = self.db.execute_query(
-                "SELECT location_id, name, location_type FROM locations WHERE name LIKE ? ORDER BY name",
+                "SELECT location_id, name, location_type FROM locations WHERE name LIKE %s ORDER BY name",
                 (f"%{destination}%",),
                 fetch='all'
             )
@@ -1964,7 +1978,7 @@ class TravelCog(commands.Cog):
             # Check if already at destination
             if destination_id == current_location_id:
                 current_name = self.db.execute_query(
-                    "SELECT name FROM locations WHERE location_id = ?",
+                    "SELECT name FROM locations WHERE location_id = %s",
                     (current_location_id,),
                     fetch='one'
                 )[0]
@@ -1981,7 +1995,7 @@ class TravelCog(commands.Cog):
             if not route:
                 # No route found
                 current_name = self.db.execute_query(
-                    "SELECT name FROM locations WHERE location_id = ?",
+                    "SELECT name FROM locations WHERE location_id = %s",
                     (current_location_id,),
                     fetch='one'
                 )[0]
@@ -2019,7 +2033,7 @@ class TravelCog(commands.Cog):
         """Callback function to handle route plotting from the modal."""
         # Ensure the user is logged in
         login_status = self.db.execute_query(
-            "SELECT is_logged_in FROM characters WHERE user_id = ?",
+            "SELECT is_logged_in FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2032,7 +2046,7 @@ class TravelCog(commands.Cog):
 
         # Get character's current location
         char_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = ?",
+            "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
@@ -2051,7 +2065,7 @@ class TravelCog(commands.Cog):
         try:
             # Find the destination
             destination_matches = self.db.execute_query(
-                "SELECT location_id, name, location_type FROM locations WHERE name LIKE ? ORDER BY name",
+                "SELECT location_id, name, location_type FROM locations WHERE name LIKE %s ORDER BY name",
                 (f"%{destination}%",),
                 fetch='all'
             )
@@ -2097,7 +2111,7 @@ class TravelCog(commands.Cog):
             route = await self._calculate_shortest_route(current_location_id, destination_id)
 
             if not route:
-                current_name = self.db.get_location_name(current_location_id)
+                current_name = self.db.execute_query("SELECT name FROM locations WHERE location_id = %s", (current_location_id,), fetch='one')[0]
                 embed = discord.Embed(
                     title="🚫 No Route Available",
                     description=f"Could not find a route from **{current_name}** to **{dest_name}**.",
@@ -2119,7 +2133,7 @@ class TravelCog(commands.Cog):
         
         # Get all active corridors including bidirectional info
         corridors = self.db.execute_query(
-            "SELECT origin_location, destination_location, corridor_id, name, travel_time, corridor_type, is_bidirectional FROM corridors WHERE is_active = 1",
+            "SELECT origin_location, destination_location, corridor_id, name, travel_time, corridor_type, is_bidirectional FROM corridors WHERE is_active = true",
             fetch='all'
         )
         
@@ -2169,12 +2183,12 @@ class TravelCog(commands.Cog):
                     
                     # Get location info
                     origin_info = self.db.execute_query(
-                        "SELECT name, location_type FROM locations WHERE location_id = ?",
+                        "SELECT name, location_type FROM locations WHERE location_id = %s",
                         (origin,),
                         fetch='one'
                     )
                     dest_info = self.db.execute_query(
-                        "SELECT name, location_type FROM locations WHERE location_id = ?",
+                        "SELECT name, location_type FROM locations WHERE location_id = %s",
                         (dest,),
                         fetch='one'
                     )
@@ -2368,7 +2382,7 @@ class EmergencyExitView(discord.ui.View):
                JOIN corridors c ON ts.corridor_id = c.corridor_id
                JOIN locations ol ON ts.origin_location = ol.location_id
                JOIN locations dl ON ts.destination_location = dl.location_id
-               WHERE ts.session_id = ?''',
+               WHERE ts.session_id = %s''',
             (self.session_id,),
             fetch='one'
         )
@@ -2415,7 +2429,7 @@ class EmergencyExitView(discord.ui.View):
             if random_location:
                 new_location_id, new_location_name = random_location
                 self.bot.db.execute_query(
-                    "UPDATE characters SET current_location = ? WHERE user_id = ?",
+                    "UPDATE characters SET current_location = %s WHERE user_id = %s",
                     (new_location_id, self.user_id)
                 )
                 
@@ -2429,7 +2443,7 @@ class EmergencyExitView(discord.ui.View):
             else:
                 # Fallback: stranded in deep space
                 self.bot.db.execute_query(
-                    "UPDATE characters SET current_location = NULL WHERE user_id = ?",
+                    "UPDATE characters SET current_location = NULL WHERE user_id = %s",
                     (self.user_id,)
                 )
                 outcome_desc = "You are violently thrown out of the corridor into the blackness of deep space. Your ship is a wreck, and you are lost."
@@ -2461,7 +2475,7 @@ class EmergencyExitView(discord.ui.View):
 
         # Update travel session and clean up
         self.db.execute_query(
-            "UPDATE travel_sessions SET status = 'emergency_exit' WHERE session_id = ?",
+            "UPDATE travel_sessions SET status = 'emergency_exit' WHERE session_id = %s",
             (self.session_id,)
         )
         
@@ -2506,13 +2520,13 @@ class JobCancellationConfirmView(discord.ui.View):
         # Cancel all active jobs
         for job_id, title, reward in self.active_jobs:
             self.bot.db.execute_query(
-                "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE job_id = ?",
+                "UPDATE jobs SET is_taken = false, taken_by = NULL, taken_at = NULL, job_status = 'available' WHERE job_id = %s",
                 (job_id,)
             )
             
             # Remove from job tracking
             self.bot.db.execute_query(
-                "DELETE FROM job_tracking WHERE job_id = ? AND user_id = ?",
+                "DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s",
                 (job_id, self.user_id)
             )
         
@@ -2541,7 +2555,7 @@ class JobCancellationConfirmView(discord.ui.View):
     async def _show_travel_interface(self, interaction: discord.Interaction):
         """Show the normal travel interface after jobs are cancelled"""
         row = self.bot.db.execute_query(
-            "SELECT current_location, location_status FROM characters WHERE user_id = ?",
+            "SELECT current_location, location_status FROM characters WHERE user_id = %s",
             (self.user_id,),
             fetch='one'
         )
@@ -2562,7 +2576,7 @@ class JobCancellationConfirmView(discord.ui.View):
                    c.corridor_type
               FROM corridors c
               JOIN locations l ON c.destination_location = l.location_id
-             WHERE c.origin_location = ? AND c.is_active = 1
+             WHERE c.origin_location = %s AND c.is_active = true
             ''',
             (origin_id,),
             fetch='all'
@@ -2574,7 +2588,7 @@ class JobCancellationConfirmView(discord.ui.View):
 
         # Get current location name for clearer route display
         current_location_name = self.bot.db.execute_query(
-            "SELECT name FROM locations WHERE location_id = ?",
+            "SELECT name FROM locations WHERE location_id = %s",
             (origin_id,),
             fetch='one'
         )[0]
@@ -2629,7 +2643,7 @@ class JobCancellationConfirmView(discord.ui.View):
             
             # Get ship efficiency and modify travel time
             ship_efficiency = self.bot.db.execute_query(
-                "SELECT fuel_efficiency FROM ships WHERE owner_id = ?",
+                "SELECT fuel_efficiency FROM ships WHERE owner_id = %s",
                 (inter.user.id,), fetch='one'
             )
             
@@ -2641,7 +2655,7 @@ class JobCancellationConfirmView(discord.ui.View):
             
             # Check fuel
             char_fuel = self.bot.db.execute_query(
-                "SELECT s.current_fuel FROM characters c JOIN ships s ON c.active_ship_id = s.ship_id WHERE c.user_id = ?",
+                "SELECT s.current_fuel FROM characters c JOIN ships s ON c.active_ship_id = s.ship_id WHERE c.user_id = %s",
                 (inter.user.id,), fetch='one'
             )
             
@@ -2654,7 +2668,7 @@ class JobCancellationConfirmView(discord.ui.View):
 
             # Deduct fuel
             self.bot.db.execute_query(
-                "UPDATE ships SET current_fuel = current_fuel - ? WHERE owner_id = ?",
+                "UPDATE ships SET current_fuel = current_fuel - %s WHERE owner_id = %s",
                 (cost, inter.user.id)
             )
 
@@ -2681,9 +2695,9 @@ class JobCancellationConfirmView(discord.ui.View):
                 INSERT INTO travel_sessions
                   (user_id, corridor_id, origin_location, destination_location,
                    start_time, end_time, temp_channel_id, status)
-                VALUES (?, ?, ?, 
-                        (SELECT CASE WHEN origin_location = ? THEN destination_location ELSE origin_location END FROM corridors WHERE corridor_id = ?),
-                        ?, ?, ?, 'traveling')
+                VALUES (%s, %s, %s, 
+                        (SELECT CASE WHEN origin_location = %s THEN destination_location ELSE origin_location END FROM corridors WHERE corridor_id = %s),
+                        %s, %s, %s, 'traveling')
                 """,
                 (inter.user.id, cid, origin_id, origin_id, cid, start.isoformat(), end.isoformat(), transit_chan.id if transit_chan else None)
             )
@@ -2705,14 +2719,14 @@ class JobCancellationConfirmView(discord.ui.View):
 
             # Remove user from origin location immediately
             old_location = self.bot.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = ?",
+                "SELECT current_location FROM characters WHERE user_id = %s",
                 (inter.user.id,), fetch='one'
             )
             old_location_id = old_location[0] if old_location else None
             
             # Set character location to None (in transit)
             self.bot.db.execute_query(
-                "UPDATE characters SET current_location = NULL WHERE user_id = ?",
+                "UPDATE characters SET current_location = NULL WHERE user_id = %s",
                 (inter.user.id,)
             )
             
@@ -2747,7 +2761,7 @@ class JobCancellationConfirmView(discord.ui.View):
                 """SELECT ts.corridor_id, ts.start_time, ts.end_time, c.travel_time, c.danger_level
                    FROM travel_sessions ts
                    JOIN corridors c ON ts.corridor_id = c.corridor_id
-                   WHERE ts.user_id = ? AND ts.status = 'arrived'
+                   WHERE ts.user_id = %s AND ts.status = 'arrived'
                    ORDER BY ts.session_id DESC LIMIT 1""",
                 (user_id,),
                 fetch='one'
@@ -2772,7 +2786,7 @@ class JobCancellationConfirmView(discord.ui.View):
             
             # Award XP to character
             self.db.execute_query(
-                "UPDATE characters SET experience = experience + ? WHERE user_id = ?",
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
                 (final_xp, user_id)
             )
             
@@ -2786,7 +2800,8 @@ class JobCancellationConfirmView(discord.ui.View):
                 # Get member to send them a message
                 member = location_channel.guild.get_member(user_id)
                 if member:
-                    await location_channel.send(
+                    await self.bot.send_with_cross_guild_broadcast(
+                        location_channel,
                         f"{member.mention} You feel more experienced in travelling and earned **{final_xp} XP**!",
                         delete_after=30
                     )
@@ -2801,7 +2816,7 @@ class JobCancellationConfirmView(discord.ui.View):
         try:
             # Get location name
             location_name = self.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = ?",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (dest_location_id,),
                 fetch='one'
             )
@@ -3134,7 +3149,7 @@ class CorridorSearchModal(discord.ui.Modal):
                                    c.corridor_type
                               FROM corridors c
                               JOIN locations l ON c.destination_location = l.location_id
-                             WHERE c.origin_location = ? AND c.is_active = 1
+                             WHERE c.origin_location = %s AND c.is_active = true
                             ''',
                             (self.parent_view.origin_id,),
                             fetch='all'

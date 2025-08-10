@@ -38,7 +38,7 @@ class RollCog(commands.Cog):
         # Get stat bonus if requested
         if stat and stat.lower() in ['navigation', 'engineering', 'combat', 'medical']:
             char_data = self.db.execute_query(
-                "SELECT navigation, engineering, combat, medical FROM characters WHERE user_id = ?",
+                "SELECT navigation, engineering, combat, medical FROM characters WHERE user_id = %s",
                 (user_id,),
                 fetch='one'
             )
