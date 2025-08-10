@@ -222,17 +222,20 @@ class Database:
                 FOREIGN KEY (taken_by) REFERENCES characters (user_id)
             )''',
             
-            # Character inventory table
-            '''CREATE TABLE IF NOT EXISTS character_inventory (
-                inventory_id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
+            # Character inventory table (renamed to 'inventory' to match bot code)
+            '''CREATE TABLE IF NOT EXISTS inventory (
+                item_id SERIAL PRIMARY KEY,
+                owner_id BIGINT NOT NULL,
                 item_name TEXT NOT NULL,
-                quantity INTEGER DEFAULT 1,
                 item_type TEXT DEFAULT 'misc',
+                quantity INTEGER DEFAULT 1,
+                description TEXT,
+                value INTEGER DEFAULT 0,
                 metadata TEXT,
-                acquired_at TIMESTAMP DEFAULT NOW(),
-                FOREIGN KEY (user_id) REFERENCES characters (user_id),
-                UNIQUE(user_id, item_name)
+                equippable BOOLEAN DEFAULT false,
+                equipment_slot TEXT,
+                stat_modifiers TEXT,
+                FOREIGN KEY (owner_id) REFERENCES characters (user_id)
             )''',
             
             # Shop items table
@@ -1147,11 +1150,17 @@ class Database:
         ]
         
         # Execute schema creation
-        for statement in schema_statements:
+        for i, statement in enumerate(schema_statements):
             try:
+                # Extract table name for logging
+                if 'CREATE TABLE' in statement:
+                    table_name = statement.split('CREATE TABLE IF NOT EXISTS ')[1].split(' ')[0].split('(')[0]
+                    print(f"Creating table {table_name}...")
                 self.execute_query(statement)
             except Exception as e:
-                print(f"⚠️ Error creating table: {e}")
+                print(f"⚠️ Error on statement {i}: {e}")
+                # Log the first 100 chars of the statement for debugging
+                print(f"   Statement preview: {statement[:100]}...")
                 continue
         
         # Add missing columns for existing databases
@@ -1244,7 +1253,8 @@ class Database:
             'CREATE INDEX IF NOT EXISTS idx_jobs_location ON jobs(location_id)',
             'CREATE INDEX IF NOT EXISTS idx_jobs_active ON jobs(is_taken) WHERE is_taken = false',
             'CREATE INDEX IF NOT EXISTS idx_jobs_expires ON jobs(expires_at)',
-            'CREATE INDEX IF NOT EXISTS idx_inventory_user ON character_inventory(user_id)',
+            'CREATE INDEX IF NOT EXISTS idx_inventory_user ON inventory(owner_id)',
+            'CREATE INDEX IF NOT EXISTS idx_inventory_item_name ON inventory(item_name)',
             'CREATE INDEX IF NOT EXISTS idx_shop_items_location ON shop_items(location_id)',
             'CREATE INDEX IF NOT EXISTS idx_travel_sessions_user ON travel_sessions(user_id)',
             'CREATE INDEX IF NOT EXISTS idx_travel_sessions_corridor ON travel_sessions(corridor_id)',
@@ -1288,7 +1298,20 @@ class Database:
                 print(f"Index creation note: {e}")
                 pass
         
-        print("✅ PostgreSQL database schema initialized")
+        # Verify critical tables exist
+        critical_tables = ['characters', 'inventory', 'locations']
+        print("\n🔍 Verifying critical tables...")
+        for table in critical_tables:
+            result = self.execute_query(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = %s)",
+                (table,)
+            )
+            if result and result[0]['exists']:
+                print(f"  ✅ Table '{table}' verified")
+            else:
+                print(f"  ❌ CRITICAL: Table '{table}' does not exist!")
+        
+        print("\n✅ PostgreSQL database schema initialized")
 
     def _create_index_without_transaction(self, index_sql):
         """Create index outside of transaction to avoid CONCURRENTLY issues"""
