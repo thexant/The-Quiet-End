@@ -60,40 +60,40 @@ class StatusUpdaterCog(commands.Cog):
                 
                 current_ingame_time = self.time_system.calculate_current_ingame_time()
                 if not current_ingame_time:
-                    print("❌ Could not calculate in-game time for status update")
-                    return (0, "Could not calculate in-game time.")
-                
-                # Use the shortened date format
-                date_str = current_ingame_time.strftime("%d-%m-%Y")
-                
-                minutes = current_ingame_time.minute
-                if minutes < 15:
-                    approx_time = f"{current_ingame_time.hour:02d}:00"
-                elif minutes < 45:
-                    approx_time = f"{current_ingame_time.hour:02d}:30"
+                    # No galaxy generated yet - show offline status
+                    new_channel_name = "🌐|OFFLINE"
                 else:
-                    next_hour = (current_ingame_time.hour + 1) % 24
-                    approx_time = f"{next_hour:02d}:00"
-                
-                # Get player counts with error handling
-                try:
-                    active_players = self.db.execute_query(
-                        "SELECT COUNT(*) FROM characters WHERE is_logged_in = TRUE",
-                        fetch='one'
-                    )[0]
+                    # Use the shortened date format
+                    date_str = current_ingame_time.strftime("%d-%m-%Y")
                     
-                    dynamic_npcs = self.db.execute_query(
-                        "SELECT COUNT(*) FROM dynamic_npcs WHERE is_alive = TRUE",
-                        fetch='one'
-                    )[0]
-                except psycopg2.errors.UndefinedTable as e:
-                    # Table doesn't exist - galaxy not yet generated
-                    return (0, "Galaxy not yet generated")
-                except Exception as e:
-                    raise e
-                
-                # Use the shortened name format
-                new_channel_name = f"🌐|{date_str}|⌚{approx_time}|🟢{active_players}"
+                    minutes = current_ingame_time.minute
+                    if minutes < 15:
+                        approx_time = f"{current_ingame_time.hour:02d}:00"
+                    elif minutes < 45:
+                        approx_time = f"{current_ingame_time.hour:02d}:30"
+                    else:
+                        next_hour = (current_ingame_time.hour + 1) % 24
+                        approx_time = f"{next_hour:02d}:00"
+                    
+                    # Get player counts with error handling
+                    try:
+                        active_players = self.db.execute_query(
+                            "SELECT COUNT(*) FROM characters WHERE is_logged_in = TRUE",
+                            fetch='one'
+                        )[0]
+                        
+                        dynamic_npcs = self.db.execute_query(
+                            "SELECT COUNT(*) FROM dynamic_npcs WHERE is_alive = TRUE",
+                            fetch='one'
+                        )[0]
+                    except psycopg2.errors.UndefinedTable as e:
+                        # Table doesn't exist - galaxy not yet generated
+                        new_channel_name = "🌐|OFFLINE"
+                    except Exception as e:
+                        raise e
+                    else:
+                        # Use the shortened name format
+                        new_channel_name = f"🌐|{date_str}|⌚{approx_time}|🟢{active_players}"
                 
                 updated_count = 0
                 for guild_id, channel_id in servers_with_status:

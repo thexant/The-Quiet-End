@@ -105,7 +105,6 @@ class Database:
                 description TEXT,
                 x_coordinate REAL DEFAULT 0,
                 y_coordinate REAL DEFAULT 0,
-                z_coordinate REAL DEFAULT 0,
                 wealth_level INTEGER DEFAULT 1,
                 population INTEGER DEFAULT 100,
                 system_name TEXT,
@@ -847,6 +846,69 @@ class Database:
                 created_at TIMESTAMP DEFAULT NOW(),
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
+            
+            # Quest system tables
+            '''CREATE TABLE IF NOT EXISTS quests (
+                quest_id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                start_location_id INTEGER NOT NULL,
+                reward_money INTEGER DEFAULT 0,
+                reward_items TEXT DEFAULT '[]',
+                reward_experience INTEGER DEFAULT 0,
+                created_by BIGINT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                is_active BOOLEAN DEFAULT true,
+                max_completions INTEGER DEFAULT -1,
+                current_completions INTEGER DEFAULT 0,
+                required_level INTEGER DEFAULT 1,
+                required_items TEXT DEFAULT '[]',
+                estimated_duration TEXT,
+                danger_level INTEGER DEFAULT 1,
+                FOREIGN KEY (start_location_id) REFERENCES locations (location_id),
+                FOREIGN KEY (created_by) REFERENCES characters (user_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS quest_objectives (
+                objective_id SERIAL PRIMARY KEY,
+                quest_id INTEGER NOT NULL,
+                objective_order INTEGER NOT NULL,
+                objective_type TEXT NOT NULL CHECK(objective_type IN ('travel', 'obtain_item', 'deliver_item', 'sell_item', 'earn_money', 'visit_location', 'talk_to_npc')),
+                target_location_id INTEGER,
+                target_item TEXT,
+                target_quantity INTEGER DEFAULT 1,
+                target_amount INTEGER DEFAULT 0,
+                description TEXT NOT NULL,
+                is_optional BOOLEAN DEFAULT false,
+                FOREIGN KEY (quest_id) REFERENCES quests (quest_id) ON DELETE CASCADE,
+                FOREIGN KEY (target_location_id) REFERENCES locations (location_id),
+                UNIQUE(quest_id, objective_order)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS quest_progress (
+                progress_id SERIAL PRIMARY KEY,
+                quest_id INTEGER NOT NULL,
+                user_id BIGINT NOT NULL,
+                current_objective INTEGER DEFAULT 1,
+                started_at TIMESTAMP DEFAULT NOW(),
+                objectives_completed TEXT DEFAULT '[]',
+                quest_status TEXT DEFAULT 'active' CHECK(quest_status IN ('active', 'completed', 'failed', 'abandoned')),
+                completion_data TEXT DEFAULT '{}',
+                FOREIGN KEY (quest_id) REFERENCES quests (quest_id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                UNIQUE(quest_id, user_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS quest_completions (
+                completion_id SERIAL PRIMARY KEY,
+                quest_id INTEGER NOT NULL,
+                user_id BIGINT NOT NULL,
+                completed_at TIMESTAMP DEFAULT NOW(),
+                reward_received TEXT DEFAULT '{}',
+                completion_time_minutes INTEGER,
+                FOREIGN KEY (quest_id) REFERENCES quests (quest_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )''',
         ]
         
         # Execute schema creation
@@ -891,6 +953,11 @@ class Database:
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS y_coordinate REAL DEFAULT 0',
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS system_name TEXT',
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS faction TEXT DEFAULT \'Independent\'',
+            
+            # Coordinate data migration - copy from old x_coord, y_coord to new x_coordinate, y_coordinate
+            '''UPDATE locations 
+             SET x_coordinate = COALESCE(x_coord, 0), y_coordinate = COALESCE(y_coord, 0) 
+             WHERE (x_coordinate IS NULL OR x_coordinate = 0) AND (x_coord IS NOT NULL OR y_coord IS NOT NULL)''',
             # Travel sessions table columns
             'ALTER TABLE travel_sessions ADD COLUMN IF NOT EXISTS corridor_id INTEGER',
             'ALTER TABLE travel_sessions ADD COLUMN IF NOT EXISTS temp_channel_id BIGINT',
@@ -929,6 +996,17 @@ class Database:
             'CREATE INDEX IF NOT EXISTS idx_news_queue_delivery ON news_queue(scheduled_delivery) WHERE is_delivered = false',
             'CREATE INDEX IF NOT EXISTS idx_news_queue_guild ON news_queue(guild_id)',
             'CREATE INDEX IF NOT EXISTS idx_news_queue_location ON news_queue(location_id)',
+            # Quest system indexes
+            'CREATE INDEX IF NOT EXISTS idx_quests_location ON quests(start_location_id)',
+            'CREATE INDEX IF NOT EXISTS idx_quests_active ON quests(is_active) WHERE is_active = true',
+            'CREATE INDEX IF NOT EXISTS idx_quest_objectives_quest ON quest_objectives(quest_id)',
+            'CREATE INDEX IF NOT EXISTS idx_quest_objectives_order ON quest_objectives(quest_id, objective_order)',
+            'CREATE INDEX IF NOT EXISTS idx_quest_progress_user ON quest_progress(user_id)',
+            'CREATE INDEX IF NOT EXISTS idx_quest_progress_quest ON quest_progress(quest_id)',
+            'CREATE INDEX IF NOT EXISTS idx_quest_progress_status ON quest_progress(quest_status)',
+            'CREATE INDEX IF NOT EXISTS idx_quest_progress_active ON quest_progress(user_id, quest_status) WHERE quest_status = \'active\'',
+            'CREATE INDEX IF NOT EXISTS idx_quest_completions_user ON quest_completions(user_id)',
+            'CREATE INDEX IF NOT EXISTS idx_quest_completions_quest ON quest_completions(quest_id)',
         ]
         
         for index_sql in indexes:
