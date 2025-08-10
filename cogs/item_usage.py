@@ -341,7 +341,7 @@ class ItemUsageCog(commands.Cog):
             # Deploy the repeater
             self.db.execute_query(
                 '''INSERT INTO repeaters (location_id, owner_id, repeater_type, receive_range, transmit_range, is_active)
-                   VALUES (%s, %s, 'portable', 10, 8, 1)''',
+                   VALUES (%s, %s, 'portable', 10, 8, true)''',
                 (location_id, user_id)
             )
             

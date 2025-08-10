@@ -191,7 +191,7 @@ async def create_random_character(bot, interaction: discord.Interaction):
 
     # Add the ship to player_ships table and set as active
     bot.db.execute_query(
-        '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (%s, %s, 1)''',
+        '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (%s, %s, true)''',
         (interaction.user.id, ship_id)
     )
     # Generate ship activities
@@ -513,7 +513,7 @@ class CharacterCreationModal(discord.ui.Modal):
 
         # Add the ship to player_ships table and set as active
         self.bot.db.execute_query(
-            '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (%s, %s, 1)''',
+            '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (%s, %s, true)''',
             (interaction.user.id, ship_id)
         )
         # Generate ship activities

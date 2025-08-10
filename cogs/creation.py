@@ -714,7 +714,7 @@ class CreationCog(commands.Cog):
                     has_upgrades, has_shipyard,
                     has_federal_supplies, has_black_market,
                     created_at, is_generated)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), 0)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), false)""",
                 (
                     location_data['name'],
                     location_data['type'],
@@ -746,7 +746,7 @@ class CreationCog(commands.Cog):
                     conn,
                     """INSERT INTO sub_locations 
                        (parent_location_id, name, sub_type, description, is_active)
-                       VALUES (%s, %s, %s, %s, 1)""",
+                       VALUES (%s, %s, %s, %s, true)""",
                     (location_id, sub_name, sub_type, sub_desc)
                 )
             
@@ -1006,7 +1006,7 @@ class CreationCog(commands.Cog):
             """INSERT INTO corridors 
                (name, origin_location, destination_location, travel_time,
                 fuel_cost, danger_level, corridor_type, is_active, is_generated)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, 1, 0)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, true, false)""",
             (name, origin_id, dest_id, travel_time, fuel_cost, danger_level, corridor_type)
         )
 
@@ -1986,7 +1986,7 @@ class CreationCog(commands.Cog):
                     if generated_subs:
                         query = '''INSERT INTO sub_locations 
                                   (parent_location_id, name, sub_type, description, is_active)
-                                  VALUES (%s, %s, %s, %s, 1)'''
+                                  VALUES (%s, %s, %s, %s, true)'''
                         self.db.executemany_in_transaction(conn, query, generated_subs)
                 
                 except ImportError:

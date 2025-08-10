@@ -1592,7 +1592,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 market_id = self.db.execute_in_transaction(
                     conn,
                     '''INSERT INTO black_markets (location_id, market_type, reputation_required, is_hidden)
-                       VALUES (%s, %s, %s, 1)''',
+                       VALUES (%s, %s, %s, true)''',
                     (location['id'], market_type, reputation_required),
                     fetch='lastrowid'
                 )
@@ -2886,7 +2886,7 @@ class GalaxyGeneratorCog(commands.Cog):
                         '''INSERT INTO location_homes 
                            (location_id, home_type, home_name, price, interior_description, 
                             activities, value_modifier, is_available)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, 1)''',
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, true)''',
                         (location['id'], home_type, home_name, price, interior_desc,
                          ','.join(activities), value_modifier)
                     )
@@ -10040,7 +10040,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 if repeaters_to_insert:
                     query = '''INSERT INTO repeaters 
                                (location_id, repeater_type, receive_range, transmit_range, is_active)
-                               VALUES (%s, 'built_in', %s, %s, 1)'''
+                               VALUES (%s, 'built_in', %s, %s, true)'''
                     self.db.executemany_in_transaction(conn, query, repeaters_to_insert)
                     total_created += len(repeaters_to_insert)
                     print(f"📡 Installed {len(repeaters_to_insert)} repeaters (batch {i//batch_size + 1}), total: {total_created}")

@@ -722,7 +722,7 @@ class SubLocationManager:
                 self.db.execute_query(
                     '''INSERT INTO sub_locations 
                        (parent_location_id, name, sub_type, description, is_active)
-                       VALUES (%s, %s, %s, %s, 1)''',
+                       VALUES (%s, %s, %s, %s, true)''',
                     (parent_location_id, props['name'], sub_type, props['description'])
                 )
                 created_count += 1
@@ -769,7 +769,7 @@ class SubLocationManager:
             self.db.execute_query(
                 '''INSERT INTO sub_locations 
                    (parent_location_id, name, sub_type, description, is_active)
-                   VALUES (%s, %s, %s, %s, 1)''',
+                   VALUES (%s, %s, %s, %s, true)''',
                 (parent_location_id, props['name'], sub_type, props['description'])
             )
             created_count += 1

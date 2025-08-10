@@ -1445,7 +1445,7 @@ class AdminCog(commands.Cog):
             if not exists_in_player_ships:
                 # Add to player_ships
                 self.db.execute_query(
-                    "INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (%s, %s, 1)",
+                    "INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (%s, %s, true)",
                     (user_id, ship_id)
                 )
                 fixed_count += 1
