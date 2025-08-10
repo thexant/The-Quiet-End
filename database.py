@@ -1113,6 +1113,13 @@ class Database:
                 job_title TEXT NOT NULL,
                 job_description TEXT,
                 reward_money INTEGER DEFAULT 100,
+                reward_items TEXT,
+                required_skill TEXT,
+                min_skill_level INTEGER DEFAULT 0,
+                danger_level INTEGER DEFAULT 0,
+                duration_minutes INTEGER DEFAULT 30,
+                is_available BOOLEAN DEFAULT true,
+                expires_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )''',
             

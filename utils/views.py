@@ -4323,14 +4323,14 @@ class LogbookInteractionView(discord.ui.View):
                     
                     # Convert stored time to display format
                     if posted_at:
-                        posted_time = safe_datetime_parse(posted_at.replace('Z', '+00:00') if 'Z' in posted_at else posted_at)
+                        posted_time = safe_datetime_parse(posted_at)
                         time_str = posted_time.strftime("%d-%m-%Y")
                     else:
                         time_str = "Unknown date"
                 except:
                     # Fallback to simple date format
                     if posted_at:
-                        posted_time = safe_datetime_parse(posted_at.replace('Z', '+00:00') if 'Z' in posted_at else posted_at)
+                        posted_time = safe_datetime_parse(posted_at)
                         time_str = posted_time.strftime("%Y-%m-%d")
                     else:
                         time_str = "Unknown date"
