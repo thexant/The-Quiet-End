@@ -1147,6 +1147,125 @@ class Database:
                 occurred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
+            
+            # Factions table
+            '''CREATE TABLE IF NOT EXISTS factions (
+                faction_id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                emoji TEXT NOT NULL,
+                description TEXT,
+                leader_id BIGINT NOT NULL,
+                is_public BOOLEAN DEFAULT false,
+                bank_balance INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (leader_id) REFERENCES characters (user_id)
+            )''',
+            
+            # Faction members table
+            '''CREATE TABLE IF NOT EXISTS faction_members (
+                member_id SERIAL PRIMARY KEY,
+                faction_id INTEGER NOT NULL,
+                user_id BIGINT NOT NULL,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (faction_id) REFERENCES factions (faction_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                UNIQUE(user_id)
+            )''',
+            
+            # Faction invites table
+            '''CREATE TABLE IF NOT EXISTS faction_invites (
+                invite_id SERIAL PRIMARY KEY,
+                faction_id INTEGER NOT NULL,
+                inviter_id BIGINT NOT NULL,
+                invitee_id BIGINT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                FOREIGN KEY (faction_id) REFERENCES factions (faction_id),
+                FOREIGN KEY (inviter_id) REFERENCES characters (user_id),
+                FOREIGN KEY (invitee_id) REFERENCES characters (user_id)
+            )''',
+            
+            # Faction sales tax table
+            '''CREATE TABLE IF NOT EXISTS faction_sales_tax (
+                tax_id SERIAL PRIMARY KEY,
+                faction_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                tax_percentage INTEGER DEFAULT 0,
+                FOREIGN KEY (faction_id) REFERENCES factions (faction_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                UNIQUE(location_id)
+            )''',
+            
+            # Faction payouts table
+            '''CREATE TABLE IF NOT EXISTS faction_payouts (
+                payout_id SERIAL PRIMARY KEY,
+                faction_id INTEGER NOT NULL,
+                user_id BIGINT NOT NULL,
+                amount INTEGER NOT NULL,
+                collected BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (faction_id) REFERENCES factions (faction_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )''',
+            
+            # Group ships table
+            '''CREATE TABLE IF NOT EXISTS group_ships (
+                group_id INTEGER PRIMARY KEY,
+                ship_id INTEGER NOT NULL,
+                captain_id BIGINT,
+                crew_positions TEXT,
+                FOREIGN KEY (group_id) REFERENCES groups (group_id),
+                FOREIGN KEY (ship_id) REFERENCES ships (ship_id),
+                FOREIGN KEY (captain_id) REFERENCES characters (user_id)
+            )''',
+            
+            # Group invites table
+            '''CREATE TABLE IF NOT EXISTS group_invites (
+                invite_id SERIAL PRIMARY KEY,
+                group_id INTEGER NOT NULL,
+                inviter_id BIGINT NOT NULL,
+                invitee_id BIGINT NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (group_id) REFERENCES groups (group_id),
+                FOREIGN KEY (inviter_id) REFERENCES characters (user_id),
+                FOREIGN KEY (invitee_id) REFERENCES characters (user_id)
+            )''',
+            
+            # Group vote sessions table
+            '''CREATE TABLE IF NOT EXISTS group_vote_sessions (
+                session_id SERIAL PRIMARY KEY,
+                group_id INTEGER NOT NULL,
+                vote_type TEXT NOT NULL,
+                vote_data TEXT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (group_id) REFERENCES groups (group_id)
+            )''',
+            
+            # Group votes table
+            '''CREATE TABLE IF NOT EXISTS group_votes (
+                vote_id SERIAL PRIMARY KEY,
+                session_id INTEGER NOT NULL,
+                user_id BIGINT NOT NULL,
+                vote_value TEXT NOT NULL,
+                voted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES group_vote_sessions (session_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )''',
+            
+            # User location panels table
+            '''CREATE TABLE IF NOT EXISTS user_location_panels (
+                user_id BIGINT NOT NULL,
+                location_id INTEGER NOT NULL,
+                message_id BIGINT,
+                channel_id BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, location_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
         ]
         
         # Execute schema creation
