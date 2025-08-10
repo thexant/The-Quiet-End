@@ -176,7 +176,7 @@ class HistoryGenerator:
                 conn = self.db.begin_transaction()
                 try:
                     locations = self.db.execute_in_transaction(conn,
-                        "SELECT location_id, name, location_type, establishment_date FROM locations WHERE is_generated = 1",
+                        "SELECT location_id, name, location_type, establishment_date FROM locations WHERE is_generated = true",
                         fetch='all'
                     )
                     self.db.commit_transaction(conn)
@@ -197,7 +197,7 @@ class HistoryGenerator:
                         print("⚠️ establishment_date column missing, setting defaults...")
                         # Try again with simpler query using read-only operation
                         locations = self.db.execute_query(
-                            "SELECT location_id, name, location_type, '01-01-2750' as establishment_date FROM locations WHERE is_generated = 1",
+                            "SELECT location_id, name, location_type, '01-01-2750' as establishment_date FROM locations WHERE is_generated = true",
                             fetch='all'
                         )
                         if locations and len(locations) > 150:

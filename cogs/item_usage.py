@@ -542,7 +542,7 @@ class ItemUsageCog(commands.Cog):
             if faction == "federal":
                 # Find all federal locations
                 federal_locations = self.db.execute_query(
-                    "SELECT location_id, name FROM locations WHERE has_federal_supplies = 1",
+                    "SELECT location_id, name FROM locations WHERE has_federal_supplies = true",
                     fetch='all'
                 )
                 

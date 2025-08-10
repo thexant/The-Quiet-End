@@ -3328,7 +3328,7 @@ class SubLocationShuffleConfirmView(discord.ui.View):
                 conn,
                 """SELECT location_id, location_type, wealth_level, is_derelict 
                    FROM locations 
-                   WHERE is_generated = 1 OR is_generated = 0""",
+                   WHERE is_generated = true OR is_generated = false""",
                 fetch='all'
             )
             

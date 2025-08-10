@@ -927,12 +927,12 @@ class UpgradeButton(discord.ui.Button):
             # Enable services based on level
             if new_level >= 2:
                 self.view.bot.db.execute_query(
-                    "UPDATE locations SET has_medical = 1 WHERE location_id = %s",
+                    "UPDATE locations SET has_medical = true WHERE location_id = %s",
                     (self.view.location_id,)
                 )
             if new_level >= 3:
                 self.view.bot.db.execute_query(
-                    "UPDATE locations SET has_repairs = 1, has_upgrades = 1 WHERE location_id = %s",
+                    "UPDATE locations SET has_repairs = true, has_upgrades = true WHERE location_id = %s",
                     (self.view.location_id,)
                 )
 
