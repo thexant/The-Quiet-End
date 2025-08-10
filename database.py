@@ -1079,12 +1079,32 @@ class Database:
         
         for index_sql in indexes:
             try:
-                self.execute_query(index_sql)
+                # Remove CONCURRENTLY if present and execute without transaction locks
+                clean_sql = index_sql.replace('CONCURRENTLY ', '')
+                self._create_index_without_transaction(clean_sql)
             except Exception as e:
                 # Ignore index creation errors (they might already exist)
+                print(f"Index creation note: {e}")
                 pass
         
         print("✅ PostgreSQL database schema initialized")
+
+    def _create_index_without_transaction(self, index_sql):
+        """Create index outside of transaction to avoid CONCURRENTLY issues"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            conn.autocommit = True  # Enable autocommit to avoid transaction blocks
+            cursor = conn.cursor()
+            cursor.execute(index_sql)
+            cursor.close()
+        except Exception as e:
+            # If index already exists or other issue, that's fine
+            pass
+        finally:
+            if conn:
+                conn.autocommit = False  # Reset to default
+                self._close_connection(conn)
 
     def validate_schema(self):
         """Validate critical schema elements exist"""

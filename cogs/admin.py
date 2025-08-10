@@ -1954,13 +1954,28 @@ class AdminCog(commands.Cog):
             # PostgreSQL always enforces foreign key constraints
             # No need to disable/enable them like in SQLite
             
-            # Delete all data
-            for table in tables_to_clear_in_order:
-                try:
-                    self.db.execute_query(f"DELETE FROM {table}")
-                except Exception as e:
-                    # Some tables might not exist, which is fine
-                    print(f"Note: Could not clear table {table}: {e}")
+            # Delete all data using a transaction for atomicity
+            try:
+                # Use database transaction to ensure all-or-nothing behavior
+                transaction_operations = []
+                for table in tables_to_clear_in_order:
+                    # Use TRUNCATE for better performance and foreign key handling
+                    transaction_operations.append((f"TRUNCATE TABLE {table} CASCADE", None))
+                
+                # Execute all truncations in a single transaction
+                self.db.execute_transaction(transaction_operations)
+                print("🗑️ All tables cleared successfully")
+                
+            except Exception as e:
+                print(f"⚠️ TRUNCATE failed, falling back to individual DELETE operations: {e}")
+                # Fallback: delete tables one by one
+                for table in tables_to_clear_in_order:
+                    try:
+                        self.db.execute_query(f"DELETE FROM {table}")
+                        print(f"✅ Cleared {table}")
+                    except Exception as e2:
+                        print(f"❌ Could not clear table {table}: {e2}")
+                        # Continue with other tables
             
             # PostgreSQL always enforces foreign key constraints
             # No need to disable/enable them like in SQLite
@@ -2005,15 +2020,23 @@ class AdminCog(commands.Cog):
                     "SELECT COUNT(*) FROM inventory", fetch='one'
                 )[0]
 
-                # Delete in proper order to avoid foreign key issues
-                self.db.execute_query("DELETE FROM logbook_entries")
-                self.db.execute_query("DELETE FROM character_identity")
-                self.db.execute_query("DELETE FROM character_reputation")
-                self.db.execute_query("DELETE FROM character_experience")
-                self.db.execute_query("DELETE FROM character_inventory")
-                self.db.execute_query("DELETE FROM characters")
-                self.db.execute_query("DELETE FROM ships")
-                self.db.execute_query("DELETE FROM inventory")
+                # Delete in proper order to avoid foreign key issues using transaction
+                try:
+                    character_tables = [
+                        "logbook_entries", "character_identity", "character_reputation", 
+                        "character_experience", "character_inventory", "characters", "ships", "inventory"
+                    ]
+                    transaction_operations = [(f"TRUNCATE TABLE {table} CASCADE", None) for table in character_tables]
+                    self.db.execute_transaction(transaction_operations)
+                    print("🗑️ Character data cleared successfully")
+                except Exception as e:
+                    print(f"⚠️ TRUNCATE failed for character data, using DELETE: {e}")
+                    # Fallback to individual deletes
+                    for table in character_tables:
+                        try:
+                            self.db.execute_query(f"DELETE FROM {table}")
+                        except Exception as e2:
+                            print(f"❌ Could not clear {table}: {e2}")
 
             # ————— Galaxy Reset with Character Preservation —————
             if reset_type in ["galaxy_with_logout"]:

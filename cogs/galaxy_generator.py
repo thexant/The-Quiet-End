@@ -1677,7 +1677,7 @@ class GalaxyGeneratorCog(commands.Cog):
             # Update the black_market_items table to include stock
             self.db.executemany_in_transaction(
                 conn,
-                '''INSERT INTO black_market_items (market_id, item_name, item_type, price, stock, description)
+                '''INSERT INTO black_market_items (market_id, item_name, item_type, price, stock, item_description)
                    VALUES (%s, %s, %s, %s, %s, %s)''',
                 items_to_insert
             )
@@ -2326,7 +2326,7 @@ class GalaxyGeneratorCog(commands.Cog):
         if federal_items_to_insert:
             self.db.executemany_in_transaction(
                 conn,
-                '''INSERT INTO shop_items (location_id, item_name, item_type, price, description, stock, metadata, sold_by_player)
+                '''INSERT INTO shop_items (location_id, item_name, item_type, price, stock, description, metadata, sold_by_player)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
                 federal_items_to_insert
             )

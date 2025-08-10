@@ -682,7 +682,7 @@ class EconomyCog(commands.Cog):
         # Get black market items
         # WITH THIS:
         items = self.db.execute_query(
-            '''SELECT bmi.item_name, bmi.item_type, bmi.price, bmi.stock, bmi.description
+            '''SELECT bmi.item_name, bmi.item_type, bmi.price, bmi.stock, bmi.item_description
                FROM black_market_items bmi
                JOIN black_markets bm ON bmi.market_id = bm.market_id
                WHERE bm.location_id = %s AND (bmi.stock > 0 OR bmi.stock = -1)
@@ -704,7 +704,7 @@ class EconomyCog(commands.Cog):
         if items:
             # Show summary by category
             item_types = {}
-            for item_name, item_type, price, stock, description in items:
+            for item_name, item_type, price, stock, item_description in items:
                 if item_type not in item_types:
                     item_types[item_type] = {'count': 0, 'price_range': []}
                 item_types[item_type]['count'] += 1
@@ -4139,7 +4139,7 @@ class InteractiveBlackMarketView(discord.ui.View):
         
         # Get available items
         items = self.bot.db.execute_query(
-            '''SELECT bmi.item_name, bmi.item_type, bmi.price, bmi.stock, bmi.description
+            '''SELECT bmi.item_name, bmi.item_type, bmi.price, bmi.stock, bmi.item_description
                FROM black_market_items bmi
                JOIN black_markets bm ON bmi.market_id = bm.market_id
                WHERE bm.location_id = %s AND (bmi.stock > 0 OR bmi.stock = -1)
@@ -4243,7 +4243,7 @@ class BlackMarketBuySelectView(discord.ui.View):
         
         if items:
             options = []
-            for item_name, item_type, price, stock, description in items[:25]:
+            for item_name, item_type, price, stock, item_description in items[:25]:
                 stock_text = f"({stock} available)" if stock != -1 else "(Unlimited)"
                 
                 # Format category name
@@ -4278,7 +4278,7 @@ class BlackMarketBuySelectView(discord.ui.View):
         
         # Get item details
         item_info = self.bot.db.execute_query(
-            '''SELECT bmi.item_name, bmi.price, bmi.stock, bmi.description, bmi.item_type
+            '''SELECT bmi.item_name, bmi.price, bmi.stock, bmi.item_description, bmi.item_type, bm.reputation_required
                FROM black_market_items bmi
                JOIN black_markets bm ON bmi.market_id = bm.market_id
                WHERE bm.location_id = %s AND bmi.item_name = %s''',
