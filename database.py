@@ -1013,6 +1013,17 @@ class Database:
                 FOREIGN KEY (home_id) REFERENCES location_homes (home_id)
             )''',
             
+            # Ship activities table
+            '''CREATE TABLE IF NOT EXISTS ship_activities (
+                activity_id SERIAL PRIMARY KEY,
+                ship_id BIGINT,
+                activity_type TEXT,
+                activity_name TEXT,
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (ship_id) REFERENCES ships(ship_id)
+            )''',
+            
             # Location logs table for location history
             '''CREATE TABLE IF NOT EXISTS location_logs (
                 log_id SERIAL PRIMARY KEY,
@@ -1262,6 +1273,9 @@ class Database:
             'CREATE INDEX IF NOT EXISTS idx_location_economy_item ON location_economy(location_id, item_category, item_name)',
             'CREATE INDEX IF NOT EXISTS idx_economic_events_location ON economic_events(location_id)',
             'CREATE INDEX IF NOT EXISTS idx_economic_events_type ON economic_events(event_type)',
+            # Ship activities indexes
+            'CREATE INDEX IF NOT EXISTS idx_ship_activities_ship ON ship_activities(ship_id)',
+            'CREATE INDEX IF NOT EXISTS idx_ship_activities_active ON ship_activities(ship_id, is_active) WHERE is_active = true',
         ]
         
         for index_sql in indexes:

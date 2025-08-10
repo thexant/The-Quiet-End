@@ -624,3 +624,8 @@
 2025-08-10 12:15:00.232 MDT [23293] LOG:  checkpoint complete: wrote 91 buffers (0.6%); 0 WAL file(s) added, 0 removed, 0 recycled; write=9.015 s, sync=0.043 s, total=9.068 s; sync files=25, longest=0.003 s, average=0.002 s; distance=463 kB, estimate=820 kB; lsn=0/2E35080, redo lsn=0/2E35048
 2025-08-10 12:19:51.306 MDT [23293] LOG:  checkpoint starting: time
 2025-08-10 12:19:54.860 MDT [23293] LOG:  checkpoint complete: wrote 36 buffers (0.2%); 0 WAL file(s) added, 0 removed, 0 recycled; write=3.507 s, sync=0.037 s, total=3.554 s; sync files=21, longest=0.003 s, average=0.002 s; distance=245 kB, estimate=762 kB; lsn=0/2E725C8, redo lsn=0/2E72590
+2025-08-10 13:09:49.890 MDT [76511] ERROR:  insert or update on table "ship_activities" violates foreign key constraint "ship_activities_ship_id_fkey"
+2025-08-10 13:09:49.890 MDT [76511] DETAIL:  Key (ship_id)=(1) is not present in table "ships".
+2025-08-10 13:09:49.890 MDT [76511] STATEMENT:  INSERT INTO ship_activities (ship_id, activity_type, activity_name) VALUES (1, 'test_activity', 'Test Activity') RETURNING activity_id
+2025-08-10 13:09:52.489 MDT [23293] LOG:  checkpoint starting: time
+2025-08-10 13:09:56.146 MDT [23293] LOG:  checkpoint complete: wrote 37 buffers (0.2%); 0 WAL file(s) added, 0 removed, 0 recycled; write=3.607 s, sync=0.041 s, total=3.658 s; sync files=23, longest=0.003 s, average=0.002 s; distance=228 kB, estimate=709 kB; lsn=0/2EAB888, redo lsn=0/2EAB850
