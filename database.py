@@ -30,6 +30,7 @@ class Database:
             raise
         
         self.init_database()
+        self.validate_schema()
         
         # Register cleanup on exit
         atexit.register(self.cleanup)
@@ -1048,6 +1049,40 @@ class Database:
                 pass
         
         print("✅ PostgreSQL database schema initialized")
+
+    def validate_schema(self):
+        """Validate critical schema elements exist"""
+        print("🔍 Validating database schema...")
+        
+        critical_validations = [
+            ("shop_items table exists", "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'shop_items'"),
+            ("sold_by_player column exists", "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'shop_items' AND column_name = 'sold_by_player'"),
+            ("locations table exists", "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'locations'"),
+            ("black_markets table exists", "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'black_markets'"),
+            ("location_id foreign key exists", "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_name = 'black_markets' AND constraint_name = 'black_markets_location_id_fkey'"),
+        ]
+        
+        validation_errors = []
+        for validation_name, query in critical_validations:
+            try:
+                result = self.execute_query(query, fetch='one')
+                if result and result[0] > 0:
+                    print(f"  ✅ {validation_name}")
+                else:
+                    error_msg = f"❌ {validation_name} - FAILED"
+                    print(error_msg)
+                    validation_errors.append(error_msg)
+            except Exception as e:
+                error_msg = f"❌ {validation_name} - ERROR: {e}"
+                print(error_msg)
+                validation_errors.append(error_msg)
+        
+        if validation_errors:
+            print(f"⚠️ Schema validation found {len(validation_errors)} issues:")
+            for error in validation_errors:
+                print(f"  {error}")
+        else:
+            print("✅ Database schema validation completed successfully")
 
     def cleanup(self):
         """Cleanup all connections on shutdown"""

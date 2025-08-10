@@ -1280,8 +1280,16 @@ class GalaxyGeneratorCog(commands.Cog):
             'is_generated': True, 'is_derelict': False, 'has_shipyard': True
         }
         print("🔧 DEBUG: Saving Earth to database...")
-        location['id'] = self._save_location_to_db(conn, location)
-        print(f"🔧 DEBUG: Earth saved with ID {location['id']}")
+        location_id = self._save_location_to_db(conn, location)
+        print(f"🔧 DEBUG: Earth saved with ID {location_id}")
+        
+        # Validate Earth location ID
+        if location_id is None or location_id <= 0:
+            error_msg = f"❌ Failed to create Earth location: invalid ID {location_id}"
+            print(error_msg)
+            raise ValueError(error_msg)
+            
+        location['id'] = location_id
         print("🌍 Created static location: Earth in Sol system.")
         return location
     async def _create_npcs_outside_transaction(self, all_locations: List[Dict], progress_msg=None):
@@ -1443,6 +1451,13 @@ class GalaxyGeneratorCog(commands.Cog):
             print(f"🔧 DEBUG: Saving location {name} to database...")
             location_id = self._save_location_to_db(conn, location_data)
             print(f"🔧 DEBUG: Location {name} saved with ID {location_id}")
+            
+            # Validate the location ID before adding to major_locations
+            if location_id is None or location_id <= 0:
+                error_msg = f"❌ Failed to create location {name}: invalid ID {location_id}"
+                print(error_msg)
+                continue  # Skip this location instead of crashing
+                
             location_data['id'] = location_id
             major_locations.append(location_data)
             
@@ -1507,6 +1522,13 @@ class GalaxyGeneratorCog(commands.Cog):
         """
         from utils.item_config import ItemConfig
         
+        # Input validation
+        if not major_locations:
+            print("⚠️ No major locations provided for black market generation")
+            return 0
+            
+        print(f"🔍 Starting black market generation for {len(major_locations)} locations")
+        
         black_markets_created = 0
         locations_to_flag = []
         items_to_insert = []
@@ -1550,7 +1572,17 @@ class GalaxyGeneratorCog(commands.Cog):
 
         black_market_item_pool = get_black_market_items()
 
+        # Debug: Log location data structure for troubleshooting
+        print(f"🔍 DEBUG: Examining location data structure:")
+        for i, location in enumerate(major_locations[:3]):  # Show first 3 locations
+            print(f"  Location {i}: keys={list(location.keys())}, id={location.get('id', 'MISSING')}, name={location.get('name', 'MISSING')}")
+
         for location in major_locations:
+            # Input validation to prevent foreign key constraint violations
+            if not location or 'id' not in location or location['id'] is None or location['id'] <= 0:
+                print(f"⚠️ Skipping black market generation for invalid location: {location}")
+                continue
+                
             black_market_chance = 0.0
             
             # Enhanced spawn logic (as before)
@@ -1589,13 +1621,17 @@ class GalaxyGeneratorCog(commands.Cog):
                 market_type = 'underground' if location['wealth_level'] <= 2 else 'discrete'
                 reputation_required = random.randint(0, 2) if location['wealth_level'] <= 2 else random.randint(1, 4)
                 
-                market_id = self.db.execute_in_transaction(
-                    conn,
-                    '''INSERT INTO black_markets (location_id, market_type, reputation_required, is_hidden)
-                       VALUES (%s, %s, %s, true)''',
-                    (location['id'], market_type, reputation_required),
-                    fetch='lastrowid'
-                )
+                try:
+                    market_id = self.db.execute_in_transaction(
+                        conn,
+                        '''INSERT INTO black_markets (location_id, market_type, reputation_required, is_hidden)
+                           VALUES (%s, %s, %s, true)''',
+                        (location['id'], market_type, reputation_required),
+                        fetch='lastrowid'
+                    )
+                except Exception as e:
+                    print(f"❌ Failed to create black market for location {location.get('name', 'Unknown')} (ID: {location.get('id', 'None')}): {e}")
+                    continue
                 
                 if market_id:
                     black_markets_created += 1
@@ -8373,6 +8409,13 @@ class GalaxyGeneratorCog(commands.Cog):
         print(f"🔧 DEBUG: About to execute INSERT for {location.get('name')}")
         result = self.db.execute_in_transaction(conn, query, params, fetch='lastrowid')
         print(f"🔧 DEBUG: INSERT completed for {location.get('name')}, got ID: {result}")
+        
+        # Validate the returned ID
+        if result is None or result <= 0:
+            error_msg = f"❌ Invalid location ID returned from database: {result} for location {location.get('name')}"
+            print(error_msg)
+            raise ValueError(error_msg)
+            
         return result
     
     def _generate_unique_name(self, loc_type: str, used_names: set) -> str:

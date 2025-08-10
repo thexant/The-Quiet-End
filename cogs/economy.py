@@ -210,10 +210,37 @@ class EconomyCog(commands.Cog):
             for location_id, name, wealth_level, location_type, last_refreshed in shops_to_refresh:
                 try:
                     # Clear existing auto-generated shop items for this location (preserve player-sold items)
-                    self.db.execute_query(
-                        'DELETE FROM shop_items WHERE location_id = %s AND sold_by_player = FALSE',
-                        (location_id,)
-                    )
+                    # Add retry logic in case of connection issues
+                    retry_count = 0
+                    max_retries = 3
+                    while retry_count < max_retries:
+                        try:
+                            # Verify column exists before attempting delete
+                            column_check = self.db.execute_query(
+                                "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop_items' AND column_name = 'sold_by_player'",
+                                fetch='one'
+                            )
+                            if not column_check:
+                                print(f"❌ sold_by_player column missing from shop_items table!")
+                                # Alternative query without the column
+                                self.db.execute_query(
+                                    'DELETE FROM shop_items WHERE location_id = %s',
+                                    (location_id,)
+                                )
+                            else:
+                                self.db.execute_query(
+                                    'DELETE FROM shop_items WHERE location_id = %s AND sold_by_player = FALSE',
+                                    (location_id,)
+                                )
+                            break  # Success, exit retry loop
+                        except Exception as delete_error:
+                            retry_count += 1
+                            if retry_count >= max_retries:
+                                print(f"❌ Failed to delete shop items for location {location_id} after {max_retries} attempts: {delete_error}")
+                                raise
+                            else:
+                                print(f"⚠️ Retry {retry_count}/{max_retries} for deleting shop items at location {location_id}: {delete_error}")
+                                await asyncio.sleep(0.1)  # Brief delay before retry
                     
                     # Generate new shop items with wealth-based quantity
                     await self._generate_shop_items(location_id, wealth_level, location_type)
