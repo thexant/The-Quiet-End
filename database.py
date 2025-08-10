@@ -939,6 +939,33 @@ class Database:
                 FOREIGN KEY (quest_id) REFERENCES quests (quest_id),
                 FOREIGN KEY (user_id) REFERENCES characters (user_id)
             )''',
+            
+            # Location economy table for supply/demand tracking
+            '''CREATE TABLE IF NOT EXISTS location_economy (
+                economy_id SERIAL PRIMARY KEY,
+                location_id INTEGER NOT NULL,
+                item_category TEXT,
+                item_name TEXT,
+                status TEXT NOT NULL CHECK(status IN ('in_demand', 'surplus', 'normal')),
+                price_modifier REAL DEFAULT 1.0,
+                stock_modifier REAL DEFAULT 1.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                UNIQUE(location_id, item_category, item_name)
+            )''',
+            
+            # Economic events table for economic news system
+            '''CREATE TABLE IF NOT EXISTS economic_events (
+                event_id SERIAL PRIMARY KEY,
+                location_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                item_category TEXT,
+                item_name TEXT,
+                description TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
         ]
         
         # Execute schema creation
@@ -1039,6 +1066,12 @@ class Database:
             'CREATE INDEX IF NOT EXISTS idx_quest_progress_active ON quest_progress(user_id, quest_status) WHERE quest_status = \'active\'',
             'CREATE INDEX IF NOT EXISTS idx_quest_completions_user ON quest_completions(user_id)',
             'CREATE INDEX IF NOT EXISTS idx_quest_completions_quest ON quest_completions(quest_id)',
+            # Economy table indexes
+            'CREATE INDEX IF NOT EXISTS idx_location_economy_location ON location_economy(location_id)',
+            'CREATE INDEX IF NOT EXISTS idx_location_economy_expires ON location_economy(expires_at)',
+            'CREATE INDEX IF NOT EXISTS idx_location_economy_item ON location_economy(location_id, item_category, item_name)',
+            'CREATE INDEX IF NOT EXISTS idx_economic_events_location ON economic_events(location_id)',
+            'CREATE INDEX IF NOT EXISTS idx_economic_events_type ON economic_events(event_type)',
         ]
         
         for index_sql in indexes:

@@ -4592,7 +4592,10 @@ class BlackMarketQuantityView(discord.ui.View):
         # Update stock if not unlimited
         if self.stock != -1:
             self.bot.db.execute_query(
-                "UPDATE black_market_items SET stock = stock - %s WHERE location_id = %s AND item_name = %s",
+                """UPDATE black_market_items bmi SET stock = stock - %s 
+                   FROM black_markets bm 
+                   WHERE bmi.market_id = bm.market_id 
+                   AND bm.location_id = %s AND bmi.item_name = %s""",
                 (self.quantity, self.location_id, self.item_name)
             )
         

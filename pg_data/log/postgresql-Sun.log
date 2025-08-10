@@ -604,3 +604,7 @@
 2025-08-10 11:22:49.284 MDT [49864] ERROR:  update or delete on table "black_markets" violates foreign key constraint "black_market_items_market_id_fkey" on table "black_market_items"
 2025-08-10 11:22:49.284 MDT [49864] DETAIL:  Key (market_id)=(84) is still referenced from table "black_market_items".
 2025-08-10 11:22:49.284 MDT [49864] STATEMENT:  DELETE FROM black_markets WHERE location_id = 705
+2025-08-10 11:24:51.784 MDT [23293] LOG:  checkpoint starting: time
+2025-08-10 11:24:54.028 MDT [23293] LOG:  checkpoint complete: wrote 23 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=2.205 s, sync=0.030 s, total=2.245 s; sync files=17, longest=0.002 s, average=0.002 s; distance=145 kB, estimate=447 kB; lsn=0/2CAC370, redo lsn=0/2CAC338
+2025-08-10 11:34:51.184 MDT [23293] LOG:  checkpoint starting: time
+2025-08-10 11:34:53.027 MDT [23293] LOG:  checkpoint complete: wrote 19 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.805 s, sync=0.030 s, total=1.844 s; sync files=22, longest=0.002 s, average=0.002 s; distance=140 kB, estimate=416 kB; lsn=0/2CCF418, redo lsn=0/2CCF3E0
