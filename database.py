@@ -1096,12 +1096,20 @@ class Database:
             
             # NPC trade inventory table
             '''CREATE TABLE IF NOT EXISTS npc_trade_inventory (
-                inventory_id SERIAL PRIMARY KEY,
+                trade_item_id SERIAL PRIMARY KEY,
                 npc_id INTEGER NOT NULL,
                 npc_type TEXT NOT NULL,
                 item_name TEXT NOT NULL,
+                item_type TEXT DEFAULT 'misc',
                 quantity INTEGER DEFAULT 1,
-                price INTEGER DEFAULT 10,
+                price_credits INTEGER DEFAULT 10,
+                trade_for_item TEXT,
+                trade_quantity_required INTEGER DEFAULT 1,
+                rarity TEXT DEFAULT 'common',
+                description TEXT,
+                metadata TEXT,
+                is_available BOOLEAN DEFAULT true,
+                restocks_at TIMESTAMP,
                 UNIQUE(npc_id, npc_type, item_name)
             )''',
             
