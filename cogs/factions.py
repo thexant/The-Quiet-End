@@ -200,7 +200,7 @@ class FactionCreateModal(discord.ui.Modal, title="Create New Faction"):
             return await interaction.followup.send("A faction with that name already exists!", ephemeral=True)
         
         # Parse public setting
-        is_public = 1 if self.is_public.value.lower() == 'yes' else 0
+        is_public = True if self.is_public.value.lower() == 'yes' else False
         
         # Create faction with initial bank balance of 2500
         self.cog.db.execute_query(
@@ -514,7 +514,7 @@ class FactionsCog(commands.Cog):
                    FROM factions f
                    JOIN faction_members fm ON f.faction_id = fm.faction_id
                    JOIN characters c ON fm.user_id = c.user_id
-                   WHERE f.is_public = 1 AND c.current_location = %s''',
+                   WHERE f.is_public = true AND c.current_location = %s''',
                 (user_location[0],),
                 fetch='all'
             )

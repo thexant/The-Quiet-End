@@ -681,7 +681,7 @@ class SubLocationManager:
         
         for sub_id, thread_id, location_id, sub_type in inactive_threads:
             self.db.execute_query(
-                "UPDATE sub_locations SET is_active = 0 WHERE sub_location_id = %s",
+                "UPDATE sub_locations SET is_active = false WHERE sub_location_id = %s",
                 (sub_id,)
             )
             
@@ -4736,7 +4736,7 @@ class SubLocationServiceView(discord.ui.View):
                 available_jobs = self.db.execute_query(
                     """SELECT j.title, l.name FROM jobs j 
                        JOIN locations l ON j.location_id = l.location_id 
-                       WHERE j.is_taken = 0 AND j.location_id != %s 
+                       WHERE j.is_taken = false AND j.location_id != %s 
                        ORDER BY RANDOM() LIMIT 3""",
                     (current_location,),
                     fetch='all'

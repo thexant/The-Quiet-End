@@ -1550,7 +1550,7 @@ class CreationCog(commands.Cog):
                         npc_id, npc_name, callsign, corridor_name = traveler_data
                         # Kill the NPC
                         self.cog.db.execute_query(
-                            "UPDATE dynamic_npcs SET is_alive = 0 WHERE npc_id = %s",
+                            "UPDATE dynamic_npcs SET is_alive = false WHERE npc_id = %s",
                             (npc_id,)
                         )
                         # Log NPC death

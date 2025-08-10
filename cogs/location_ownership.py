@@ -755,7 +755,7 @@ class PurchaseConfirmationView(discord.ui.View):
             
             # Update location status
             self.bot.db.execute_query(
-                "UPDATE locations SET is_derelict = 0 WHERE location_id = %s",
+                "UPDATE locations SET is_derelict = false WHERE location_id = %s",
                 (self.location_id,)
             )
             

@@ -1285,7 +1285,7 @@ class NPCActionView(discord.ui.View):
             '''SELECT npc_job_id, job_title, job_description, reward_money, reward_items,
                       required_skill, min_skill_level, danger_level, duration_minutes
                FROM npc_jobs 
-               WHERE npc_id = %s AND npc_type = %s AND is_available = 1 
+               WHERE npc_id = %s AND npc_type = %s AND is_available = true 
                AND (expires_at IS NULL OR expires_at > NOW())''',
             (self.npc_id, self.npc_type),
             fetch='all'
@@ -1307,7 +1307,7 @@ class NPCActionView(discord.ui.View):
                         '''SELECT npc_job_id, job_title, job_description, reward_money, reward_items,
                                   required_skill, min_skill_level, danger_level, duration_minutes
                            FROM npc_jobs 
-                           WHERE npc_id = %s AND npc_type = %s AND is_available = 1''',
+                           WHERE npc_id = %s AND npc_type = %s AND is_available = true''',
                         (self.npc_id, self.npc_type),
                         fetch='all'
                     )
@@ -1353,7 +1353,7 @@ class NPCActionView(discord.ui.View):
             '''SELECT trade_item_id, item_name, quantity, price_credits, trade_for_item,
                       trade_quantity_required, rarity, description
                FROM npc_trade_inventory 
-               WHERE npc_id = %s AND npc_type = %s AND is_available = 1 
+               WHERE npc_id = %s AND npc_type = %s AND is_available = true 
                AND quantity > 0''',
             (self.npc_id, self.npc_type),
             fetch='all'
@@ -1376,7 +1376,7 @@ class NPCActionView(discord.ui.View):
                         '''SELECT trade_item_id, item_name, quantity, price_credits, trade_for_item,
                                   trade_quantity_required, rarity, description
                            FROM npc_trade_inventory 
-                           WHERE npc_id = %s AND npc_type = %s AND is_available = 1 
+                           WHERE npc_id = %s AND npc_type = %s AND is_available = true 
                            AND quantity > 0''',
                         (self.npc_id, self.npc_type),
                         fetch='all'
@@ -1669,7 +1669,7 @@ class NPCJobSelectView(discord.ui.View):
             if job_status and job_status[0] > 0 and job_status[1] >= job_status[0]:
                 self.bot.db.execute_in_transaction(
                     conn,
-                    "UPDATE npc_jobs SET is_available = 0 WHERE npc_job_id = %s",
+                    "UPDATE npc_jobs SET is_available = false WHERE npc_job_id = %s",
                     (npc_job_id,)
                 )
             

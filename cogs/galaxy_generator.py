@@ -3202,8 +3202,8 @@ class GalaxyGeneratorCog(commands.Cog):
                        reconnection_eta = %s,
                        abandoned_since = NULL,
                        population = %s,
-                       has_fuel = 1,
-                       has_repairs = 1
+                       has_fuel = true,
+                       has_repairs = true
                        WHERE location_id = %s""",
                     (reconnection_time, basic_population, gate_id)
                 )

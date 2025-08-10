@@ -1378,7 +1378,7 @@ class AdminCog(commands.Cog):
         
         # Get pending news count
         pending_count = self.db.execute_query(
-            "SELECT COUNT(*) FROM news_queue WHERE guild_id = %s AND is_delivered = 0",
+            "SELECT COUNT(*) FROM news_queue WHERE guild_id = %s AND is_delivered = false",
             (interaction.guild.id,),
             fetch='one'
         )[0]

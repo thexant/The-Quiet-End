@@ -830,7 +830,7 @@ class LocationView(discord.ui.View):
         jobs = self.bot.db.execute_query(
             '''SELECT job_id, title, description, reward_money, required_skill, min_skill_level, danger_level, duration_minutes
                FROM jobs 
-               WHERE location_id = %s AND is_taken = 0 AND expires_at > NOW()
+               WHERE location_id = %s AND is_taken = false AND expires_at > NOW()
                ORDER BY reward_money DESC''',
             (char_location[0],),
             fetch='all'
@@ -842,7 +842,7 @@ class LocationView(discord.ui.View):
             jobs = self.bot.db.execute_query(
                 '''SELECT job_id, title, description, reward_money, required_skill, min_skill_level, danger_level, duration_minutes
                    FROM jobs 
-                   WHERE location_id = %s AND is_taken = 0 AND expires_at > NOW()
+                   WHERE location_id = %s AND is_taken = false AND expires_at > NOW()
                    ORDER BY reward_money DESC''',
                 (char_location[0],),
                 fetch='all'
@@ -3082,7 +3082,7 @@ class EphemeralLocationView(discord.ui.View):
         homes_info = self.bot.db.execute_query(
             '''SELECT COUNT(*), MIN(price), MAX(price), home_type
                FROM location_homes 
-               WHERE location_id = %s AND is_available = 1
+               WHERE location_id = %s AND is_available = true
                GROUP BY home_type''',
             (location_id,),
             fetch='all'
@@ -6813,7 +6813,7 @@ class HomesView(discord.ui.View):
         
         # Check if location has homes for sale
         available_homes = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM location_homes WHERE location_id = %s AND is_available = 1",
+            "SELECT COUNT(*) FROM location_homes WHERE location_id = %s AND is_available = true",
             (current_location,),
             fetch='one'
         )

@@ -1874,7 +1874,7 @@ class CharacterCog(commands.Cog):
             # Make all homes available again
             self.db.execute_query(
                 '''UPDATE location_homes 
-                   SET owner_id = NULL, is_available = 1, purchase_date = NULL
+                   SET owner_id = NULL, is_available = true, purchase_date = NULL
                    WHERE owner_id = %s''',
                 (user_id,)
             )

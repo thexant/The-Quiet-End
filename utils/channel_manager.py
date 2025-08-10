@@ -744,7 +744,7 @@ class ChannelManager:
         homes_info = self.db.execute_query(
             '''SELECT COUNT(*), MIN(price), MAX(price), home_type
                FROM location_homes 
-               WHERE location_id = %s AND is_available = 1
+               WHERE location_id = %s AND is_available = true
                GROUP BY home_type''',
             (loc_id,),
             fetch='all'
@@ -2659,7 +2659,7 @@ class CharacterDeleteConfirmView(discord.ui.View):
         
         # Cancel any jobs
         self.bot.db.execute_query(
-            "UPDATE jobs SET is_taken = 0, taken_by = NULL, taken_at = NULL WHERE taken_by = %s",
+            "UPDATE jobs SET is_taken = false, taken_by = NULL, taken_at = NULL WHERE taken_by = %s",
             (self.user_id,)
         )
         
