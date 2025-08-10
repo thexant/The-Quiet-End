@@ -1,0 +1,7 @@
+LOAD DATABASE
+    FROM sqlite:///home/vetaso/The-Quiet-End/data/THEQUIETEND.db
+    INTO postgresql://thequietend_user:thequietend_pass@localhost/thequietend_db?host=/tmp
+
+WITH include drop, create tables, create indexes, reset sequences
+
+SET work_mem to '16MB', maintenance_work_mem to '512 MB';
