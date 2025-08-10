@@ -2108,10 +2108,13 @@ class EconomyCog(commands.Cog):
             await self._complete_job_failed(interaction, job_id, title, reward, roll, success_chance)
         self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
+        # Get player name for display
+        player_name = interaction.user.display_name
+        
         if success:
             embed = discord.Embed(
-                title="✅ Group Job Completed Successfully!",
-                description=f"**{title}** has been completed by the group!",
+                title="✅ Job Completed Successfully!",
+                description=f"**{title}** has been completed!",
                 color=0x00ff00
             )
             
@@ -2124,11 +2127,11 @@ class EconomyCog(commands.Cog):
                 value=f"Rolled **{displayed_roll}** (needed {failure_threshold+1}+)", 
                 inline=True
             )
-            embed.add_field(name="💰 Reward Each", value=f"{reward:,} credits", inline=True)
-            embed.add_field(name="👥 Group Members", value=str(len(group_members)), inline=True)
+            embed.add_field(name="💰 Reward", value=f"{reward:,} credits", inline=True)
+            embed.add_field(name="👤 Completed By", value=player_name, inline=True)
         else:
             embed = discord.Embed(
-                title="❌ Group Job Failed",
+                title="❌ Job Failed",
                 description=f"**{title}** was not completed successfully",
                 color=0xff4444
             )
@@ -2142,18 +2145,8 @@ class EconomyCog(commands.Cog):
                 value=f"Rolled **{displayed_roll}** (needed {failure_threshold+1}+ to succeed)", 
                 inline=True
             )
-            embed.add_field(name="💰 Partial Payment Each", value=f"{reward // 3:,} credits", inline=True)
-            embed.add_field(name="👥 Group Members", value=str(len(group_members)), inline=True)
-
-
-        
-        # List all group members who received rewards
-        member_names = [name for _, name in group_members]
-        embed.add_field(
-            name="👥 Rewarded Members",
-            value=", ".join(member_names),
-            inline=False
-        )
+            embed.add_field(name="💰 Partial Payment", value=f"{reward // 3:,} credits", inline=True)
+            embed.add_field(name="👤 Attempted By", value=player_name, inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=False)  # Make it public in the location channel
     

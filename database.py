@@ -731,8 +731,7 @@ class Database:
                 docking_fee INTEGER DEFAULT 0,
                 purchased_at TIMESTAMP DEFAULT NOW(),
                 FOREIGN KEY (location_id) REFERENCES locations (location_id),
-                FOREIGN KEY (owner_id) REFERENCES characters (user_id),
-                FOREIGN KEY (group_id) REFERENCES groups (group_id)
+                FOREIGN KEY (owner_id) REFERENCES characters (user_id)
             )''',
             
             # Active location effects table

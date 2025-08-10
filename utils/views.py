@@ -742,7 +742,7 @@ class LocationView(discord.ui.View):
         """Get ownership information for a location"""
         ownership = self.bot.db.execute_query(
             '''SELECT lo.owner_id, lo.custom_name, lo.custom_description,
-                      c.name as owner_name, g.name as group_name
+                      c.name as owner_name
                FROM location_ownership lo
                LEFT JOIN characters c ON lo.owner_id = c.user_id
                WHERE lo.location_id = %s''',
@@ -756,8 +756,7 @@ class LocationView(discord.ui.View):
                 'owner_id': ownership[0],
                 'custom_name': ownership[1],
                 'custom_description': ownership[2],
-                'owner_name': ownership[3],
-                'group_name': ownership[4]
+                'owner_name': ownership[3]
             }
         
         return {'owned': False}
@@ -1393,7 +1392,6 @@ class TravelConfirmView(discord.ui.View):
         
         # Group functionality removed - solo travel only
         travelers = [user_id]
-            travelers = [member[0] for member in group_members]
         
         # Create transit channel
         if len(travelers) > 1:
@@ -6146,7 +6144,7 @@ class PlayerSelectView(discord.ui.View):
         if self.action == "attack":
             await combat_cog.attack_player.callback(combat_cog, interaction, target_member)
         else:  # rob
-            await combat_cog.rob_group.player.callback(combat_cog, interaction, target_member)
+            await combat_cog.player.callback(combat_cog, interaction, target_member)
 
 
 class ExtrasMenuView(discord.ui.View):
