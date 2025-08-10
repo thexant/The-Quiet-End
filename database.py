@@ -1302,14 +1302,32 @@ class Database:
         critical_tables = ['characters', 'inventory', 'locations']
         print("\n🔍 Verifying critical tables...")
         for table in critical_tables:
-            result = self.execute_query(
-                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = %s)",
-                (table,)
-            )
-            if result and result[0]['exists']:
-                print(f"  ✅ Table '{table}' verified")
-            else:
-                print(f"  ❌ CRITICAL: Table '{table}' does not exist!")
+            try:
+                # Use a simpler query that just counts the table
+                result = self.execute_query(
+                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = %s",
+                    (table,)
+                )
+                # Check if result exists and has the expected structure
+                if result:
+                    if isinstance(result, list) and len(result) > 0:
+                        # Handle dict result (RealDictCursor)
+                        if isinstance(result[0], dict):
+                            exists = result[0]['count'] > 0
+                        # Handle tuple result
+                        else:
+                            exists = result[0] > 0
+                    else:
+                        exists = False
+                    
+                    if exists:
+                        print(f"  ✅ Table '{table}' verified")
+                    else:
+                        print(f"  ❌ CRITICAL: Table '{table}' does not exist!")
+                else:
+                    print(f"  ❌ Could not verify table '{table}'")
+            except Exception as e:
+                print(f"  ⚠️ Error verifying table '{table}': {e}")
         
         print("\n✅ PostgreSQL database schema initialized")
 
