@@ -1111,9 +1111,12 @@ class Database:
             # Galactic history table
             '''CREATE TABLE IF NOT EXISTS galactic_history (
                 history_id SERIAL PRIMARY KEY,
-                event_type TEXT NOT NULL,
-                event_description TEXT NOT NULL,
                 location_id INTEGER,
+                event_title TEXT,
+                event_description TEXT NOT NULL,
+                historical_figure TEXT,
+                event_date TEXT,
+                event_type TEXT NOT NULL,
                 occurred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
@@ -1196,6 +1199,11 @@ class Database:
             'ALTER TABLE repeaters ADD COLUMN IF NOT EXISTS owner_id BIGINT',
             'ALTER TABLE repeaters ADD COLUMN IF NOT EXISTS repeater_type TEXT DEFAULT \'standard\'',
             'ALTER TABLE repeaters ADD COLUMN IF NOT EXISTS deployed_at TIMESTAMP DEFAULT NOW()',
+            
+            # Add missing columns to galactic_history table
+            'ALTER TABLE galactic_history ADD COLUMN IF NOT EXISTS event_title TEXT',
+            'ALTER TABLE galactic_history ADD COLUMN IF NOT EXISTS historical_figure TEXT',
+            'ALTER TABLE galactic_history ADD COLUMN IF NOT EXISTS event_date TEXT',
         ]
         
         for migration_sql in column_migrations:
