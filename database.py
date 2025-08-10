@@ -1163,12 +1163,21 @@ class Database:
                 result = self.execute_query(statement)
                 
                 if table_name:
-                    # Verify the table was created
+                    # Verify the table was created - need to fetch the result
                     verify_result = self.execute_query(
-                        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s)",
-                        (table_name,)
+                        "SELECT COUNT(*) as count FROM information_schema.tables WHERE table_schema = 'public' AND table_name = %s",
+                        (table_name,),
+                        fetch='one'  # Explicitly fetch one row
                     )
-                    if verify_result and len(verify_result) > 0:
+                    # Check if table exists
+                    table_exists = False
+                    if verify_result:
+                        if isinstance(verify_result, dict) and verify_result.get('count', 0) > 0:
+                            table_exists = True
+                        elif isinstance(verify_result, (tuple, list)) and verify_result[0] > 0:
+                            table_exists = True
+                    
+                    if table_exists:
                         print(f"     ✓ Table {table_name} created successfully")
                     else:
                         print(f"     ✗ Table {table_name} was not created!")
