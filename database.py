@@ -49,7 +49,7 @@ class Database:
                 hp INTEGER DEFAULT 100,
                 max_hp INTEGER DEFAULT 100,
                 current_location INTEGER,
-                money INTEGER DEFAULT 1000,
+                money INTEGER DEFAULT 500,
                 level INTEGER DEFAULT 1,
                 experience INTEGER DEFAULT 0,
                 is_logged_in BOOLEAN DEFAULT false,
@@ -61,14 +61,25 @@ class Database:
                 combat_modifier INTEGER DEFAULT 0,
                 can_act_time TIMESTAMP,
                 ship_storage_limit INTEGER DEFAULT 5,
-                skill_points INTEGER DEFAULT 0,
+                skill_points INTEGER DEFAULT 5,
                 location_status TEXT DEFAULT 'docked',
                 current_ship_id INTEGER,
-                engineering INTEGER DEFAULT 10,
-                navigation INTEGER DEFAULT 10,
-                combat INTEGER DEFAULT 10,
-                medical INTEGER DEFAULT 10,
-                defense INTEGER DEFAULT 10
+                engineering INTEGER DEFAULT 5,
+                navigation INTEGER DEFAULT 5,
+                combat INTEGER DEFAULT 5,
+                medical INTEGER DEFAULT 5,
+                defense INTEGER DEFAULT 0,
+                ship_id BIGINT,
+                group_id BIGINT,
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                current_home_id BIGINT,
+                alignment TEXT DEFAULT 'neutral',
+                login_time TIMESTAMP,
+                active_ship_id BIGINT,
+                image_url TEXT,
+                auto_rename BIGINT DEFAULT 0,
+                guild_id BIGINT
             )''',
             
             # Galaxy info table
@@ -97,6 +108,8 @@ class Database:
                 z_coordinate REAL DEFAULT 0,
                 wealth_level INTEGER DEFAULT 1,
                 population INTEGER DEFAULT 100,
+                system_name TEXT,
+                faction TEXT DEFAULT 'Independent',
                 faction_id INTEGER,
                 created_at TIMESTAMP DEFAULT NOW(),
                 has_medical BOOLEAN DEFAULT false,
@@ -298,6 +311,21 @@ class Database:
                 FOREIGN KEY (player2_id) REFERENCES characters (user_id),
                 FOREIGN KEY (location_id) REFERENCES locations (location_id),
                 UNIQUE(player1_id, player2_id, cooldown_type)
+            )''',
+            
+            # Pending robberies for PvP combat system
+            '''CREATE TABLE IF NOT EXISTS pending_robberies (
+                robbery_id SERIAL PRIMARY KEY,
+                robber_id BIGINT NOT NULL,
+                victim_id BIGINT NOT NULL,
+                location_id BIGINT NOT NULL,
+                message_id BIGINT,
+                channel_id BIGINT,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                FOREIGN KEY (robber_id) REFERENCES characters (user_id),
+                FOREIGN KEY (victim_id) REFERENCES characters (user_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
             
             # Server configuration
@@ -670,6 +698,142 @@ class Database:
                 expires_at TIMESTAMP,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
+            
+            # Combat states table for NPC combat system
+            '''CREATE TABLE IF NOT EXISTS combat_states (
+                combat_id SERIAL PRIMARY KEY,
+                player_id BIGINT NOT NULL,
+                target_npc_id BIGINT,
+                target_npc_type TEXT,
+                combat_type TEXT,
+                location_id INTEGER,
+                last_action_time TIMESTAMP DEFAULT NOW(),
+                next_npc_action_time TIMESTAMP,
+                player_can_act_time TIMESTAMP,
+                created_at TIMESTAMP DEFAULT NOW(),
+                FOREIGN KEY (player_id) REFERENCES characters (user_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            
+            # NPC respawn queue table
+            '''CREATE TABLE IF NOT EXISTS npc_respawn_queue (
+                respawn_id SERIAL PRIMARY KEY,
+                original_npc_id BIGINT,
+                location_id INTEGER,
+                scheduled_respawn_time TIMESTAMP,
+                npc_data TEXT,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            
+            # PvP combat states table
+            '''CREATE TABLE IF NOT EXISTS pvp_combat_states (
+                combat_id SERIAL PRIMARY KEY,
+                attacker_id BIGINT NOT NULL,
+                defender_id BIGINT NOT NULL,
+                location_id INTEGER NOT NULL,
+                combat_type TEXT NOT NULL CHECK(combat_type IN ('ground', 'space')),
+                created_at TIMESTAMP DEFAULT NOW(),
+                last_action_time TIMESTAMP DEFAULT NOW(),
+                attacker_can_act_time TIMESTAMP,
+                defender_can_act_time TIMESTAMP,
+                current_turn TEXT DEFAULT 'attacker' CHECK(current_turn IN ('attacker', 'defender')),
+                FOREIGN KEY (attacker_id) REFERENCES characters (user_id),
+                FOREIGN KEY (defender_id) REFERENCES characters (user_id),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            
+            # Static NPCs table
+            '''CREATE TABLE IF NOT EXISTS static_npcs (
+                npc_id SERIAL PRIMARY KEY,
+                location_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                age INTEGER NOT NULL,
+                occupation TEXT,
+                personality TEXT,
+                trade_specialty TEXT,
+                created_at TIMESTAMP DEFAULT NOW(),
+                alignment TEXT DEFAULT 'neutral' CHECK(alignment IN ('loyal', 'neutral', 'bandit')),
+                hp INTEGER DEFAULT 100,
+                max_hp INTEGER DEFAULT 100,
+                combat_rating INTEGER DEFAULT 5,
+                credits INTEGER DEFAULT 100,
+                last_interaction TIMESTAMP,
+                is_alive BOOLEAN DEFAULT true,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            
+            # Dynamic NPCs table  
+            '''CREATE TABLE IF NOT EXISTS dynamic_npcs (
+                npc_id SERIAL PRIMARY KEY,
+                name TEXT,
+                callsign TEXT UNIQUE,
+                age BIGINT,
+                ship_name TEXT,
+                ship_type TEXT,
+                current_location INTEGER,
+                destination_location INTEGER,
+                travel_start_time TIMESTAMP,
+                travel_duration BIGINT,
+                last_radio_message TIMESTAMP,
+                last_location_action TIMESTAMP,
+                credits BIGINT DEFAULT 0,
+                is_alive BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT NOW(),
+                alignment TEXT DEFAULT 'neutral',
+                hp BIGINT DEFAULT 100,
+                max_hp BIGINT DEFAULT 100,
+                combat_rating BIGINT DEFAULT 5,
+                ship_hull BIGINT DEFAULT 100,
+                max_ship_hull BIGINT DEFAULT 100,
+                FOREIGN KEY (current_location) REFERENCES locations (location_id),
+                FOREIGN KEY (destination_location) REFERENCES locations (location_id)
+            )''',
+            
+            # Combat encounters table
+            '''CREATE TABLE IF NOT EXISTS combat_encounters (
+                encounter_id SERIAL PRIMARY KEY,
+                location_id INTEGER NOT NULL,
+                encounter_type TEXT NOT NULL,
+                difficulty_level INTEGER DEFAULT 1,
+                enemy_name TEXT,
+                enemy_hp INTEGER DEFAULT 100,
+                enemy_max_hp INTEGER DEFAULT 100,
+                enemy_combat_rating INTEGER DEFAULT 5,
+                loot_table TEXT,
+                experience_reward INTEGER DEFAULT 10,
+                money_reward INTEGER DEFAULT 50,
+                created_at TIMESTAMP DEFAULT NOW(),
+                is_active BOOLEAN DEFAULT true,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            
+            # NPC inventory table
+            '''CREATE TABLE IF NOT EXISTS npc_inventory (
+                inventory_id SERIAL PRIMARY KEY,
+                npc_id BIGINT NOT NULL,
+                npc_type TEXT NOT NULL CHECK(npc_type IN ('static', 'dynamic')),
+                item_name TEXT NOT NULL,
+                quantity INTEGER DEFAULT 1,
+                item_type TEXT DEFAULT 'misc',
+                trade_value INTEGER DEFAULT 10,
+                UNIQUE(npc_id, npc_type, item_name)
+            )''',
+            
+            # News queue table for galactic news system
+            '''CREATE TABLE IF NOT EXISTS news_queue (
+                news_id SERIAL PRIMARY KEY,
+                guild_id BIGINT NOT NULL,
+                news_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                location_id INTEGER,
+                event_data TEXT,
+                scheduled_delivery TIMESTAMP NOT NULL,
+                delay_hours REAL DEFAULT 0,
+                is_delivered BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT NOW(),
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
         ]
         
         # Execute schema creation
@@ -685,6 +849,17 @@ class Database:
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS location_status TEXT DEFAULT \'docked\'',
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_ship_id INTEGER',
             'ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_location INTEGER',
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_home_id BIGINT',
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS ship_id BIGINT',
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS group_id BIGINT',
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS status TEXT DEFAULT \'active\'',
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS alignment TEXT DEFAULT \'neutral\'',
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS login_time TIMESTAMP',
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS active_ship_id BIGINT',
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS image_url TEXT',
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS auto_rename BIGINT DEFAULT 0',
+            'ALTER TABLE characters ADD COLUMN IF NOT EXISTS guild_id BIGINT',
             # Corridor table columns
             'ALTER TABLE corridors ADD COLUMN IF NOT EXISTS fuel_cost INTEGER DEFAULT 20',
             'ALTER TABLE corridors ADD COLUMN IF NOT EXISTS corridor_type TEXT DEFAULT \'ungated\'',
@@ -701,6 +876,8 @@ class Database:
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS has_shops BOOLEAN DEFAULT true',
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS x_coordinate REAL DEFAULT 0',
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS y_coordinate REAL DEFAULT 0',
+            'ALTER TABLE locations ADD COLUMN IF NOT EXISTS system_name TEXT',
+            'ALTER TABLE locations ADD COLUMN IF NOT EXISTS faction TEXT DEFAULT \'Independent\'',
             # Travel sessions table columns
             'ALTER TABLE travel_sessions ADD COLUMN IF NOT EXISTS corridor_id INTEGER',
             'ALTER TABLE travel_sessions ADD COLUMN IF NOT EXISTS temp_channel_id BIGINT',
@@ -709,6 +886,8 @@ class Database:
             # Galaxy info table columns for time system PostgreSQL migration
             'ALTER TABLE galaxy_info ADD COLUMN IF NOT EXISTS time_paused_at TIMESTAMP',
             'ALTER TABLE galaxy_info ADD COLUMN IF NOT EXISTS is_manually_paused BOOLEAN DEFAULT false',
+            'ALTER TABLE galaxy_info ADD COLUMN IF NOT EXISTS last_shift_check TEXT',
+            'ALTER TABLE galaxy_info ADD COLUMN IF NOT EXISTS current_shift TEXT',
         ]
         
         for migration_sql in column_migrations:
@@ -734,6 +913,9 @@ class Database:
             'CREATE INDEX IF NOT EXISTS idx_pvp_cooldowns_expires ON pvp_cooldowns(expires_at)',
             'CREATE INDEX IF NOT EXISTS idx_repeaters_location ON repeaters(location_id)',
             'CREATE INDEX IF NOT EXISTS idx_repeaters_active ON repeaters(is_active) WHERE is_active = true',
+            'CREATE INDEX IF NOT EXISTS idx_news_queue_delivery ON news_queue(scheduled_delivery) WHERE is_delivered = false',
+            'CREATE INDEX IF NOT EXISTS idx_news_queue_guild ON news_queue(guild_id)',
+            'CREATE INDEX IF NOT EXISTS idx_news_queue_location ON news_queue(location_id)',
         ]
         
         for index_sql in indexes:

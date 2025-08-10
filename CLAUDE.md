@@ -7,3 +7,5 @@
 - Anything that charges the players ingame money should state that it will cost money beforehand
 - Sub location implementations should strive to be unique, or at least SEEM unique between different sub-location types.
 - The implementation should take existing features and functionality into account instead of making up new ones
+
+- database.py is our current implementation, postgresql_database.py is old

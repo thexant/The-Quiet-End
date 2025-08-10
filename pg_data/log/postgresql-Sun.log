@@ -563,3 +563,20 @@
 2025-08-10 09:25:53.245 MDT [10181] LOG:  checkpoint complete: wrote 4 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.301 s, sync=0.009 s, total=0.320 s; sync files=4, longest=0.004 s, average=0.003 s; distance=0 kB, estimate=324 kB; lsn=0/2A8EF60, redo lsn=0/2A8EF28
 2025-08-10 09:30:52.285 MDT [10181] LOG:  checkpoint starting: time
 2025-08-10 09:30:53.148 MDT [10181] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.502 s, sync=0.161 s, total=0.863 s; sync files=6, longest=0.029 s, average=0.027 s; distance=13 kB, estimate=293 kB; lsn=0/2A92518, redo lsn=0/2A924E0
+2025-08-10 09:40:52.346 MDT [10181] LOG:  checkpoint starting: time
+2025-08-10 09:40:56.831 MDT [10181] LOG:  checkpoint complete: wrote 45 buffers (0.3%); 0 WAL file(s) added, 0 removed, 0 recycled; write=4.409 s, sync=0.066 s, total=4.486 s; sync files=38, longest=0.003 s, average=0.002 s; distance=252 kB, estimate=289 kB; lsn=0/2AD16A8, redo lsn=0/2AD1670
+2025-08-10 09:44:49.351 MDT [10179] LOG:  received fast shutdown request
+2025-08-10 09:44:49.354 MDT [10179] LOG:  aborting any active transactions
+2025-08-10 09:44:49.355 MDT [10179] LOG:  background worker "logical replication launcher" (PID 10186) exited with exit code 1
+2025-08-10 09:44:49.355 MDT [10181] LOG:  shutting down
+2025-08-10 09:44:49.357 MDT [10181] LOG:  checkpoint starting: shutdown immediate
+2025-08-10 09:44:49.368 MDT [10181] LOG:  checkpoint complete: wrote 1 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.002 s, total=0.013 s; sync files=1, longest=0.002 s, average=0.002 s; distance=6 kB, estimate=261 kB; lsn=0/2AD2FF0, redo lsn=0/2AD2FF0
+2025-08-10 09:44:49.371 MDT [10179] LOG:  database system is shut down
+2025-08-10 09:44:49.473 MDT [23291] LOG:  starting PostgreSQL 16.9 on x86_64-redhat-linux-gnu, compiled by gcc (GCC) 15.1.1 20250521 (Red Hat 15.1.1-2), 64-bit
+2025-08-10 09:44:49.473 MDT [23291] LOG:  listening on IPv6 address "::1", port 5432
+2025-08-10 09:44:49.473 MDT [23291] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2025-08-10 09:44:49.475 MDT [23291] LOG:  listening on Unix socket "/tmp/.s.PGSQL.5432"
+2025-08-10 09:44:49.480 MDT [23295] LOG:  database system was shut down at 2025-08-10 09:44:49 MDT
+2025-08-10 09:44:49.484 MDT [23291] LOG:  database system is ready to accept connections
+2025-08-10 09:49:49.542 MDT [23293] LOG:  checkpoint starting: time
+2025-08-10 09:49:54.282 MDT [23293] LOG:  checkpoint complete: wrote 50 buffers (0.3%); 0 WAL file(s) added, 0 removed, 0 recycled; write=4.710 s, sync=0.020 s, total=4.740 s; sync files=41, longest=0.003 s, average=0.001 s; distance=304 kB, estimate=304 kB; lsn=0/2B1F288, redo lsn=0/2B1F250

@@ -525,7 +525,7 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Get all locations
         all_locations_data = self.db.execute_query(
-            "SELECT location_id, name, location_type, x_coordinateinate, y_coordinateinate, wealth_level FROM locations",
+            "SELECT location_id, name, location_type, x_coordinate, y_coordinate, wealth_level FROM locations",
             fetch='all'
         )
         
@@ -3020,7 +3020,7 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Find gates that are ready to reconnect
         moving_gates = self.db.execute_query(
-            """SELECT location_id, name, x_coordinateinate, y_coordinateinate, reconnection_eta 
+            """SELECT location_id, name, x_coordinate, y_coordinate, reconnection_eta 
                FROM locations 
                WHERE location_type = 'gate' 
                AND gate_status = 'moving' 

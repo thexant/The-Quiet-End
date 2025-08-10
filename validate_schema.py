@@ -8,8 +8,8 @@ def validate_schema_syntax():
     """Read and validate the schema SQL syntax"""
     
     try:
-        # Read the schema from database_postgresql.py
-        with open('/home/vetaso/The-Quiet-End/database_postgresql.py', 'r') as f:
+        # Read the schema from database.py
+        with open('/home/vetaso/The-Quiet-End/database.py', 'r') as f:
             content = f.read()
         
         # Extract all CREATE TABLE statements
