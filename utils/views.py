@@ -172,33 +172,8 @@ async def create_random_character(bot, interaction: discord.Interaction):
 
     # Generate random starting ship
     ship_type, ship_name, exterior_desc, interior_desc = get_random_starter_ship()
-
-    # Defensive cleanup: remove any existing ships (in case death cleanup was incomplete)
-    bot.db.execute_query("DELETE FROM ships WHERE owner_id = %s", (interaction.user.id,))
-    bot.db.execute_query("DELETE FROM player_ships WHERE owner_id = %s", (interaction.user.id,))
-
-    # Create basic ship
-    bot.db.execute_query(
-        "INSERT INTO ships (owner_id, name, ship_type, exterior_description, interior_description) VALUES (%s, %s, %s, %s, %s)",
-        (interaction.user.id, ship_name, ship_type, exterior_desc, interior_desc)
-    )
-
-    ship_id = bot.db.execute_query(
-        "SELECT ship_id FROM ships WHERE owner_id = %s ORDER BY ship_id DESC LIMIT 1",
-        (interaction.user.id,),
-        fetch='one'
-    )[0]
-
-    # Add the ship to player_ships table and set as active
-    bot.db.execute_query(
-        '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (%s, %s, true)''',
-        (interaction.user.id, ship_id)
-    )
-    # Generate ship activities
-    from utils.ship_activities import ShipActivityManager
-    activity_manager = ShipActivityManager(bot)
-    activity_manager.generate_ship_activities(ship_id, ship_type)
-    # Get random colony for spawning
+    
+    # Get random colony for spawning (do this before creating character)
     rows = bot.db.execute_query(
         "SELECT location_id FROM locations WHERE location_type = 'colony'",
         fetch='all'
@@ -229,15 +204,49 @@ async def create_random_character(bot, interaction: discord.Interaction):
 
     spawn_location = random.choice(valid)
     
-    # Create character with active_ship_id set (no appearance or biography)
+    # Defensive cleanup: remove any existing character/ships (in case death cleanup was incomplete)
+    bot.db.execute_query("DELETE FROM player_ships WHERE owner_id = %s", (interaction.user.id,))
+    bot.db.execute_query("DELETE FROM ships WHERE owner_id = %s", (interaction.user.id,))
+    bot.db.execute_query("DELETE FROM characters WHERE user_id = %s", (interaction.user.id,))
+    
+    # Create character FIRST (without ship_id initially)
     bot.db.execute_query(
         '''INSERT INTO characters 
-           (user_id, name, callsign, appearance, current_location, ship_id, active_ship_id,
+           (user_id, name, callsign, appearance, current_location,
             engineering, navigation, combat, medical, guild_id) 
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
         (interaction.user.id, random_name, callsign, "", 
-         spawn_location, ship_id, ship_id, engineering, navigation, combat, medical, interaction.guild.id)
+         spawn_location, engineering, navigation, combat, medical, interaction.guild.id)
     )
+    
+    # Now create the ship (character exists so foreign key will work)
+    bot.db.execute_query(
+        "INSERT INTO ships (owner_id, name, ship_type, exterior_description, interior_description) VALUES (%s, %s, %s, %s, %s)",
+        (interaction.user.id, ship_name, ship_type, exterior_desc, interior_desc)
+    )
+    
+    ship_id = bot.db.execute_query(
+        "SELECT ship_id FROM ships WHERE owner_id = %s ORDER BY ship_id DESC LIMIT 1",
+        (interaction.user.id,),
+        fetch='one'
+    )[0]
+    
+    # Add the ship to player_ships table and set as active
+    bot.db.execute_query(
+        '''INSERT INTO player_ships (owner_id, ship_id, is_active) VALUES (%s, %s, true)''',
+        (interaction.user.id, ship_id)
+    )
+    
+    # Update character with ship_id
+    bot.db.execute_query(
+        "UPDATE characters SET ship_id = %s, active_ship_id = %s WHERE user_id = %s",
+        (ship_id, ship_id, interaction.user.id)
+    )
+    
+    # Generate ship activities
+    from utils.ship_activities import ShipActivityManager
+    activity_manager = ShipActivityManager(bot)
+    activity_manager.generate_ship_activities(ship_id, ship_type)
     
     # Create character identity record (no biography)
     bot.db.execute_query(
