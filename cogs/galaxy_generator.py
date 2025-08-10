@@ -2339,15 +2339,15 @@ class GalaxyGeneratorCog(commands.Cog):
         # Mark high-wealth locations as federal/loyal zones
         self.db.execute_query(
             """UPDATE locations 
-               SET has_federal_supplies = 1 
-               WHERE wealth_level >= 8 AND has_black_market = 0""",
+               SET has_federal_supplies = true 
+               WHERE wealth_level >= 8 AND has_black_market = false""",
         )
         
         # Mark low-wealth black market locations as bandit zones  
         self.db.execute_query(
             """UPDATE locations 
-               SET has_black_market = 1 
-               WHERE wealth_level <= 3 AND has_federal_supplies = 0 AND random() % 10 = 0""",
+               SET has_black_market = true 
+               WHERE wealth_level <= 3 AND has_federal_supplies = false AND random() < 0.1""",
         )
         
         print("✅ Updated location alignment rules")
@@ -3013,10 +3013,10 @@ class GalaxyGeneratorCog(commands.Cog):
                         """UPDATE locations SET 
                            gate_status = 'unused', 
                            abandoned_since = %s,
-                           has_shops = 0, 
-                           has_medical = 0,
-                           has_repairs = 0,
-                           has_fuel = 0,
+                           has_shops = false, 
+                           has_medical = false,
+                           has_repairs = false,
+                           has_fuel = false,
                            population = 0
                            WHERE location_id = %s""",
                         (current_time, gate_id)
@@ -3083,11 +3083,11 @@ class GalaxyGeneratorCog(commands.Cog):
                    gate_status = 'active', 
                    reconnection_eta = NULL,
                    population = %s,
-                   has_shops = 1,
-                   has_medical = 1,
-                   has_repairs = 1,
-                   has_fuel = 1,
-                   has_upgrades = 0
+                   has_shops = true,
+                   has_medical = true,
+                   has_repairs = true,
+                   has_fuel = true,
+                   has_upgrades = false
                    WHERE location_id = %s""",
                 (gate_population, gate_id)
             )
@@ -5337,10 +5337,10 @@ class GalaxyGeneratorCog(commands.Cog):
                     """UPDATE locations SET 
                        gate_status = 'active', 
                        reconnection_eta = NULL,
-                       has_shops = 1,
-                       has_medical = 1, 
-                       has_repairs = 1,
-                       has_fuel = 1,
+                       has_shops = true,
+                       has_medical = true, 
+                       has_repairs = true,
+                       has_fuel = true,
                        population = %s
                        WHERE location_id = %s""",
                     (random.randint(50, 150), gate_id)
@@ -10289,7 +10289,7 @@ class GalaxyGeneratorCog(commands.Cog):
                         
                         # Add to chunk entries
                         chunk_log_entries.append(
-                            (location['id'], 0, name_format, message, entry_time.isoformat(), 1)
+                            (location['id'], 0, name_format, message, entry_time.isoformat(), True)
                         )
             
             # Add chunk entries to current batch
@@ -10546,7 +10546,7 @@ class GalaxyGeneratorCog(commands.Cog):
             await asyncio.sleep(1.0)
             
             # Test database connectivity with a simple query
-            self.db.execute_query("SELECT COUNT(*) FROM locations WHERE is_generated = 1", fetch='one')
+            self.db.execute_query("SELECT COUNT(*) FROM locations WHERE is_generated = true", fetch='one')
             print("✅ Database connectivity verified for history generation")
             
         except Exception as e:
