@@ -1159,11 +1159,7 @@ class Database:
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS system_name TEXT',
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS faction TEXT DEFAULT \'Independent\'',
             
-            # Drop duplicate coordinate columns after ensuring data is migrated
-            '''UPDATE locations 
-               SET x_coordinate = COALESCE(x_coordinate, x_coord, 0), 
-                   y_coordinate = COALESCE(y_coordinate, y_coord, 0) 
-               WHERE x_coordinate IS NULL OR y_coordinate IS NULL''',
+            # Drop duplicate coordinate columns if they exist (already migrated)
             'ALTER TABLE locations DROP COLUMN IF EXISTS x_coord',
             'ALTER TABLE locations DROP COLUMN IF EXISTS y_coord',
             
