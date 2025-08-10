@@ -561,3 +561,5 @@
 2025-08-10 09:25:49.378 MDT [17059] STATEMENT:  INSERT INTO pending_robberies (robber_id, victim_id, location_id, expires_at) VALUES (1, 2, 1, NOW() + INTERVAL '1 hour') ON CONFLICT DO NOTHING; SELECT COUNT(*) FROM pending_robberies;
 2025-08-10 09:25:52.926 MDT [10181] LOG:  checkpoint starting: time
 2025-08-10 09:25:53.245 MDT [10181] LOG:  checkpoint complete: wrote 4 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.301 s, sync=0.009 s, total=0.320 s; sync files=4, longest=0.004 s, average=0.003 s; distance=0 kB, estimate=324 kB; lsn=0/2A8EF60, redo lsn=0/2A8EF28
+2025-08-10 09:30:52.285 MDT [10181] LOG:  checkpoint starting: time
+2025-08-10 09:30:53.148 MDT [10181] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.502 s, sync=0.161 s, total=0.863 s; sync files=6, longest=0.029 s, average=0.027 s; distance=13 kB, estimate=293 kB; lsn=0/2A92518, redo lsn=0/2A924E0

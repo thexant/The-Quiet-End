@@ -83,7 +83,11 @@ class Database:
             
             # Locations table
             '''CREATE TABLE IF NOT EXISTS locations (
+<<<<<<< HEAD
                 location_id BIGSERIAL PRIMARY KEY,
+=======
+                location_id SERIAL PRIMARY KEY,
+>>>>>>> 855b8fa61f9f3a2ee4597deb88499136b96c0f15
                 channel_id BIGINT UNIQUE,
                 name TEXT NOT NULL,
                 location_type TEXT NOT NULL,
