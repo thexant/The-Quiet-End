@@ -1150,18 +1150,40 @@ class Database:
         ]
         
         # Execute schema creation
+        print(f"📋 Executing {len(schema_statements)} schema statements...")
+        failed_tables = []
         for i, statement in enumerate(schema_statements):
             try:
                 # Extract table name for logging
+                table_name = None
                 if 'CREATE TABLE' in statement:
                     table_name = statement.split('CREATE TABLE IF NOT EXISTS ')[1].split(' ')[0].split('(')[0]
-                    print(f"Creating table {table_name}...")
-                self.execute_query(statement)
+                    print(f"  [{i+1}/{len(schema_statements)}] Creating table {table_name}...")
+                
+                result = self.execute_query(statement)
+                
+                if table_name:
+                    # Verify the table was created
+                    verify_result = self.execute_query(
+                        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s)",
+                        (table_name,)
+                    )
+                    if verify_result and len(verify_result) > 0:
+                        print(f"     ✓ Table {table_name} created successfully")
+                    else:
+                        print(f"     ✗ Table {table_name} was not created!")
+                        failed_tables.append(table_name)
+                        
             except Exception as e:
-                print(f"⚠️ Error on statement {i}: {e}")
-                # Log the first 100 chars of the statement for debugging
-                print(f"   Statement preview: {statement[:100]}...")
-                continue
+                print(f"❌ Error on statement {i}: {e}")
+                # Log the first 200 chars of the statement for debugging
+                print(f"   Statement preview: {statement[:200]}...")
+                if table_name:
+                    failed_tables.append(table_name)
+                # For critical tables, don't continue
+                if table_name in ['characters', 'inventory', 'locations']:
+                    print(f"🛑 CRITICAL: Failed to create essential table '{table_name}'. Cannot continue.")
+                    raise Exception(f"Failed to create critical table '{table_name}': {e}")
         
         # Add missing columns for existing databases
         column_migrations = [
