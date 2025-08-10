@@ -3529,6 +3529,10 @@ class GalaxyGeneratorCog(commands.Cog):
             
             pair = tuple(sorted([loc_a['id'], loc_b['id']]))
             
+            # Validate location IDs to prevent foreign key constraint violations
+            if loc_a['id'] <= 0 or loc_b['id'] <= 0:
+                continue
+            
             # Skip if already exists
             if pair in active_pairs:
                 continue
@@ -8153,6 +8157,11 @@ class GalaxyGeneratorCog(commands.Cog):
                 
             name = self._generate_corridor_name(route['from'], route['to'])
             loc1_id, loc2_id = route['from']['id'], route['to']['id']
+            
+            # Validate location IDs to prevent foreign key constraint violations
+            if loc1_id <= 0 or loc2_id <= 0:
+                print(f"⚠️ Skipping route {name}: invalid location IDs (from: {loc1_id}, to: {loc2_id})")
+                continue
             dist = route['distance']
             fuel = max(10, int(dist * 0.8) + 5)
             danger = max(1, min(5, 2 + random.randint(-1, 2)))
@@ -8161,6 +8170,12 @@ class GalaxyGeneratorCog(commands.Cog):
                 # Gated route with 6 segments
                 og_id = route['origin_gate']['id']
                 dg_id = route['destination_gate']['id']
+                
+                # Validate gate IDs to prevent foreign key constraint violations
+                if og_id <= 0 or dg_id <= 0:
+                    print(f"⚠️ Skipping gated route {name}: invalid gate IDs (origin: {og_id}, dest: {dg_id})")
+                    continue
+                
                 approach_time, main_time = self._calculate_gated_route_times(dist)
                 gate_danger = max(1, danger - 1)
                 

@@ -361,6 +361,11 @@ class ArchitectureValidator:
             
             # Create gated connections to the nearest active gates
             for target_id, target_name, target_x, target_y in nearby_gates:
+                # Validate location IDs to prevent foreign key constraint violations
+                if gate_id <= 0 or target_id <= 0:
+                    if not silent:
+                        print(f"⚠️ Skipping connection: invalid location IDs (gate: {gate_id}, target: {target_id})")
+                    continue
                 # Check if bidirectional corridors already exist
                 forward_exists = self.db.execute_query(
                     """SELECT corridor_id FROM corridors 

@@ -594,3 +594,5 @@
 2025-08-10 10:19:50.409 MDT [23293] LOG:  checkpoint complete: wrote 2 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.201 s, sync=0.005 s, total=0.216 s; sync files=2, longest=0.004 s, average=0.003 s; distance=7 kB, estimate=592 kB; lsn=0/2C85F60, redo lsn=0/2C85F28
 2025-08-10 10:34:50.587 MDT [23293] LOG:  checkpoint starting: time
 2025-08-10 10:34:50.702 MDT [23293] LOG:  checkpoint complete: wrote 2 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.101 s, sync=0.005 s, total=0.116 s; sync files=2, longest=0.004 s, average=0.003 s; distance=3 kB, estimate=533 kB; lsn=0/2C86E00, redo lsn=0/2C86DC8
+2025-08-10 10:56:31.126 MDT [42548] ERROR:  column reference "constraint_name" is ambiguous at character 8
+2025-08-10 10:56:31.126 MDT [42548] STATEMENT:  SELECT constraint_name, table_name, column_name, foreign_table_name, foreign_column_name FROM information_schema.key_column_usage k JOIN information_schema.referential_constraints r ON k.constraint_name = r.constraint_name WHERE k.table_name = 'corridors'
