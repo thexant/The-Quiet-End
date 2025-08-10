@@ -648,7 +648,7 @@ class EventsCog(commands.Cog):
             
             # Cleanup shop items with 0 stock (non-unlimited)
             self.db.execute_query(
-                "DELETE FROM shop_items WHERE stock_quantity = 0"
+                "DELETE FROM shop_items WHERE stock = 0"
             )
             
             # Update character last_active for online users

@@ -228,10 +228,11 @@ class Database:
                 item_name TEXT NOT NULL,
                 item_type TEXT NOT NULL,
                 price INTEGER NOT NULL,
-                stock_quantity INTEGER DEFAULT -1,
+                stock INTEGER DEFAULT -1,
                 description TEXT,
                 expires_at TIMESTAMP,
                 sold_by_player BOOLEAN DEFAULT false,
+                metadata TEXT,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
             
@@ -1030,6 +1031,9 @@ class Database:
             'ALTER TABLE galaxy_info ADD COLUMN IF NOT EXISTS current_shift TEXT',
             # Shop items table columns
             'ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS sold_by_player BOOLEAN DEFAULT false',
+            'ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS metadata TEXT',
+            # Clean up redundant stock_quantity column (use stock instead)
+            'ALTER TABLE shop_items DROP COLUMN IF EXISTS stock_quantity',
         ]
         
         for migration_sql in column_migrations:
