@@ -633,25 +633,27 @@ class GalaxyGeneratorCog(commands.Cog):
                     # Create bidirectional emergency corridor atomically
                     emergency_conn = self.db.begin_transaction()
                     try:
-                        corridor_id_1 = self.db.execute_in_transaction(
+                        result_1 = self.db.execute_in_transaction(
                             emergency_conn,
                             '''INSERT INTO corridors 
                                (name, origin_location, destination_location, travel_time, fuel_cost, 
                                 danger_level, is_active, is_generated)
-                               VALUES (%s, %s, %s, %s, %s, %s, TRUE, TRUE)''',
+                               VALUES (%s, %s, %s, %s, %s, %s, TRUE, TRUE) RETURNING corridor_id''',
                             (name, loc_a['id'], loc_b['id'], travel_time, fuel_cost, danger),
-                            fetch='lastrowid'
+                            fetch='one'
                         )
+                        corridor_id_1 = result_1[0] if result_1 and len(result_1) > 0 else None
                         
-                        corridor_id_2 = self.db.execute_in_transaction(
+                        result_2 = self.db.execute_in_transaction(
                             emergency_conn,
                             '''INSERT INTO corridors 
                                (name, origin_location, destination_location, travel_time, fuel_cost, 
                                 danger_level, is_active, is_generated)
-                               VALUES (%s, %s, %s, %s, %s, %s, TRUE, TRUE)''',
+                               VALUES (%s, %s, %s, %s, %s, %s, TRUE, TRUE) RETURNING corridor_id''',
                             (f"{name} Return", loc_b['id'], loc_a['id'], travel_time, fuel_cost, danger),
-                            fetch='lastrowid'
+                            fetch='one'
                         )
+                        corridor_id_2 = result_2[0] if result_2 and len(result_2) > 0 else None
                         
                         # Validate both corridors were created
                         if not corridor_id_1 or not corridor_id_2:
@@ -1622,13 +1624,14 @@ class GalaxyGeneratorCog(commands.Cog):
                 reputation_required = random.randint(0, 2) if location['wealth_level'] <= 2 else random.randint(1, 4)
                 
                 try:
-                    market_id = self.db.execute_in_transaction(
+                    result = self.db.execute_in_transaction(
                         conn,
                         '''INSERT INTO black_markets (location_id, market_type, reputation_required, is_hidden)
-                           VALUES (%s, %s, %s, true)''',
+                           VALUES (%s, %s, %s, true) RETURNING market_id''',
                         (location['id'], market_type, reputation_required),
-                        fetch='lastrowid'
+                        fetch='one'
                     )
+                    market_id = result[0] if result and len(result) > 0 else None
                 except Exception as e:
                     print(f"❌ Failed to create black market for location {location.get('name', 'Unknown')} (ID: {location.get('id', 'None')}): {e}")
                     continue
@@ -8395,7 +8398,8 @@ class GalaxyGeneratorCog(commands.Cog):
                    (name, location_type, description, wealth_level, population,
                     x_coordinate, y_coordinate, system_name, established_date, has_jobs, has_shops, has_medical, 
                     has_repairs, has_fuel, has_upgrades, has_black_market, is_generated, is_derelict, has_shipyard) 
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'''
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING location_id'''
         params = (
             location['name'], location['type'], location['description'], 
             location['wealth_level'], location['population'], location['x_coordinate'], 
@@ -8407,16 +8411,20 @@ class GalaxyGeneratorCog(commands.Cog):
         )
         print(f"🔧 DEBUG: Params prepared for {location.get('name')}: type={location['type']}")
         print(f"🔧 DEBUG: About to execute INSERT for {location.get('name')}")
-        result = self.db.execute_in_transaction(conn, query, params, fetch='lastrowid')
-        print(f"🔧 DEBUG: INSERT completed for {location.get('name')}, got ID: {result}")
+        result = self.db.execute_in_transaction(conn, query, params, fetch='one')
+        print(f"🔧 DEBUG: INSERT completed for {location.get('name')}, got result: {result}")
+        
+        # Extract the location_id from the returned tuple
+        location_id = result[0] if result and len(result) > 0 else None
+        print(f"🔧 DEBUG: Extracted location_id: {location_id}")
         
         # Validate the returned ID
-        if result is None or result <= 0:
-            error_msg = f"❌ Invalid location ID returned from database: {result} for location {location.get('name')}"
+        if location_id is None or location_id <= 0:
+            error_msg = f"❌ Invalid location ID returned from database: {location_id} for location {location.get('name')}"
             print(error_msg)
             raise ValueError(error_msg)
             
-        return result
+        return location_id
     
     def _generate_unique_name(self, loc_type: str, used_names: set) -> str:
         """Generate a unique location name"""

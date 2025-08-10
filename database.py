@@ -1310,7 +1310,10 @@ class Database:
                 if result:
                     result = [tuple(row.values()) if hasattr(row, 'values') else row for row in result]
             elif fetch == 'lastrowid':
-                result = cursor.lastrowid if hasattr(cursor, 'lastrowid') else None
+                # PostgreSQL doesn't support cursor.lastrowid reliably
+                # This is a fallback for legacy code - prefer using RETURNING in your SQL
+                print("⚠️ WARNING: Using lastrowid with PostgreSQL is unreliable. Use 'RETURNING id' in your SQL instead.")
+                result = cursor.lastrowid if hasattr(cursor, 'lastrowid') else 0
             elif fetch is None:
                 result = cursor.rowcount
             

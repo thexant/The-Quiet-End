@@ -596,3 +596,11 @@
 2025-08-10 10:34:50.702 MDT [23293] LOG:  checkpoint complete: wrote 2 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.101 s, sync=0.005 s, total=0.116 s; sync files=2, longest=0.004 s, average=0.003 s; distance=3 kB, estimate=533 kB; lsn=0/2C86E00, redo lsn=0/2C86DC8
 2025-08-10 10:56:31.126 MDT [42548] ERROR:  column reference "constraint_name" is ambiguous at character 8
 2025-08-10 10:56:31.126 MDT [42548] STATEMENT:  SELECT constraint_name, table_name, column_name, foreign_table_name, foreign_column_name FROM information_schema.key_column_usage k JOIN information_schema.referential_constraints r ON k.constraint_name = r.constraint_name WHERE k.table_name = 'corridors'
+2025-08-10 11:19:51.412 MDT [23293] LOG:  checkpoint starting: time
+2025-08-10 11:19:51.731 MDT [23293] LOG:  checkpoint complete: wrote 4 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.301 s, sync=0.009 s, total=0.320 s; sync files=4, longest=0.004 s, average=0.003 s; distance=3 kB, estimate=480 kB; lsn=0/2C87C88, redo lsn=0/2C87C50
+2025-08-10 11:22:25.584 MDT [49442] ERROR:  insert or update on table "black_markets" violates foreign key constraint "black_markets_location_id_fkey"
+2025-08-10 11:22:25.584 MDT [49442] DETAIL:  Key (location_id)=(705) is not present in table "locations".
+2025-08-10 11:22:25.584 MDT [49442] STATEMENT:  ALTER TABLE black_markets ADD CONSTRAINT black_markets_location_id_fkey FOREIGN KEY (location_id) REFERENCES locations (location_id)
+2025-08-10 11:22:49.284 MDT [49864] ERROR:  update or delete on table "black_markets" violates foreign key constraint "black_market_items_market_id_fkey" on table "black_market_items"
+2025-08-10 11:22:49.284 MDT [49864] DETAIL:  Key (market_id)=(84) is still referenced from table "black_market_items".
+2025-08-10 11:22:49.284 MDT [49864] STATEMENT:  DELETE FROM black_markets WHERE location_id = 705
