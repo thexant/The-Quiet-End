@@ -377,14 +377,14 @@ class BeaconSystemCog(commands.Cog):
         try:
             # Get beacon location info
             location_info = self.db.execute_query(
-                "SELECT name, x_coord, y_coord, system_name FROM locations WHERE location_id = %s",
+                "SELECT name, x_coordinate, y_coordinate, system_name FROM locations WHERE location_id = %s",
                 (location_id,), fetch='one'
             )
             
             if not location_info:
                 return
             
-            loc_name, x_coord, y_coord, system_name = location_info
+            loc_name, x_coordinate, y_coordinate, system_name = location_info
             
             # Get character info
             char_info = self.db.execute_query(
@@ -409,7 +409,7 @@ class BeaconSystemCog(commands.Cog):
             radio_cog = self.bot.get_cog('RadioCog')
             if radio_cog:
                 recipients = await radio_cog._calculate_radio_propagation(
-                    x_coord, y_coord, system_name, message, 0  # Use 0 as guild_id for system message
+                    x_coordinate, y_coordinate, system_name, message, 0  # Use 0 as guild_id for system message
                 )
                 
                 if recipients:
@@ -443,14 +443,14 @@ class BeaconSystemCog(commands.Cog):
         try:
             # Get beacon location info
             location_info = self.db.execute_query(
-                "SELECT name, x_coord, y_coord, system_name FROM locations WHERE location_id = %s",
+                "SELECT name, x_coordinate, y_coordinate, system_name FROM locations WHERE location_id = %s",
                 (location_id,), fetch='one'
             )
             
             if not location_info:
                 return
             
-            loc_name, x_coord, y_coord, system_name = location_info
+            loc_name, x_coordinate, y_coordinate, system_name = location_info
             
             # Get character info
             char_info = self.db.execute_query(
@@ -475,7 +475,7 @@ class BeaconSystemCog(commands.Cog):
             radio_cog = self.bot.get_cog('RadioCog')
             if radio_cog:
                 recipients = await radio_cog._calculate_radio_propagation(
-                    x_coord, y_coord, system_name, message, 0  # Use 0 as guild_id for system message
+                    x_coordinate, y_coordinate, system_name, message, 0  # Use 0 as guild_id for system message
                 )
                 
                 if recipients:

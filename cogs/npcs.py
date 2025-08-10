@@ -50,7 +50,7 @@ class NPCCog(commands.Cog):
             # Get all alive dynamic NPCs
             npcs = self.db.execute_query(
                 """SELECT n.npc_id, n.name, n.callsign, n.ship_name, n.current_location,
-                          l.name as location_name, l.system_name, l.x_coord, l.y_coord,
+                          l.name as location_name, l.system_name, l.x_coordinate, l.y_coordinate,
                           n.last_radio_message
                    FROM dynamic_npcs n
                    LEFT JOIN locations l ON n.current_location = l.location_id
@@ -72,7 +72,7 @@ class NPCCog(commands.Cog):
 
     async def _individual_npc_timer(self, npc_data, initial_delay=0):
         """Individual timer for a single NPC's radio messages"""
-        npc_id, name, callsign, ship_name, location_id, location_name, system_name, x_coord, y_coord, last_message = npc_data
+        npc_id, name, callsign, ship_name, location_id, location_name, system_name, x_coordinate, y_coordinate, last_message = npc_data
         
         # Wait for initial staggered delay
         if initial_delay > 0:
@@ -420,7 +420,7 @@ class NPCCog(commands.Cog):
                 # Get NPCs that could potentially take jobs (not traveling, alive)
                 available_npcs = self.db.execute_query(
                     """SELECT n.npc_id, n.name, n.callsign, n.current_location, n.credits,
-                              l.name as location_name, l.system_name, l.x_coord, l.y_coord
+                              l.name as location_name, l.system_name, l.x_coordinate, l.y_coordinate
                        FROM dynamic_npcs n
                        JOIN locations l ON n.current_location = l.location_id
                        WHERE n.is_alive = true AND n.travel_start_time IS NULL""",
@@ -428,18 +428,18 @@ class NPCCog(commands.Cog):
                 )
                 
                 for npc_data in available_npcs:
-                    npc_id, name, callsign, location_id, credits, location_name, system_name, x_coord, y_coord = npc_data
+                    npc_id, name, callsign, location_id, credits, location_name, system_name, x_coordinate, y_coordinate = npc_data
                     
                     # 15% chance for each NPC to simulate taking a job
                     if random.random() < 0.15:
-                        job_outcome = await self._simulate_npc_job(npc_id, name, callsign, location_id, location_name, system_name, x_coord, y_coord)
+                        job_outcome = await self._simulate_npc_job(npc_id, name, callsign, location_id, location_name, system_name, x_coordinate, y_coordinate)
                         
                         # Small delay between job simulations
                         await asyncio.sleep(random.uniform(10, 30))
                         
             except Exception as e:
                 print(f"❌ Error in background job simulation: {e}")
-    async def _simulate_npc_job(self, npc_id: int, name: str, callsign: str, location_id: int, location_name: str, system_name: str, x_coord: int, y_coord: int):
+    async def _simulate_npc_job(self, npc_id: int, name: str, callsign: str, location_id: int, location_name: str, system_name: str, x_coordinate: int, y_coordinate: int):
         """Simulate an NPC taking and completing a job"""
         job_types = [
             ("cargo transport", "hauling goods to distant locations"),
@@ -545,7 +545,7 @@ class NPCCog(commands.Cog):
                 # Get all alive NPCs
                 all_npcs = self.db.execute_query(
                     """SELECT n.npc_id, n.name, n.callsign, n.current_location,
-                              l.name as location_name, l.system_name, l.x_coord, l.y_coord
+                              l.name as location_name, l.system_name, l.x_coordinate, l.y_coordinate
                        FROM dynamic_npcs n
                        LEFT JOIN locations l ON n.current_location = l.location_id
                        WHERE n.is_alive = true""",
@@ -553,18 +553,18 @@ class NPCCog(commands.Cog):
                 )
                 
                 for npc_data in all_npcs:
-                    npc_id, name, callsign, location_id, location_name, system_name, x_coord, y_coord = npc_data
+                    npc_id, name, callsign, location_id, location_name, system_name, x_coordinate, y_coordinate = npc_data
                     
                     # 8% chance for each NPC to be involved in an event
                     if random.random() < 0.08:
-                        await self._simulate_npc_event(npc_id, name, callsign, location_id, location_name, system_name, x_coord, y_coord)
+                        await self._simulate_npc_event(npc_id, name, callsign, location_id, location_name, system_name, x_coordinate, y_coordinate)
                         
                         # Small delay between event simulations
                         await asyncio.sleep(random.uniform(5, 15))
                         
             except Exception as e:
                 print(f"❌ Error in background event simulation: {e}")
-    async def _simulate_npc_event(self, npc_id: int, name: str, callsign: str, location_id: int, location_name: str, system_name: str, x_coord: int, y_coord: int):
+    async def _simulate_npc_event(self, npc_id: int, name: str, callsign: str, location_id: int, location_name: str, system_name: str, x_coordinate: int, y_coordinate: int):
         """Simulate an NPC being caught in various events"""
         events = [
             {
@@ -1029,7 +1029,7 @@ class NPCCog(commands.Cog):
 
         # Get NPC's current location for signal calculation
         npc_location_data = self.db.execute_query(
-            """SELECT l.x_coord, l.y_coord, l.system_name
+            """SELECT l.x_coordinate, l.y_coordinate, l.system_name
                FROM dynamic_npcs n
                JOIN locations l ON n.current_location = l.location_id
                WHERE n.callsign = %s""",
@@ -1129,7 +1129,7 @@ class NPCCog(commands.Cog):
         # Start radio timer for the arrived NPC
         npc_details = self.db.execute_query(
             """SELECT n.npc_id, n.name, n.callsign, n.ship_name, n.current_location,
-                      l.name as location_name, l.system_name, l.x_coord, l.y_coord,
+                      l.name as location_name, l.system_name, l.x_coordinate, l.y_coordinate,
                       n.last_radio_message
                FROM dynamic_npcs n
                LEFT JOIN locations l ON n.current_location = l.location_id

@@ -384,7 +384,7 @@ class EnhancedEventsCog(commands.Cog):
         reputation_chance = 0.35  # Was 0.20
         
         # Increase hostile chances in dangerous areas
-        edge_distance = (x_coord**2 + y_coord**2)**0.5
+        edge_distance = (x_coordinate**2 + y_coordinate**2)**0.5
         if edge_distance > 70:  # Far from center
             hostile_chance += 0.15
             reputation_chance += 0.15

@@ -2314,7 +2314,7 @@ class EconomyCog(commands.Cog):
             
             # Get all connections from current location
             connections = self.db.execute_query(
-                '''SELECT c.destination_location, l.name, l.location_type, l.wealth_level, l.x_coord, l.y_coord
+                '''SELECT c.destination_location, l.name, l.location_type, l.wealth_level, l.x_coordinate, l.y_coordinate
                    FROM corridors c
                    JOIN locations l ON c.destination_location = l.location_id
                    WHERE c.origin_location = %s AND c.is_active = true''',
@@ -2342,7 +2342,7 @@ class EconomyCog(commands.Cog):
 
         # 2) Get this location's info
         row = self.db.execute_query(
-            "SELECT name, x_coord, y_coord, wealth_level, location_type FROM locations WHERE location_id = %s",
+            "SELECT name, x_coordinate, y_coordinate, wealth_level, location_type FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -2352,7 +2352,7 @@ class EconomyCog(commands.Cog):
 
         # 3) Find all available destinations (direct and multi-jump)
         direct_destinations = self.db.execute_query(
-            """SELECT DISTINCT l.location_id, l.name, l.x_coord, l.y_coord, l.location_type, l.wealth_level
+            """SELECT DISTINCT l.location_id, l.name, l.x_coordinate, l.y_coordinate, l.location_type, l.wealth_level
                FROM corridors c 
                JOIN locations l ON c.destination_location = l.location_id
                WHERE c.origin_location = %s AND c.is_active = true""",

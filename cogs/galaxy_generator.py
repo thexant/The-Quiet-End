@@ -525,7 +525,7 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Get all locations
         all_locations_data = self.db.execute_query(
-            "SELECT location_id, name, location_type, x_coord, y_coord, wealth_level FROM locations",
+            "SELECT location_id, name, location_type, x_coordinateinate, y_coordinateinate, wealth_level FROM locations",
             fetch='all'
         )
         
@@ -536,8 +536,8 @@ class GalaxyGeneratorCog(commands.Cog):
                 'id': loc_id,
                 'name': name, 
                 'type': loc_type,
-                'x_coord': x,
-                'y_coord': y,
+                'x_coordinate': x,
+                'y_coordinate': y,
                 'wealth_level': wealth
             })
         
@@ -1271,7 +1271,7 @@ class GalaxyGeneratorCog(commands.Cog):
         )
         print("🔧 DEBUG: Creating Earth location data...")
         location = {
-            'name': "Earth", 'type': 'colony', 'x_coord': 0, 'y_coord': 0,
+            'name': "Earth", 'type': 'colony', 'x_coordinate': 0, 'y_coordinate': 0,
             'system_name': "Sol", 'description': description, 'wealth_level': 10,
             'population': random.randint(50000, 100000),
             'established_date': f"{start_year - 4000}-{random.randint(1,12):02d}-{random.randint(1,28):02d}",
@@ -1713,8 +1713,8 @@ class GalaxyGeneratorCog(commands.Cog):
             loc = {
                 'name': name,
                 'type': loc_type,
-                'x_coord': x,
-                'y_coord': y,
+                'x_coordinate': x,
+                'y_coordinate': y,
                 'system_name': system,
                 'description': description,
                 'wealth_level': wealth,
@@ -1737,8 +1737,8 @@ class GalaxyGeneratorCog(commands.Cog):
             loc = {
                 'name': name,
                 'type': loc_type,
-                'x_coord': x,
-                'y_coord': y,
+                'x_coordinate': x,
+                'y_coordinate': y,
                 'system_name': system,
                 'description': description,
                 'wealth_level': wealth,
@@ -2128,12 +2128,12 @@ class GalaxyGeneratorCog(commands.Cog):
         self.db.execute_query(
             '''INSERT INTO locations 
                (name, location_type, description, wealth_level, population,
-                x_coord, y_coord, system_name, established_date, has_jobs, has_shops, has_medical, 
+                x_coordinate, y_coordinate, system_name, established_date, has_jobs, has_shops, has_medical, 
                 has_repairs, has_fuel, has_upgrades, has_black_market, is_generated, is_derelict) 
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
             (location['name'], location['type'], location['description'], 
-             location['wealth_level'], location['population'], location['x_coord'], 
-             location['y_coord'], location['system_name'], location['established_date'],
+             location['wealth_level'], location['population'], location['x_coordinate'], 
+             location['y_coordinate'], location['system_name'], location['established_date'],
              location['has_jobs'], location['has_shops'], location['has_medical'], 
              location['has_repairs'], location['has_fuel'], location['has_upgrades'],
              location['has_black_market'], location['is_generated'], location['is_derelict'])
@@ -2483,8 +2483,8 @@ class GalaxyGeneratorCog(commands.Cog):
         """
         grid = {}
         for loc in locations:
-            grid_x = int(loc['x_coord'] // grid_size)
-            grid_y = int(loc['y_coord'] // grid_size)
+            grid_x = int(loc['x_coordinate'] // grid_size)
+            grid_y = int(loc['y_coordinate'] // grid_size)
             if (grid_x, grid_y) not in grid:
                 grid[(grid_x, grid_y)] = []
             grid[(grid_x, grid_y)].append(loc)
@@ -2586,8 +2586,8 @@ class GalaxyGeneratorCog(commands.Cog):
         for station in stations:
             # Connect to 2-4 nearby wealthy colonies.
             nearby_colonies = []
-            grid_x = int(station['x_coord'] // grid_size)
-            grid_y = int(station['y_coord'] // grid_size)
+            grid_x = int(station['x_coordinate'] // grid_size)
+            grid_y = int(station['y_coordinate'] // grid_size)
             
             # Search in an expanding radius of grid cells.
             for radius in range(3): # Search up to 2 cells away
@@ -2645,8 +2645,8 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Find 1-2 nearby locations to connect to.
             nearby_candidates = []
-            grid_x = int(loc['x_coord'] // grid_size)
-            grid_y = int(loc['y_coord'] // grid_size)
+            grid_x = int(loc['x_coordinate'] // grid_size)
+            grid_y = int(loc['y_coordinate'] // grid_size)
 
             # Search nearby grid cells with expanding radius if needed
             max_candidates = 20  # Limit candidates to prevent hanging
@@ -3020,7 +3020,7 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Find gates that are ready to reconnect
         moving_gates = self.db.execute_query(
-            """SELECT location_id, name, x_coord, y_coord, reconnection_eta 
+            """SELECT location_id, name, x_coordinateinate, y_coordinateinate, reconnection_eta 
                FROM locations 
                WHERE location_type = 'gate' 
                AND gate_status = 'moving' 
@@ -3060,12 +3060,12 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Find nearby gates to connect to (within reasonable distance)
             nearby_gates = self.db.execute_query(
-                """SELECT location_id, name, x_coord, y_coord 
+                """SELECT location_id, name, x_coordinate, y_coordinate 
                    FROM locations 
                    WHERE location_type = 'gate' 
                    AND gate_status = 'active' 
                    AND location_id != %s
-                   ORDER BY ((x_coord - %s) * (x_coord - %s) + (y_coord - %s) * (y_coord - %s))
+                   ORDER BY ((x_coordinate - %s) * (x_coordinate - %s) + (y_coordinate - %s) * (y_coordinate - %s))
                    LIMIT 3""",
                 (gate_id, gate_x, gate_x, gate_y, gate_y),
                 fetch='all'
@@ -3581,8 +3581,8 @@ class GalaxyGeneratorCog(commands.Cog):
         bins = {}
         
         for loc in locations:
-            bin_x = int(loc['x_coord'] // bin_size)
-            bin_y = int(loc['y_coord'] // bin_size)
+            bin_x = int(loc['x_coordinate'] // bin_size)
+            bin_y = int(loc['y_coordinate'] // bin_size)
             bin_key = (bin_x, bin_y)
             
             if bin_key not in bins:
@@ -3594,8 +3594,8 @@ class GalaxyGeneratorCog(commands.Cog):
     def _get_nearby_from_bins(self, location: Dict, spatial_bins: Dict, max_candidates: int = 8) -> List[Dict]:
         """Get nearby locations using spatial bins (much faster than distance calculations)"""
         bin_size = 25
-        bin_x = int(location['x_coord'] // bin_size)
-        bin_y = int(location['y_coord'] // bin_size)
+        bin_x = int(location['x_coordinate'] // bin_size)
+        bin_y = int(location['y_coordinate'] // bin_size)
         
         nearby = []
         
@@ -3657,14 +3657,14 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Batch fetch all required data upfront - ONLY ACTIVE GATES
             all_gates = self.db.execute_query(
-                """SELECT location_id, name, x_coord, y_coord 
+                """SELECT location_id, name, x_coordinate, y_coordinate 
                    FROM locations 
                    WHERE location_type = 'gate' AND gate_status = 'active'""",
                 fetch='all'
             )
             
             all_major_locations = self.db.execute_query(
-                """SELECT location_id, name, x_coord, y_coord, location_type
+                """SELECT location_id, name, x_coordinate, y_coordinate, location_type
                    FROM locations
                    WHERE location_type IN ('colony', 'space_station', 'outpost')""",
                 fetch='all'
@@ -3761,8 +3761,8 @@ class GalaxyGeneratorCog(commands.Cog):
             # Get all gate-to-location connections in one query
             gate_connections = self.db.execute_query(
                 """SELECT c.origin_location as gate_id, c.destination_location as loc_id,
-                          l.name as loc_name, l.x_coord, l.y_coord,
-                          g.x_coord as gate_x, g.y_coord as gate_y
+                          l.name as loc_name, l.x_coordinate, l.y_coordinate,
+                          g.x_coordinate as gate_x, g.y_coordinate as gate_y
                    FROM corridors c
                    JOIN locations l ON c.destination_location = l.location_id
                    JOIN locations g ON c.origin_location = g.location_id
@@ -4334,7 +4334,7 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Get gate info
             gate_info = self.db.execute_query(
-                "SELECT name, location_type, gate_status, system_name, x_coord, y_coord FROM locations WHERE location_id = %s",
+                "SELECT name, location_type, gate_status, system_name, x_coordinate, y_coordinate FROM locations WHERE location_id = %s",
                 (gate_id,), fetch='one'
             )
             
@@ -4350,8 +4350,8 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Find nearest location in same system
             nearest_location = self.db.execute_query(
-                """SELECT location_id, name, x_coord, y_coord,
-                          ((x_coord - %s) * (x_coord - %s) + (y_coord - %s) * (y_coord - %s)) as distance_sq
+                """SELECT location_id, name, x_coordinate, y_coordinate,
+                          ((x_coordinate - %s) * (x_coordinate - %s) + (y_coordinate - %s) * (y_coordinate - %s)) as distance_sq
                    FROM locations 
                    WHERE system_name = %s 
                    AND location_type IN ('colony', 'space_station', 'outpost')
@@ -4799,7 +4799,7 @@ class GalaxyGeneratorCog(commands.Cog):
         """Ensure a moving gate has active local space connections to nearby locations"""
         # Find nearby major locations in the same system
         gate_info = self.db.execute_query(
-            "SELECT system_name, x_coord, y_coord FROM locations WHERE location_id = %s",
+            "SELECT system_name, x_coordinate, y_coordinate FROM locations WHERE location_id = %s",
             (gate_id,), fetch='one'
         )
         
@@ -4810,8 +4810,8 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Find major locations in the same system
         nearby_locations = self.db.execute_query(
-            """SELECT location_id, name, x_coord, y_coord,
-                      ((x_coord - %s) * (x_coord - %s) + (y_coord - %s) * (y_coord - %s)) as distance_sq
+            """SELECT location_id, name, x_coordinate, y_coordinate,
+                      ((x_coordinate - %s) * (x_coordinate - %s) + (y_coordinate - %s) * (y_coordinate - %s)) as distance_sq
                FROM locations 
                WHERE system_name = %s 
                AND location_type IN ('colony', 'space_station', 'outpost')
@@ -4871,7 +4871,7 @@ class GalaxyGeneratorCog(commands.Cog):
         if current_gated_connections < 1:
             # Find nearby active gates to connect to
             gate_info = self.db.execute_query(
-                "SELECT x_coord, y_coord FROM locations WHERE location_id = %s",
+                "SELECT x_coordinate, y_coordinate FROM locations WHERE location_id = %s",
                 (gate_id,), fetch='one'
             )
             
@@ -4882,12 +4882,12 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Find nearby active gates (not including this one)
             nearby_gates = self.db.execute_query(
-                """SELECT location_id, name, x_coord, y_coord 
+                """SELECT location_id, name, x_coordinate, y_coordinate 
                    FROM locations 
                    WHERE location_type = 'gate' 
                    AND gate_status = 'active' 
                    AND location_id != %s
-                   ORDER BY ((x_coord - %s) * (x_coord - %s) + (y_coord - %s) * (y_coord - %s))
+                   ORDER BY ((x_coordinate - %s) * (x_coordinate - %s) + (y_coordinate - %s) * (y_coordinate - %s))
                    LIMIT 3""",
                 (gate_id, gate_x, gate_x, gate_y, gate_y),
                 fetch='all'
@@ -5305,9 +5305,9 @@ class GalaxyGeneratorCog(commands.Cog):
                 
                 # Find nearest major location for reconnection
                 nearest_major = self.db.execute_query(
-                    """SELECT l2.location_id, l2.name, l2.x_coord, l2.y_coord,
-                              SQRT((l1.x_coord - l2.x_coord) * (l1.x_coord - l2.x_coord) + 
-                                   (l1.y_coord - l2.y_coord) * (l1.y_coord - l2.y_coord)) as distance
+                    """SELECT l2.location_id, l2.name, l2.x_coordinate, l2.y_coordinate,
+                              SQRT((l1.x_coordinate - l2.x_coordinate) * (l1.x_coordinate - l2.x_coordinate) + 
+                                   (l1.y_coordinate - l2.y_coordinate) * (l1.y_coordinate - l2.y_coordinate)) as distance
                        FROM locations l1
                        JOIN locations l2 ON l2.location_type IN ('colony', 'space_station', 'outpost')
                        WHERE l1.location_id = %s
@@ -5430,7 +5430,7 @@ class GalaxyGeneratorCog(commands.Cog):
         try:
             # Build query based on status filter
             base_query = """
-                SELECT l.location_id, l.name, l.x_coord, l.y_coord, l.gate_status, 
+                SELECT l.location_id, l.name, l.x_coordinate, l.y_coordinate, l.gate_status, 
                        l.reconnection_eta, l.abandoned_since, l.population,
                        COUNT(c.corridor_id) as connected_routes
                 FROM locations l
@@ -5445,7 +5445,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 params.append(status)
             
             base_query += """
-                GROUP BY l.location_id, l.name, l.x_coord, l.y_coord, l.gate_status, 
+                GROUP BY l.location_id, l.name, l.x_coordinate, l.y_coordinate, l.gate_status, 
                          l.reconnection_eta, l.abandoned_since, l.population
                 ORDER BY l.gate_status, l.name
             """
@@ -5505,7 +5505,7 @@ class GalaxyGeneratorCog(commands.Cog):
             # Display gates for this page
             gate_lines = []
             for gate in page_gates:
-                (gate_id, gate_name, x_coord, y_coord, gate_status, 
+                (gate_id, gate_name, x_coordinate, y_coordinate, gate_status, 
                  reconnection_eta, abandoned_since, population, connected_routes) = gate
                 
                 # Format status indicator
@@ -5540,7 +5540,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 
                 # Format line
                 gate_line = f"{status_icon} **{gate_name}**{extra_info}"
-                gate_line += f"\n   └ Routes: {connected_routes} | Pop: {population or 0} | ({x_coord:.1f}, {y_coord:.1f})"
+                gate_line += f"\n   └ Routes: {connected_routes} | Pop: {population or 0} | ({x_coordinate:.1f}, {y_coordinate:.1f})"
                 
                 gate_lines.append(gate_line)
             
@@ -6217,7 +6217,7 @@ class GalaxyGeneratorCog(commands.Cog):
         # Get all possible destinations (excluding local space connections)
         try:
             all_destinations = self.db.execute_query(
-                """SELECT location_id, name, location_type, x_coord, y_coord 
+                """SELECT location_id, name, location_type, x_coordinate, y_coordinate 
                    FROM locations 
                    WHERE location_type IN ('colony', 'space_station', 'outpost', 'gate')
                    ORDER BY location_id""",
@@ -6245,7 +6245,7 @@ class GalaxyGeneratorCog(commands.Cog):
         origin_data = {}
         try:
             origin_locations = self.db.execute_query(
-                f"""SELECT location_id, x_coord, y_coord, system_name, location_type 
+                f"""SELECT location_id, x_coordinate, y_coordinate, system_name, location_type 
                    FROM locations 
                    WHERE location_id IN ({origin_ids_str})""",
                 fetch='all'
@@ -6757,7 +6757,7 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Sample some distant location pairs to check for overly direct routes
         all_major_locations = self.db.execute_query(
-            "SELECT location_id, name, x_coord, y_coord, system_name FROM locations WHERE location_type IN ('colony', 'space_station', 'outpost')",
+            "SELECT location_id, name, x_coordinate, y_coordinate, system_name FROM locations WHERE location_type IN ('colony', 'space_station', 'outpost')",
             fetch='all'
         )
         
@@ -6873,11 +6873,11 @@ class GalaxyGeneratorCog(commands.Cog):
         for corridor_id, name, origin_id, dest_id, old_time in long_routes:
             # Get location info
             origin_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s",
+                "SELECT x_coordinate, y_coordinate, location_type FROM locations WHERE location_id = %s",
                 (origin_id,), fetch='one'
             )
             dest_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s", 
+                "SELECT x_coordinate, y_coordinate, location_type FROM locations WHERE location_id = %s", 
                 (dest_id,), fetch='one'
             )
             
@@ -6925,14 +6925,14 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Batch fetch all required data upfront - ONLY ACTIVE GATES
         all_gates = self.db.execute_query(
-            """SELECT location_id, name, x_coord, y_coord 
+            """SELECT location_id, name, x_coordinate, y_coordinate 
                FROM locations 
                WHERE location_type = 'gate' AND gate_status = 'active'""",
             fetch='all'
         )
         
         all_major_locations = self.db.execute_query(
-            """SELECT location_id, name, x_coord, y_coord, location_type
+            """SELECT location_id, name, x_coordinate, y_coordinate, location_type
                FROM locations
                WHERE location_type IN ('colony', 'space_station', 'outpost')""",
             fetch='all'
@@ -7027,8 +7027,8 @@ class GalaxyGeneratorCog(commands.Cog):
         # Get all gate-to-location connections in one query
         gate_connections = self.db.execute_query(
             """SELECT c.origin_location as gate_id, c.destination_location as loc_id,
-                      l.name as loc_name, l.x_coord, l.y_coord,
-                      g.x_coord as gate_x, g.y_coord as gate_y
+                      l.name as loc_name, l.x_coordinate, l.y_coordinate,
+                      g.x_coordinate as gate_x, g.y_coordinate as gate_y
                FROM corridors c
                JOIN locations l ON c.destination_location = l.location_id
                JOIN locations g ON c.origin_location = g.location_id
@@ -7080,12 +7080,12 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Get gates and major locations separately for targeted creation
         gates = self.db.execute_query(
-            "SELECT location_id, name, x_coord, y_coord, system_name FROM locations WHERE location_type = 'gate'",
+            "SELECT location_id, name, x_coordinate, y_coordinate, system_name FROM locations WHERE location_type = 'gate'",
             fetch='all'
         )
         
         major_locations = self.db.execute_query(
-            "SELECT location_id, name, x_coord, y_coord, system_name, location_type FROM locations WHERE location_type IN ('colony', 'space_station', 'outpost')",
+            "SELECT location_id, name, x_coordinate, y_coordinate, system_name, location_type FROM locations WHERE location_type IN ('colony', 'space_station', 'outpost')",
             fetch='all'
         )
         
@@ -7993,14 +7993,14 @@ class GalaxyGeneratorCog(commands.Cog):
         angle = random.uniform(0, 2 * math.pi)
         distance = random.uniform(3, 8)
         
-        gate_x = location['x_coord'] + distance * math.cos(angle)
-        gate_y = location['y_coord'] + distance * math.sin(angle)
+        gate_x = location['x_coordinate'] + distance * math.cos(angle)
+        gate_y = location['y_coordinate'] + distance * math.sin(angle)
         
         return {
             'name': gate_name,
             'type': 'gate',
-            'x_coord': gate_x,
-            'y_coord': gate_y,
+            'x_coordinate': gate_x,
+            'y_coordinate': gate_y,
             'system_name': location['system_name'],
             'description': f"Transit gate providing safe passage to and from {location['name']}. Features decontamination facilities and basic services.",
             'wealth_level': min(location['wealth_level'] + 1, 8),
@@ -8075,8 +8075,8 @@ class GalaxyGeneratorCog(commands.Cog):
         angle = random.uniform(0, 2 * math.pi)
         distance = random.uniform(3, 8)  # Close but separate
         
-        gate_x = location['x_coord'] + distance * math.cos(angle)
-        gate_y = location['y_coord'] + distance * math.sin(angle)
+        gate_x = location['x_coordinate'] + distance * math.cos(angle)
+        gate_y = location['y_coordinate'] + distance * math.sin(angle)
         
         name = ""
         attempts = 0
@@ -8107,8 +8107,8 @@ class GalaxyGeneratorCog(commands.Cog):
         return {
             'name': name,
             'type': 'gate',
-            'x_coord': gate_x,
-            'y_coord': gate_y,
+            'x_coordinate': gate_x,
+            'y_coordinate': gate_y,
             'system_name': location['system_name'],
             'description': f"Transit gate providing safe passage to and from {location['name']}. Features decontamination facilities and basic services.",
             'wealth_level': min(location['wealth_level'] + 1, 8),  # Gates are well-maintained
@@ -8342,13 +8342,13 @@ class GalaxyGeneratorCog(commands.Cog):
         print(f"🔧 DEBUG: _save_location_to_db called for {location.get('name', 'Unknown')}")
         query = '''INSERT INTO locations 
                    (name, location_type, description, wealth_level, population,
-                    x_coord, y_coord, system_name, established_date, has_jobs, has_shops, has_medical, 
+                    x_coordinate, y_coordinate, system_name, established_date, has_jobs, has_shops, has_medical, 
                     has_repairs, has_fuel, has_upgrades, has_black_market, is_generated, is_derelict, has_shipyard) 
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'''
         params = (
             location['name'], location['type'], location['description'], 
-            location['wealth_level'], location['population'], location['x_coord'], 
-            location['y_coord'], location['system_name'], location.get('established_date'),
+            location['wealth_level'], location['population'], location['x_coordinate'], 
+            location['y_coordinate'], location['system_name'], location.get('established_date'),
             location['has_jobs'], location['has_shops'], location['has_medical'], 
             location['has_repairs'], location['has_fuel'], location['has_upgrades'],
             location.get('has_black_market', False), location['is_generated'], 
@@ -8418,8 +8418,8 @@ class GalaxyGeneratorCog(commands.Cog):
     
     def _calculate_distance(self, loc1: Dict, loc2: Dict) -> float:
         """Calculate distance between two locations"""
-        dx = loc1['x_coord'] - loc2['x_coord']
-        dy = loc1['y_coord'] - loc2['y_coord']
+        dx = loc1['x_coordinate'] - loc2['x_coordinate']
+        dy = loc1['y_coordinate'] - loc2['y_coordinate']
         return math.sqrt(dx * dx + dy * dy)
     
     # Visual map generation with updated gate display
@@ -8483,7 +8483,7 @@ class GalaxyGeneratorCog(commands.Cog):
         
         # Fetch locations
         locations = self.db.execute_query(
-            "SELECT location_id, name, location_type, x_coord, y_coord, wealth_level FROM locations",
+            "SELECT location_id, name, location_type, x_coordinate, y_coordinate, wealth_level FROM locations",
             fetch='all'
         )
         if not locations:
@@ -8494,8 +8494,8 @@ class GalaxyGeneratorCog(commands.Cog):
         if show_routes:
             corridors = self.db.execute_query(
                 '''SELECT c.origin_location, c.destination_location, c.danger_level,
-                          ol.x_coord as ox, ol.y_coord as oy,
-                          dl.x_coord as dx, dl.y_coord as dy, ol.location_type as origin_type,
+                          ol.x_coordinate as ox, ol.y_coordinate as oy,
+                          dl.x_coordinate as dx, dl.y_coordinate as dy, ol.location_type as origin_type,
                           c.name as corridor_name
                    FROM corridors c
                    JOIN locations ol ON c.origin_location = ol.location_id
@@ -8585,7 +8585,7 @@ class GalaxyGeneratorCog(commands.Cog):
             if result:
                 player_location = result[0]
                 loc_data = self.db.execute_query(
-                    "SELECT x_coord, y_coord FROM locations WHERE location_id = %s",
+                    "SELECT x_coordinate, y_coordinate FROM locations WHERE location_id = %s",
                     (player_location,), fetch='one'
                 )
                 if loc_data:
@@ -8649,14 +8649,14 @@ class GalaxyGeneratorCog(commands.Cog):
             ax.set_ylim(fy - margin, fy + margin)
         else:
             if visible_locations:
-                x_coords = [loc[3] for loc in visible_locations]
-                y_coords = [loc[4] for loc in visible_locations]
-                x_range = max(x_coords) - min(x_coords)
-                y_range = max(y_coords) - min(y_coords)
+                x_coordinates = [loc[3] for loc in visible_locations]
+                y_coordinates = [loc[4] for loc in visible_locations]
+                x_range = max(x_coordinates) - min(x_coordinates)
+                y_range = max(y_coordinates) - min(y_coordinates)
                 padding = max(x_range, y_range) * 0.1
                 
-                ax.set_xlim(min(x_coords) - padding, max(x_coords) + padding)
-                ax.set_ylim(min(y_coords) - padding, max(y_coords) + padding)
+                ax.set_xlim(min(x_coordinates) - padding, max(x_coordinates) + padding)
+                ax.set_ylim(min(y_coordinates) - padding, max(y_coordinates) + padding)
         
         # Save to buffer
         buffer = io.BytesIO()

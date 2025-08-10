@@ -133,13 +133,13 @@ class GalacticNewsCog(commands.Cog):
         # Add location context if available
         if location_id:
             location_info = self.db.execute_query(
-                "SELECT name, location_type, system_name, x_coord, y_coord FROM locations WHERE location_id = %s",
+                "SELECT name, location_type, system_name, x_coordinate, y_coordinate FROM locations WHERE location_id = %s",
                 (location_id,),
                 fetch='one'
             )
             
             if location_info:
-                location_name, loc_type, system_name, x_coord, y_coord = location_info
+                location_name, loc_type, system_name, x_coordinate, y_coordinate = location_info
                 embed.add_field(
                     name="📍 Location",
                     value=f"{location_name} ({loc_type.replace('_', ' ').title()})\n{system_name} System",
@@ -185,7 +185,7 @@ class GalacticNewsCog(commands.Cog):
             
         # Get location coordinates
         location_info = self.db.execute_query(
-            "SELECT x_coord, y_coord FROM locations WHERE location_id = %s",
+            "SELECT x_coordinate, y_coordinate FROM locations WHERE location_id = %s",
             (location_id,),
             fetch='one'
         )
@@ -193,10 +193,10 @@ class GalacticNewsCog(commands.Cog):
         if not location_info:
             return 0.0
             
-        x_coord, y_coord = location_info
+        x_coordinate, y_coordinate = location_info
         
         # Calculate distance from galactic center (0, 0)
-        distance = math.sqrt(x_coord**2 + y_coord**2)
+        distance = math.sqrt(x_coordinate**2 + y_coordinate**2)
         
         # News delay formula: 1 hour per 50 units of distance + some randomness
         base_delay = distance / 50.0
@@ -324,8 +324,8 @@ class GalacticNewsCog(commands.Cog):
             central_location = self.db.execute_query(
                 """SELECT location_id FROM locations 
                    WHERE location_type = 'space_station' 
-                   AND (x_coord*x_coord + y_coord*y_coord) < 900 
-                   ORDER BY (x_coord*x_coord + y_coord*y_coord) ASC 
+                   AND (x_coordinate*x_coordinate + y_coordinate*y_coordinate) < 900 
+                   ORDER BY (x_coordinate*x_coordinate + y_coordinate*y_coordinate) ASC 
                    LIMIT 1""",
                 fetch='one'
             )

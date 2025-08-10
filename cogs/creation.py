@@ -618,7 +618,7 @@ class CreationCog(commands.Cog):
         
         # Find the connection location
         connection = self.db.execute_query(
-            """SELECT location_id, name, x_coord, y_coord, location_type, system_name 
+            """SELECT location_id, name, x_coordinate, y_coordinate, location_type, system_name 
                FROM locations 
                WHERE LOWER(name) LIKE LOWER(%s)""",
             (f"%{connect_to}%",),
@@ -637,8 +637,8 @@ class CreationCog(commands.Cog):
         # Generate coordinates near the connection
         angle = random.uniform(0, 2 * math.pi)
         distance = random.uniform(5, 15)
-        x_coord = connect_x + distance * math.cos(angle)
-        y_coord = connect_y + distance * math.sin(angle)
+        x_coordinate = connect_x + distance * math.cos(angle)
+        y_coordinate = connect_y + distance * math.sin(angle)
         
         # Determine system name
         if system:
@@ -661,8 +661,8 @@ class CreationCog(commands.Cog):
             'type': location_type,
             'wealth_level': wealth,
             'faction': faction,
-            'x_coord': x_coord,
-            'y_coord': y_coord,
+            'x_coordinate': x_coordinate,
+            'y_coordinate': y_coordinate,
             'system_name': system_name,
             'connect_to_id': connect_id,
             'connect_to_name': connect_name,
@@ -709,7 +709,7 @@ class CreationCog(commands.Cog):
                 conn,
                 """INSERT INTO locations 
                    (name, location_type, description, wealth_level, population,
-                    x_coord, y_coord, system_name,
+                    x_coordinate, y_coordinate, system_name,
                     has_jobs, has_shops, has_medical, has_repairs, has_fuel, 
                     has_upgrades, has_shipyard,
                     has_federal_supplies, has_black_market,
@@ -721,8 +721,8 @@ class CreationCog(commands.Cog):
                     location_data.get('description', ''),
                     location_data['wealth_level'],
                     location_data.get('population', 10000),
-                    location_data['x_coord'],
-                    location_data['y_coord'],
+                    location_data['x_coordinate'],
+                    location_data['y_coordinate'],
                     location_data['system_name'],
                     location_data['services']['has_jobs'],
                     location_data['services']['has_shops'],
@@ -792,8 +792,8 @@ class CreationCog(commands.Cog):
                 location_data['type'],
                 location_data['connect_to_id'],
                 location_data['connect_to_name'],
-                location_data['x_coord'],
-                location_data['y_coord']
+                location_data['x_coordinate'],
+                location_data['y_coordinate']
             )
             
             # If gate was created, create local space connection
@@ -893,7 +893,7 @@ class CreationCog(commands.Cog):
         
         # Get connection location details including system info for route type detection
         connect_info = self.db.execute_query(
-            "SELECT x_coord, y_coord, location_type, system_name FROM locations WHERE location_id = %s",
+            "SELECT x_coordinate, y_coordinate, location_type, system_name FROM locations WHERE location_id = %s",
             (connect_to_id,),
             fetch='one'
         )
@@ -1087,11 +1087,11 @@ class CreationCog(commands.Cog):
         
         # Find nearby locations with system info
         nearby = self.db.execute_query(
-            """SELECT location_id, name, x_coord, y_coord, location_type, system_name
+            """SELECT location_id, name, x_coordinate, y_coordinate, location_type, system_name
                FROM locations
                WHERE location_id != %s
-               AND ABS(x_coord - %s) < 30
-               AND ABS(y_coord - %s) < 30
+               AND ABS(x_coordinate - %s) < 30
+               AND ABS(y_coordinate - %s) < 30
                ORDER BY RANDOM()
                LIMIT 10""",
             (location_id, x, y),
@@ -1135,8 +1135,8 @@ class CreationCog(commands.Cog):
                JOIN locations l1 ON l1.location_id = %s
                JOIN locations l2 ON l2.location_id = %s
                WHERE g.location_type = 'gate'
-               ORDER BY (ABS(g.x_coord - l1.x_coord) + ABS(g.y_coord - l1.y_coord) +
-                        ABS(g.x_coord - l2.x_coord) + ABS(g.y_coord - l2.y_coord))
+               ORDER BY (ABS(g.x_coordinate - l1.x_coordinate) + ABS(g.y_coordinate - l1.y_coordinate) +
+                        ABS(g.x_coordinate - l2.x_coordinate) + ABS(g.y_coordinate - l2.y_coordinate))
                LIMIT 1""",
             (loc1_id, loc2_id),
             fetch='one'
@@ -1349,11 +1349,11 @@ class CreationCog(commands.Cog):
             # For gated routes, use the existing _create_gated_corridor method if available
             # Get coordinates to calculate distance
             origin_coords = self.db.execute_query(
-                "SELECT x_coord, y_coord FROM locations WHERE location_id = %s",
+                "SELECT x_coordinate, y_coordinate FROM locations WHERE location_id = %s",
                 (origin_id,), fetch='one'
             )
             dest_coords = self.db.execute_query(
-                "SELECT x_coord, y_coord FROM locations WHERE location_id = %s", 
+                "SELECT x_coordinate, y_coordinate FROM locations WHERE location_id = %s", 
                 (dest_id,), fetch='one'
             )
             
@@ -1852,7 +1852,7 @@ class CreationCog(commands.Cog):
             connection_info = None
             if connect_to:
                 connection_info = self.db.execute_query(
-                    """SELECT location_id, name, x_coord, y_coord, location_type, system_name
+                    """SELECT location_id, name, x_coordinate, y_coordinate, location_type, system_name
                        FROM locations 
                        WHERE LOWER(name) LIKE LOWER(%s)""",
                     (f"%{connect_to}%",),
@@ -1883,15 +1883,15 @@ class CreationCog(commands.Cog):
                     # Generate nearby coordinates (within local space range)
                     angle = random.uniform(0, 2 * math.pi)
                     distance = random.uniform(2, 8)  # Closer for local space connections
-                    x_coord = conn_x + distance * math.cos(angle)
-                    y_coord = conn_y + distance * math.sin(angle)
+                    x_coordinate = conn_x + distance * math.cos(angle)
+                    y_coordinate = conn_y + distance * math.sin(angle)
                     
                     # Use galaxy generator for other properties but override coordinates and system
                     location_data = galaxy_gen._create_location_data(
                         location_name, location_type, system_name, establishment_date
                     )
-                    location_data['x_coord'] = x_coord
-                    location_data['y_coord'] = y_coord
+                    location_data['x_coordinate'] = x_coordinate
+                    location_data['y_coordinate'] = y_coordinate
                     location_data['system_name'] = system_name
                 else:
                     # Normal location creation logic
@@ -1902,12 +1902,12 @@ class CreationCog(commands.Cog):
             # If no specific connection, find nearest location and potentially adjust positioning
             if not connection_id:
                 nearest = self.db.execute_query(
-                    """SELECT location_id, name, x_coord, y_coord, location_type, system_name,
-                       SQRT(POWER(x_coord - %s, 2) + POWER(y_coord - %s, 2)) as distance
+                    """SELECT location_id, name, x_coordinate, y_coordinate, location_type, system_name,
+                       SQRT(POWER(x_coordinate - %s, 2) + POWER(y_coordinate - %s, 2)) as distance
                        FROM locations 
                        ORDER BY distance 
                        LIMIT 1""",
-                    (location_data['x_coord'], location_data['y_coord']),
+                    (location_data['x_coordinate'], location_data['y_coordinate']),
                     fetch='one'
                 )
                 if nearest:
@@ -1922,12 +1922,12 @@ class CreationCog(commands.Cog):
                         # Generate nearby coordinates for gate connections
                         angle = random.uniform(0, 2 * math.pi)
                         distance = random.uniform(2, 8)  # Closer for local space connections
-                        x_coord = nearest_x + distance * math.cos(angle)
-                        y_coord = nearest_y + distance * math.sin(angle)
+                        x_coordinate = nearest_x + distance * math.cos(angle)
+                        y_coordinate = nearest_y + distance * math.sin(angle)
                         
                         # Update location data
-                        location_data['x_coord'] = x_coord
-                        location_data['y_coord'] = y_coord
+                        location_data['x_coordinate'] = x_coordinate
+                        location_data['y_coordinate'] = y_coordinate
                         location_data['system_name'] = system_name
             
             if not connection_id:
@@ -1942,7 +1942,7 @@ class CreationCog(commands.Cog):
                 conn,
                 """INSERT INTO locations 
                    (name, location_type, description, wealth_level, population,
-                    x_coord, y_coord, system_name,
+                    x_coordinate, y_coordinate, system_name,
                     has_jobs, has_shops, has_medical, has_repairs, has_fuel, 
                     has_upgrades, has_shipyard, has_federal_supplies, has_black_market,
                     created_at, is_generated, is_derelict)
@@ -1953,8 +1953,8 @@ class CreationCog(commands.Cog):
                     location_data['description'],
                     location_data['wealth_level'],
                     location_data['population'],
-                    location_data['x_coord'],
-                    location_data['y_coord'],
+                    location_data['x_coordinate'],
+                    location_data['y_coordinate'],
                     location_data['system_name'],
                     location_data['has_jobs'],
                     location_data['has_shops'],
@@ -2027,7 +2027,7 @@ class CreationCog(commands.Cog):
             await self._create_random_location_corridors(
                 location_id, location_data['name'], location_data['type'],
                 connection_id, connect_to,
-                location_data['x_coord'], location_data['y_coord']
+                location_data['x_coordinate'], location_data['y_coordinate']
             )
             
             # Queue galactic news
@@ -2124,7 +2124,7 @@ class CreationCog(commands.Cog):
         
         # Get connection location details
         connect_info = self.db.execute_query(
-            "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s",
+            "SELECT x_coordinate, y_coordinate, location_type FROM locations WHERE location_id = %s",
             (connect_to_id,),
             fetch='one'
         )
@@ -2177,11 +2177,11 @@ class CreationCog(commands.Cog):
         
         # Find nearby locations (smaller radius for random locations)
         nearby = self.db.execute_query(
-            """SELECT location_id, name, x_coord, y_coord, location_type
+            """SELECT location_id, name, x_coordinate, y_coordinate, location_type
                FROM locations
                WHERE location_id != %s
-               AND ABS(x_coord - %s) < 20
-               AND ABS(y_coord - %s) < 20
+               AND ABS(x_coordinate - %s) < 20
+               AND ABS(y_coordinate - %s) < 20
                ORDER BY RANDOM()
                LIMIT 5""",
             (location_id, x, y),
@@ -2454,7 +2454,7 @@ class CreationCog(commands.Cog):
         
         # Validate both locations exist
         loc1_data = self.db.execute_query(
-            "SELECT location_id, name, location_type, system_name, x_coord, y_coord FROM locations WHERE name = %s",
+            "SELECT location_id, name, location_type, system_name, x_coordinate, y_coordinate FROM locations WHERE name = %s",
             (location1,), fetch='one'
         )
         
@@ -2463,7 +2463,7 @@ class CreationCog(commands.Cog):
             return
         
         loc2_data = self.db.execute_query(
-            "SELECT location_id, name, location_type, system_name, x_coord, y_coord FROM locations WHERE name = %s", 
+            "SELECT location_id, name, location_type, system_name, x_coordinate, y_coordinate FROM locations WHERE name = %s", 
             (location2,), fetch='one'
         )
         
@@ -2589,11 +2589,11 @@ class CreationCog(commands.Cog):
         for corridor_id, name, origin_id, dest_id, old_time, old_fuel_cost in long_routes:
             # Get location coordinates to calculate distance
             origin_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s",
+                "SELECT x_coordinate, y_coordinate, location_type FROM locations WHERE location_id = %s",
                 (origin_id,), fetch='one'
             )
             dest_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s", 
+                "SELECT x_coordinate, y_coordinate, location_type FROM locations WHERE location_id = %s", 
                 (dest_id,), fetch='one'
             )
             
@@ -2688,11 +2688,11 @@ class CreationCog(commands.Cog):
         for corridor_id, name, origin_id, dest_id, old_time, old_fuel_cost in long_routes:
             # Get location coordinates to calculate distance
             origin_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s",
+                "SELECT x_coordinate, y_coordinate, location_type FROM locations WHERE location_id = %s",
                 (origin_id,), fetch='one'
             )
             dest_info = self.db.execute_query(
-                "SELECT x_coord, y_coord, location_type FROM locations WHERE location_id = %s", 
+                "SELECT x_coordinate, y_coordinate, location_type FROM locations WHERE location_id = %s", 
                 (dest_id,), fetch='one'
             )
             
@@ -2751,8 +2751,8 @@ class CreationCog(commands.Cog):
         # Generate gate coordinates near the main location
         angle = random.uniform(0, 2 * math.pi)
         distance = random.uniform(2, 8)  # Close enough for local_space connection
-        gate_x = location_data['x_coord'] + distance * math.cos(angle)
-        gate_y = location_data['y_coord'] + distance * math.sin(angle)
+        gate_x = location_data['x_coordinate'] + distance * math.cos(angle)
+        gate_y = location_data['y_coordinate'] + distance * math.sin(angle)
         
         # Generate gate name
         gate_name = f"{location_data['name']} Gate"
@@ -2762,7 +2762,7 @@ class CreationCog(commands.Cog):
             conn,
             """INSERT INTO locations 
                (name, location_type, description, wealth_level, population,
-                x_coord, y_coord, system_name,
+                x_coordinate, y_coordinate, system_name,
                 has_jobs, has_shops, has_medical, has_repairs, has_fuel, 
                 has_upgrades, has_shipyard,
                 has_federal_supplies, has_black_market,
@@ -2934,7 +2934,7 @@ class LocationDeletionConfirmView(discord.ui.View):
         try:
             # Get location coordinates for finding nearest location
             location_coords = self.cog.db.execute_query(
-                "SELECT x_coord, y_coord FROM locations WHERE location_id = %s",
+                "SELECT x_coordinate, y_coordinate FROM locations WHERE location_id = %s",
                 (self.location_id,),
                 fetch='one'
             )
@@ -2943,17 +2943,17 @@ class LocationDeletionConfirmView(discord.ui.View):
                 await interaction.followup.send("❌ Error: Location data not found.", ephemeral=True)
                 return
             
-            x_coord, y_coord = location_coords
+            x_coordinate, y_coordinate = location_coords
             
             # Find nearest location for news broadcast
             nearest_location = self.cog.db.execute_query(
                 """SELECT location_id, name, 
-                   SQRT(POWER(x_coord - %s, 2) + POWER(y_coord - %s, 2)) as distance
+                   SQRT(POWER(x_coordinate - %s, 2) + POWER(y_coordinate - %s, 2)) as distance
                    FROM locations 
                    WHERE location_id != %s 
                    ORDER BY distance 
                    LIMIT 1""",
-                (x_coord, y_coord, self.location_id),
+                (x_coordinate, y_coordinate, self.location_id),
                 fetch='one'
             )
             

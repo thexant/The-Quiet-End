@@ -139,7 +139,7 @@ class ExportCog(commands.Cog):
         locations = self.db.execute_query("""
             SELECT
                 location_id, name, location_type, description, wealth_level,
-                population, x_coord, y_coord, system_name, established_date,
+                population, x_coordinate, y_coordinate, system_name, established_date,
                 has_jobs, has_shops, has_medical, has_repairs, has_fuel,
                 has_upgrades, has_black_market, is_derelict, gate_status, faction
             FROM locations

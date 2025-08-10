@@ -94,7 +94,7 @@ class WebMapCog(commands.Cog):
         """Refresh all cached data"""
         # Get locations with explicit column names, ordered by type priority then by name for consistency
         locations_data = self.db.execute_query(
-            """SELECT l.location_id, l.name, l.location_type, l.x_coord, l.y_coord,
+            """SELECT l.location_id, l.name, l.location_type, l.x_coordinate, l.y_coordinate,
                       l.system_name, l.wealth_level, l.population, l.description, l.faction,
                       lo.owner_id, lo.docking_fee, c.name as owner_name
                FROM locations l
@@ -167,7 +167,7 @@ class WebMapCog(commands.Cog):
         players_data = self.db.execute_query(
             """SELECT c.user_id, c.name, c.current_location, c.money,
                       t.corridor_id, t.start_time, t.end_time,
-                      l.name as location_name, l.x_coord, l.y_coord,
+                      l.name as location_name, l.x_coordinate, l.y_coordinate,
                       c.level, c.experience
                FROM characters c
                LEFT JOIN travel_sessions t ON c.user_id = t.user_id AND t.status = 'traveling'
@@ -202,7 +202,7 @@ class WebMapCog(commands.Cog):
             """SELECT n.npc_id, n.name, n.callsign, n.current_location,
                       n.destination_location, n.travel_start_time, n.travel_duration,
                       n.alignment, n.is_alive, l.name as location_name,
-                      l.x_coord, l.y_coord
+                      l.x_coordinate, l.y_coordinate
                FROM dynamic_npcs n
                LEFT JOIN locations l ON n.current_location = l.location_id
                WHERE n.is_alive = true""",
@@ -770,7 +770,7 @@ class WebMapCog(commands.Cog):
                 current_time = self.time_system.format_ingame_datetime(current_time_obj)
         # Get detailed location information - removed tech_level and stability
         locations = self.db.execute_query(
-            """SELECT l.location_id, l.name, l.location_type, l.x_coord, l.y_coord,
+            """SELECT l.location_id, l.name, l.location_type, l.x_coordinate, l.y_coordinate,
                       l.system_name, l.wealth_level, l.population, l.description, l.faction,
                       COUNT(DISTINCT c.user_id) as player_count,
                       COUNT(DISTINCT sn.npc_id) as static_npc_count,
