@@ -1660,7 +1660,7 @@ class GalaxyGeneratorCog(commands.Cog):
                             stock = random.randint(1, 2)
                         
                         items_to_insert.append(
-                            (market_id, item_name, item_type, final_price, description, stock)
+                            (market_id, item_name, item_type, final_price, stock, description)
                         )
                     
                     print(f"🕴️  Created {market_type} black market at {location['name']}")
@@ -1677,7 +1677,7 @@ class GalaxyGeneratorCog(commands.Cog):
             # Update the black_market_items table to include stock
             self.db.executemany_in_transaction(
                 conn,
-                '''INSERT INTO black_market_items (market_id, item_name, item_type, price, description, stock)
+                '''INSERT INTO black_market_items (market_id, item_name, item_type, price, stock, description)
                    VALUES (%s, %s, %s, %s, %s, %s)''',
                 items_to_insert
             )
