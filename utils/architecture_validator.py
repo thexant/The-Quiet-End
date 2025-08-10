@@ -385,7 +385,7 @@ class ArchitectureValidator:
                 if not forward_exists:
                     self.db.execute_query(
                         """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated, is_bidirectional)
-                           VALUES (%s, %s, %s, %s, %s, 2, 1, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, 2, TRUE, TRUE, TRUE)""",
                         (f"{gate_name} - {target_name} Corridor", gate_id, target_id, travel_time, fuel_cost)
                     )
                     fixes_made += 1
@@ -396,7 +396,7 @@ class ArchitectureValidator:
                 if not backward_exists:
                     self.db.execute_query(
                         """INSERT INTO corridors (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, is_active, is_generated, is_bidirectional)
-                           VALUES (%s, %s, %s, %s, %s, 2, 1, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, 2, TRUE, TRUE, TRUE)""",
                         (f"{target_name} - {gate_name} Corridor", target_id, gate_id, travel_time, fuel_cost)
                     )
                     fixes_made += 1

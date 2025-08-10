@@ -2767,7 +2767,7 @@ class CreationCog(commands.Cog):
                 has_upgrades, has_shipyard,
                 has_federal_supplies, has_black_market,
                 created_at, is_generated)
-               VALUES (%s, 'gate', %s, %s, %s, %s, %s, %s, 0, 1, 1, 1, 1, 0, 0, 0, 0, NOW(), 0)""",
+               VALUES (%s, 'gate', %s, %s, %s, %s, %s, %s, FALSE, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, NOW(), FALSE)""",
             (
                 gate_name,
                 f"Local gate providing access to {location_data['name']}",
