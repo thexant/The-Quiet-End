@@ -2511,10 +2511,7 @@ class CharacterCog(commands.Cog):
             (user_id,)
         )
         # Group functionality removed
-            
-            if remaining_online == 0:
-                # Last member logging out - could add special handling here
-                print(f"🎯 Group {group_name} has no online members after {char_name} logout")
+        
         # Remove from job tracking
         self.db.execute_query(
             "DELETE FROM job_tracking WHERE user_id = %s",
