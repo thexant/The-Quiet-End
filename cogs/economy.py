@@ -3649,11 +3649,6 @@ class JobDetailView(discord.ui.View):
             await interaction.followup.send("Job is no longer available.", ephemeral=True)
             return
         
-        # Check for group job acceptance if in a group
-        if group_id:
-            await interaction.followup.send("Group job acceptance not supported in this interface. Use `/job accept` command.", ephemeral=True)
-            return
-        
         # Extract job info
         job_id, title, desc, reward, skill, min_level, danger, duration = job
         
