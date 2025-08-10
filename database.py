@@ -171,7 +171,9 @@ class Database:
                 danger_level INTEGER DEFAULT 1,
                 corridor_type TEXT DEFAULT 'ungated',
                 is_active BOOLEAN DEFAULT true,
+                is_generated BOOLEAN DEFAULT false,
                 last_shift TIMESTAMP,
+                next_shift TIMESTAMP,
                 FOREIGN KEY (origin_location) REFERENCES locations (location_id),
                 FOREIGN KEY (destination_location) REFERENCES locations (location_id)
             )''',
@@ -659,6 +661,33 @@ class Database:
                 UNIQUE(user_id, location_id)
             )''',
             
+            # Black markets table
+            '''CREATE TABLE IF NOT EXISTS black_markets (
+                market_id SERIAL PRIMARY KEY,
+                location_id BIGINT NOT NULL,
+                market_type TEXT DEFAULT 'underground',
+                reputation_required BIGINT DEFAULT 0,
+                is_hidden BOOLEAN DEFAULT true,
+                discovered_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            
+            # Black market items table
+            '''CREATE TABLE IF NOT EXISTS black_market_items (
+                item_id SERIAL PRIMARY KEY,
+                market_id BIGINT NOT NULL,
+                item_name TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                price BIGINT NOT NULL,
+                stock INTEGER DEFAULT 1,
+                max_stock INTEGER DEFAULT 1,
+                refresh_rate INTEGER DEFAULT 60,
+                last_refresh TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                item_description TEXT,
+                FOREIGN KEY (market_id) REFERENCES black_markets (market_id)
+            )''',
+            
             # Travel micro events table
             '''CREATE TABLE IF NOT EXISTS travel_micro_events (
                 event_id SERIAL PRIMARY KEY,
@@ -939,6 +968,8 @@ class Database:
             'ALTER TABLE corridors ADD COLUMN IF NOT EXISTS fuel_cost INTEGER DEFAULT 20',
             'ALTER TABLE corridors ADD COLUMN IF NOT EXISTS corridor_type TEXT DEFAULT \'ungated\'',
             'ALTER TABLE corridors ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true',
+            'ALTER TABLE corridors ADD COLUMN IF NOT EXISTS is_generated BOOLEAN DEFAULT false',
+            'ALTER TABLE corridors ADD COLUMN IF NOT EXISTS next_shift TIMESTAMP',
             # Jobs table columns
             'ALTER TABLE jobs ADD COLUMN IF NOT EXISTS job_status TEXT DEFAULT \'available\'',
             'ALTER TABLE jobs ADD COLUMN IF NOT EXISTS danger_level INTEGER DEFAULT 1',
