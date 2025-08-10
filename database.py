@@ -954,10 +954,10 @@ class Database:
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS system_name TEXT',
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS faction TEXT DEFAULT \'Independent\'',
             
-            # Coordinate data migration - copy from old x_coord, y_coord to new x_coordinate, y_coordinate
-            '''UPDATE locations 
-             SET x_coordinate = COALESCE(x_coord, 0), y_coordinate = COALESCE(y_coord, 0) 
-             WHERE (x_coordinate IS NULL OR x_coordinate = 0) AND (x_coord IS NOT NULL OR y_coord IS NOT NULL)''',
+            # Coordinate data migration - DISABLED: x_coord/y_coord columns don't exist in PostgreSQL schema
+            # '''UPDATE locations 
+            #  SET x_coordinate = COALESCE(x_coord, 0), y_coordinate = COALESCE(y_coord, 0) 
+            #  WHERE (x_coordinate IS NULL OR x_coordinate = 0) AND (x_coord IS NOT NULL OR y_coord IS NOT NULL)''',
             # Travel sessions table columns
             'ALTER TABLE travel_sessions ADD COLUMN IF NOT EXISTS corridor_id INTEGER',
             'ALTER TABLE travel_sessions ADD COLUMN IF NOT EXISTS temp_channel_id BIGINT',
