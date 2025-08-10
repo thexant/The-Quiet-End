@@ -335,7 +335,7 @@ class Database:
                 robbery_id SERIAL PRIMARY KEY,
                 robber_id BIGINT NOT NULL,
                 victim_id BIGINT NOT NULL,
-                location_id BIGINT NOT NULL,
+                location_id INTEGER NOT NULL,
                 message_id BIGINT,
                 channel_id BIGINT,
                 expires_at TIMESTAMP NOT NULL,
@@ -667,9 +667,9 @@ class Database:
             # Black markets table
             '''CREATE TABLE IF NOT EXISTS black_markets (
                 market_id SERIAL PRIMARY KEY,
-                location_id BIGINT NOT NULL,
+                location_id INTEGER NOT NULL,
                 market_type TEXT DEFAULT 'underground',
-                reputation_required BIGINT DEFAULT 0,
+                reputation_required INTEGER DEFAULT 0,
                 is_hidden BOOLEAN DEFAULT true,
                 discovered_by TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -679,10 +679,10 @@ class Database:
             # Black market items table
             '''CREATE TABLE IF NOT EXISTS black_market_items (
                 item_id SERIAL PRIMARY KEY,
-                market_id BIGINT NOT NULL,
+                market_id INTEGER NOT NULL,
                 item_name TEXT NOT NULL,
                 item_type TEXT NOT NULL,
-                price BIGINT NOT NULL,
+                price INTEGER NOT NULL,
                 stock INTEGER DEFAULT 1,
                 max_stock INTEGER DEFAULT 1,
                 refresh_rate INTEGER DEFAULT 60,
@@ -968,6 +968,150 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
+            
+            # Sub-locations table for location subdivisions
+            '''CREATE TABLE IF NOT EXISTS sub_locations (
+                sub_location_id SERIAL PRIMARY KEY,
+                parent_location_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                sub_type TEXT,
+                description TEXT,
+                thread_id BIGINT,
+                channel_id BIGINT,
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (parent_location_id) REFERENCES locations (location_id)
+            )''',
+            
+            # Home activities table
+            '''CREATE TABLE IF NOT EXISTS home_activities (
+                activity_id SERIAL PRIMARY KEY,
+                home_id INTEGER NOT NULL,
+                activity_type TEXT,
+                activity_name TEXT,
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (home_id) REFERENCES location_homes (home_id)
+            )''',
+            
+            # Location logs table for location history
+            '''CREATE TABLE IF NOT EXISTS location_logs (
+                log_id SERIAL PRIMARY KEY,
+                location_id INTEGER NOT NULL,
+                author_id BIGINT,
+                author_name TEXT,
+                message TEXT,
+                posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_generated BOOLEAN DEFAULT false,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            
+            # Location items table
+            '''CREATE TABLE IF NOT EXISTS location_items (
+                item_id SERIAL PRIMARY KEY,
+                location_id INTEGER NOT NULL,
+                item_name TEXT NOT NULL,
+                item_type TEXT,
+                quantity INTEGER DEFAULT 1,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
+            
+            # Location storage table
+            '''CREATE TABLE IF NOT EXISTS location_storage (
+                storage_id SERIAL PRIMARY KEY,
+                location_id INTEGER NOT NULL,
+                item_name TEXT NOT NULL,
+                item_type TEXT,
+                quantity INTEGER DEFAULT 1,
+                stored_by BIGINT,
+                stored_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                FOREIGN KEY (stored_by) REFERENCES characters (user_id)
+            )''',
+            
+            # Location income log table
+            '''CREATE TABLE IF NOT EXISTS location_income_log (
+                income_id SERIAL PRIMARY KEY,
+                location_id INTEGER NOT NULL,
+                income_amount INTEGER NOT NULL,
+                income_source TEXT,
+                collected_by BIGINT,
+                collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                FOREIGN KEY (collected_by) REFERENCES characters (user_id)
+            )''',
+            
+            # Location access control table
+            '''CREATE TABLE IF NOT EXISTS location_access_control (
+                access_id SERIAL PRIMARY KEY,
+                location_id INTEGER NOT NULL,
+                user_id BIGINT NOT NULL,
+                access_level TEXT DEFAULT 'visitor',
+                granted_by BIGINT,
+                granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                FOREIGN KEY (granted_by) REFERENCES characters (user_id),
+                UNIQUE(location_id, user_id)
+            )''',
+            
+            # Location upgrades table
+            '''CREATE TABLE IF NOT EXISTS location_upgrades (
+                upgrade_id SERIAL PRIMARY KEY,
+                location_id INTEGER NOT NULL,
+                upgrade_type TEXT NOT NULL,
+                upgrade_name TEXT NOT NULL,
+                upgrade_level INTEGER DEFAULT 1,
+                purchased_by BIGINT,
+                purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id),
+                FOREIGN KEY (purchased_by) REFERENCES characters (user_id)
+            )''',
+            
+            # NPC trade inventory table
+            '''CREATE TABLE IF NOT EXISTS npc_trade_inventory (
+                inventory_id SERIAL PRIMARY KEY,
+                npc_id INTEGER NOT NULL,
+                npc_type TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                quantity INTEGER DEFAULT 1,
+                price INTEGER DEFAULT 10,
+                UNIQUE(npc_id, npc_type, item_name)
+            )''',
+            
+            # NPC jobs table
+            '''CREATE TABLE IF NOT EXISTS npc_jobs (
+                job_id SERIAL PRIMARY KEY,
+                npc_id INTEGER NOT NULL,
+                npc_type TEXT NOT NULL,
+                job_title TEXT NOT NULL,
+                job_description TEXT,
+                reward_money INTEGER DEFAULT 100,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''',
+            
+            # NPC job completions table
+            '''CREATE TABLE IF NOT EXISTS npc_job_completions (
+                completion_id SERIAL PRIMARY KEY,
+                job_id INTEGER NOT NULL,
+                completed_by BIGINT NOT NULL,
+                completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (job_id) REFERENCES npc_jobs (job_id),
+                FOREIGN KEY (completed_by) REFERENCES characters (user_id)
+            )''',
+            
+            # Galactic history table
+            '''CREATE TABLE IF NOT EXISTS galactic_history (
+                history_id SERIAL PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                event_description TEXT NOT NULL,
+                location_id INTEGER,
+                occurred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (location_id) REFERENCES locations (location_id)
+            )''',
         ]
         
         # Execute schema creation
@@ -1015,10 +1159,14 @@ class Database:
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS system_name TEXT',
             'ALTER TABLE locations ADD COLUMN IF NOT EXISTS faction TEXT DEFAULT \'Independent\'',
             
-            # Coordinate data migration - DISABLED: x_coord/y_coord columns don't exist in PostgreSQL schema
-            # '''UPDATE locations 
-            #  SET x_coordinate = COALESCE(x_coord, 0), y_coordinate = COALESCE(y_coord, 0) 
-            #  WHERE (x_coordinate IS NULL OR x_coordinate = 0) AND (x_coord IS NOT NULL OR y_coord IS NOT NULL)''',
+            # Drop duplicate coordinate columns after ensuring data is migrated
+            '''UPDATE locations 
+               SET x_coordinate = COALESCE(x_coordinate, x_coord, 0), 
+                   y_coordinate = COALESCE(y_coordinate, y_coord, 0) 
+               WHERE x_coordinate IS NULL OR y_coordinate IS NULL''',
+            'ALTER TABLE locations DROP COLUMN IF EXISTS x_coord',
+            'ALTER TABLE locations DROP COLUMN IF EXISTS y_coord',
+            
             # Travel sessions table columns
             'ALTER TABLE travel_sessions ADD COLUMN IF NOT EXISTS corridor_id INTEGER',
             'ALTER TABLE travel_sessions ADD COLUMN IF NOT EXISTS temp_channel_id BIGINT',
@@ -1034,6 +1182,13 @@ class Database:
             'ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS metadata TEXT',
             # Clean up redundant stock_quantity column (use stock instead)
             'ALTER TABLE shop_items DROP COLUMN IF EXISTS stock_quantity',
+            
+            # Fix data type mismatches for foreign keys
+            'ALTER TABLE pending_robberies ALTER COLUMN location_id TYPE INTEGER USING location_id::INTEGER',
+            'ALTER TABLE black_markets ALTER COLUMN location_id TYPE INTEGER USING location_id::INTEGER',
+            'ALTER TABLE black_markets ALTER COLUMN reputation_required TYPE INTEGER USING reputation_required::INTEGER',
+            'ALTER TABLE black_market_items ALTER COLUMN market_id TYPE INTEGER USING market_id::INTEGER',
+            'ALTER TABLE black_market_items ALTER COLUMN price TYPE INTEGER USING price::INTEGER',
         ]
         
         for migration_sql in column_migrations:
