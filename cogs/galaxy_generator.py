@@ -8220,9 +8220,9 @@ class GalaxyGeneratorCog(commands.Cog):
                 
                 # Reduced corridor creation: Only essential approach, main route, and arrival
                 corridors_to_insert.extend([
-                    (f"{name} Approach", loc1_id, og_id, approach_time, int(fuel*0.3), 1, True, True),
-                    (name, og_id, dg_id, main_time, int(fuel*0.4), danger, True, True),
-                    (f"{name} Arrival", dg_id, loc2_id, approach_time, int(fuel*0.3), 1, True, True),
+                    (f"{name} Approach", loc1_id, og_id, approach_time, int(fuel*0.3), 1, 'local_space', True, True),
+                    (name, og_id, dg_id, main_time, int(fuel*0.4), danger, 'gated', True, True),
+                    (f"{name} Arrival", dg_id, loc2_id, approach_time, int(fuel*0.3), 1, 'local_space', True, True),
                 ])
                 corridors_created += 3
             else:
@@ -8231,8 +8231,8 @@ class GalaxyGeneratorCog(commands.Cog):
                 ungated_danger = min(5, danger + 2)
                 ungated_fuel = int(fuel * 0.7)
                 corridors_to_insert.extend([
-                    (f"{name} (Ungated)", loc1_id, loc2_id, ungated_time, ungated_fuel, ungated_danger, True, True),
-                    (f"{name} Return (Ungated)", loc2_id, loc1_id, ungated_time, ungated_fuel, ungated_danger, True, True),
+                    (f"{name} (Ungated)", loc1_id, loc2_id, ungated_time, ungated_fuel, ungated_danger, 'ungated', True, True),
+                    (f"{name} Return (Ungated)", loc2_id, loc1_id, ungated_time, ungated_fuel, ungated_danger, 'ungated', True, True),
                 ])
                 corridors_created += 2
             
@@ -8280,8 +8280,8 @@ class GalaxyGeneratorCog(commands.Cog):
                     return  # Skip this batch instead of crashing
         try:
             query = '''INSERT INTO corridors (name, origin_location, destination_location, 
-                       travel_time, fuel_cost, danger_level, is_active, is_generated) 
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)'''
+                       travel_time, fuel_cost, danger_level, corridor_type, is_active, is_generated) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)'''
             self.db.executemany_in_transaction(micro_conn, query, batch_data)
             self.db.commit_transaction(micro_conn)
         except Exception as e:
