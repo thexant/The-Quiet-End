@@ -844,9 +844,9 @@ class EconomyCog(commands.Cog):
             )
         else:
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                (interaction.user.id, actual_name, item_type, quantity, description, price, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (interaction.user.id, actual_name, item_type, quantity, description, price, metadata, False, None, None)
             )
         embed = discord.Embed(
             title="✅ Purchase Successful",
@@ -3363,9 +3363,9 @@ class ShopBuyQuantityView(discord.ui.View):
             )
         else:
             econ_cog.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                (interaction.user.id, actual_name, item_type, self.quantity, description, price, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (interaction.user.id, actual_name, item_type, self.quantity, description, price, metadata, False, None, None)
             )
         
         embed = discord.Embed(
@@ -4441,9 +4441,9 @@ class FederalDepotQuantityView(discord.ui.View):
             )
         else:
             self.bot.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, value, description)
-                   VALUES (%s, %s, %s, %s, %s, %s)''',
-                (interaction.user.id, self.item_name, self.item_type, self.quantity, item_value, self.description)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, value, description, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (interaction.user.id, self.item_name, self.item_type, self.quantity, item_value, self.description, None, False, None, None)
             )
         
         # Update stock if not unlimited
@@ -4584,9 +4584,9 @@ class BlackMarketQuantityView(discord.ui.View):
             )
         else:
             self.bot.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, value, description)
-                   VALUES (%s, %s, %s, %s, %s, %s)''',
-                (interaction.user.id, self.item_name, self.item_type, self.quantity, item_value, self.description)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, value, description, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (interaction.user.id, self.item_name, self.item_type, self.quantity, item_value, self.description, None, False, None, None)
             )
         
         # Update stock if not unlimited

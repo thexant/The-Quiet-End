@@ -278,10 +278,10 @@ async def create_random_character(bot, interaction: discord.Interaction):
             quantity = 5 if item_name == "Emergency Rations" else 1
             
             bot.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, item_name, item_def["type"], quantity, 
-                 item_def["description"], item_def["base_value"], metadata)
+                 item_def["description"], item_def["base_value"], metadata, False, None, None)
             )
     
     # Get location info for response
@@ -606,10 +606,10 @@ class CharacterCreationModal(discord.ui.Modal):
                 quantity = 5 if item_name == "Emergency Rations" else 1
                 
                 self.bot.db.execute_query(
-                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)''',
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
                     (interaction.user.id, item_name, item_def["type"], quantity, 
-                     item_def["description"], item_def["base_value"], metadata)
+                     item_def["description"], item_def["base_value"], metadata, False, None, None)
                 )
         
         # Get location info for response

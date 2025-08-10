@@ -1862,9 +1862,9 @@ class NPCTradeSelectView(discord.ui.View):
             metadata = ItemConfig.create_item_metadata(item_name)
             
             self.bot.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, metadata)
-                   VALUES (%s, %s, %s, 1, %s, %s)''',
-                (interaction.user.id, item_name, item_type, description, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, metadata, value, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, 1, %s, %s, %s, %s, %s, %s)''',
+                (interaction.user.id, item_name, item_type, description, metadata, 0, False, None, None)
             )
         
         # Update NPC inventory

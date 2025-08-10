@@ -463,9 +463,9 @@ class ItemUsageCog(commands.Cog):
                 )
             else:
                 self.db.execute_query(
-                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (%s, 'Active: Security Bypass', 'effect', 1, 'Bypassing security checks', 0, %s)''',
-                    (user_id, metadata)
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                       VALUES (%s, 'Active: Security Bypass', 'effect', 1, 'Bypassing security checks', 0, %s, %s, %s, %s)''',
+                    (user_id, metadata, False, None, None)
                 )
             
             expire_dt = safe_datetime_parse(expire_time).replace(tzinfo=timezone.utc)
@@ -506,9 +506,9 @@ class ItemUsageCog(commands.Cog):
             
             # Add permanent federal access
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, 'Active: Federal Access', 'permit', 1, 'Authorized federal personnel', 0, %s)''',
-                (user_id, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, 'Active: Federal Access', 'permit', 1, 'Authorized federal personnel', 0, %s, %s, %s, %s)''',
+                (user_id, metadata, False, None, None)
             )
             
             return {"success": True, "message": "Federal ID activated. You now have permanent access to federal facilities."}
@@ -527,9 +527,9 @@ class ItemUsageCog(commands.Cog):
                     return {"success": False, "message": "You already have federal communication access!"}
                 
                 self.db.execute_query(
-                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (%s, 'Active: Federal Comms', 'permit', 1, 'Federal communication access', 0, %s)''',
-                    (user_id, metadata)
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                       VALUES (%s, 'Active: Federal Comms', 'permit', 1, 'Federal communication access', 0, %s, %s, %s, %s)''',
+                    (user_id, metadata, False, None, None)
                 )
                 
                 return {"success": True, "message": "Federal communication channels unlocked. You can now access classified channels."}
@@ -581,9 +581,9 @@ class ItemUsageCog(commands.Cog):
                 return {"success": False, "message": "You already have a federal permit!"}
             
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, 'Active: Federal Permit', 'permit', 1, 'Access to restricted zones', 0, %s)''',
-                (user_id, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, 'Active: Federal Permit', 'permit', 1, 'Access to restricted zones', 0, %s, %s, %s, %s)''',
+                (user_id, metadata, False, None, None)
             )
             
             return {"success": True, "message": "Federal permit activated. Access to restricted zones granted."}
@@ -605,9 +605,9 @@ class ItemUsageCog(commands.Cog):
             
             # Add new boost
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, 'Active: Scanner Boost', 'effect', 1, 'Enhanced scanning capability', 0, %s)''',
-                (user_id, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, 'Active: Scanner Boost', 'effect', 1, 'Enhanced scanning capability', 0, %s, %s, %s, %s)''',
+                (user_id, metadata, False, None, None)
             )
             
             return {"success": True, "message": f"Scanner array activated. +{effect_value}% search effectiveness for 2 hours."}
@@ -628,9 +628,9 @@ class ItemUsageCog(commands.Cog):
                 )
                 
                 self.db.execute_query(
-                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (%s, 'Active: Security Override', 'effect', 1, 'Federal security bypassed', 0, %s)''',
-                    (user_id, metadata)
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                       VALUES (%s, 'Active: Security Override', 'effect', 1, 'Federal security bypassed', 0, %s, %s, %s, %s)''',
+                    (user_id, metadata, False, None, None)
                 )
                 
                 return {"success": True, "message": "Federal security override activated. Bypass federal security for 4 hours."}
@@ -653,9 +653,9 @@ class ItemUsageCog(commands.Cog):
             )
             
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, 'Active: Combat Stims', 'effect', 1, 'Enhanced combat effectiveness', 0, %s)''',
-                (user_id, boost_metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, 'Active: Combat Stims', 'effect', 1, 'Enhanced combat effectiveness', 0, %s, %s, %s, %s)''',
+                (user_id, boost_metadata, False, None, None)
             )
             
             duration_minutes = duration // 60

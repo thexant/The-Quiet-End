@@ -1403,9 +1403,9 @@ class HomesCog(commands.Cog):
         else:
             self.db.execute_query(
                 '''INSERT INTO inventory 
-                   (owner_id, item_name, item_type, quantity, description, value)
-                   VALUES (%s, %s, %s, %s, %s, %s)''',
-                (interaction.user.id, actual_name, item_type, quantity, description, value)
+                   (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (interaction.user.id, actual_name, item_type, quantity, description, value, None, False, None, None)
             )
         
         embed = discord.Embed(

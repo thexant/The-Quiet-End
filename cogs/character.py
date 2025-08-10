@@ -1654,10 +1654,10 @@ class CharacterCog(commands.Cog):
                         metadata = ItemConfig.create_item_metadata(actual_name)
                         self.db.execute_query(
                             '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, 
-                               description, value, metadata)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s)''',
+                               description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
                             (interaction.user.id, actual_name, item_def["type"], actual_quantity,
-                             item_def["description"], item_def["base_value"], metadata)
+                             item_def["description"], item_def["base_value"], metadata, False, None, None)
                         )
                     
                     items_added.append(f"{actual_quantity}x **{actual_name}**")
@@ -1684,10 +1684,10 @@ class CharacterCog(commands.Cog):
                                 
                                 self.db.execute_query(
                                     '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, 
-                                       description, value, metadata)
-                                       VALUES (%s, %s, %s, %s, %s, %s, %s)''',
+                                       description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
                                     (interaction.user.id, actual_name, dropped[1], actual_quantity,
-                                     dropped[3], dropped[4], metadata)
+                                     dropped[3], dropped[4], metadata, False, None, None)
                                 )
                             
                             items_added.append(f"{actual_quantity}x **{actual_name}**")
@@ -2877,9 +2877,9 @@ class CharacterCog(commands.Cog):
             from utils.item_config import ItemConfig
             metadata = ItemConfig.create_item_metadata(actual_name)
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                (interaction.user.id, actual_name, item_type, quantity, description, value, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (interaction.user.id, actual_name, item_type, quantity, description, value, metadata, False, None, None)
             )
         
         embed = discord.Embed(

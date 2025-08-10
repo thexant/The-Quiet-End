@@ -104,9 +104,9 @@ class ItemTradingCog(commands.Cog):
             )
         else:
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                (player.id, actual_name, item_type, quantity, description, value, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (player.id, actual_name, item_type, quantity, description, value, metadata, False, None, None)
             )
         
         # Send success message to location channels via cross-guild broadcast
@@ -495,9 +495,9 @@ class TradeOfferView(discord.ui.View):
                 )
             else:
                 self.bot.db.execute_query(
-                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                    (self.buyer_id, actual_name, item_type, self.quantity, description, value, metadata)
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                    (self.buyer_id, actual_name, item_type, self.quantity, description, value, metadata, False, None, None)
                 )
             
             # Success embed

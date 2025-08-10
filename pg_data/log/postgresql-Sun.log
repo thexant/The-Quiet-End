@@ -629,3 +629,5 @@
 2025-08-10 13:09:49.890 MDT [76511] STATEMENT:  INSERT INTO ship_activities (ship_id, activity_type, activity_name) VALUES (1, 'test_activity', 'Test Activity') RETURNING activity_id
 2025-08-10 13:09:52.489 MDT [23293] LOG:  checkpoint starting: time
 2025-08-10 13:09:56.146 MDT [23293] LOG:  checkpoint complete: wrote 37 buffers (0.2%); 0 WAL file(s) added, 0 removed, 0 recycled; write=3.607 s, sync=0.041 s, total=3.658 s; sync files=23, longest=0.003 s, average=0.002 s; distance=228 kB, estimate=709 kB; lsn=0/2EAB888, redo lsn=0/2EAB850
+2025-08-10 13:14:52.242 MDT [23293] LOG:  checkpoint starting: time
+2025-08-10 13:14:52.868 MDT [23293] LOG:  checkpoint complete: wrote 7 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.602 s, sync=0.014 s, total=0.626 s; sync files=7, longest=0.003 s, average=0.002 s; distance=17 kB, estimate=640 kB; lsn=0/2EAFDF0, redo lsn=0/2EAFDB8

@@ -2970,9 +2970,9 @@ class SubLocationServiceView(discord.ui.View):
         from utils.item_config import ItemConfig
         metadata = ItemConfig.create_item_metadata(mod_name)
         self.db.execute_query(
-            '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-            (interaction.user.id, mod_name, "ship_modification", 1, description, cost, metadata)
+            '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+            (interaction.user.id, mod_name, "ship_modification", 1, description, cost, metadata, False, None, None)
         )
         
         # Deduct cost
@@ -3381,9 +3381,9 @@ class SubLocationServiceView(discord.ui.View):
         from utils.item_config import ItemConfig
         metadata = ItemConfig.create_item_metadata(item_name)
         self.db.execute_query(
-            '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-            (interaction.user.id, item_name, item_type, 1, description, cost, metadata)
+            '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+            (interaction.user.id, item_name, item_type, 1, description, cost, metadata, False, None, None)
         )
         
         # Deduct cost
@@ -3432,9 +3432,9 @@ class SubLocationServiceView(discord.ui.View):
             from utils.item_config import ItemConfig
             metadata = ItemConfig.create_item_metadata(item_name)
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                (interaction.user.id, item_name, item_type, quantity, description, value, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (interaction.user.id, item_name, item_type, quantity, description, value, metadata, False, None, None)
             )
             
             embed = discord.Embed(
@@ -3945,9 +3945,9 @@ class SubLocationServiceView(discord.ui.View):
             from utils.item_config import ItemConfig
             metadata = ItemConfig.create_item_metadata(item_name)
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                (interaction.user.id, item_name, "medical", 1, description, cost, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (interaction.user.id, item_name, "medical", 1, description, cost, metadata, False, None, None)
             )
             
             # Deduct money
@@ -5107,9 +5107,9 @@ class SubLocationServiceView(discord.ui.View):
             from utils.item_config import ItemConfig
             metadata = ItemConfig.create_item_metadata(item_name)
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                (interaction.user.id, item_name, item_type, quantity, description, value, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (interaction.user.id, item_name, item_type, quantity, description, value, metadata, False, None, None)
             )
             
             embed = discord.Embed(
@@ -6611,9 +6611,9 @@ class SubLocationServiceView(discord.ui.View):
                 value = item_data.get("base_value", 800)
                 
                 self.db.execute_query(
-                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                    (interaction.user.id, item_name, item_type, 1, description, value, metadata)
+                    '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                    (interaction.user.id, item_name, item_type, 1, description, value, metadata, False, None, None)
                 )
                 
                 embed = discord.Embed(
@@ -6639,10 +6639,10 @@ class SubLocationServiceView(discord.ui.View):
             effect_metadata = f'{{"active_until": "{expire_time.isoformat()}", "boost_value": 1, "single_use": false}}'
             
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
                 (interaction.user.id, "Active: Fuel Efficiency Boost", "effect", 1, 
-                 f"Temporary +1 fuel efficiency for next {boost_duration_hours} travel hours", 0, effect_metadata)
+                 f"Temporary +1 fuel efficiency for next {boost_duration_hours} travel hours", 0, effect_metadata, False, None, None)
             )
             
             # Random performance service experiences
@@ -8828,9 +8828,9 @@ class EmergencySupplyPurchaseView(discord.ui.View):
         else:
             # Create new inventory entry
             self.db.execute_query(
-                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                (self.user_id, item_name, item_type, 1, actual_description, self.final_cost, metadata)
+                '''INSERT INTO inventory (owner_id, item_name, item_type, quantity, description, value, metadata, equippable, equipment_slot, stat_modifiers)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (self.user_id, item_name, item_type, 1, actual_description, self.final_cost, metadata, False, None, None)
             )
 
         # Deduct money
