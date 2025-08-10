@@ -1334,21 +1334,21 @@ class Database:
         print("\n🔍 Verifying critical tables...")
         for table in critical_tables:
             try:
-                # Use a simpler query that just counts the table
+                # Use a simpler query that just counts the table - with fetch='one'
                 result = self.execute_query(
-                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = %s",
-                    (table,)
+                    "SELECT COUNT(*) as count FROM information_schema.tables WHERE table_schema = 'public' AND table_name = %s",
+                    (table,),
+                    fetch='one'  # Make sure we fetch the result
                 )
                 # Check if result exists and has the expected structure
                 if result:
-                    if isinstance(result, list) and len(result) > 0:
-                        # Handle dict result (RealDictCursor)
-                        if isinstance(result[0], dict):
-                            exists = result[0]['count'] > 0
-                        # Handle tuple result
-                        else:
-                            exists = result[0] > 0
+                    if isinstance(result, dict):
+                        exists = result.get('count', 0) > 0
+                    elif isinstance(result, (tuple, list)):
+                        exists = result[0] > 0 if len(result) > 0 else False
                     else:
+                        # Unexpected result type
+                        print(f"  ⚠️ Unexpected result type for table '{table}': {type(result)} = {result}")
                         exists = False
                     
                     if exists:
@@ -1356,7 +1356,7 @@ class Database:
                     else:
                         print(f"  ❌ CRITICAL: Table '{table}' does not exist!")
                 else:
-                    print(f"  ❌ Could not verify table '{table}'")
+                    print(f"  ❌ Could not verify table '{table}' - no result returned")
             except Exception as e:
                 print(f"  ⚠️ Error verifying table '{table}': {e}")
         
