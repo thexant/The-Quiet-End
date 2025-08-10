@@ -165,6 +165,16 @@ class Database:
                 speed_rating BIGINT DEFAULT 5
             )''',
             
+            # Ship customization table
+            '''CREATE TABLE IF NOT EXISTS ship_customization (
+                ship_id BIGINT PRIMARY KEY,
+                paint_job TEXT DEFAULT 'Default',
+                decals TEXT DEFAULT 'None',
+                interior_style TEXT DEFAULT 'Standard',
+                name_plate TEXT DEFAULT 'Standard',
+                FOREIGN KEY (ship_id) REFERENCES ships (ship_id)
+            )''',
+            
             # Player ships junction table for ship ownership and storage
             '''CREATE TABLE IF NOT EXISTS player_ships (
                 ship_storage_id SERIAL PRIMARY KEY,

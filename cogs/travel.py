@@ -1521,7 +1521,13 @@ class TravelCog(commands.Cog):
                 await interaction.response.send_message("Current location not found!", ephemeral=True)
                 return
                 
-            current_location_name, current_faction, current_is_derelict = location_info_result
+            # Handle the case where is_derelict column might not exist
+            if len(location_info_result) == 3:
+                current_location_name, current_faction, current_is_derelict = location_info_result
+            else:
+                # Fallback if is_derelict column doesn't exist
+                current_location_name, current_faction = location_info_result
+                current_is_derelict = False
             # Get routes with location types, faction info, and system info for proper classification (including bidirectional)
             routes = self.db.execute_query(
                 '''SELECT c.corridor_id,
