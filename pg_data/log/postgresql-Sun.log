@@ -580,3 +580,7 @@
 2025-08-10 09:44:49.484 MDT [23291] LOG:  database system is ready to accept connections
 2025-08-10 09:49:49.542 MDT [23293] LOG:  checkpoint starting: time
 2025-08-10 09:49:54.282 MDT [23293] LOG:  checkpoint complete: wrote 50 buffers (0.3%); 0 WAL file(s) added, 0 removed, 0 recycled; write=4.710 s, sync=0.020 s, total=4.740 s; sync files=41, longest=0.003 s, average=0.001 s; distance=304 kB, estimate=304 kB; lsn=0/2B1F288, redo lsn=0/2B1F250
+2025-08-10 09:54:49.284 MDT [23293] LOG:  checkpoint starting: time
+2025-08-10 09:54:57.283 MDT [23293] LOG:  checkpoint complete: wrote 80 buffers (0.5%); 0 WAL file(s) added, 0 removed, 0 recycled; write=7.915 s, sync=0.073 s, total=7.999 s; sync files=47, longest=0.003 s, average=0.002 s; distance=477 kB, estimate=477 kB; lsn=0/2B96820, redo lsn=0/2B967E8
+2025-08-10 09:59:49.383 MDT [23293] LOG:  checkpoint starting: time
+2025-08-10 09:59:49.999 MDT [23293] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.602 s, sync=0.005 s, total=0.617 s; sync files=2, longest=0.004 s, average=0.003 s; distance=8 kB, estimate=430 kB; lsn=0/2B98928, redo lsn=0/2B988F0
