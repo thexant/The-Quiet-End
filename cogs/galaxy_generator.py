@@ -638,7 +638,7 @@ class GalaxyGeneratorCog(commands.Cog):
                             '''INSERT INTO corridors 
                                (name, origin_location, destination_location, travel_time, fuel_cost, 
                                 danger_level, is_active, is_generated)
-                               VALUES (%s, %s, %s, %s, %s, %s, 1, 1)''',
+                               VALUES (%s, %s, %s, %s, %s, %s, TRUE, TRUE)''',
                             (name, loc_a['id'], loc_b['id'], travel_time, fuel_cost, danger),
                             fetch='lastrowid'
                         )
@@ -648,7 +648,7 @@ class GalaxyGeneratorCog(commands.Cog):
                             '''INSERT INTO corridors 
                                (name, origin_location, destination_location, travel_time, fuel_cost, 
                                 danger_level, is_active, is_generated)
-                               VALUES (%s, %s, %s, %s, %s, %s, 1, 1)''',
+                               VALUES (%s, %s, %s, %s, %s, %s, TRUE, TRUE)''',
                             (f"{name} Return", loc_b['id'], loc_a['id'], travel_time, fuel_cost, danger),
                             fetch='lastrowid'
                         )
@@ -1630,7 +1630,7 @@ class GalaxyGeneratorCog(commands.Cog):
         if locations_to_flag:
             self.db.executemany_in_transaction(
                 conn,
-                "UPDATE locations SET has_black_market = 1 WHERE location_id = %s",
+                "UPDATE locations SET has_black_market = TRUE WHERE location_id = %s",
                 locations_to_flag
             )
         
@@ -3098,14 +3098,14 @@ class GalaxyGeneratorCog(commands.Cog):
                     self.db.execute_query(
                         """INSERT INTO corridors (name, origin_location, destination_location, 
                            travel_time, fuel_cost, danger_level, is_active, is_generated)
-                           VALUES (%s, %s, %s, %s, %s, %s, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, TRUE, TRUE)""",
                         (corridor_name, gate_id, target_id, main_time, fuel_cost, danger_level)
                     )
                     
                     self.db.execute_query(
                         """INSERT INTO corridors (name, origin_location, destination_location, 
                            travel_time, fuel_cost, danger_level, is_active, is_generated)
-                           VALUES (%s, %s, %s, %s, %s, %s, 1, 1)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, TRUE, TRUE)""",
                         (f"{target_name} - {gate_name} Route", target_id, gate_id, main_time, fuel_cost, danger_level)
                     )
                     
@@ -3625,7 +3625,7 @@ class GalaxyGeneratorCog(commands.Cog):
             query = '''INSERT INTO corridors 
                        (name, origin_location, destination_location, travel_time, fuel_cost, 
                         danger_level, corridor_type, is_active, is_generated)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, 0, 1)'''
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, FALSE, TRUE)'''
             self.db.executemany_in_transaction(micro_conn, query, batch_data)
             self.db.commit_transaction(micro_conn)
         except Exception as e:
@@ -7165,7 +7165,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     '''INSERT INTO corridors 
                        (name, origin_location, destination_location, travel_time, fuel_cost, 
                         danger_level, corridor_type, is_active, is_generated)
-                       VALUES (%s, %s, %s, %s, %s, %s, 'gated', 0, 1)''',
+                       VALUES (%s, %s, %s, %s, %s, %s, 'gated', FALSE, TRUE)''',
                     (f"{corridor_name} (Dormant)", gate_a_id, gate_b_id, travel_time, fuel_cost, danger)
                 )
                 
@@ -7173,7 +7173,7 @@ class GalaxyGeneratorCog(commands.Cog):
                     '''INSERT INTO corridors 
                        (name, origin_location, destination_location, travel_time, fuel_cost, 
                         danger_level, corridor_type, is_active, is_generated)
-                       VALUES (%s, %s, %s, %s, %s, %s, 'gated', 0, 1)''',
+                       VALUES (%s, %s, %s, %s, %s, %s, 'gated', FALSE, TRUE)''',
                     (f"{corridor_name} Return (Dormant)", gate_b_id, gate_a_id, travel_time, fuel_cost, danger)
                 )
                 
@@ -7225,7 +7225,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 '''INSERT INTO corridors 
                    (name, origin_location, destination_location, travel_time, fuel_cost, 
                     danger_level, corridor_type, is_active, is_generated)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'ungated', 0, 1)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, 'ungated', FALSE, TRUE)''',
                 (f"{corridor_name} (Dormant)", loc_a['id'], loc_b['id'], travel_time, fuel_cost, danger)
             )
             
@@ -7233,7 +7233,7 @@ class GalaxyGeneratorCog(commands.Cog):
                 '''INSERT INTO corridors 
                    (name, origin_location, destination_location, travel_time, fuel_cost, 
                     danger_level, corridor_type, is_active, is_generated)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'ungated', 0, 1)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, 'ungated', FALSE, TRUE)''',
                 (f"{corridor_name} Return (Dormant)", loc_b['id'], loc_a['id'], travel_time, fuel_cost, danger)
             )
             
@@ -8166,9 +8166,9 @@ class GalaxyGeneratorCog(commands.Cog):
                 
                 # Reduced corridor creation: Only essential approach, main route, and arrival
                 corridors_to_insert.extend([
-                    (f"{name} Approach", loc1_id, og_id, approach_time, int(fuel*0.3), 1, 1, 1),
-                    (name, og_id, dg_id, main_time, int(fuel*0.4), danger, 1, 1),
-                    (f"{name} Arrival", dg_id, loc2_id, approach_time, int(fuel*0.3), 1, 1, 1),
+                    (f"{name} Approach", loc1_id, og_id, approach_time, int(fuel*0.3), 1, True, True),
+                    (name, og_id, dg_id, main_time, int(fuel*0.4), danger, True, True),
+                    (f"{name} Arrival", dg_id, loc2_id, approach_time, int(fuel*0.3), 1, True, True),
                 ])
                 corridors_created += 3
             else:
@@ -8177,8 +8177,8 @@ class GalaxyGeneratorCog(commands.Cog):
                 ungated_danger = min(5, danger + 2)
                 ungated_fuel = int(fuel * 0.7)
                 corridors_to_insert.extend([
-                    (f"{name} (Ungated)", loc1_id, loc2_id, ungated_time, ungated_fuel, ungated_danger, 1, 1),
-                    (f"{name} Return (Ungated)", loc2_id, loc1_id, ungated_time, ungated_fuel, ungated_danger, 1, 1),
+                    (f"{name} (Ungated)", loc1_id, loc2_id, ungated_time, ungated_fuel, ungated_danger, True, True),
+                    (f"{name} Return (Ungated)", loc2_id, loc1_id, ungated_time, ungated_fuel, ungated_danger, True, True),
                 ])
                 corridors_created += 2
             
@@ -8296,7 +8296,7 @@ class GalaxyGeneratorCog(commands.Cog):
         self.db.execute_query(
             '''INSERT INTO corridors 
                (name, origin_location, destination_location, travel_time, fuel_cost, danger_level, corridor_type, is_generated)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, 1)''',
+               VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)''',
             (name, origin_id, dest_id, travel_time, fuel_cost, danger_level, corridor_type)
         )
         
