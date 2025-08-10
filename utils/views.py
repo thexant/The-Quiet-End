@@ -191,7 +191,7 @@ async def create_random_character(bot, interaction: discord.Interaction):
     for row in rows:
         loc_id = row[0]
         has_route = bot.db.execute_query(
-            "SELECT 1 FROM corridors WHERE (origin_location = %s OR (destination_location = %s AND is_bidirectional = 1)) AND is_active = true LIMIT 1",
+            "SELECT 1 FROM corridors WHERE (origin_location = %s OR (destination_location = %s AND is_bidirectional = true)) AND is_active = true LIMIT 1",
             (loc_id, loc_id),
             fetch='one'
         )
@@ -547,7 +547,7 @@ class CharacterCreationModal(discord.ui.Modal):
         for row in rows:
             loc_id = row[0]
             has_route = self.bot.db.execute_query(
-                "SELECT 1 FROM corridors WHERE (origin_location = %s OR (destination_location = %s AND is_bidirectional = 1)) AND is_active = true LIMIT 1",
+                "SELECT 1 FROM corridors WHERE (origin_location = %s OR (destination_location = %s AND is_bidirectional = true)) AND is_active = true LIMIT 1",
                 (loc_id, loc_id),
                 fetch='one'
             )
@@ -3157,7 +3157,7 @@ class EphemeralLocationView(discord.ui.View):
                JOIN locations l_dest ON c.destination_location = l_dest.location_id
                JOIN locations l_orig ON c.origin_location = l_orig.location_id
                JOIN locations lo ON %s = lo.location_id
-               WHERE (c.origin_location = %s OR (c.destination_location = %s AND c.is_bidirectional = 1)) 
+               WHERE (c.origin_location = %s OR (c.destination_location = %s AND c.is_bidirectional = true)) 
                AND c.is_active = true
                ORDER BY c.travel_time
                LIMIT 8''',

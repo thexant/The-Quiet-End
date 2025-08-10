@@ -964,7 +964,7 @@ class ChannelManager:
                JOIN locations l_dest ON c.destination_location = l_dest.location_id
                JOIN locations l_orig ON c.origin_location = l_orig.location_id
                JOIN locations lo ON %s = lo.location_id
-               WHERE (c.origin_location = %s OR (c.destination_location = %s AND c.is_bidirectional = 1)) 
+               WHERE (c.origin_location = %s OR (c.destination_location = %s AND c.is_bidirectional = true)) 
                AND c.is_active = true
                ORDER BY c.travel_time''',
             (loc_id, loc_id, loc_id, loc_id, loc_id, loc_id, loc_id),

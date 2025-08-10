@@ -2482,7 +2482,7 @@ class CreationCog(commands.Cog):
         existing_route = self.db.execute_query(
             """SELECT corridor_id FROM corridors 
                WHERE (origin_location = %s AND destination_location = %s) 
-               OR (origin_location = %s AND destination_location = %s AND is_bidirectional = 1)""",
+               OR (origin_location = %s AND destination_location = %s AND is_bidirectional = true)""",
             (loc1_id, loc2_id, loc2_id, loc1_id), fetch='one'
         )
         
