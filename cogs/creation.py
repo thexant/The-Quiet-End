@@ -2345,7 +2345,7 @@ class CreationCog(commands.Cog):
         
         # Find the location
         location = self.db.execute_query(
-            "SELECT location_id, name, population, location_type, COALESCE(is_derelict, 0) FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
+            "SELECT location_id, name, population, location_type, COALESCE(is_derelict, false) FROM locations WHERE LOWER(name) LIKE LOWER(%s)",
             (f"%{location_name}%",),
             fetch='one'
         )

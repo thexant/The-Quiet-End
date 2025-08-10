@@ -1512,7 +1512,7 @@ class TravelCog(commands.Cog):
             
             # Get current location name and faction info with error checking
             location_info_result = self.db.execute_query(
-                "SELECT name, COALESCE(faction, 'Independent'), COALESCE(is_derelict, 0) FROM locations WHERE location_id = %s",
+                "SELECT name, COALESCE(faction, 'Independent'), COALESCE(is_derelict, false) FROM locations WHERE location_id = %s",
                 (current_location_id,),
                 fetch='one'
             )
@@ -1547,8 +1547,8 @@ class TravelCog(commands.Cog):
                               ELSE COALESCE(l_orig.faction, 'Independent')
                           END AS dest_faction,
                           CASE 
-                              WHEN c.origin_location = %s THEN COALESCE(l_dest.is_derelict, 0)
-                              ELSE COALESCE(l_orig.is_derelict, 0)
+                              WHEN c.origin_location = %s THEN COALESCE(l_dest.is_derelict, false)
+                              ELSE COALESCE(l_orig.is_derelict, false)
                           END AS dest_is_derelict
                    FROM corridors c
                    JOIN locations l_dest ON c.destination_location = l_dest.location_id
