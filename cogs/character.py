@@ -1578,7 +1578,7 @@ class CharacterCog(commands.Cog):
         # Check for dropped items at this location FIRST
         dropped_items = self.db.execute_query(
             '''SELECT item_name, item_type, SUM(quantity) as total_quantity, 
-                      MAX(description) as description, MAX(value) as value
+                      MAX(description) as description
                FROM location_items 
                WHERE location_id = %s
                GROUP BY item_name, item_type
@@ -1595,7 +1595,7 @@ class CharacterCog(commands.Cog):
         found_items = []
 
         # Add dropped items first (guaranteed finds)
-        for item_name, item_type, quantity, description, value in dropped_items:
+        for item_name, item_type, quantity, description in dropped_items:
             found_items.append((item_name, quantity))
             
             # Remove the dropped items from the location

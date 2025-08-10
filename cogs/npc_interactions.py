@@ -1281,15 +1281,21 @@ class NPCActionView(discord.ui.View):
             await interaction.response.send_message("This is not your interaction!", ephemeral=True)
             return
         # Get available jobs from this NPC
-        jobs = self.bot.db.execute_query(
-            '''SELECT npc_job_id, job_title, job_description, reward_money, reward_items,
-                      required_skill, min_skill_level, danger_level, duration_minutes
-               FROM npc_jobs 
-               WHERE npc_id = %s AND npc_type = %s AND is_available = true 
-               AND (expires_at IS NULL OR expires_at > NOW())''',
-            (self.npc_id, self.npc_type),
-            fetch='all'
-        )
+        try:
+            jobs = self.bot.db.execute_query(
+                '''SELECT job_id, job_title, job_description, reward_money, reward_items,
+                          required_skill, min_skill_level, danger_level, duration_minutes
+                   FROM npc_jobs 
+                   WHERE npc_id = %s AND npc_type = %s AND is_available = true 
+                   AND (expires_at IS NULL OR expires_at > NOW())''',
+                (self.npc_id, self.npc_type),
+                fetch='all'
+            )
+        except Exception as e:
+            # Handle database schema errors gracefully
+            print(f"Error fetching NPC jobs: {e}")
+            await interaction.response.send_message("Unable to load jobs at this time. Please try again.", ephemeral=True)
+            return
         
         if not jobs:
             # Generate jobs if none exist
@@ -1304,7 +1310,7 @@ class NPCActionView(discord.ui.View):
                     await npc_cog.generate_npc_jobs(self.npc_id, self.npc_type, 0, occupation[0])
                     
                     jobs = self.bot.db.execute_query(
-                        '''SELECT npc_job_id, job_title, job_description, reward_money, reward_items,
+                        '''SELECT job_id, job_title, job_description, reward_money, reward_items,
                                   required_skill, min_skill_level, danger_level, duration_minutes
                            FROM npc_jobs 
                            WHERE npc_id = %s AND npc_type = %s AND is_available = true''',
@@ -1323,7 +1329,7 @@ class NPCActionView(discord.ui.View):
         )
         
         for job in jobs[:5]:  # Show up to 5 jobs
-            npc_job_id, title, desc, reward_money, reward_items, skill, min_skill, danger, duration = job
+            job_id, title, desc, reward_money, reward_items, skill, min_skill, danger, duration = job
             
             reward_text = f"{reward_money:,} credits"
             if reward_items:
@@ -1350,7 +1356,7 @@ class NPCActionView(discord.ui.View):
         
         # Get NPC's trade inventory
         trade_items = self.bot.db.execute_query(
-            '''SELECT trade_item_id, item_name, quantity, price_credits, trade_for_item,
+            '''SELECT inventory_id, item_name, quantity, price_credits, trade_for_item,
                       trade_quantity_required, rarity, description
                FROM npc_trade_inventory 
                WHERE npc_id = %s AND npc_type = %s AND is_available = true 
@@ -1373,7 +1379,7 @@ class NPCActionView(discord.ui.View):
                     await npc_cog.generate_npc_trade_inventory(self.npc_id, self.npc_type, specialty)
                     
                     trade_items = self.bot.db.execute_query(
-                        '''SELECT trade_item_id, item_name, quantity, price_credits, trade_for_item,
+                        '''SELECT inventory_id, item_name, quantity, price_credits, trade_for_item,
                                   trade_quantity_required, rarity, description
                            FROM npc_trade_inventory 
                            WHERE npc_id = %s AND npc_type = %s AND is_available = true 
@@ -1393,7 +1399,7 @@ class NPCActionView(discord.ui.View):
         )
         
         for item in trade_items[:8]:  # Show up to 8 items
-            trade_item_id, name, quantity, price_credits, trade_for_item, trade_quantity_required, rarity, description = item
+            inventory_id, name, quantity, price_credits, trade_for_item, trade_quantity_required, rarity, description = item
             
             rarity_emoji = {"common": "⚪", "uncommon": "🟢", "rare": "🔵", "legendary": "🟣"}[rarity]
             
@@ -1468,7 +1474,7 @@ class NPCJobSelectView(discord.ui.View):
         if jobs:
             options = []
             for job in jobs[:25]:  # Discord limit
-                npc_job_id, title, desc, reward_money, reward_items, skill, min_skill, danger, duration = job
+                job_id, title, desc, reward_money, reward_items, skill, min_skill, danger, duration = job
                 
                 reward_text = f"{reward_money:,} credits"
                 if reward_items:
@@ -1482,7 +1488,7 @@ class NPCJobSelectView(discord.ui.View):
                     discord.SelectOption(
                         label=f"{title} - {reward_text}",
                         description=f"{desc[:50]}{'...' if len(desc) > 50 else ''} {duration}min{skill_text} {danger_text}"[:100],
-                        value=str(npc_job_id)
+                        value=str(job_id)
                     )
                 )
             
@@ -1523,7 +1529,7 @@ class NPCJobSelectView(discord.ui.View):
             await interaction.response.send_message("This is not your interaction!", ephemeral=True)
             return
         
-        npc_job_id = int(interaction.data['values'][0])
+        job_id = int(interaction.data['values'][0])
         
         # Check if user already has an active job
         has_job = self.bot.db.execute_query(
@@ -1540,8 +1546,8 @@ class NPCJobSelectView(discord.ui.View):
         job_info = self.bot.db.execute_query(
             '''SELECT job_title, job_description, reward_money, reward_items, required_skill, 
                       min_skill_level, danger_level, duration_minutes
-               FROM npc_jobs WHERE npc_job_id = %s''',
-            (npc_job_id,),
+               FROM npc_jobs WHERE job_id = %s''',
+            (job_id,),
             fetch='one'
         )
         
@@ -1647,30 +1653,30 @@ class NPCJobSelectView(discord.ui.View):
             # Record completion for tracking
             self.bot.db.execute_in_transaction(
                 conn,
-                "INSERT INTO npc_job_completions (npc_job_id, user_id) VALUES (%s, %s)",
-                (npc_job_id, interaction.user.id)
+                "INSERT INTO npc_job_completions (job_id, user_id) VALUES (%s, %s)",
+                (job_id, interaction.user.id)
             )
             
             # Update completion count
             self.bot.db.execute_in_transaction(
                 conn,
-                "UPDATE npc_jobs SET current_completions = current_completions + 1 WHERE npc_job_id = %s",
-                (npc_job_id,)
+                "UPDATE npc_jobs SET current_completions = current_completions + 1 WHERE job_id = %s",
+                (job_id,)
             )
             
             # Check if job should be disabled (max completions reached)
             job_status = self.bot.db.execute_in_transaction(
                 conn,
-                "SELECT max_completions, current_completions FROM npc_jobs WHERE npc_job_id = %s",
-                (npc_job_id,),
+                "SELECT max_completions, current_completions FROM npc_jobs WHERE job_id = %s",
+                (job_id,),
                 fetch='one'
             )
             
             if job_status and job_status[0] > 0 and job_status[1] >= job_status[0]:
                 self.bot.db.execute_in_transaction(
                     conn,
-                    "UPDATE npc_jobs SET is_available = false WHERE npc_job_id = %s",
-                    (npc_job_id,)
+                    "UPDATE npc_jobs SET is_available = false WHERE job_id = %s",
+                    (job_id,)
                 )
             
             # Commit the transaction
@@ -1730,7 +1736,7 @@ class NPCTradeSelectView(discord.ui.View):
         if trade_items:
             options = []
             for item in trade_items[:25]:  # Discord limit
-                trade_item_id, name, quantity, price_credits, trade_for_item, trade_quantity_required, rarity, description = item
+                inventory_id, name, quantity, price_credits, trade_for_item, trade_quantity_required, rarity, description = item
                 
                 if price_credits:
                     price_text = f"{price_credits:,} credits"
@@ -1748,7 +1754,7 @@ class NPCTradeSelectView(discord.ui.View):
                     discord.SelectOption(
                         label=f"{name} (x{quantity}) - {price_text}",
                         description=f"[{category_name}] {rarity_emoji} {description[:65]}{'...' if len(description) > 65 else ''}",
-                        value=str(trade_item_id)
+                        value=str(inventory_id)
                     )
                 )
             
@@ -1768,14 +1774,14 @@ class NPCTradeSelectView(discord.ui.View):
             await interaction.response.send_message("This is not your interaction!", ephemeral=True)
             return
         
-        trade_item_id = int(interaction.data['values'][0])
+        inventory_id = int(interaction.data['values'][0])
         
         # Get trade item details
         trade_info = self.bot.db.execute_query(
             '''SELECT item_name, quantity, price_credits, trade_for_item, trade_quantity_required,
                       rarity, description, item_type
-               FROM npc_trade_inventory WHERE trade_item_id = %s''',
-            (trade_item_id,),
+               FROM npc_trade_inventory WHERE inventory_id = %s''',
+            (inventory_id,),
             fetch='one'
         )
         
@@ -1870,13 +1876,13 @@ class NPCTradeSelectView(discord.ui.View):
         # Update NPC inventory
         if quantity == 1:
             self.bot.db.execute_query(
-                "DELETE FROM npc_trade_inventory WHERE trade_item_id = %s",
-                (trade_item_id,)
+                "DELETE FROM npc_trade_inventory WHERE inventory_id = %s",
+                (inventory_id,)
             )
         else:
             self.bot.db.execute_query(
-                "UPDATE npc_trade_inventory SET quantity = quantity - 1 WHERE trade_item_id = %s",
-                (trade_item_id,)
+                "UPDATE npc_trade_inventory SET quantity = quantity - 1 WHERE inventory_id = %s",
+                (inventory_id,)
             )
         
         embed = discord.Embed(
