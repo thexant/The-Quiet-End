@@ -231,6 +231,7 @@ class Database:
                 stock_quantity INTEGER DEFAULT -1,
                 description TEXT,
                 expires_at TIMESTAMP,
+                sold_by_player BOOLEAN DEFAULT false,
                 FOREIGN KEY (location_id) REFERENCES locations (location_id)
             )''',
             
@@ -1027,6 +1028,8 @@ class Database:
             'ALTER TABLE galaxy_info ADD COLUMN IF NOT EXISTS is_manually_paused BOOLEAN DEFAULT false',
             'ALTER TABLE galaxy_info ADD COLUMN IF NOT EXISTS last_shift_check TEXT',
             'ALTER TABLE galaxy_info ADD COLUMN IF NOT EXISTS current_shift TEXT',
+            # Shop items table columns
+            'ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS sold_by_player BOOLEAN DEFAULT false',
         ]
         
         for migration_sql in column_migrations:
