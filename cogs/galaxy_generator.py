@@ -2308,7 +2308,7 @@ class GalaxyGeneratorCog(commands.Cog):
                         stock = random.randint(2, 5)
                     
                     federal_items_to_insert.append(
-                        (location['id'], item_name, item_type, final_price, description, stock, "federal", False)
+                        (location['id'], item_name, item_type, final_price, stock, description, "federal", False)
                     )
                 
                 print(f"🏛️  Created federal depot at {location['name']}")

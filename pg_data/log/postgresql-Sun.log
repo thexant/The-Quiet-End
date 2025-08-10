@@ -616,3 +616,5 @@
 2025-08-10 11:58:02.236 MDT [61777] DETAIL:  Key (location_id)=(1) is not present in table "locations".
 2025-08-10 11:58:02.236 MDT [61777] STATEMENT:  INSERT INTO shop_items (location_id, item_name, item_type, price, stock, description, metadata, sold_by_player)
 	           VALUES (1, 'Test Item', 'equipment', 100, 5, 'Test description', 'test_metadata', false)
+2025-08-10 11:59:51.771 MDT [23293] LOG:  checkpoint starting: time
+2025-08-10 11:59:53.310 MDT [23293] LOG:  checkpoint complete: wrote 13 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.204 s, sync=0.325 s, total=1.539 s; sync files=12, longest=0.288 s, average=0.028 s; distance=78 kB, estimate=314 kB; lsn=0/2CEA248, redo lsn=0/2CEA210
