@@ -160,6 +160,19 @@ class Database:
                 channel_id BIGINT
             )''',
             
+            # Player ships junction table for ship ownership and storage
+            '''CREATE TABLE IF NOT EXISTS player_ships (
+                ship_storage_id SERIAL PRIMARY KEY,
+                owner_id BIGINT NOT NULL,
+                ship_id INTEGER NOT NULL,
+                is_active BOOLEAN DEFAULT false,
+                stored_at_shipyard INTEGER,
+                acquired_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (owner_id) REFERENCES characters (user_id),
+                FOREIGN KEY (ship_id) REFERENCES ships (ship_id),
+                FOREIGN KEY (stored_at_shipyard) REFERENCES locations (location_id)
+            )''',
+            
             # Corridors table
             '''CREATE TABLE IF NOT EXISTS corridors (
                 corridor_id SERIAL PRIMARY KEY,
