@@ -1093,7 +1093,7 @@ class NPCCog(commands.Cog):
         await self._announce_npc_departure(current_location, npc_name, dest_name, travel_time)
         
         # Schedule arrival
-        arrival_time = start_time + timedelta(seconds=travel_time)
+        arrival_time = datetime.now() + timedelta(seconds=travel_time)
         delay = (arrival_time - datetime.now()).total_seconds()
         
         if delay > 0:
