@@ -1420,17 +1420,12 @@ class ChannelManager:
                    FROM locations l
                    WHERE l.channel_id IS NOT NULL
                    AND NOT EXISTS (
-                       SELECT 1 FROM guild_location_channels glc 
-                       WHERE glc.location_id = l.location_id 
-                       AND glc.guild_id = %s
-                   )
-                   AND NOT EXISTS (
                        SELECT 1 FROM characters c 
                        WHERE c.current_location = l.location_id 
                        AND c.is_logged_in = true 
                        AND c.guild_id = %s
-                   )''',  # Find orphaned channels like Earth - removed LIMIT 1
-                (guild.id, guild.id),
+                   )''',  # Find ALL locations with channel_id that have no logged-in players
+                (guild.id,),
                 fetch='all'
             )
             
@@ -1534,10 +1529,16 @@ class ChannelManager:
                         print(f"🧹 Auto-cleaned orphaned channel #{channel.name} for {location_name}")
                         cleaned_count += 1
                         
-                        # Clear from main locations table since it's not in guild tracking
+                        # Clear from main locations table
                         self.db.execute_query(
                             "UPDATE locations SET channel_id = NULL WHERE location_id = %s",
                             (location_id,)
+                        )
+                        
+                        # Also clear from guild tracking if it exists (for Earth and similar dual-stored locations)
+                        self.db.execute_query(
+                            "DELETE FROM guild_location_channels WHERE guild_id = %s AND location_id = %s",
+                            (guild.id, location_id)
                         )
                     else:
                         print(f"⏭️ Skipped {location_name} - travelers incoming ({travelers_coming})")

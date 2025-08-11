@@ -142,6 +142,9 @@ class CharacterCog(commands.Cog):
     async def tqe_overview(self, interaction: discord.Interaction):
         """Display The Quiet End overview panel with character, location, and galaxy info"""
         
+        # Defer response to prevent Discord timeout during database operations
+        await interaction.response.defer(ephemeral=True)
+        
         import time
         start_time = time.time()
         
@@ -230,12 +233,12 @@ class CharacterCog(commands.Cog):
                 from utils.views import BasicTQEView
                 view = BasicTQEView(self.bot)
                 
-                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
                 return
             
             # Original behavior for no character in location channels or other scenarios
             if not char_data:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "You don't have a character! Use the game panel to create a character first.",
                     ephemeral=True
                 )
@@ -397,7 +400,7 @@ class CharacterCog(commands.Cog):
                 print(f"⚠️ TQE: View creation failed for user {interaction.user.id}: {view_error}")
                 # Continue without interactive buttons
             
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
             
             # Log successful completion time
             total_time = time.time() - start_time
@@ -424,11 +427,11 @@ class CharacterCog(commands.Cog):
             embed.set_footer(text="The Quiet End • Sorry for the inconvenience")
             
             try:
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
             except:
                 # If even the fallback fails, try basic text response
                 try:
-                    await interaction.response.send_message(
+                    await interaction.followup.send(
                         "🚫 The Quiet End is temporarily unavailable. Please try again in a moment.",
                         ephemeral=True
                     )
