@@ -6652,14 +6652,14 @@ class BountiesView(discord.ui.View):
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        view = ClaimBountyPlayerSelect(self.bot, interaction.user.id)
+        view = ClaimBountyPlayerSelect(self.bot, interaction.user.id, interaction.guild)
         await interaction.response.send_message("Select a player to attempt to capture:", view=view, ephemeral=True)
 
 
 class ClaimBountyPlayerSelect(discord.ui.View):
     """View for selecting player to attempt bounty capture on"""
     
-    def __init__(self, bot, user_id: int):
+    def __init__(self, bot, user_id: int, guild):
         super().__init__(timeout=60)
         self.bot = bot
         self.user_id = user_id
@@ -6673,7 +6673,6 @@ class ClaimBountyPlayerSelect(discord.ui.View):
         
         # Create select menu with bountied players in same location
         options = []
-        guild = interaction.guild
         if guild and user_location and user_location[0]:
             current_location = user_location[0]
             

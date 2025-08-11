@@ -4006,7 +4006,7 @@ class SayModal(discord.ui.Modal, title="Speak as Character"):
         self.bot = bot
     
     message = discord.ui.TextInput(
-        label="What does your character say%s",
+        label="What does your character say?",
         placeholder="Enter your character's dialogue...",
         style=discord.TextStyle.paragraph,
         max_length=2000
@@ -4026,7 +4026,7 @@ class ThinkModal(discord.ui.Modal, title="Character Thoughts"):
         self.bot = bot
     
     thought = discord.ui.TextInput(
-        label="What is your character thinking%s",
+        label="What is your character thinking?",
         placeholder="Enter your character's internal thoughts...",
         style=discord.TextStyle.paragraph,
         max_length=2000
@@ -4046,7 +4046,7 @@ class ActModal(discord.ui.Modal, title="Character Action"):
         self.bot = bot
     
     action = discord.ui.TextInput(
-        label="What action does your character perform%s",
+        label="What action does your character perform?",
         placeholder="Describe your character's action...",
         style=discord.TextStyle.paragraph,
         max_length=2000

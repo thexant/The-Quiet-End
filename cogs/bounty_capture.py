@@ -1061,7 +1061,7 @@ class BountyCog(commands.Cog):
                JOIN locations l ON c.current_location = l.location_id
                WHERE c.current_location IN ({location_ids_str}) 
                AND pb.is_active = true AND c.is_logged_in = true
-               GROUP BY pb.target_id, pb.target_name, l.name
+               GROUP BY pb.target_id, pb.target_name, l.name, c.user_id
                ORDER BY total_bounty DESC''',
             search_locations,
             fetch='all'
@@ -1080,7 +1080,7 @@ class BountyCog(commands.Cog):
                AND pb.is_active = true AND c.is_logged_in = true 
                AND ts.status = 'traveling'
                AND cor.corridor_type != 'ungated'
-               GROUP BY pb.target_id, pb.target_name, cor.name
+               GROUP BY pb.target_id, pb.target_name, cor.name, c.user_id
                ORDER BY total_bounty DESC''',
             search_locations + search_locations,  # Double the params for origin and dest
             fetch='all'
