@@ -5292,23 +5292,23 @@ class TQEOverviewView(discord.ui.View):
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
+        # Defer the interaction response first to avoid conflicts
+        await interaction.response.defer(ephemeral=True)
+        
         # Get the EconomyCog and call its job completion logic
         econ_cog = self.bot.get_cog('EconomyCog')
         if econ_cog:
             try:
-                await econ_cog.job_complete.callback(econ_cog, interaction)
+                # Call a version that doesn't try to handle the interaction response
+                await econ_cog._complete_job_from_button(interaction)
             except Exception as e:
                 print(f"❌ Error in job completion: {e}")
                 import traceback
                 traceback.print_exc()
                 
-                # Try to respond if we haven't responded yet
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(f"❌ Error completing job: {e}", ephemeral=True)
-                else:
-                    await interaction.followup.send(f"❌ Error completing job: {e}", ephemeral=True)
+                await interaction.followup.send(f"❌ Error completing job: {e}", ephemeral=True)
         else:
-            await interaction.response.send_message("Job system is currently unavailable.", ephemeral=True)
+            await interaction.followup.send("Job system is currently unavailable.", ephemeral=True)
     
     async def view_job_status(self, interaction: discord.Interaction):
         """Handle viewing job status"""

@@ -1565,6 +1565,230 @@ class EconomyCog(commands.Cog):
                     await self._complete_job_immediately(interaction, job_id, title, reward, roll, success_chance, "stationary")
                 else:
                     await self._complete_job_failed(interaction, job_id, title, reward, roll, success_chance)
+
+    async def _complete_job_from_button(self, interaction: discord.Interaction):
+        """Complete a job when called from a button (interaction already deferred)"""
+        # This is the same as job_complete but assumes interaction.response.defer() was already called
+        # Fetch the active job with skill requirements and destination_location_id
+        job_info = self.db.execute_query(
+            '''SELECT j.job_id, j.title, j.reward_money, j.danger_level, j.taken_at,
+                      j.duration_minutes, l.name AS location_name, j.job_status,
+                      j.description, j.location_id, j.required_skill, j.min_skill_level,
+                      j.destination_location_id
+               FROM jobs j
+               JOIN locations l ON j.location_id = l.location_id
+               WHERE j.taken_by = %s AND j.is_taken = true''',
+            (interaction.user.id,),
+            fetch='one'
+        )
+
+        if not job_info:
+            await interaction.followup.send(
+                "You don't have an active job to complete.",
+                ephemeral=True
+            )
+            return
+
+        (job_id, title, reward, danger, taken_at, duration_minutes, location_name, job_status,
+         description, job_location_id, required_skill, min_skill_level, destination_location_id) = job_info
+
+        # Check if job was already completed
+        if job_status == 'completed':
+            await interaction.followup.send(
+                "This job has already been completed!",
+                ephemeral=True
+            )
+            return
+        
+        # Define title_lower and desc_lower before they're used
+        title_lower = title.lower()
+        desc_lower = description.lower()
+        
+        # Determine job type - check destination_location_id first for definitive classification
+        if destination_location_id and destination_location_id != job_location_id:
+            # Has a different destination location = definitely a transport job
+            is_transport_job = True
+        elif destination_location_id is None:
+            # No destination set - check keywords to determine if it's a transport job (NPC-style)
+            is_transport_job = any(word in title_lower for word in ['transport', 'deliver', 'courier', 'cargo', 'passenger', 'escort']) or \
+                              any(word in desc_lower for word in ['transport', 'deliver', 'courier', 'escort'])
+        else:
+            # destination_location_id == job_location_id = stationary job, regardless of keywords
+            is_transport_job = False
+
+        # Get player's current location and docking status
+        player_info = self.db.execute_query(
+            "SELECT current_location, location_status FROM characters WHERE user_id = %s",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not player_info or not player_info[0]:
+            await interaction.followup.send(
+                "You cannot complete jobs while in transit!",
+                ephemeral=True
+            )
+            return
+        
+        current_location, location_status = player_info
+
+        # Check if player is docked
+        if location_status != 'docked':
+            await interaction.followup.send(
+                "You must be docked at a location to complete jobs. Use `/tqe` to dock first.",
+                ephemeral=True
+            )
+            return
+
+        if is_transport_job:
+            # TRANSPORT JOB LOGIC - Check if at correct destination, then do unloading phase
+            
+            # Check if this is a finalization attempt for transport jobs
+            if job_status == 'awaiting_finalization':
+                # Transport job is in finalization phase - complete immediately
+                await self._finalize_transport_job(interaction, job_id, title, reward)
+                return
+            
+            # For NPC jobs without destination, allow completion at any location after elapsed time
+            if not destination_location_id:
+                # Check elapsed time for NPC transport jobs
+                taken_time = safe_datetime_parse(taken_at)
+                now = datetime.now()
+                elapsed_minutes = (now - taken_time).total_seconds() / 60
+                
+                if elapsed_minutes >= duration_minutes:
+                    # Start unloading phase
+                    await self._start_transport_unloading(interaction, job_id, title, reward)
+                    return
+                else:
+                    remaining = duration_minutes - elapsed_minutes
+                    await interaction.followup.send(
+                        f"⏳ **Transport Job In Progress**\n\nYou need to wait **{remaining:.1f} more minutes** before completing this delivery.",
+                        ephemeral=True
+                    )
+                    return
+            
+            # Check if player is at the job's destination (for jobs with destination set)
+            if current_location != destination_location_id:
+                # Get correct destination location name
+                correct_dest_name = "an unknown location"
+                if destination_location_id:
+                    dest_name_result = self.db.execute_query(
+                        "SELECT name FROM locations WHERE location_id = %s",
+                        (destination_location_id,),
+                        fetch='one'
+                    )
+                    if dest_name_result:
+                        correct_dest_name = dest_name_result[0]
+                
+                # Get player's current location name for a more accurate error message
+                current_location_name_result = self.db.execute_query(
+                    "SELECT name FROM locations WHERE location_id = %s",
+                    (current_location,),
+                    fetch='one'
+                )
+                current_location_name = current_location_name_result[0] if current_location_name_result else "an unknown location"
+
+                await interaction.followup.send(
+                    f"❌ **Wrong destination!**\n\nThis transport job must be completed at **{correct_dest_name}**.\nYou are currently at {current_location_name}.",
+                    ephemeral=True
+                )
+                return
+            
+            # Player is at correct destination - start unloading phase
+            await self._start_transport_unloading(interaction, job_id, title, reward)
+            
+        else:
+            # STATIONARY JOB LOGIC - Use existing time-based completion
+            
+            # Parse the time the job was taken
+            taken_time = safe_datetime_parse(taken_at)
+            now = datetime.now()
+            elapsed_minutes = (now - taken_time).total_seconds() / 60
+
+            # Check location-based tracking for stationary jobs only
+            tracking = self.db.execute_query(
+                "SELECT time_at_location, required_duration FROM job_tracking WHERE job_id = %s AND user_id = %s",
+                (job_id, interaction.user.id),
+                fetch='one'
+            )
+            
+            if not tracking:
+                await interaction.followup.send(
+                    "❌ **Job tracking error**\n\nNo tracking record found. Please abandon and re-accept this job.",
+                    ephemeral=True
+                )
+                return
+            
+            time_at_location, required_duration = tracking
+            if time_at_location < required_duration:
+                remaining = required_duration - time_at_location
+                await interaction.followup.send(
+                    f"⏳ **Job not ready for completion**\n\nYou need **{remaining:.1f} more minutes** at this location.\n\nProgress: {time_at_location:.1f}/{required_duration} minutes",
+                    ephemeral=True
+                )
+                return
+
+            # Stationary job is ready - complete with success/failure checks
+            # NOTE: interaction.response.defer() was already called by the button handler
+
+            # --- ENHANCED SKILL CHECK ---
+            # Improved base success rates - ordinary jobs should succeed most of the time
+            if danger == 0:
+                base_success = 85  # Safe jobs should have high success rate
+            elif danger == 1:
+                base_success = 75  # Slightly risky jobs
+            elif danger == 2:
+                base_success = 60  # Moderately dangerous 
+            elif danger == 3:
+                base_success = 45  # Dangerous jobs
+            else:
+                base_success = 30  # Very dangerous jobs (danger 4+)
+
+            # Get character skills
+            char_skills = self.db.execute_query(
+                "SELECT engineering, navigation, combat, medical FROM characters WHERE user_id = %s",
+                (interaction.user.id,),
+                fetch='one'
+            )
+
+            skill_map = {
+                'engineering': char_skills[0] if char_skills else 0,
+                'navigation': char_skills[1] if char_skills else 0,
+                'combat': char_skills[2] if char_skills else 0,
+                'medical': char_skills[3] if char_skills else 0
+            }
+
+            skill_bonus = 0
+            if required_skill and required_skill in skill_map:
+                player_skill_level = skill_map[required_skill]
+                
+                # Improved skill bonus calculation
+                skill_difference = player_skill_level - min_skill_level
+                
+                if skill_difference >= 0:
+                    # Meeting requirements gives good bonus, exceeding gives even more
+                    skill_bonus = min(15, skill_difference * 4)  # +4% per point above minimum, capped at +15%
+                else:
+                    # Below minimum should be rare due to job acceptance checks, but penalize if it happens
+                    skill_bonus = skill_difference * 5  # -5% per point below minimum
+
+            # Final success chance calculation
+            success_chance = max(10, min(95, base_success + skill_bonus))
+            roll = random.randint(1, 100)
+            success = roll <= success_chance
+
+            # Optional: Add debug logging to help you monitor the changes
+            if success:
+                print(f"Job success check - Target: ≤{success_chance}, Rolled: {roll} ✓ SUCCESS (Base: {base_success}% + Skill: {skill_bonus}%)")
+            else:
+                print(f"Job success check - Target: ≤{success_chance}, Rolled: {roll} ✗ FAILED by {roll - success_chance} (Base: {base_success}% + Skill: {skill_bonus}%)")
+
+            # Handle success/failure
+            if success:
+                await self._complete_job_immediately(interaction, job_id, title, reward, roll, success_chance, "stationary")
+            else:
+                await self._complete_job_failed(interaction, job_id, title, reward, roll, success_chance)
                     
     def get_economic_modifiers(self, location_id: int, item_name: str, item_type: str) -> tuple:
         """Get supply/demand modifiers for an item at a location"""
