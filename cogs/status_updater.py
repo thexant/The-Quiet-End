@@ -13,11 +13,23 @@ class StatusUpdaterCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
         self.time_system = TimeSystem(bot)
+        self.task_start_time = None
+        self.task_failure_count = 0
+        self.last_successful_update = None
         
-        self.update_status_channels.start()
+        print("🔄 StatusUpdaterCog: Initializing...")
+        try:
+            self.update_status_channels.start()
+            print("✅ StatusUpdaterCog: Background task started successfully")
+        except Exception as e:
+            print(f"❌ StatusUpdaterCog: Failed to start background task: {e}")
+            import traceback
+            traceback.print_exc()
     
     def cog_unload(self):
+        print("🛑 StatusUpdaterCog: Unloading, cancelling background task...")
         self.update_status_channels.cancel()
+        print("✅ StatusUpdaterCog: Background task cancelled")
 
     async def _execute_status_update(self):
         """
@@ -139,13 +151,37 @@ class StatusUpdaterCog(commands.Cog):
 
     @tasks.loop(seconds=480)
     async def update_status_channels(self):
-        await self._execute_status_update()
+        try:
+            print("🔄 StatusUpdaterCog: Starting scheduled status update...")
+            updated_count, reason = await self._execute_status_update()
+            
+            if updated_count > 0:
+                self.last_successful_update = datetime.now()
+                self.task_failure_count = 0
+                print(f"✅ StatusUpdaterCog: Scheduled update successful - {updated_count} channels updated")
+            else:
+                print(f"ℹ️ StatusUpdaterCog: Scheduled update completed - {reason}")
+                
+        except Exception as e:
+            self.task_failure_count += 1
+            print(f"❌ StatusUpdaterCog: Task failed (failure #{self.task_failure_count}): {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Auto-restart after 3 consecutive failures
+            if self.task_failure_count >= 3:
+                print("⚠️ StatusUpdaterCog: Too many failures, restarting task...")
+                await self._restart_task()
     
     @update_status_channels.before_loop
     async def before_status_update(self):
+        print("⏳ StatusUpdaterCog: Waiting for bot to be ready...")
         await self.bot.wait_until_ready()
+        print("⏳ StatusUpdaterCog: Bot ready, waiting 30 seconds before first update...")
         await asyncio.sleep(30)
-        print("🔄 Status voice channel updater started")
+        self.task_start_time = datetime.now()
+        print("🔄 StatusUpdaterCog: Background task fully initialized and ready")
+        print(f"📅 StatusUpdaterCog: Next update scheduled in 8 minutes (480 seconds)")
 
     # -------------------------------------------------------------------------
     # 2. DECORATOR and FUNCTION SIGNATURE UPDATED for discord.py
@@ -176,6 +212,86 @@ class StatusUpdaterCog(commands.Cog):
             )
         
         await interaction.followup.send(embed=embed) # <--- Use interaction.followup
+
+    async def _restart_task(self):
+        """Restart the background task after failures"""
+        try:
+            print("🔄 StatusUpdaterCog: Stopping current task...")
+            self.update_status_channels.cancel()
+            await asyncio.sleep(2)  # Give it time to cancel
+            
+            print("🔄 StatusUpdaterCog: Starting fresh task...")
+            self.task_failure_count = 0
+            self.update_status_channels.restart()
+            print("✅ StatusUpdaterCog: Task restarted successfully")
+        except Exception as e:
+            print(f"❌ StatusUpdaterCog: Failed to restart task: {e}")
+            import traceback
+            traceback.print_exc()
+
+    @update_status_channels.error
+    async def status_update_task_error(self, error):
+        """Error handler for the task loop"""
+        self.task_failure_count += 1
+        print(f"❌ StatusUpdaterCog: Task error handler triggered (failure #{self.task_failure_count}): {error}")
+        import traceback
+        traceback.print_exc()
+        
+        # Auto-restart after 3 consecutive failures
+        if self.task_failure_count >= 3:
+            print("⚠️ StatusUpdaterCog: Too many failures in error handler, attempting restart...")
+            await self._restart_task()
+
+    @app_commands.command(
+        name="statusupdaterdiagnostics", 
+        description="Check the status of the background status updater task"
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def statusupdaterdiagnostics(self, interaction: discord.Interaction):
+        """Admin command to check the status updater task diagnostics"""
+        await interaction.response.defer(ephemeral=True)
+        
+        # Gather diagnostic information
+        is_running = self.update_status_channels.is_running()
+        current_loop = self.update_status_channels.current_loop or 0
+        next_iteration = self.update_status_channels.next_iteration
+        
+        embed = discord.Embed(title="📊 Status Updater Diagnostics", color=0x00ff00 if is_running else 0xff0000)
+        embed.add_field(name="Task Running", value="✅ Yes" if is_running else "❌ No", inline=True)
+        embed.add_field(name="Current Loop", value=str(current_loop), inline=True)
+        embed.add_field(name="Failure Count", value=str(self.task_failure_count), inline=True)
+        
+        if self.task_start_time:
+            embed.add_field(name="Started At", value=self.task_start_time.strftime("%Y-%m-%d %H:%M:%S"), inline=True)
+        
+        if self.last_successful_update:
+            embed.add_field(name="Last Success", value=self.last_successful_update.strftime("%Y-%m-%d %H:%M:%S"), inline=True)
+        else:
+            embed.add_field(name="Last Success", value="Never", inline=True)
+            
+        if next_iteration:
+            embed.add_field(name="Next Update", value=f"<t:{int(next_iteration.timestamp())}:R>", inline=True)
+            
+        # Test database connection
+        try:
+            test_result = self.db.execute_query("SELECT 1", fetch='one')
+            db_status = "✅ Connected" if test_result else "❌ No Response"
+        except Exception as e:
+            db_status = f"❌ Error: {str(e)[:50]}"
+        embed.add_field(name="Database", value=db_status, inline=True)
+        
+        # Check if there are servers with status channels configured
+        try:
+            servers_with_status = self.db.execute_query(
+                "SELECT COUNT(*) FROM server_config WHERE status_voice_channel_id IS NOT NULL",
+                fetch='one'
+            )
+            channel_count = servers_with_status[0] if servers_with_status else 0
+            embed.add_field(name="Configured Servers", value=str(channel_count), inline=True)
+        except Exception as e:
+            embed.add_field(name="Configured Servers", value=f"Error: {str(e)[:30]}", inline=True)
+            
+        await interaction.followup.send(embed=embed)
 
 
 async def setup(bot):
