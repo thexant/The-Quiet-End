@@ -1917,9 +1917,9 @@ class EconomyCog(commands.Cog):
     async def _send_job_ready_notification(self, user_id: int, job_id: int, job_title: str, location_id: int):
         """Send notification when a stationary job is ready for completion"""
         try:
-            # Get location channel info
+            # Get location name
             location_info = self.db.execute_query(
-                "SELECT name, channel_id FROM locations WHERE location_id = %s",
+                "SELECT name FROM locations WHERE location_id = %s",
                 (location_id,),
                 fetch='one'
             )
@@ -1928,23 +1928,17 @@ class EconomyCog(commands.Cog):
                 print(f"❌ Could not find location info for location_id {location_id}")
                 return
                 
-            location_name, channel_id = location_info
-            
-            if not channel_id:
-                print(f"❌ No channel_id set for location {location_name}")
-                return
-                
-            # Get the channel and user
-            channel = self.bot.get_channel(channel_id)
+            location_name = location_info[0]
             user = self.bot.get_user(user_id)
             
-            if not channel:
-                print(f"❌ Could not find channel {channel_id} for location {location_name}")
-                return
-                
             if not user:
                 print(f"❌ Could not find user {user_id}")
                 return
+            
+            # Use cross-guild broadcasting like transport jobs do
+            from utils.channel_manager import ChannelManager
+            channel_manager = ChannelManager(self.bot)
+            cross_guild_channels = await channel_manager.get_cross_guild_location_channels(location_id)
             
             # Send notification message
             embed = discord.Embed(
@@ -1954,8 +1948,21 @@ class EconomyCog(commands.Cog):
             )
             embed.add_field(name="📍 Location", value=location_name, inline=True)
             
-            await self.bot.send_with_cross_guild_broadcast(channel, f"{user.mention}, your job is ready for completion!", embed=embed, delete_after=60)
-            print(f"✅ Sent job completion notification for job {job_id} to {user.name} in {location_name}")
+            if cross_guild_channels:
+                for guild_channel, channel in cross_guild_channels:
+                    try:
+                        await channel.send(f"{user.mention}, your job is ready for completion!", embed=embed, delete_after=60)
+                    except Exception as e:
+                        print(f"❌ Failed to send job notification to guild {guild_channel.name}: {e}")
+                        pass  # Skip if can't send to this guild
+                print(f"✅ Sent job completion notification for job {job_id} to {user.name} in {location_name}")
+            else:
+                # Fallback to DM if no channels found
+                try:
+                    await user.send(embed=embed)
+                    print(f"✅ Sent job completion notification DM for job {job_id} to {user.name}")
+                except Exception as e:
+                    print(f"❌ Failed to send DM notification: {e}")
             
         except Exception as e:
             print(f"❌ Error sending job ready notification: {e}")
