@@ -1356,7 +1356,6 @@ class ChannelManager:
         if not self.auto_cleanup_enabled:
             return
             
-        print(f"🧹 Starting cleanup for guild {guild.name}")
         
         # More aggressive cleanup - only 1 minute instead of 2
         cutoff_time = datetime.now() - timedelta(minutes=2)  # Increased from 1 minute
@@ -1381,7 +1380,6 @@ class ChannelManager:
                 (guild.id, cutoff_time, guild.id),
                 fetch='all'
             )
-            print(f"⏱️ Location query took {time.time() - query_start:.2f}s")
             
             # Also check for empty ship channels with read-only query
             query_start = time.time()
@@ -1397,7 +1395,6 @@ class ChannelManager:
                    LIMIT 1''',  # Reduced to 1 to minimize processing time
                 fetch='all'
             )
-            print(f"⏱️ Ship query took {time.time() - query_start:.2f}s")
             
             # Also check for empty home channels with read-only query
             query_start = time.time()
@@ -1414,7 +1411,6 @@ class ChannelManager:
                    LIMIT 1''',  # Reduced to 1 to minimize processing time
                 fetch='all'
             )
-            print(f"⏱️ Home query took {time.time() - query_start:.2f}s")
             
             # Fallback query: Find channels in locations table that aren't in guild_location_channels
             # This catches Earth and other "orphaned" channels
@@ -1433,12 +1429,10 @@ class ChannelManager:
                        WHERE c.current_location = l.location_id 
                        AND c.is_logged_in = true 
                        AND c.guild_id = %s
-                   )
-                   LIMIT 1''',  # Find orphaned channels like Earth
+                   )''',  # Find orphaned channels like Earth - removed LIMIT 1
                 (guild.id, guild.id),
                 fetch='all'
             )
-            print(f"⏱️ Orphaned channels query took {time.time() - query_start:.2f}s")
             
         except Exception as e:
             print(f"⚠️ Database timeout in cleanup query: {e}")
@@ -1556,7 +1550,6 @@ class ChannelManager:
         
         # Log timing information
         elapsed_time = time.time() - start_time
-        print(f"🧹 Cleanup completed for guild {guild.name} in {elapsed_time:.2f}s")
         
         if cleaned_count > 0:
             print(f"🧹 Background cleanup: removed {cleaned_count} channels with no logged-in players")

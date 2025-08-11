@@ -2662,91 +2662,157 @@ class CharacterCog(commands.Cog):
         return await self.check_ship_death(user_id, guild, reason)    
     @character_group.command(name="login", description="Log into the game and restore your character")
     async def login_character(self, interaction: discord.Interaction):
-        char_data = self.db.execute_query(
-            "SELECT name, current_location, is_logged_in, current_ship_id FROM characters WHERE user_id = %s",
-            (interaction.user.id,),
-            fetch='one'
-        )
+        # Defer response to prevent timeout during database operations and channel management
+        await interaction.response.defer(ephemeral=True)
         
-        if not char_data:
-            await interaction.response.send_message(
-                "You don't have a character! Use the game panel to create a character first.",
-                ephemeral=True
-            )
-            return
-        
-        char_name, current_location, is_logged_in, current_ship_id = char_data
-        
-        if is_logged_in:
-            await interaction.response.send_message(
-                f"**{char_name}** is already logged in!",
-                ephemeral=True
-            )
-            return
-        
-        # Log in the character
-        self.db.execute_query(
-            "UPDATE characters SET is_logged_in = true, guild_id = %s, login_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE user_id = %s",
-            (interaction.guild.id, interaction.user.id)
-        )
-        
-        # Restore location access
-        from utils.channel_manager import ChannelManager
-        channel_manager = ChannelManager(self.bot)
-        location_name = "Deep Space"
-
-        if current_ship_id:
-            ship_info_raw = self.db.execute_query(
-                "SELECT ship_id, name, ship_type, interior_description, channel_id, owner_id FROM ships WHERE ship_id = %s",
-                (current_ship_id,), fetch='one'
-            )
-            if ship_info_raw:
-                ship_id, ship_name, s_type, s_int, s_chan, owner_id = ship_info_raw
-                owner = interaction.guild.get_member(owner_id)
-                if owner:
-                    ship_tuple = (ship_id, ship_name, s_type, s_int, s_chan)
-                    await channel_manager.get_or_create_ship_channel(interaction.guild, ship_tuple, owner)
-                    await channel_manager.give_user_ship_access(interaction.user, current_ship_id)
-                    location_name = f"Aboard '{ship_name}'"
-                else:
-                    self.db.execute_query("UPDATE characters SET current_ship_id = NULL, current_location = NULL WHERE user_id = %s", (interaction.user.id,))
-                    location_name = "Lost in Space (Ship's owner not found)"
-            else:
-                self.db.execute_query("UPDATE characters SET current_ship_id = NULL, current_location = NULL WHERE user_id = %s", (interaction.user.id,))
-                location_name = "Lost in Space (Ship was destroyed)"
-
-        elif current_location:
-            success = await channel_manager.restore_user_location_on_login(interaction.user, current_location)
-            location_name = self.db.execute_query(
-                "SELECT name FROM locations WHERE location_id = %s",
-                (current_location,),
-                fetch='one'
-            )[0]
-        
-        else:
-            # Character has no location (likely from galaxy reset) - spawn at random colony
-            colony_locations = self.db.execute_query(
-                """SELECT location_id, name FROM locations 
-                   WHERE location_type = 'colony' 
-                   ORDER BY RANDOM() LIMIT 1""", 
+        try:
+            char_data = self.db.execute_query(
+                "SELECT name, current_location, is_logged_in, current_ship_id FROM characters WHERE user_id = %s",
+                (interaction.user.id,),
                 fetch='one'
             )
             
-            if colony_locations:
-                colony_id, colony_name = colony_locations
-                # Set character location to the colony
-                self.db.execute_query(
-                    "UPDATE characters SET current_location = %s WHERE user_id = %s",
-                    (colony_id, interaction.user.id)
+            if not char_data:
+                await interaction.followup.send(
+                    "You don't have a character! Use the game panel to create a character first.",
+                    ephemeral=True
                 )
-                # Grant access to the colony
-                await channel_manager.restore_user_location_on_login(interaction.user, colony_id)
-                location_name = f"{colony_name} (Auto-spawned after galaxy reset)"
+                return
+            
+            char_name, current_location, is_logged_in, current_ship_id = char_data
+            
+            if is_logged_in:
+                await interaction.followup.send(
+                    f"**{char_name}** is already logged in!",
+                    ephemeral=True
+                )
+                return
+            
+            # Log in the character
+            self.db.execute_query(
+                "UPDATE characters SET is_logged_in = true, guild_id = %s, login_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE user_id = %s",
+                (interaction.guild.id, interaction.user.id)
+            )
+            
+            # Restore location access
+            from utils.channel_manager import ChannelManager
+            channel_manager = ChannelManager(self.bot)
+            location_name = "Deep Space"
+
+            if current_ship_id:
+                ship_info_raw = self.db.execute_query(
+                    "SELECT ship_id, name, ship_type, interior_description, channel_id, owner_id FROM ships WHERE ship_id = %s",
+                    (current_ship_id,), fetch='one'
+                )
+                if ship_info_raw:
+                    ship_id, ship_name, s_type, s_int, s_chan, owner_id = ship_info_raw
+                    owner = interaction.guild.get_member(owner_id)
+                    if owner:
+                        ship_tuple = (ship_id, ship_name, s_type, s_int, s_chan)
+                        await channel_manager.get_or_create_ship_channel(interaction.guild, ship_tuple, owner)
+                        await channel_manager.give_user_ship_access(interaction.user, current_ship_id)
+                        location_name = f"Aboard '{ship_name}'"
+                    else:
+                        self.db.execute_query("UPDATE characters SET current_ship_id = NULL, current_location = NULL WHERE user_id = %s", (interaction.user.id,))
+                        location_name = "Lost in Space (Ship's owner not found)"
+                else:
+                    self.db.execute_query("UPDATE characters SET current_ship_id = NULL, current_location = NULL WHERE user_id = %s", (interaction.user.id,))
+                    location_name = "Lost in Space (Ship was destroyed)"
+
+            elif current_location:
+                success = await channel_manager.restore_user_location_on_login(interaction.user, current_location)
+                location_name = self.db.execute_query(
+                    "SELECT name FROM locations WHERE location_id = %s",
+                    (current_location,),
+                    fetch='one'
+                )[0]
+            
             else:
-                location_name = "Deep Space (No colonies available)"
-        
-        # Group functionality removed
-        group_status = ""
+                # Character has no location (likely from galaxy reset) - spawn at random colony
+                colony_locations = self.db.execute_query(
+                    """SELECT location_id, name FROM locations 
+                       WHERE location_type = 'colony' 
+                       ORDER BY RANDOM() LIMIT 1""", 
+                    fetch='one'
+                )
+                
+                if colony_locations:
+                    colony_id, colony_name = colony_locations
+                    # Set character location to the colony
+                    self.db.execute_query(
+                        "UPDATE characters SET current_location = %s WHERE user_id = %s",
+                        (colony_id, interaction.user.id)
+                    )
+                    # Grant access to the colony
+                    await channel_manager.restore_user_location_on_login(interaction.user, colony_id)
+                    location_name = f"{colony_name} (Auto-spawned after galaxy reset)"
+                else:
+                    location_name = "Deep Space (No colonies available)"
+            
+            # Group functionality removed
+            group_status = ""
+            
+            # Check for pending faction payouts
+            await self.check_faction_payouts(interaction, interaction.user.id)
+            
+            # Update activity tracker
+            if hasattr(self.bot, 'activity_tracker'):
+                self.bot.activity_tracker.update_activity(interaction.user.id)
+            
+            embed = discord.Embed(
+                title="✅ Login Successful",
+                description=f"Welcome back, **{char_name}**!",
+                color=0x00ff00
+            )
+            
+            embed.add_field(
+                name="📍 Current Location",
+                value=location_name,
+                inline=True
+            )
+            
+            embed.add_field(
+                name="🕐 Session Started",
+                value=f"<t:{int(datetime.now().timestamp())}:T>",
+                inline=True
+            )
+            
+            if group_status:
+                embed.add_field(
+                    name="👥 Group Status",
+                    value=group_status.strip(),
+                    inline=False
+                )
+            
+            embed.add_field(
+                name="💡 Tip",
+                value="Use `/tqe` to interact with your current location.",
+                inline=False
+            )
+            
+            # Auto-resume time system if this is the first player to log in
+            try:
+                from utils.time_system import TimeSystem
+                time_system = TimeSystem(self.bot)
+                # This will check conditions and only resume if appropriate
+                time_system.auto_resume_time()
+            except Exception as e:
+                print(f"⚠️ LOGIN: Failed to check auto-resume time system: {e}")
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            print(f"❌ LOGIN: Error during login process: {e}")
+            embed = discord.Embed(
+                title="❌ Login Failed",
+                description="An error occurred during login. Please try again in a moment.",
+                color=0xff0000
+            )
+            try:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            except:
+                # Fallback if followup also fails
+                print(f"❌ LOGIN: Could not send error message to user {interaction.user.id}")
         
     async def check_faction_payouts(self, interaction: discord.Interaction, user_id: int):
         pending_payouts = self.db.execute_query(
@@ -2782,51 +2848,6 @@ class CharacterCog(commands.Cog):
             )
             
             await interaction.followup.send(embed=embed, ephemeral=True)
-        # Update activity tracker
-        if hasattr(self.bot, 'activity_tracker'):
-            self.bot.activity_tracker.update_activity(interaction.user.id)
-        
-        embed = discord.Embed(
-            title="✅ Login Successful",
-            description=f"Welcome back, **{char_name}**!",
-            color=0x00ff00
-        )
-        
-        embed.add_field(
-            name="📍 Current Location",
-            value=location_name,
-            inline=True
-        )
-        
-        embed.add_field(
-            name="🕐 Session Started",
-            value=f"<t:{int(datetime.now().timestamp())}:T>",
-            inline=True
-        )
-        
-        if group_status:
-            embed.add_field(
-                name="👥 Group Status",
-                value=group_status.strip(),
-                inline=False
-            )
-        
-        embed.add_field(
-            name="💡 Tip",
-            value="Use `/tqe` to interact with your current location.",
-            inline=False
-        )
-        
-        # Auto-resume time system if this is the first player to log in
-        try:
-            from utils.time_system import TimeSystem
-            time_system = TimeSystem(self.bot)
-            # This will check conditions and only resume if appropriate
-            time_system.auto_resume_time()
-        except Exception as e:
-            print(f"⚠️ LOGIN: Failed to check auto-resume time system: {e}")
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @character_group.command(name="logout", description="Log out of the game (saves your progress)")
     async def logout_character(self, interaction: discord.Interaction):
