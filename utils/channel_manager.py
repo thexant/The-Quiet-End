@@ -43,7 +43,7 @@ class ChannelManager:
                             # Use a timeout for cleanup operations
                             await asyncio.wait_for(
                                 self._check_and_cleanup_empty_channels(guild),
-                                timeout=30.0  # 30 second timeout
+                                timeout=60.0  # 60 second timeout - increased from 30s
                             )
                         except asyncio.TimeoutError:
                             print(f"⚠️ Channel cleanup timed out for guild {guild.name}")
@@ -1350,56 +1350,71 @@ class ChannelManager:
     
     async def _check_and_cleanup_empty_channels(self, guild: discord.Guild):
         """Background task to check and cleanup empty channels - IMPROVED with timeout handling"""
+        import time
+        start_time = time.time()
+        
         if not self.auto_cleanup_enabled:
             return
             
+        print(f"🧹 Starting cleanup for guild {guild.name}")
+        
         # More aggressive cleanup - only 1 minute instead of 2
         cutoff_time = datetime.now() - timedelta(minutes=2)  # Increased from 1 minute
         
         try:
             # Use read-only query with timeout
             # Get empty channels for this specific guild
+            query_start = time.time()
             empty_channels = self.db.execute_read_query(
-                '''SELECT glc.location_id, glc.channel_id, l.name,
-                          COUNT(CASE WHEN c.is_logged_in = true AND c.guild_id = %s THEN c.user_id END) as logged_in_count
+                '''SELECT glc.location_id, glc.channel_id, l.name
                    FROM guild_location_channels glc
                    JOIN locations l ON glc.location_id = l.location_id
-                   LEFT JOIN characters c ON l.location_id = c.current_location AND c.guild_id = %s
                    WHERE glc.guild_id = %s
                    AND (glc.channel_last_active IS NULL OR glc.channel_last_active < %s)
-                   GROUP BY glc.location_id, glc.channel_id, l.name
-                   HAVING COUNT(CASE WHEN c.is_logged_in = true AND c.guild_id = %s THEN c.user_id END) = 0
-                   LIMIT 3''',  # Reduced from 5 to avoid conflicts
-                (guild.id, guild.id, guild.id, cutoff_time, guild.id),
+                   AND NOT EXISTS (
+                       SELECT 1 FROM characters c 
+                       WHERE c.current_location = l.location_id 
+                       AND c.is_logged_in = true 
+                       AND c.guild_id = %s
+                   )
+                   LIMIT 1''',  # Reduced to 1 to minimize processing time
+                (guild.id, cutoff_time, guild.id),
                 fetch='all'
             )
+            print(f"⏱️ Location query took {time.time() - query_start:.2f}s")
             
             # Also check for empty ship channels with read-only query
+            query_start = time.time()
             empty_ship_channels = self.db.execute_read_query(
-                '''SELECT s.ship_id, s.channel_id, s.name,
-                          COUNT(CASE WHEN c.is_logged_in = true THEN c.user_id END) as logged_in_count
+                '''SELECT s.ship_id, s.channel_id, s.name
                    FROM ships s
-                   LEFT JOIN characters c ON s.ship_id = c.current_ship_id
                    WHERE s.channel_id IS NOT NULL
-                   GROUP BY s.ship_id, s.channel_id, s.name
-                   HAVING COUNT(CASE WHEN c.is_logged_in = true THEN c.user_id END) = 0
-                   LIMIT 2''',  # Reduced limit
+                   AND NOT EXISTS (
+                       SELECT 1 FROM characters c 
+                       WHERE c.current_ship_id = s.ship_id 
+                       AND c.is_logged_in = true
+                   )
+                   LIMIT 1''',  # Reduced to 1 to minimize processing time
                 fetch='all'
             )
+            print(f"⏱️ Ship query took {time.time() - query_start:.2f}s")
             
             # Also check for empty home channels with read-only query
+            query_start = time.time()
             empty_home_channels = self.db.execute_read_query(
-                '''SELECT hi.home_id, hi.channel_id, lh.home_name,
-                          COUNT(CASE WHEN c.is_logged_in = true THEN c.user_id END) as logged_in_count
+                '''SELECT hi.home_id, hi.channel_id, lh.home_name
                    FROM home_interiors hi
                    JOIN location_homes lh ON hi.home_id = lh.home_id
-                   LEFT JOIN characters c ON lh.home_id = c.current_home_id
                    WHERE hi.channel_id IS NOT NULL
-                   GROUP BY hi.home_id, hi.channel_id, lh.home_name
-                   HAVING COUNT(CASE WHEN c.is_logged_in = true THEN c.user_id END) = 0
-                   LIMIT 2''',  # Reduced limit
+                   AND NOT EXISTS (
+                       SELECT 1 FROM characters c 
+                       WHERE c.current_home_id = lh.home_id 
+                       AND c.is_logged_in = true
+                   )
+                   LIMIT 1''',  # Reduced to 1 to minimize processing time
                 fetch='all'
             )
+            print(f"⏱️ Home query took {time.time() - query_start:.2f}s")
             
         except Exception as e:
             print(f"⚠️ Database timeout in cleanup query: {e}")
@@ -1408,7 +1423,7 @@ class ChannelManager:
         cleaned_count = 0
         
         # Clean up location channels
-        for location_id, channel_id, location_name, logged_in_count in empty_channels:
+        for location_id, channel_id, location_name in empty_channels:
             channel = guild.get_channel(channel_id)
             if channel:
                 try:
@@ -1445,7 +1460,7 @@ class ChannelManager:
             await asyncio.sleep(0.5)
         
         # Clean up ship channels
-        for ship_id, channel_id, ship_name, logged_in_count in empty_ship_channels:
+        for ship_id, channel_id, ship_name in empty_ship_channels:
             channel = guild.get_channel(channel_id)
             if channel:
                 try:
@@ -1465,7 +1480,7 @@ class ChannelManager:
             await asyncio.sleep(0.5)
         
         # Clean up home channels
-        for home_id, channel_id, home_name, logged_in_count in empty_home_channels:
+        for home_id, channel_id, home_name in empty_home_channels:
             channel = guild.get_channel(channel_id)
             if channel:
                 try:
@@ -1483,6 +1498,10 @@ class ChannelManager:
             
             # Yield between deletions
             await asyncio.sleep(0.5)
+        
+        # Log timing information
+        elapsed_time = time.time() - start_time
+        print(f"🧹 Cleanup completed for guild {guild.name} in {elapsed_time:.2f}s")
         
         if cleaned_count > 0:
             print(f"🧹 Background cleanup: removed {cleaned_count} channels with no logged-in players")
@@ -1834,23 +1853,56 @@ class ChannelManager:
                     travel_type = "gated corridor"
                     topic = f"In gated corridor {corridor_name} to {dest_display_name}"
             
-            # Create the transit channel
-            channel = await guild.create_text_channel(
-                channel_name,
-                category=category,
-                topic=topic,
-                overwrites=overwrites,
-                reason=f"Temporary transit channel through {corridor_name}"
-            )
+            # Create the transit channel with retry logic
+            max_retries = 2
+            last_error = None
             
-            # Send initial transit message with proper travel type
-            await self._send_transit_welcome(channel, corridor_name, dest_display_name, travel_type)
+            for attempt in range(max_retries + 1):
+                try:
+                    channel = await guild.create_text_channel(
+                        channel_name,
+                        category=category,
+                        topic=topic,
+                        overwrites=overwrites,
+                        reason=f"Temporary transit channel through {corridor_name}"
+                    )
+                    
+                    # Send initial transit message with proper travel type
+                    try:
+                        await self._send_transit_welcome(channel, corridor_name, dest_display_name, travel_type)
+                    except Exception as welcome_error:
+                        print(f"⚠️ Created channel but failed to send welcome message: {welcome_error}")
+                        # Channel is still created successfully, so continue
+                    
+                    print(f"🚀 Created transit channel #{channel_name} for {corridor_name} (attempt {attempt + 1})")
+                    return channel
+                    
+                except discord.errors.Forbidden as e:
+                    print(f"❌ Bot lacks permissions to create transit channel (attempt {attempt + 1}): {e}")
+                    last_error = e
+                    break  # Don't retry permission errors
+                    
+                except discord.errors.HTTPException as e:
+                    print(f"❌ Discord API error creating transit channel (attempt {attempt + 1}): {e}")
+                    last_error = e
+                    if attempt < max_retries:
+                        await asyncio.sleep(1 + attempt)  # Progressive backoff
+                        continue
+                    break
+                    
+                except Exception as e:
+                    print(f"❌ Unexpected error creating transit channel (attempt {attempt + 1}): {e}")
+                    last_error = e
+                    if attempt < max_retries:
+                        await asyncio.sleep(0.5 + attempt)  # Progressive backoff
+                        continue
+                    break
             
-            print(f"🚀 Created transit channel #{channel_name} for {corridor_name}")
-            return channel
+            print(f"❌ Failed to create transit channel after {max_retries + 1} attempts. Last error: {last_error}")
+            return None
             
         except Exception as e:
-            print(f"❌ Failed to create transit channel: {e}")
+            print(f"❌ Unexpected error in create_transit_channel: {e}")
             return None
     
     async def _send_transit_welcome(self, channel: discord.TextChannel, corridor_name: str, destination: str, travel_type: str):

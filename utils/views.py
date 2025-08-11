@@ -767,38 +767,58 @@ class LocationView(discord.ui.View):
             await interaction.response.send_message("🚫 This is not your character.", ephemeral=True)
             return
 
-        # check if the character is currently docked
-        row = self.bot.db.execute_query(
-            "SELECT location_status FROM characters WHERE user_id = %s",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        if row and row[0] == "docked":
-            await interaction.response.send_message(
-                "❌ You must undock before travelling! Use `/tqe` to undock.",
-                ephemeral=True
+        try:
+            # check if the character is currently docked
+            row = self.bot.db.execute_query(
+                "SELECT location_status FROM characters WHERE user_id = %s",
+                (interaction.user.id,),
+                fetch='one'
             )
-            return
+            if row and row[0] == "docked":
+                await interaction.response.send_message(
+                    "❌ You must undock before travelling! Use `/tqe` to undock.",
+                    ephemeral=True
+                )
+                return
 
-        # check if already in a travel session
-        traveling = self.bot.db.execute_query(
-            "SELECT session_id FROM travel_sessions WHERE user_id = %s AND status = 'traveling'",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        if traveling:
-            await interaction.response.send_message(
-                "🚧 You’re already travelling along a corridor.",
-                ephemeral=True
+            # check if already in a travel session
+            traveling = self.bot.db.execute_query(
+                "SELECT session_id FROM travel_sessions WHERE user_id = %s AND status = 'traveling'",
+                (interaction.user.id,),
+                fetch='one'
             )
-            return
+            if traveling:
+                await interaction.response.send_message(
+                    "🚧 You're already travelling along a corridor.",
+                    ephemeral=True
+                )
+                return
+                
+            # Get the travel cog and call the travel_go command
+            travel_cog = self.bot.get_cog('TravelCog')
+            if travel_cog:
+                await travel_cog.travel_go.callback(travel_cog, interaction)
+            else:
+                await interaction.response.send_message("Travel system is currently unavailable.", ephemeral=True)
+        except Exception as e:
+            print(f"❌ Error in LocationView travel button: {e}")
+            import traceback
+            traceback.print_exc()
             
-        # Get the travel cog and call the travel_go command
-        travel_cog = self.bot.get_cog('TravelCog')
-        if travel_cog:
-            await travel_cog.travel_go.callback(travel_cog, interaction)
-        else:
-            await interaction.response.send_message("Travel system is currently unavailable.", ephemeral=True)
+            # Try to respond if we haven't already
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "❌ An error occurred while initiating travel. Please try again.",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        "❌ An error occurred while initiating travel. Please try again.",
+                        ephemeral=True
+                    )
+            except Exception:
+                print(f"❌ Could not send error message to user {interaction.user.id}")
     
     @discord.ui.button(label="Jobs", style=discord.ButtonStyle.success, emoji="💼")
     async def jobs(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2043,9 +2063,31 @@ class PersistentLocationView(discord.ui.View):
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        travel_cog = self.bot.get_cog('TravelCog')
-        if travel_cog:
-            await travel_cog.travel_go.callback(travel_cog, interaction)
+        try:
+            travel_cog = self.bot.get_cog('TravelCog')
+            if travel_cog:
+                await travel_cog.travel_go.callback(travel_cog, interaction)
+            else:
+                await interaction.response.send_message("Travel system is currently unavailable.", ephemeral=True)
+        except Exception as e:
+            print(f"❌ Error in EphemeralLocationView travel button: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Try to respond if we haven't already
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "❌ An error occurred while initiating travel. Please try again.",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        "❌ An error occurred while initiating travel. Please try again.",
+                        ephemeral=True
+                    )
+            except Exception:
+                print(f"❌ Could not send error message to user {interaction.user.id}")
     @discord.ui.button(label="View Routes", style=discord.ButtonStyle.primary, emoji="📋")
     async def route_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
@@ -2743,9 +2785,31 @@ class EphemeralLocationView(discord.ui.View):
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        travel_cog = self.bot.get_cog('TravelCog')
-        if travel_cog:
-            await travel_cog.travel_go.callback(travel_cog, interaction)
+        try:
+            travel_cog = self.bot.get_cog('TravelCog')
+            if travel_cog:
+                await travel_cog.travel_go.callback(travel_cog, interaction)
+            else:
+                await interaction.response.send_message("Travel system is currently unavailable.", ephemeral=True)
+        except Exception as e:
+            print(f"❌ Error in EphemeralLocationView travel button (2): {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Try to respond if we haven't already
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "❌ An error occurred while initiating travel. Please try again.",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        "❌ An error occurred while initiating travel. Please try again.",
+                        ephemeral=True
+                    )
+            except Exception:
+                print(f"❌ Could not send error message to user {interaction.user.id}")
 
     @discord.ui.button(label="View Routes", style=discord.ButtonStyle.primary, emoji="📋")
     async def route_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -4825,51 +4889,69 @@ class TQEOverviewView(discord.ui.View):
         self.bot = bot
         self.user_id = user_id
         
-        # Check if user is in combat BEFORE the view is fully initialized
-        in_combat = self._check_combat_status()
-        
-        # If NOT in combat, remove the attack button
-        if not in_combat:
-            # Remove the attack_button from the view
-            self.remove_item(self.attack_button)
-        
-        # Check for active job and add job button if needed
-        self._add_job_button_if_needed()
+        try:
+            # Check if user is in combat BEFORE the view is fully initialized
+            in_combat = self._check_combat_status()
+            
+            # If NOT in combat, remove the attack button
+            if not in_combat:
+                # Remove the attack_button from the view
+                self.remove_item(self.attack_button)
+            
+            # Check for active job and add job button if needed
+            self._add_job_button_if_needed()
+        except Exception as e:
+            # Log the error but continue with a basic view
+            print(f"⚠️ TQEOverviewView init error for user {user_id}: {e}")
+            # Remove buttons that require database access if they exist
+            try:
+                self.remove_item(self.attack_button)
+            except:
+                pass
 
     def _check_combat_status(self):
         """Check if user is in any combat"""
-        # Check NPC combat
-        npc_combat = self.bot.db.execute_query(
-            "SELECT combat_id FROM combat_states WHERE player_id = %s",
-            (self.user_id,),
-            fetch='one'
-        )
-        
-        # Check PvP combat
-        pvp_combat = self.bot.db.execute_query(
-            "SELECT combat_id FROM pvp_combat_states WHERE attacker_id = %s OR defender_id = %s",
-            (self.user_id, self.user_id),
-            fetch='one'
-        )
-        
-        return (npc_combat is not None) or (pvp_combat is not None)
+        try:
+            # Check NPC combat
+            npc_combat = self.bot.db.execute_query(
+                "SELECT combat_id FROM combat_states WHERE player_id = %s",
+                (self.user_id,),
+                fetch='one'
+            )
+            
+            # Check PvP combat
+            pvp_combat = self.bot.db.execute_query(
+                "SELECT combat_id FROM pvp_combat_states WHERE attacker_id = %s OR defender_id = %s",
+                (self.user_id, self.user_id),
+                fetch='one'
+            )
+            
+            return (npc_combat is not None) or (pvp_combat is not None)
+        except Exception as e:
+            print(f"⚠️ Error checking combat status for user {self.user_id}: {e}")
+            # Assume not in combat if check fails
+            return False
     
     def check_job_status(self):
         """Check if user has active job and if it's ready for completion"""
-        # Get active job info - UPDATED to include destination_location_id and job location
-        job_info = self.bot.db.execute_query(
-            '''SELECT j.job_id, j.title, j.description, j.reward_money, j.taken_at, j.duration_minutes,
-                      j.danger_level, l.name as location_name, j.job_status, j.location_id, 
-                      j.destination_location_id
-               FROM jobs j
-               JOIN locations l ON j.location_id = l.location_id
-               WHERE j.taken_by = %s AND j.is_taken = true''',
-            (self.user_id,),
-            fetch='one'
-        )
-        
-        if not job_info:
-            return None, False  # No active job
+        try:
+            # Get active job info - UPDATED to include destination_location_id and job location
+            job_info = self.bot.db.execute_query(
+                '''SELECT j.job_id, j.title, j.description, j.reward_money, j.taken_at, j.duration_minutes,
+                          j.danger_level, l.name as location_name, j.job_status, j.location_id, 
+                          j.destination_location_id
+                   FROM jobs j
+                   JOIN locations l ON j.location_id = l.location_id
+                   WHERE j.taken_by = %s AND j.is_taken = true''',
+                (self.user_id,),
+                fetch='one'
+            )
+            
+            if not job_info:
+                return None, False  # No active job
+        except Exception as e:
+            print(f"⚠️ Error checking job status for user {self.user_id}: {e}")
+            return None, False  # Assume no job if check fails
         
         # Unpack with new fields
         (job_id, title, description, reward, taken_at, duration_minutes, danger, 
@@ -4937,44 +5019,48 @@ class TQEOverviewView(discord.ui.View):
     
     def _add_job_button_if_needed(self):
         """Add job button if user has an active job"""
-        job_info, is_ready = self.check_job_status()
-        
-        if job_info:
-            # Check if player is docked
-            location_status = self.bot.db.execute_query(
-                "SELECT location_status FROM characters WHERE user_id = %s",
-                (self.user_id,),
-                fetch='one'
-            )
+        try:
+            job_info, is_ready = self.check_job_status()
             
-            is_docked = location_status and location_status[0] == 'docked'
-            
-            # User has an active job, add the appropriate button
-            if is_ready and is_docked:
-                job_button = discord.ui.Button(
-                    label="Complete Job",
-                    style=discord.ButtonStyle.success,
-                    emoji="✅"
+            if job_info:
+                # Check if player is docked
+                location_status = self.bot.db.execute_query(
+                    "SELECT location_status FROM characters WHERE user_id = %s",
+                    (self.user_id,),
+                    fetch='one'
                 )
-                job_button.callback = self.complete_job
-            elif is_ready and not is_docked:
-                # Job is ready but player is not docked
-                job_button = discord.ui.Button(
-                    label="Job Ready (Dock Required)",
-                    style=discord.ButtonStyle.secondary,
-                    emoji="⚠️"
-                )
-                job_button.callback = self.view_job_status
-            else:
-                # Job is not ready yet
-                job_button = discord.ui.Button(
-                    label="Job Status",
-                    style=discord.ButtonStyle.primary,
-                    emoji="💼"
-                )
-                job_button.callback = self.view_job_status
-            
-            self.add_item(job_button)
+                
+                is_docked = location_status and location_status[0] == 'docked'
+                
+                # User has an active job, add the appropriate button
+                if is_ready and is_docked:
+                    job_button = discord.ui.Button(
+                        label="Complete Job",
+                        style=discord.ButtonStyle.success,
+                        emoji="✅"
+                    )
+                    job_button.callback = self.complete_job
+                elif is_ready and not is_docked:
+                    # Job is ready but player is not docked
+                    job_button = discord.ui.Button(
+                        label="Job Ready (Dock Required)",
+                        style=discord.ButtonStyle.secondary,
+                        emoji="⚠️"
+                    )
+                    job_button.callback = self.view_job_status
+                else:
+                    # Job is not ready yet
+                    job_button = discord.ui.Button(
+                        label="Job Status",
+                        style=discord.ButtonStyle.primary,
+                        emoji="💼"
+                    )
+                    job_button.callback = self.view_job_status
+                
+                self.add_item(job_button)
+        except Exception as e:
+            print(f"⚠️ Error adding job button for user {self.user_id}: {e}")
+            # Continue without job button if check fails
             
     @discord.ui.button(label="Location", style=discord.ButtonStyle.primary, emoji="📍")
     async def location_button(self, interaction: discord.Interaction, button: discord.ui.Button):

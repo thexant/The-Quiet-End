@@ -1158,7 +1158,7 @@ class GalaxyGeneratorCog(commands.Cog):
 
                 # Restart background tasks
                 print("🔄 Restarting background tasks...")
-                self.bot.start_background_tasks()
+                await self.bot.start_background_tasks()
 
                 status_updater_cog = self.bot.get_cog('StatusUpdaterCog')
                 if status_updater_cog:

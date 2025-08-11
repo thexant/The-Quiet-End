@@ -30,6 +30,29 @@ class CharacterCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
+        self._galaxy_info_cache = None
+        self._galaxy_info_cache_time = 0
+
+    async def _safe_db_query(self, query, params=None, fetch='one', timeout_seconds=5, user_id=None):
+        """Execute database query with timeout and error handling"""
+        import asyncio
+        
+        def run_query():
+            return self.db.execute_query(query, params, fetch=fetch)
+        
+        try:
+            # Run the query with a timeout
+            result = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, run_query),
+                timeout=timeout_seconds
+            )
+            return result
+        except asyncio.TimeoutError:
+            print(f"🚨 TQE: Database query timeout ({timeout_seconds}s) for user {user_id}: {query[:100]}...")
+            return None
+        except Exception as e:
+            print(f"❌ TQE: Database query error for user {user_id}: {e}")
+            return None
     
     
 
@@ -39,115 +62,313 @@ class CharacterCog(commands.Cog):
 
     def _get_galaxy_info(self):
         """Get galaxy information including time, shift, players online, and galaxy name"""
-        # Get current galaxy time using TimeSystem
+        import time
+        
+        # Cache galaxy info for 30 seconds to reduce database load
+        current_time = time.time()
+        if (self._galaxy_info_cache and 
+            current_time - self._galaxy_info_cache_time < 30):
+            return self._galaxy_info_cache
+        
         try:
-            from utils.time_system import TimeSystem
-            time_system = TimeSystem(self.bot)
-            current_datetime = time_system.calculate_current_ingame_time()
-            if current_datetime:
-                current_date = time_system.format_ingame_datetime(current_datetime)
-                # Get the current shift
-                shift_name, shift_period = time_system.get_current_shift()
-            else:
+            # Get current galaxy time using TimeSystem
+            try:
+                from utils.time_system import TimeSystem
+                time_system = TimeSystem(self.bot)
+                current_datetime = time_system.calculate_current_ingame_time()
+                if current_datetime:
+                    current_date = time_system.format_ingame_datetime(current_datetime)
+                    # Get the current shift
+                    shift_name, shift_period = time_system.get_current_shift()
+                else:
+                    current_date = "Unknown Date"
+                    shift_name = "Unknown Shift"
+                    shift_period = "unknown"
+            except:
+                # Fallback if TimeSystem is not available
                 current_date = "Unknown Date"
                 shift_name = "Unknown Shift"
                 shift_period = "unknown"
-        except:
-            # Fallback if TimeSystem is not available
-            current_date = "Unknown Date"
-            shift_name = "Unknown Shift"
-            shift_period = "unknown"
 
-        # Get logged in players count
-        logged_in_count = self.bot.db.execute_query(
-            "SELECT COUNT(*) FROM characters WHERE is_logged_in = true",
-            fetch='one'
-        )[0]
+            # Get logged in players count and galaxy name in a single optimized query
+            combined_info = self.bot.db.execute_query(
+                """SELECT 
+                    (SELECT COUNT(*) FROM characters WHERE is_logged_in = true) as logged_in_count,
+                    (SELECT name FROM galaxy_info WHERE galaxy_id = 1) as galaxy_name""",
+                fetch='one'
+            )
 
-        # Get galaxy name from galaxy_info table
-        galaxy_info = self.bot.db.execute_query(
-            "SELECT name FROM galaxy_info WHERE galaxy_id = 1",
-            fetch='one'
-        )
-        galaxy_name = galaxy_info[0] if galaxy_info else "Unknown Galaxy"
+            if combined_info:
+                logged_in_count, galaxy_name = combined_info
+            else:
+                logged_in_count = 0
+                galaxy_name = "Unknown Galaxy"
 
-        # Add shift emoji based on period
-        shift_emojis = {
-            "morning": "🌅",
-            "day": "☀️",
-            "evening": "🌆",
-            "night": "🌙"
-        }
-        shift_emoji = shift_emojis.get(shift_period, "🌐")
+            # Add shift emoji based on period
+            shift_emojis = {
+                "morning": "🌅",
+                "day": "☀️",
+                "evening": "🌆",
+                "night": "🌙"
+            }
+            shift_emoji = shift_emojis.get(shift_period, "🌐")
 
-        return {
-            'galaxy_name': galaxy_name,
-            'current_date': current_date,
-            'shift_name': shift_name,
-            'shift_emoji': shift_emoji,
-            'logged_in_count': logged_in_count
-        }
+            result = {
+                'galaxy_name': galaxy_name or "Unknown Galaxy",
+                'current_date': current_date,
+                'shift_name': shift_name,
+                'shift_emoji': shift_emoji,
+                'logged_in_count': logged_in_count or 0
+            }
+            
+            # Cache the result
+            self._galaxy_info_cache = result
+            self._galaxy_info_cache_time = current_time
+            
+            return result
+            
+        except Exception as e:
+            print(f"⚠️ Error getting galaxy info: {e}")
+            # Return fallback data
+            return {
+                'galaxy_name': "The Quiet End",
+                'current_date': "Unknown Date",
+                'shift_name': "Unknown Shift",
+                'shift_emoji': "🌐",
+                'logged_in_count': 0
+            }
 
     @app_commands.command(name="tqe", description="The Quiet End - View game overview panel")
     async def tqe_overview(self, interaction: discord.Interaction):
         """Display The Quiet End overview panel with character, location, and galaxy info"""
         
-        # Check if user has a character
-        char_data = self.db.execute_query(
-            """SELECT name, is_logged_in, current_location, current_ship_id, 
-               location_status, money
-               FROM characters WHERE user_id = %s""",
-            (interaction.user.id,),
-            fetch='one'
-        )
+        import time
+        start_time = time.time()
         
-        # Check if this command is being run in a location channel
-        from utils.channel_manager import ChannelManager
-        channel_manager = ChannelManager(self.bot)
-        location_channel_check = channel_manager.get_location_from_channel_id(
-            interaction.guild.id, 
-            interaction.channel.id
-        )
+        try:
+            # Check if user has a character
+            char_data = self.db.execute_query(
+                """SELECT name, is_logged_in, current_location, current_ship_id, 
+                   location_status, money
+                   FROM characters WHERE user_id = %s""",
+                (interaction.user.id,),
+                fetch='one'
+            )
         
-        # Check if this command is being run in a home interior channel
-        home_channel_check = self.db.execute_query(
-            "SELECT home_id FROM home_interiors WHERE channel_id = %s",
-            (interaction.channel.id,),
-            fetch='one'
-        )
-        
-        # Check if this command is being run in a ship interior channel
-        ship_channel_check = self.db.execute_query(
-            "SELECT ship_id FROM ships WHERE channel_id = %s",
-            (interaction.channel.id,),
-            fetch='one'
-        )
-        
-        # Check if this command is being run in a transit channel
-        # Transit channels have names starting with "transit-" and are typically in the transit category
-        transit_channel_check = (
-            interaction.channel.name.startswith("transit-") and 
-            interaction.channel.category and 
-            interaction.channel.category.name == "🚀 IN TRANSIT"
-        )
-        
-        # Show basic panel unless user is logged in AND in a recognized channel (location, home, ship, or transit)
-        # Basic panel conditions: (no character) OR (not logged in) OR (not in any recognized channel)
-        show_basic_panel = (
-            not char_data or 
-            (char_data and not char_data[1]) or  # char_data[1] is is_logged_in
-            (not location_channel_check and not home_channel_check and not ship_channel_check and not transit_channel_check)
-        )
-        
-        if show_basic_panel:
-            galaxy_info = self._get_galaxy_info()
+            # Check if this command is being run in a location channel
+            from utils.channel_manager import ChannelManager
+            channel_manager = ChannelManager(self.bot)
+            location_channel_check = channel_manager.get_location_from_channel_id(
+                interaction.guild.id, 
+                interaction.channel.id
+            )
             
-            # Create basic embed with galaxy info only
+            # Check if this command is being run in a home interior channel
+            home_channel_check = self.db.execute_query(
+                "SELECT home_id FROM home_interiors WHERE channel_id = %s",
+                (interaction.channel.id,),
+                fetch='one'
+            )
+            
+            # Check if this command is being run in a ship interior channel
+            ship_channel_check = self.db.execute_query(
+                "SELECT ship_id FROM ships WHERE channel_id = %s",
+                (interaction.channel.id,),
+                fetch='one'
+            )
+            
+            # Check if this command is being run in a transit channel
+            # Transit channels have names starting with "transit-" and are typically in the transit category
+            transit_channel_check = (
+                interaction.channel.name.startswith("transit-") and 
+                interaction.channel.category and 
+                interaction.channel.category.name == "🚀 IN TRANSIT"
+            )
+            
+            # Show basic panel unless user is logged in AND in a recognized channel (location, home, ship, or transit)
+            # Basic panel conditions: (no character) OR (not logged in) OR (not in any recognized channel)
+            show_basic_panel = (
+                not char_data or 
+                (char_data and not char_data[1]) or  # char_data[1] is is_logged_in
+                (not location_channel_check and not home_channel_check and not ship_channel_check and not transit_channel_check)
+            )
+            
+            if show_basic_panel:
+                galaxy_info = self._get_galaxy_info()
+                
+                # Create basic embed with galaxy info only
+                embed = discord.Embed(
+                    title="🌌 The Quiet End - Galaxy Overview",
+                    description="Current galaxy status and information",
+                    color=0x1a1a2e
+                )
+                
+                embed.add_field(
+                    name="🌍 Galaxy",
+                    value=f"**Name:** {galaxy_info['galaxy_name']}\n"
+                          f"**Date:** {galaxy_info['current_date']}\n"
+                          f"**Shift:** {galaxy_info['shift_emoji']} {galaxy_info['shift_name']}\n"
+                          f"**Players Online:** {galaxy_info['logged_in_count']}",
+                    inline=False
+                )
+                
+                # Customize message based on whether user has a character
+                if char_data:
+                    getting_started_text = "• Click **Login** to connect to your character\n• Use `/tqe` in a location channel after logging in for full features"
+                else:
+                    getting_started_text = "• Click **Login** to connect to your character\n• Use the game panel to create a character if you don't have a character yet"
+                
+                embed.add_field(
+                    name="🚀 Getting Started",
+                    value=getting_started_text,
+                    inline=False
+                )
+                
+                embed.set_footer(text="The Quiet End • Use Login to access full features")
+                
+                # Import BasicTQEView from utils.views
+                from utils.views import BasicTQEView
+                view = BasicTQEView(self.bot)
+                
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+                return
+            
+            # Original behavior for no character in location channels or other scenarios
+            if not char_data:
+                await interaction.response.send_message(
+                    "You don't have a character! Use the game panel to create a character first.",
+                    ephemeral=True
+                )
+                return
+            
+            char_name, is_logged_in, current_location, current_ship_id, location_status, money = char_data
+            
+            # Get age from character_identity table
+            age_data = self.db.execute_query(
+                "SELECT age FROM character_identity WHERE user_id = %s",
+                (interaction.user.id,),
+                fetch='one'
+            )
+            age = age_data[0] if age_data else "Unknown"
+            
+            # Create the main embed
             embed = discord.Embed(
-                title="🌌 The Quiet End - Galaxy Overview",
-                description="Current galaxy status and information",
+                title="🌌 The Quiet End - Overview",
+                description=f"**{char_name}**'s Status Overview",
                 color=0x1a1a2e
             )
+            
+            # Character Information Section
+            status_emoji = "🟢" if is_logged_in else "⚫"
+            status_text = "Online" if is_logged_in else "Offline"
+            embed.add_field(
+                name="👤 Character",
+                value=f"**Status:** {status_emoji} {status_text}\n"
+                      f"**Age:** {age} years\n"
+                      f"**Credits:** {money:,}",
+                inline=True
+            )
+            
+            # Location/Transit Information Section
+            if location_status == "traveling" or not current_location:
+                # Get travel session info using separated queries to avoid JOIN hangs
+                print(f"🚨 TQE: User {interaction.user.id} in travel state - checking for corruption (location_status='{location_status}', current_location={current_location})")
+                
+                # Step 1: Get basic travel session data first with timeout
+                travel_session = await self._safe_db_query(
+                    """SELECT origin_location, destination_location, corridor_id,
+                              end_time, temp_channel_id,
+                              EXTRACT(EPOCH FROM (end_time - NOW())) / 86400.0 as time_remaining
+                       FROM travel_sessions 
+                       WHERE user_id = %s AND status = 'traveling'""",
+                    (interaction.user.id,),
+                    fetch='one',
+                    timeout_seconds=3,
+                    user_id=interaction.user.id
+                )
+                
+                if travel_session:
+                    origin_id, dest_id, corridor_id, end_time, temp_channel_id, time_remaining = travel_session
+                    print(f"📍 TQE: Travel session found for user {interaction.user.id} - origin:{origin_id}, dest:{dest_id}, corridor:{corridor_id}")
+                    
+                    # Step 2: Get location names separately (safer than JOINs)
+                    origin_name = "Unknown Origin"
+                    dest_name = "Unknown Destination"
+                    corridor_name = "Unknown Corridor"
+                    
+                    # Step 2: Get location names with individual timeouts
+                    if origin_id:
+                        origin_data = await self._safe_db_query("SELECT name FROM locations WHERE location_id = %s", (origin_id,), timeout_seconds=2, user_id=interaction.user.id)
+                        origin_name = origin_data[0] if origin_data else f"Location #{origin_id}"
+                    
+                    if dest_id:
+                        dest_data = await self._safe_db_query("SELECT name FROM locations WHERE location_id = %s", (dest_id,), timeout_seconds=2, user_id=interaction.user.id)
+                        dest_name = dest_data[0] if dest_data else f"Location #{dest_id}"
+                    
+                    if corridor_id:
+                        corridor_data = await self._safe_db_query("SELECT name FROM corridors WHERE corridor_id = %s", (corridor_id,), timeout_seconds=2, user_id=interaction.user.id)
+                        corridor_name = corridor_data[0] if corridor_data else f"Corridor #{corridor_id}"
+                    
+                    travel_info = (origin_id, dest_id, corridor_id, end_time, temp_channel_id, 
+                                 origin_name, dest_name, corridor_name, time_remaining)
+                else:
+                    travel_info = None
+                    print(f"❌ TQE: No travel session found for user {interaction.user.id} despite traveling status!")
+                
+                if travel_info:
+                    origin_id, dest_id, corridor_id, end_time, temp_channel_id, \
+                    origin_name, dest_name, corridor_name, time_remaining = travel_info
+                    
+                    # Convert time remaining to hours and minutes
+                    if time_remaining and time_remaining > 0:
+                        hours_remaining = int(time_remaining * 24)
+                        minutes_remaining = int((time_remaining * 24 - hours_remaining) * 60)
+                        time_str = f"{hours_remaining}h {minutes_remaining}m"
+                    else:
+                        time_str = "Arriving soon..."
+                    
+                    # Build transit status with corridor info
+                    transit_value = f"**From:** {origin_name}\n"
+                    transit_value += f"**To:** {dest_name}\n"
+                    transit_value += f"**Via:** {corridor_name}\n"
+                    transit_value += f"**ETA:** {time_str}"
+                    
+                    embed.add_field(
+                        name="🚀 Transit Status",
+                        value=transit_value,
+                        inline=True
+                    )
+                else:
+                    embed.add_field(
+                        name="📍 Location",
+                        value="**Status:** In Transit\n**Destination:** Unknown",
+                        inline=True
+                    )
+            else:
+                # Get current location info
+                location_name = "Unknown Location"
+                location_type = ""
+                if current_location:
+                    location_info = self.db.execute_query(
+                        "SELECT name, location_type FROM locations WHERE location_id = %s",
+                        (current_location,),
+                        fetch='one'
+                    )
+                    if location_info:
+                        location_name = location_info[0]
+                        location_type = location_info[1]
+                
+                status_emoji = "🛬" if location_status == "docked" else "🚀"
+                embed.add_field(
+                    name="📍 Location",
+                    value=f"**Current:** {location_name}\n"
+                          f"**Type:** {location_type.replace('_', ' ').title()}\n"
+                          f"**Status:** {status_emoji} {location_status.replace('_', ' ').title()}",
+                    inline=True
+                )
+            
+            # Galaxy Information Section
+            galaxy_info = self._get_galaxy_info()
             
             embed.add_field(
                 name="🌍 Galaxy",
@@ -155,164 +376,336 @@ class CharacterCog(commands.Cog):
                       f"**Date:** {galaxy_info['current_date']}\n"
                       f"**Shift:** {galaxy_info['shift_emoji']} {galaxy_info['shift_name']}\n"
                       f"**Players Online:** {galaxy_info['logged_in_count']}",
-                inline=False
-            )
-            
-            # Customize message based on whether user has a character
-            if char_data:
-                getting_started_text = "• Click **Login** to connect to your character\n• Use `/tqe` in a location channel after logging in for full features"
-            else:
-                getting_started_text = "• Click **Login** to connect to your character\n• Use the game panel to create a character if you don't have a character yet"
-            
-            embed.add_field(
-                name="🚀 Getting Started",
-                value=getting_started_text,
-                inline=False
-            )
-            
-            embed.set_footer(text="The Quiet End • Use Login to access full features")
-            
-            # Import BasicTQEView from utils.views
-            from utils.views import BasicTQEView
-            view = BasicTQEView(self.bot)
-            
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-            return
-        
-        # Original behavior for no character in location channels or other scenarios
-        if not char_data:
-            await interaction.response.send_message(
-                "You don't have a character! Use the game panel to create a character first.",
-                ephemeral=True
-            )
-            return
-        
-        char_name, is_logged_in, current_location, current_ship_id, location_status, money = char_data
-        
-        # Get age from character_identity table
-        age_data = self.db.execute_query(
-            "SELECT age FROM character_identity WHERE user_id = %s",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        age = age_data[0] if age_data else "Unknown"
-        
-        # Create the main embed
-        embed = discord.Embed(
-            title="🌌 The Quiet End - Overview",
-            description=f"**{char_name}**'s Status Overview",
-            color=0x1a1a2e
-        )
-        
-        # Character Information Section
-        status_emoji = "🟢" if is_logged_in else "⚫"
-        status_text = "Online" if is_logged_in else "Offline"
-        embed.add_field(
-            name="👤 Character",
-            value=f"**Status:** {status_emoji} {status_text}\n"
-                  f"**Age:** {age} years\n"
-                  f"**Credits:** {money:,}",
-            inline=True
-        )
-        
-        # Location/Transit Information Section
-        if location_status == "traveling" or not current_location:
-            # Get travel session info - either status is traveling or no current location
-            travel_info = self.db.execute_query(
-                """SELECT ts.origin_location, ts.destination_location, ts.corridor_id,
-                          ts.end_time, ts.temp_channel_id,
-                          ol.name as origin_name, dl.name as dest_name, 
-                          c.name as corridor_name,
-                          EXTRACT(EPOCH FROM (ts.end_time - NOW())) / 86400.0 as time_remaining
-                   FROM travel_sessions ts
-                   JOIN locations ol ON ts.origin_location = ol.location_id
-                   JOIN locations dl ON ts.destination_location = dl.location_id
-                   JOIN corridors c ON ts.corridor_id = c.corridor_id
-                   WHERE ts.user_id = %s AND ts.status = 'traveling'""",
-                (interaction.user.id,),
-                fetch='one'
-            )
-            
-            if travel_info:
-                origin_id, dest_id, corridor_id, end_time, temp_channel_id, \
-                origin_name, dest_name, corridor_name, time_remaining = travel_info
-                
-                # Convert time remaining to hours and minutes
-                if time_remaining and time_remaining > 0:
-                    hours_remaining = int(time_remaining * 24)
-                    minutes_remaining = int((time_remaining * 24 - hours_remaining) * 60)
-                    time_str = f"{hours_remaining}h {minutes_remaining}m"
-                else:
-                    time_str = "Arriving soon..."
-                
-                # Build transit status with corridor info
-                transit_value = f"**From:** {origin_name}\n"
-                transit_value += f"**To:** {dest_name}\n"
-                transit_value += f"**Via:** {corridor_name}\n"
-                transit_value += f"**ETA:** {time_str}"
-                
-                embed.add_field(
-                    name="🚀 Transit Status",
-                    value=transit_value,
-                    inline=True
-                )
-            else:
-                embed.add_field(
-                    name="📍 Location",
-                    value="**Status:** In Transit\n**Destination:** Unknown",
-                    inline=True
-                )
-        else:
-            # Get current location info
-            location_name = "Unknown Location"
-            location_type = ""
-            if current_location:
-                location_info = self.db.execute_query(
-                    "SELECT name, location_type FROM locations WHERE location_id = %s",
-                    (current_location,),
-                    fetch='one'
-                )
-                if location_info:
-                    location_name = location_info[0]
-                    location_type = location_info[1]
-            
-            status_emoji = "🛬" if location_status == "docked" else "🚀"
-            embed.add_field(
-                name="📍 Location",
-                value=f"**Current:** {location_name}\n"
-                      f"**Type:** {location_type.replace('_', ' ').title()}\n"
-                      f"**Status:** {status_emoji} {location_status.replace('_', ' ').title()}",
                 inline=True
             )
+            
+            # Add instructions
+            embed.add_field(
+                name="📱 Quick Access",
+                value="Use the buttons below to access detailed panels:",
+                inline=False
+            )
+            
+            embed.set_footer(text="The Quiet End • Use the buttons to navigate")
+            
+            # Create the view with buttons - use fallback if view creation fails
+            view = None
+            try:
+                from utils.views import TQEOverviewView
+                view = TQEOverviewView(self.bot, interaction.user.id)
+            except Exception as view_error:
+                print(f"⚠️ TQE: View creation failed for user {interaction.user.id}: {view_error}")
+                # Continue without interactive buttons
+            
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            
+            # Log successful completion time
+            total_time = time.time() - start_time
+            if total_time > 2.0:  # Log if takes longer than 2 seconds
+                print(f"⚠️ TQE command took {total_time:.2f}s for user {interaction.user.id}")
+            elif total_time > 5.0:  # Alert if extremely slow
+                print(f"🚨 TQE command SLOW: {total_time:.2f}s for user {interaction.user.id}")
+            
+        except Exception as e:
+            # Log the error for debugging
+            print(f"❌ TQE Command Error for user {interaction.user.id}: {e}")
+            
+            # Create fallback embed
+            embed = discord.Embed(
+                title="🌌 The Quiet End - Service Temporarily Unavailable",
+                description="The game servers are experiencing temporary issues. Please try again in a moment.",
+                color=0xff6b6b
+            )
+            embed.add_field(
+                name="ℹ️ Status",
+                value="Our technical team has been notified and is working to resolve this issue.",
+                inline=False
+            )
+            embed.set_footer(text="The Quiet End • Sorry for the inconvenience")
+            
+            try:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            except:
+                # If even the fallback fails, try basic text response
+                try:
+                    await interaction.response.send_message(
+                        "🚫 The Quiet End is temporarily unavailable. Please try again in a moment.",
+                        ephemeral=True
+                    )
+                except:
+                    # Last resort - at least log that we tried
+                    print(f"❌ Failed to send any response to user {interaction.user.id} for /tqe command")
+
+    @app_commands.command(name="db_health", description="[Admin] Check database connection health")
+    @app_commands.default_permissions(administrator=True)
+    async def db_health(self, interaction: discord.Interaction):
+        """Check database connection pool health"""
+        import time
+        try:
+            # Get pool status
+            pool_status = self.bot.db.get_pool_status()
+            
+            # Test a simple query
+            test_start = time.time()
+            test_result = self.bot.db.execute_query("SELECT 1", fetch='one')
+            test_time = time.time() - test_start
+            
+            embed = discord.Embed(
+                title="🔍 Database Health Check",
+                color=0x00ff00 if pool_status["status"] == "healthy" else 0xff0000
+            )
+            
+            embed.add_field(
+                name="Connection Pool",
+                value=f"**Status:** {pool_status['status']}\n"
+                      f"**Min Connections:** {pool_status.get('minconn', 'unknown')}\n"
+                      f"**Max Connections:** {pool_status.get('maxconn', 'unknown')}",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="Query Test",
+                value=f"**Response Time:** {test_time:.3f}s\n"
+                      f"**Result:** {'✅ Success' if test_result else '❌ Failed'}",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            embed = discord.Embed(
+                title="❌ Database Health Check Failed",
+                description=f"Error: {e}",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="check_travel_corruption", description="[Admin] Check for corrupted travel session data")
+    @app_commands.default_permissions(administrator=True)
+    async def check_travel_corruption(self, interaction: discord.Interaction):
+        """Check for users with corrupted travel session data that could cause /tqe timeouts"""
+        await interaction.response.defer(ephemeral=True)
         
-        # Galaxy Information Section
-        galaxy_info = self._get_galaxy_info()
+        try:
+            # Find travel sessions with invalid location/corridor references
+            corrupt_sessions = self.bot.db.execute_query(
+                """SELECT ts.user_id, ts.origin_location, ts.destination_location, ts.corridor_id,
+                          c.name as char_name,
+                          CASE WHEN ol.location_id IS NULL THEN 'Missing Origin' ELSE '' END as origin_issue,
+                          CASE WHEN dl.location_id IS NULL THEN 'Missing Destination' ELSE '' END as dest_issue,
+                          CASE WHEN cor.corridor_id IS NULL THEN 'Missing Corridor' ELSE '' END as corridor_issue
+                   FROM travel_sessions ts
+                   JOIN characters c ON ts.user_id = c.user_id
+                   LEFT JOIN locations ol ON ts.origin_location = ol.location_id
+                   LEFT JOIN locations dl ON ts.destination_location = dl.location_id  
+                   LEFT JOIN corridors cor ON ts.corridor_id = cor.corridor_id
+                   WHERE ts.status = 'traveling'
+                   AND (ol.location_id IS NULL OR dl.location_id IS NULL OR cor.corridor_id IS NULL)""",
+                fetch='all'
+            )
+            
+            # Find characters in traveling state without travel sessions
+            orphaned_travelers = self.bot.db.execute_query(
+                """SELECT c.user_id, c.name, c.location_status
+                   FROM characters c
+                   LEFT JOIN travel_sessions ts ON c.user_id = ts.user_id AND ts.status = 'traveling'
+                   WHERE c.location_status = 'traveling' AND ts.user_id IS NULL""",
+                fetch='all'
+            )
+            
+            embed = discord.Embed(
+                title="🔍 Travel Data Corruption Report",
+                color=0xff6600 if corrupt_sessions or orphaned_travelers else 0x00ff00
+            )
+            
+            if corrupt_sessions:
+                corrupt_list = []
+                for session in corrupt_sessions[:10]:  # Limit to first 10
+                    user_id, origin_id, dest_id, corridor_id, char_name, origin_issue, dest_issue, corridor_issue = session
+                    issues = [i for i in [origin_issue, dest_issue, corridor_issue] if i]
+                    corrupt_list.append(f"• **{char_name}** (ID: {user_id}): {', '.join(issues)}")
+                
+                embed.add_field(
+                    name=f"❌ Corrupted Travel Sessions ({len(corrupt_sessions)})",
+                    value='\n'.join(corrupt_list) + (f"\n... and {len(corrupt_sessions)-10} more" if len(corrupt_sessions) > 10 else ""),
+                    inline=False
+                )
+            
+            if orphaned_travelers:
+                orphan_list = []
+                for traveler in orphaned_travelers[:10]:
+                    user_id, char_name, status = traveler
+                    orphan_list.append(f"• **{char_name}** (ID: {user_id})")
+                
+                embed.add_field(
+                    name=f"👻 Orphaned Travelers ({len(orphaned_travelers)})",
+                    value='\n'.join(orphan_list) + (f"\n... and {len(orphaned_travelers)-10} more" if len(orphaned_travelers) > 10 else ""),
+                    inline=False
+                )
+            
+            if not corrupt_sessions and not orphaned_travelers:
+                embed.add_field(
+                    name="✅ All Clear",
+                    value="No corrupted travel session data found.",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="🔧 Recommended Action",
+                    value="Use `/fix_travel_corruption` to clean up corrupted data, or manually reset affected users' location_status to 'docked'.",
+                    inline=False
+                )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            embed = discord.Embed(
+                title="❌ Corruption Check Failed",
+                description=f"Error checking travel data: {e}",
+                color=0xff0000
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="fix_travel_corruption", description="[Admin] Clean up corrupted travel session data")
+    @app_commands.default_permissions(administrator=True)
+    async def fix_travel_corruption(self, interaction: discord.Interaction, confirm: bool = False):
+        """Clean up corrupted travel session data that causes /tqe timeouts"""
         
-        embed.add_field(
-            name="🌍 Galaxy",
-            value=f"**Name:** {galaxy_info['galaxy_name']}\n"
-                  f"**Date:** {galaxy_info['current_date']}\n"
-                  f"**Shift:** {galaxy_info['shift_emoji']} {galaxy_info['shift_name']}\n"
-                  f"**Players Online:** {galaxy_info['logged_in_count']}",
-            inline=True
-        )
+        if not confirm:
+            embed = discord.Embed(
+                title="⚠️ Travel Data Cleanup Confirmation",
+                description="This will clean up corrupted travel session data. **This action cannot be undone.**",
+                color=0xff6600
+            )
+            embed.add_field(
+                name="What this will do:",
+                value="• Delete travel sessions with invalid location/corridor references\n"
+                      "• Reset characters stuck in 'traveling' status to 'docked'\n"
+                      "• Clean up orphaned travel session records",
+                inline=False
+            )
+            embed.add_field(
+                name="To proceed:",
+                value="Run `/fix_travel_corruption confirm:True`",
+                inline=False
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
         
-        # Add instructions
-        embed.add_field(
-            name="📱 Quick Access",
-            value="Use the buttons below to access detailed panels:",
-            inline=False
-        )
+        await interaction.response.defer(ephemeral=True)
         
-        embed.set_footer(text="The Quiet End • Use the buttons to navigate")
-        
-        # Create the view with buttons
-        # Import TQEOverviewView from utils.views
-        from utils.views import TQEOverviewView
-        view = TQEOverviewView(self.bot, interaction.user.id)
-        
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
+        try:
+            fixed_count = 0
+            
+            # Step 1: Find and delete travel sessions with invalid references
+            print("🔧 Starting travel session cleanup...")
+            
+            # Get corrupted sessions before deleting them
+            corrupt_sessions = self.bot.db.execute_query(
+                """SELECT ts.user_id, c.name as char_name
+                   FROM travel_sessions ts
+                   JOIN characters c ON ts.user_id = c.user_id
+                   LEFT JOIN locations ol ON ts.origin_location = ol.location_id
+                   LEFT JOIN locations dl ON ts.destination_location = dl.location_id  
+                   LEFT JOIN corridors cor ON ts.corridor_id = cor.corridor_id
+                   WHERE ts.status = 'traveling'
+                   AND (ol.location_id IS NULL OR dl.location_id IS NULL OR cor.corridor_id IS NULL)""",
+                fetch='all'
+            )
+            
+            if corrupt_sessions:
+                # Delete corrupted travel sessions
+                deleted_sessions = self.bot.db.execute_query(
+                    """DELETE FROM travel_sessions 
+                       WHERE travel_session_id IN (
+                           SELECT ts.travel_session_id
+                           FROM travel_sessions ts
+                           LEFT JOIN locations ol ON ts.origin_location = ol.location_id
+                           LEFT JOIN locations dl ON ts.destination_location = dl.location_id  
+                           LEFT JOIN corridors cor ON ts.corridor_id = cor.corridor_id
+                           WHERE ts.status = 'traveling'
+                           AND (ol.location_id IS NULL OR dl.location_id IS NULL OR cor.corridor_id IS NULL)
+                       )"""
+                )
+                fixed_count += len(corrupt_sessions)
+                print(f"✅ Deleted {len(corrupt_sessions)} corrupted travel sessions")
+            
+            # Step 2: Reset orphaned travelers to docked status
+            orphaned_travelers = self.bot.db.execute_query(
+                """SELECT c.user_id, c.name
+                   FROM characters c
+                   LEFT JOIN travel_sessions ts ON c.user_id = ts.user_id AND ts.status = 'traveling'
+                   WHERE c.location_status = 'traveling' AND ts.user_id IS NULL""",
+                fetch='all'
+            )
+            
+            if orphaned_travelers:
+                # Reset their status to docked
+                for user_id, char_name in orphaned_travelers:
+                    self.bot.db.execute_query(
+                        "UPDATE characters SET location_status = 'docked' WHERE user_id = %s",
+                        (user_id,)
+                    )
+                    print(f"🔧 Reset {char_name} (ID: {user_id}) from traveling to docked")
+                
+                fixed_count += len(orphaned_travelers)
+            
+            # Step 3: Clean up any completed/cancelled travel sessions that are lingering
+            old_sessions = self.bot.db.execute_query(
+                """DELETE FROM travel_sessions 
+                   WHERE status IN ('completed', 'cancelled') 
+                   AND end_time < NOW() - INTERVAL '24 hours'"""
+            )
+            
+            # Step 4: Delete any transit channels that are no longer needed
+            # (Optional - might want to keep this separate)
+            
+            embed = discord.Embed(
+                title="✅ Travel Data Cleanup Complete",
+                color=0x00ff00
+            )
+            
+            if corrupt_sessions:
+                char_names = [session[1] for session in corrupt_sessions]
+                embed.add_field(
+                    name=f"🗑️ Deleted Corrupted Sessions ({len(corrupt_sessions)})",
+                    value=', '.join(char_names[:10]) + ('...' if len(char_names) > 10 else ''),
+                    inline=False
+                )
+            
+            if orphaned_travelers:
+                char_names = [traveler[1] for traveler in orphaned_travelers]
+                embed.add_field(
+                    name=f"🚢 Reset to Docked ({len(orphaned_travelers)})",
+                    value=', '.join(char_names[:10]) + ('...' if len(char_names) > 10 else ''),
+                    inline=False
+                )
+            
+            if not corrupt_sessions and not orphaned_travelers:
+                embed.add_field(
+                    name="🎯 No Issues Found",
+                    value="No corrupted travel data needed cleanup.",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="📊 Summary",
+                    value=f"Fixed **{fixed_count}** travel data issues.\n"
+                          f"/tqe command should now work properly for all users.",
+                    inline=False
+                )
+            
+            embed.set_footer(text="Affected users should try /tqe again - it should work now!")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            print(f"❌ Travel cleanup error: {e}")
+            embed = discord.Embed(
+                title="❌ Cleanup Failed",
+                description=f"Error during travel data cleanup: {e}",
+                color=0xff0000
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="think", description="Share your character's internal thoughts")
     @app_commands.describe(thought="What your character is thinking")

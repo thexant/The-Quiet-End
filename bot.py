@@ -41,9 +41,21 @@ class RPGBot(commands.Bot):
         self.activity_tracker = None
         self.income_task = None
         self._background_tasks = []
+        
+        # ASYNC TASK MANAGEMENT SYSTEM
+        self._task_priorities = {
+            'heartbeat': 0,      # Highest priority - Discord heartbeat critical
+            'user_interaction': 1,  # User commands and interactions
+            'background_low': 2,    # Low priority background tasks
+            'maintenance': 3        # Lowest priority - backups, cleanup, etc.
+        }
+        self._task_queues = {}
+        self._maintenance_mode = False
+        self._task_monitor = {}
+        
         # Multi-server support enabled - no guild restrictions
         
-    def start_background_tasks(self):
+    async def start_background_tasks(self):
         """Starts the background tasks if they are not already running."""
         if self._closing:
             print("⚠️ Bot is shutting down, not starting background tasks")
@@ -58,6 +70,9 @@ class RPGBot(commands.Bot):
         if not hasattr(self, 'income_task') or self.income_task is None or self.income_task.done():
             self.income_task = self.loop.create_task(self.generate_location_income())
             self._background_tasks.append(self.income_task)
+        
+        # Start database health monitoring
+        await self.start_database_health_monitor()
         
         galaxy_cog = self.get_cog('GalaxyGeneratorCog')
         if galaxy_cog:
@@ -74,7 +89,7 @@ class RPGBot(commands.Bot):
             resume_task = self.loop.create_task(self.activity_tracker.resume_afk_warnings_on_startup())
             self._background_tasks.append(resume_task)
             
-        print("✅ Background tasks started.")
+        print("✅ Background tasks started with health monitoring.")
 
     def stop_background_tasks(self):
         """Stops/Cancels the background tasks."""
@@ -166,6 +181,10 @@ class RPGBot(commands.Bot):
             self.activity_tracker = ActivityTracker(self)
             print("✅ Activity tracker initialized")
             
+            print("🚀 Initializing async task management...")
+            await self.init_task_management()
+            print("✅ Task management initialized")
+            
             print("🧩 Loading cogs...")
             loaded_cogs = 0
             
@@ -203,7 +222,7 @@ class RPGBot(commands.Bot):
             print(f"✅ Loaded {loaded_cogs} cogs successfully")
             
             # Start background tasks
-            self.start_background_tasks()
+            await self.start_background_tasks()
             
             print("🎮 Bot setup complete!")
             
@@ -682,9 +701,252 @@ class RPGBot(commands.Bot):
         async def cross_guild_send(content=None, **kwargs):
             return await self.send_with_cross_guild_broadcast(channel, content, **kwargs)
         return cross_guild_send
+
+    # ASYNC TASK MANAGEMENT & PRIORITY SYSTEM
+    async def init_task_management(self):
+        """Initialize the async task management system"""
+        import asyncio
+        for priority_name in self._task_priorities:
+            self._task_queues[priority_name] = asyncio.Queue()
+        
+        # Start task processor
+        self._task_processor_task = self.loop.create_task(self._process_task_queues())
+        self._background_tasks.append(self._task_processor_task)
+
+    async def _process_task_queues(self):
+        """Process tasks from priority queues to prevent blocking operations"""
+        import asyncio
+        
+        await self.wait_until_ready()
+        
+        while not self.is_closed() and not self._closing:
+            try:
+                # Process tasks in priority order (lower number = higher priority)
+                for priority_name in sorted(self._task_priorities.keys(), 
+                                           key=lambda x: self._task_priorities[x]):
+                    
+                    if self._closing:
+                        return
+                    
+                    # Skip maintenance tasks if not in maintenance mode
+                    if priority_name == 'maintenance' and not self._maintenance_mode:
+                        continue
+                    
+                    queue = self._task_queues.get(priority_name)
+                    if not queue or queue.empty():
+                        continue
+                    
+                    try:
+                        # Get task with short timeout to prevent blocking
+                        task_info = await asyncio.wait_for(queue.get(), timeout=0.1)
+                        task_name, task_func, task_args, task_kwargs = task_info
+                        
+                        # Track task execution
+                        self._task_monitor[task_name] = {
+                            'priority': priority_name,
+                            'started_at': asyncio.get_event_loop().time(),
+                            'status': 'running'
+                        }
+                        
+                        # Execute the task
+                        if asyncio.iscoroutinefunction(task_func):
+                            await task_func(*task_args, **task_kwargs)
+                        else:
+                            # Run sync functions in thread pool
+                            await asyncio.to_thread(task_func, *task_args, **task_kwargs)
+                        
+                        # Mark task as completed
+                        if task_name in self._task_monitor:
+                            self._task_monitor[task_name]['status'] = 'completed'
+                        
+                        queue.task_done()
+                        
+                    except asyncio.TimeoutError:
+                        # No tasks in this priority queue, continue to next
+                        continue
+                    except Exception as e:
+                        if task_name in self._task_monitor:
+                            self._task_monitor[task_name]['status'] = 'failed'
+                            self._task_monitor[task_name]['error'] = str(e)
+                        print(f"❌ Task {task_name} failed: {e}")
+                        queue.task_done()
+                
+                # Yield control briefly
+                await asyncio.sleep(0.01)
+                
+            except asyncio.CancelledError:
+                print("🛑 Task processor cancelled")
+                break
+            except Exception as e:
+                print(f"❌ Task processor error: {e}")
+                await asyncio.sleep(1)
+
+    async def schedule_task(self, task_name: str, task_func, priority: str = 'background_low', *args, **kwargs):
+        """Schedule a task with specified priority"""
+        if priority not in self._task_priorities:
+            priority = 'background_low'
+        
+        if priority not in self._task_queues:
+            print(f"⚠️ Task queue {priority} not initialized, using background_low")
+            priority = 'background_low'
+        
+        await self._task_queues[priority].put((task_name, task_func, args, kwargs))
+
+    def enter_maintenance_mode(self):
+        """Enter maintenance mode - allows maintenance priority tasks"""
+        self._maintenance_mode = True
+        print("🔧 Entered maintenance mode - maintenance tasks enabled")
+
+    def exit_maintenance_mode(self):
+        """Exit maintenance mode - blocks maintenance priority tasks"""
+        self._maintenance_mode = False
+        print("✅ Exited maintenance mode - maintenance tasks disabled")
+
+    def get_task_status(self):
+        """Get status of all tracked tasks"""
+        current_time = asyncio.get_event_loop().time()
+        status = {
+            'maintenance_mode': self._maintenance_mode,
+            'queue_sizes': {},
+            'running_tasks': [],
+            'recent_tasks': []
+        }
+        
+        # Get queue sizes
+        for priority_name, queue in self._task_queues.items():
+            status['queue_sizes'][priority_name] = queue.qsize()
+        
+        # Get task information
+        for task_name, task_info in self._task_monitor.items():
+            task_age = current_time - task_info['started_at']
+            task_status = {
+                'name': task_name,
+                'priority': task_info['priority'],
+                'status': task_info['status'],
+                'age_seconds': task_age
+            }
+            
+            if 'error' in task_info:
+                task_status['error'] = task_info['error']
+            
+            if task_info['status'] == 'running':
+                status['running_tasks'].append(task_status)
+            else:
+                status['recent_tasks'].append(task_status)
+        
+        return status
+
+    # BACKGROUND TASK MONITORING & RESTART SYSTEM
+    async def start_database_health_monitor(self):
+        """Start database health monitoring task"""
+        if not hasattr(self, '_health_monitor_task') or self._health_monitor_task.done():
+            self._health_monitor_task = self.loop.create_task(self._database_health_monitor())
+            self._background_tasks.append(self._health_monitor_task)
+
+    async def _database_health_monitor(self):
+        """Monitor database health and restart tasks if needed"""
+        import asyncio
+        await self.wait_until_ready()
+        
+        while not self.is_closed() and not self._closing:
+            try:
+                # Wait 30 seconds between health checks
+                await asyncio.sleep(30)
+                
+                if self._closing:
+                    return
+                
+                # Perform health check
+                health_status = await self.db.perform_health_check()
+                
+                # Log critical health issues
+                if health_status['overall_health'] == 'critical':
+                    print(f"🚨 Database health CRITICAL: {health_status['errors']}")
+                    
+                    # Record heartbeat failure if database is blocking
+                    self.db._record_heartbeat_failure()
+                    
+                    # Restart failed background tasks
+                    await self._restart_failed_tasks()
+                    
+                elif health_status['overall_health'] == 'degraded':
+                    print(f"⚠️ Database health degraded: {health_status['warnings']}")
+                
+                # Auto-restart income task if it's stopped and should be running
+                if not hasattr(self, 'income_task') or self.income_task is None or self.income_task.done():
+                    if not self._closing:
+                        print("🔄 Restarting income generation task")
+                        self.income_task = self.loop.create_task(self.generate_location_income())
+                        self._background_tasks.append(self.income_task)
+                
+            except asyncio.CancelledError:
+                print("🛑 Database health monitor cancelled")
+                break
+            except Exception as e:
+                print(f"❌ Database health monitor error: {e}")
+                await asyncio.sleep(60)  # Wait longer on errors
+
+    async def _restart_failed_tasks(self):
+        """Restart failed background tasks"""
+        tasks_to_restart = []
+        
+        # Check income task
+        if hasattr(self, 'income_task') and self.income_task and self.income_task.done():
+            exception = self.income_task.exception()
+            if exception:
+                print(f"🔄 Restarting income task due to: {exception}")
+                tasks_to_restart.append(('income', self.generate_location_income))
+        
+        # Check activity tracker tasks
+        if hasattr(self, 'activity_tracker') and self.activity_tracker:
+            # This would need to be implemented in ActivityTracker
+            pass
+        
+        # Restart failed tasks
+        for task_name, task_func in tasks_to_restart:
+            try:
+                if task_name == 'income':
+                    self.income_task = self.loop.create_task(task_func())
+                    self._background_tasks.append(self.income_task)
+                    print(f"✅ Restarted {task_name} task")
+            except Exception as e:
+                print(f"❌ Failed to restart {task_name} task: {e}")
+
+    async def get_system_health_report(self):
+        """Get comprehensive system health report"""
+        # Get database health
+        db_health = await self.db.perform_health_check()
+        
+        # Get task status
+        task_status = self.get_task_status()
+        
+        # Get background task status
+        background_task_status = {
+            'income_task_running': hasattr(self, 'income_task') and self.income_task and not self.income_task.done(),
+            'health_monitor_running': hasattr(self, '_health_monitor_task') and not self._health_monitor_task.done(),
+            'task_processor_running': hasattr(self, '_task_processor_task') and not self._task_processor_task.done(),
+            'total_background_tasks': len(self._background_tasks),
+            'active_background_tasks': len([t for t in self._background_tasks if not t.done()])
+        }
+        
+        # Discord connection status
+        discord_status = {
+            'is_ready': self.is_ready(),
+            'is_closed': self.is_closed(),
+            'latency_ms': round(self.latency * 1000, 1),
+            'guild_count': len(self.guilds)
+        }
+        
+        return {
+            'database_health': db_health,
+            'task_management': task_status,
+            'background_tasks': background_task_status,
+            'discord_connection': discord_status,
+            'maintenance_mode': self._maintenance_mode
+        }
         
     async def generate_location_income(self):
-        """Generate passive income for locations every hour."""
+        """Generate passive income for locations every hour using async database operations."""
         await self.wait_until_ready()
         
         while not self.is_closed() and not self._closing:
@@ -698,40 +960,75 @@ class RPGBot(commands.Bot):
                 if self._closing:
                     return
                 
-                owned_locations = self.db.execute_query(
+                # Use async database operations to prevent blocking Discord heartbeat
+                owned_locations = await self.db.async_safe_execute_read_query(
                     '''SELECT lo.location_id, l.wealth_level, l.population
                        FROM location_ownership lo
                        JOIN locations l ON lo.location_id = l.location_id''',
-                    fetch='all'
+                    fetch='all',
+                    timeout=10  # 10 second timeout for this query
                 )
                 
                 if not owned_locations:
                     continue
 
-                for location_id, wealth_level, population in owned_locations:
+                # Process locations in batches to prevent long-running operations
+                batch_size = 5
+                for i in range(0, len(owned_locations), batch_size):
                     if self._closing:
                         return
-                        
-                    base_income = (wealth_level * 10) + (population // 100)
-                    income_multiplier = 1.0
-                    final_income = int(base_income * income_multiplier)
                     
-                    if final_income > 0:
-                        self.db.execute_query(
-                            '''UPDATE locations 
-                               SET generated_income = generated_income + %s 
-                               WHERE location_id = %s''',
-                            (final_income, location_id)
-                        )
+                    batch = owned_locations[i:i + batch_size]
+                    update_operations = []
+                    
+                    for location_id, wealth_level, population in batch:
+                        if self._closing:
+                            return
+                            
+                        base_income = (wealth_level * 10) + (population // 100)
+                        income_multiplier = 1.0
+                        final_income = int(base_income * income_multiplier)
+                        
+                        if final_income > 0:
+                            update_operations.append((
+                                '''UPDATE locations 
+                                   SET generated_income = generated_income + %s 
+                                   WHERE location_id = %s''',
+                                (final_income, location_id)
+                            ))
+                    
+                    # Execute batch updates asynchronously if we have any
+                    if update_operations:
+                        # Execute each update individually but asynchronously
+                        for query, params in update_operations:
+                            if self._closing:
+                                return
+                            await self.db.async_safe_execute_query(
+                                query,
+                                params,
+                                timeout=5  # Short timeout per individual update
+                            )
+                    
+                    # Yield control between batches to prevent blocking
+                    await asyncio.sleep(0.1)
                 
                 print("💰 Generated passive income for owned locations.")
                 
             except asyncio.CancelledError:
                 print("💰 Income generation task cancelled.")
                 break
+            except RuntimeError as e:
+                if "circuit breaker" in str(e).lower():
+                    print(f"💰 Income generation paused due to database circuit breaker: {e}")
+                    # Wait longer when circuit breaker is open
+                    await asyncio.sleep(300)  # Wait 5 minutes
+                else:
+                    print(f"💰 Income generation error: {e}")
+                    await asyncio.sleep(60)  # Wait 1 minute on other errors
             except Exception as e:
                 if not self._closing:
-                    print(f"Error generating location income: {e}")
+                    print(f"💰 Unexpected error in income generation: {e}")
+                    await asyncio.sleep(60)  # Wait 1 minute before retry
 
 # Global bot instance
 # Global bot instance

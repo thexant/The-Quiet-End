@@ -2526,64 +2526,206 @@ class AdminCog(commands.Cog):
         
         await interaction.response.defer(ephemeral=True)
         
+        # Enter maintenance mode for backup operation
+        self.bot.enter_maintenance_mode()
+        
         try:
-            import subprocess
-            from datetime import datetime
-            import os
+            await interaction.followup.send(
+                "🔧 **Backup Started**\n⏸️ Maintenance mode enabled - scheduling backup task...", 
+                ephemeral=True
+            )
             
+            # Schedule backup as maintenance priority task to avoid blocking
+            await self.bot.schedule_task(
+                task_name=f"database_backup_{interaction.user.id}",
+                task_func=self._perform_backup_task,
+                priority='maintenance',
+                interaction=interaction
+            )
+            
+        except Exception as e:
+            self.bot.exit_maintenance_mode()  # Ensure we exit maintenance mode on error
+            await interaction.followup.send(f"❌ Failed to schedule backup: {str(e)}", ephemeral=True)
+
+    async def _perform_backup_task(self, interaction):
+        """Perform the actual backup operation in maintenance mode"""
+        import subprocess
+        from datetime import datetime
+        import os
+        import asyncio
+        
+        try:
             # Create backup filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_filename = f"rpg_game_backup_{timestamp}.sql"
             
-            # Use pg_dump to create PostgreSQL backup
-            # Extract connection details from database URL
-            db_url = self.db.db_url
+            # Use async subprocess to prevent blocking
             env = os.environ.copy()
-            if 'host=/tmp' in db_url:
-                env['PGHOST'] = '/tmp'
+            env['PGHOST'] = '/tmp'
             
-            # Run pg_dump command
-            result = subprocess.run([
+            # Run pg_dump command asynchronously
+            process = await asyncio.create_subprocess_exec(
                 'pg_dump', 
                 '-h', '/tmp',
                 '-U', 'thequietend_user', 
                 '-d', 'thequietend_db',
                 '-f', backup_filename,
-                '--no-password'
-            ], env=env, capture_output=True, text=True)
+                '--no-password',
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
             
-            if result.returncode != 0:
-                raise Exception(f"pg_dump failed: {result.stderr}")
+            stdout, stderr = await process.communicate()
             
-            # Get database stats
+            if process.returncode != 0:
+                raise Exception(f"pg_dump failed: {stderr.decode()}")
+            
+            # Get database stats using async database methods
             stats = {}
             tables = ["characters", "locations", "corridors", "jobs", "ships", "inventory"]
             for table in tables:
                 try:
-                    count = self.db.execute_query(f"SELECT COUNT(*) FROM {table}", fetch='one')[0]
-                    stats[table] = count
-                except:
+                    count = await self.db.async_heartbeat_safe_query(
+                        f"SELECT COUNT(*) FROM {table}", 
+                        fetch='one',
+                        timeout=3
+                    )
+                    stats[table] = count[0] if count else 0
+                except Exception:
                     stats[table] = 0
             
             embed = discord.Embed(
-                title="💾 PostgreSQL Database Backup Created",
+                title="💾 PostgreSQL Database Backup Completed",
                 description=f"Backup saved as: `{backup_filename}`",
                 color=0x00ff00
             )
             
-            stats_text = "\n".join([f"{table.title()}: {count}" for table, count in stats.items()])
+            stats_text = "\n".join([f"{table.title()}: {count:,}" for table, count in stats.items()])
             embed.add_field(name="Backed Up Data", value=stats_text, inline=True)
             
             embed.add_field(
                 name="📁 File Details", 
-                value=f"SQL dump file created with pg_dump\nFile: `{backup_filename}`\nFormat: Plain SQL",
+                value=f"Async SQL dump created\nFile: `{backup_filename}`\nFormat: Plain SQL",
                 inline=False
             )
             
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            # Get file size if possible
+            try:
+                import os
+                if os.path.exists(backup_filename):
+                    file_size = os.path.getsize(backup_filename)
+                    embed.add_field(
+                        name="📊 File Size", 
+                        value=f"{file_size / (1024*1024):.1f} MB",
+                        inline=True
+                    )
+            except:
+                pass
+            
+            await interaction.followup.send(embed=embed)
             
         except Exception as e:
             await interaction.followup.send(f"❌ Backup failed: {str(e)}", ephemeral=True)
+        finally:
+            # Always exit maintenance mode when backup completes
+            self.bot.exit_maintenance_mode()
+
+    @admin_group.command(name="health", description="Check system and database health status")
+    async def check_system_health(self, interaction: discord.Interaction):
+        
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Get comprehensive health report
+            health_report = await self.bot.get_system_health_report()
+            
+            # Create embed with health information
+            embed = discord.Embed(
+                title="🩺 System Health Report",
+                color=0x00ff00 if health_report['database_health']['overall_health'] == 'healthy' else 
+                      0xff9900 if health_report['database_health']['overall_health'] == 'degraded' else 0xff0000
+            )
+            
+            # Database health
+            db_health = health_report['database_health']
+            health_icon = "🟢" if db_health['overall_health'] == 'healthy' else "🟡" if db_health['overall_health'] == 'degraded' else "🔴"
+            
+            db_info = f"{health_icon} **{db_health['overall_health'].title()}**\n"
+            db_info += f"Connection Pool: {db_health['connection_pool_status'].title()}\n"
+            db_info += f"Query Performance: {db_health['query_performance'].title()}\n"
+            db_info += f"Circuit Breaker: {db_health['circuit_breaker_status'].title()}"
+            
+            if db_health.get('warnings'):
+                db_info += f"\n⚠️ Warnings: {len(db_health['warnings'])}"
+            if db_health.get('errors'):
+                db_info += f"\n❌ Errors: {len(db_health['errors'])}"
+            
+            embed.add_field(name="📊 Database Health", value=db_info, inline=True)
+            
+            # Background tasks
+            bg_tasks = health_report['background_tasks']
+            task_info = f"Income Task: {'🟢' if bg_tasks['income_task_running'] else '🔴'}\n"
+            task_info += f"Health Monitor: {'🟢' if bg_tasks['health_monitor_running'] else '🔴'}\n"
+            task_info += f"Task Processor: {'🟢' if bg_tasks['task_processor_running'] else '🔴'}\n"
+            task_info += f"Total Tasks: {bg_tasks['total_background_tasks']}\n"
+            task_info += f"Active Tasks: {bg_tasks['active_background_tasks']}"
+            
+            embed.add_field(name="🔄 Background Tasks", value=task_info, inline=True)
+            
+            # Discord connection
+            discord = health_report['discord_connection']
+            discord_info = f"Status: {'🟢 Ready' if discord['is_ready'] else '🔴 Not Ready'}\n"
+            discord_info += f"Latency: {discord['latency_ms']}ms\n"
+            discord_info += f"Guilds: {discord['guild_count']}"
+            
+            embed.add_field(name="🌐 Discord Connection", value=discord_info, inline=True)
+            
+            # Task management stats
+            task_mgmt = health_report['task_management']
+            queue_info = ""
+            for queue_name, size in task_mgmt['queue_sizes'].items():
+                queue_info += f"{queue_name}: {size}\n"
+            
+            if queue_info.strip():
+                embed.add_field(name="📋 Task Queues", value=queue_info.strip(), inline=True)
+            
+            # Maintenance mode
+            embed.add_field(
+                name="🔧 Maintenance Mode", 
+                value="🟢 Active" if health_report['maintenance_mode'] else "🔴 Inactive", 
+                inline=True
+            )
+            
+            # Database metrics if available
+            if 'metrics' in db_health and db_health['metrics']:
+                metrics = db_health['metrics']
+                metrics_info = f"Total Queries: {metrics.get('total_queries', 0)}\n"
+                metrics_info += f"Success Rate: {(metrics.get('successful_queries', 0) / max(metrics.get('total_queries', 1), 1) * 100):.1f}%\n"
+                metrics_info += f"Avg Query Time: {metrics.get('avg_query_time', 0):.2f}s\n"
+                metrics_info += f"Heartbeat Failures: {metrics.get('heartbeat_failures', 0)}"
+                
+                embed.add_field(name="📈 Database Metrics", value=metrics_info, inline=True)
+            
+            # Add warnings/errors if any
+            if db_health.get('warnings') or db_health.get('errors'):
+                issues = ""
+                for warning in db_health.get('warnings', []):
+                    issues += f"⚠️ {warning}\n"
+                for error in db_health.get('errors', []):
+                    issues += f"❌ {error}\n"
+                
+                if issues:
+                    embed.add_field(name="🚨 Issues", value=issues[:1024], inline=False)
+            
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            await interaction.followup.send(f"❌ Health check failed: {str(e)}", ephemeral=True)
     
     @admin_group.command(name="item", description="Delete items from player inventory")
     @app_commands.describe(player="Player to delete items from (optional - defaults to yourself)")
@@ -3032,14 +3174,14 @@ class ServerResetConfirmView(discord.ui.View):
             
             # Resume background tasks
             await asyncio.sleep(1)
-            self.bot.start_background_tasks()
+            await self.bot.start_background_tasks()
             
             print(f"☠️ COMPLETE SERVER RESET: {interaction.user.name} reset {interaction.guild.name}")
             
         except Exception as e:
             await interaction.followup.send(f"❌ Server reset failed: {str(e)}", ephemeral=True)
             # Make sure to restart background tasks even on error
-            self.bot.start_background_tasks()
+            await self.bot.start_background_tasks()
     
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_reset(self, interaction: discord.Interaction, button: discord.ui.Button):

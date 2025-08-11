@@ -310,13 +310,7 @@ class TravelCog(commands.Cog):
             )
             return
 
-        # Deduct fuel
-        self.db.execute_query(
-            "UPDATE ships SET current_fuel = current_fuel - %s WHERE owner_id = %s",
-            (cost, interaction.user.id)
-        )
-
-        # Create transit channel
+        # Create transit channel BEFORE deducting fuel to avoid rollback issues
         transit_chan = await self.channel_mgr.create_transit_channel(
             interaction.guild,
             interaction.user,
@@ -327,6 +321,22 @@ class TravelCog(commands.Cog):
         if transit_chan is None:
             print(f"❌ Failed to create transit channel for corridor {cname} to {dest_name}")
             await interaction.followup.send("❌ Failed to create transit channel. Travel cancelled.", ephemeral=True)
+            return
+
+        # Only deduct fuel after successful channel creation
+        try:
+            self.db.execute_query(
+                "UPDATE ships SET current_fuel = current_fuel - %s WHERE owner_id = %s",
+                (cost, interaction.user.id)
+            )
+        except Exception as e:
+            print(f"❌ Failed to deduct fuel: {e}")
+            # Clean up the transit channel if fuel deduction fails
+            try:
+                await self.channel_mgr.cleanup_transit_channel(transit_chan.id, delay_seconds=5)
+            except Exception:
+                pass
+            await interaction.followup.send("❌ Failed to process fuel payment. Travel cancelled.", ephemeral=True)
             return
 
         # Record the session (storing transit_chan.id safely)
@@ -635,170 +645,6 @@ class TravelCog(commands.Cog):
             view.add_item(select)
             await interaction.response.send_message("Select your route to depart:", view=view, ephemeral=True)
     
-
-        async def on_select(inter: discord.Interaction):
-            if inter.user.id != interaction.user.id:
-                return await inter.response.send_message("This isn't your travel menu!", ephemeral=True)
-
-            # grab the choice they just made
-            choice = int(select.values[0])
-            cid, cname, dest_name, travel_time, cost, dest_type, origin_type, same_system, corridor_type = next(
-                c for c in corridors if c[0] == choice
-            )
-            # Get ship efficiency and modify travel time
-            ship_efficiency = self.db.execute_query(
-                "SELECT fuel_efficiency FROM ships WHERE owner_id = %s",
-                (inter.user.id,), fetch='one'
-            )[0]
-
-            # Apply ship efficiency to travel time
-            # fuel_efficiency ranges 3-10, where 10 = fastest
-            # Create multiplier: efficiency 3 = 1.4x time, efficiency 10 = 0.8x time
-            efficiency_modifier = 1.6 - (ship_efficiency * 0.08)  # 1.36 to 0.8 range
-            actual_travel_time = max(int(travel_time * efficiency_modifier), 120)  # Minimum 2 minute
-
-            # Apply location effects
-            # First need to get the current location (origin_id)
-            origin_location = self.bot.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = %s",
-                (inter.user.id,), fetch='one'
-            )[0]
-            
-            effects_manager = LocationEffectsManager(self.bot.db)
-            travel_modifiers = effects_manager.get_travel_modifiers(origin_location)
-            
-            # Check for travel ban
-            if travel_modifiers['travel_ban']:
-                await inter.response.send_message(
-                    "🚫 **Travel Restricted**: Current location conditions prevent departure.\n"
-                    + "\n".join(effects_manager.get_active_effect_descriptions(origin_location)),
-                    ephemeral=True
-                )
-                return
-            
-            # Apply travel delay effects
-            delay_modifier = 1.0 + (travel_modifiers['travel_delay'] * 0.2)  # 20% delay per level
-            
-            # Apply fuel efficiency effects
-            fuel_efficiency_modifier = travel_modifiers['fuel_efficiency']
-            
-            # Apply travel bonus (reduces time)
-            bonus_modifier = max(0.5, 1.0 - (travel_modifiers['travel_bonus'] * 0.15))  # 15% reduction per bonus level
-            
-            # Combine all modifiers
-            final_travel_time = max(int(actual_travel_time * delay_modifier * bonus_modifier), 120)
-            final_fuel_cost = max(1, int(cost * fuel_efficiency_modifier))
-            
-            # Update the variables for the rest of the function
-            travel_time = final_travel_time
-            cost = final_fuel_cost
-            # Check fuel
-            char_fuel = self.db.execute_query(
-                "SELECT s.current_fuel FROM characters c JOIN ships s ON c.ship_id = s.ship_id WHERE c.user_id = %s",
-                (inter.user.id,), fetch='one'
-            )
-            
-            if not char_fuel or char_fuel[0] < cost:
-                await inter.response.send_message(
-                    f"Insufficient fuel! Need {cost}, have {char_fuel[0] if char_fuel else 0}.", 
-                    ephemeral=True
-                )
-                return
-
-            # Deduct fuel
-            self.db.execute_query(
-                "UPDATE ships SET current_fuel = current_fuel - %s WHERE owner_id = %s",
-                (cost, inter.user.id)
-            )
-
-            # Create transit channel
-            transit_chan = await self.channel_mgr.create_transit_channel(
-                inter.guild,
-                inter.user,
-                cname,
-                dest_name
-            )
-            
-            if transit_chan is None:
-                print(f"❌ Failed to create transit channel for corridor {cname} to {dest_name}")
-                await inter.response.send_message("❌ Failed to create transit channel. Travel cancelled.", ephemeral=True)
-                return
-
-            # Record the session (storing transit_chan.id safely)
-            start = datetime.utcnow()
-            end = start + timedelta(seconds=travel_time)  # travel_time is already in seconds from DB
-            self.db.execute_query(
-                """
-                INSERT INTO travel_sessions
-                  (user_id, corridor_id, origin_location, destination_location,
-                   start_time, end_time, temp_channel_id, status)
-                VALUES (%s, %s, %s, 
-                        (SELECT CASE WHEN origin_location = %s THEN destination_location ELSE origin_location END FROM corridors WHERE corridor_id = %s),
-                        %s, %s, %s, 'traveling')
-                """,
-                (
-                    inter.user.id,
-                    cid,
-                    origin_id,
-                    origin_id,
-                    cid,
-                    start.isoformat(),
-                    end.isoformat(),
-                    transit_chan.id if transit_chan else None
-                )
-            )
-
-            # Confirm departure back to the user
-            mins, secs = divmod(travel_time, 60)  # Use travel_time variable
-            hours = mins // 60
-            mins = mins % 60
-            
-            if hours > 0:
-                time_display = f"{hours}h {mins}m {secs}s"
-            else:
-                time_display = f"{mins}m {secs}s"
-            
-            await inter.response.edit_message(
-                content=f"🚀 Departure confirmed. ETA: {time_display}. Your transit channel is {transit_chan.mention if transit_chan else 'unavailable'}.",
-                view=None
-            )
-
-            # Remove user from origin location immediately
-            old_location = self.db.execute_query(
-                "SELECT current_location FROM characters WHERE user_id = %s",
-                (inter.user.id,), fetch='one'
-            )
-            old_location_id = old_location[0] if old_location else None
-            
-            # Set character location to None (in transit)
-            self.db.execute_query(
-                "UPDATE characters SET current_location = NULL WHERE user_id = %s",
-                (inter.user.id,)
-            )
-            
-            # Remove access from old location
-            if old_location_id:
-                await self.channel_mgr.update_channel_on_player_movement(
-                    inter.guild, inter.user.id, old_location_id, None
-                )
-
-            # Start auto-refreshing progress tracking if transit channel exists
-            if transit_chan:
-                asyncio.create_task(self._start_travel_progress_tracking(
-                    transit_chan, inter.user.id, cid, travel_time, start, end, dest_name
-                ))
-
-            # Start corridor events system
-            if transit_chan:
-                asyncio.create_task(self._trigger_corridor_events(
-                    transit_chan, inter.user.id, cid, travel_time
-                ))
-
-            # Schedule the actual travel completion
-            asyncio.create_task(self._complete_travel_after_delay(
-                inter.user.id, cid, travel_time, dest_name, transit_chan, inter.guild
-            ))
-
     async def _check_active_jobs(self, user_id: int, interaction: discord.Interaction) -> bool:
         """Check if user has active stationary jobs and warn them. Returns True if should proceed."""
         active_jobs = self.db.execute_query(

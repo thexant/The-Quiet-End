@@ -22,7 +22,9 @@ class Database:
             self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
                 1, 20,  # min and max connections
                 self.db_url,
-                cursor_factory=psycopg2.extras.RealDictCursor
+                cursor_factory=psycopg2.extras.RealDictCursor,
+                connect_timeout=10,  # 10 second connection timeout
+                application_name='TheQuietEnd_Bot'
             )
             print("[OK] PostgreSQL connection pool created")
         except Exception as e:
@@ -1498,6 +1500,22 @@ class Database:
         
         print("✅ Database cleanup completed")
 
+    def get_pool_status(self):
+        """Get connection pool health status"""
+        try:
+            if not self.connection_pool:
+                return {"status": "no_pool", "available": 0, "used": 0}
+            
+            # Try to get basic pool info
+            return {
+                "status": "healthy",
+                "pool_exists": True,
+                "minconn": getattr(self.connection_pool, 'minconn', 'unknown'),
+                "maxconn": getattr(self.connection_pool, 'maxconn', 'unknown')
+            }
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
     def get_connection(self):
         """Get a database connection from the pool"""
         if self._shutdown:
@@ -1536,6 +1554,9 @@ class Database:
                 cursor = None
                 try:
                     cursor = conn.cursor()
+                    
+                    # Set query timeout to 15 seconds for read queries
+                    cursor.execute("SET statement_timeout = '15s'")
                     
                     if params:
                         cursor.execute(query, params)
@@ -1602,6 +1623,9 @@ class Database:
                         cursor = None
                         try:
                             cursor = conn.cursor()
+                            
+                            # Set query timeout to 15 seconds for regular queries
+                            cursor.execute("SET statement_timeout = '15s'")
                             
                             if params:
                                 cursor.execute(query, params)
@@ -1893,3 +1917,316 @@ class Database:
         except Exception as e:
             print(f"❌ Migration failed: {e}")
             return False
+
+    # ASYNC DATABASE WRAPPERS - Prevent blocking Discord event loop
+    async def async_execute_query(self, query, params=None, fetch=None, many=False):
+        """Async wrapper for execute_query to prevent blocking the event loop"""
+        import asyncio
+        try:
+            # Use asyncio.to_thread to run blocking database operations in thread pool
+            result = await asyncio.to_thread(self.execute_query, query, params, fetch, many)
+            return result
+        except Exception as e:
+            print(f"❌ Async database error: {e}")
+            raise
+
+    async def async_execute_read_query(self, query, params=None, fetch='all'):
+        """Async wrapper for read-only queries to prevent blocking"""
+        import asyncio
+        try:
+            result = await asyncio.to_thread(self.execute_read_query, query, params, fetch)
+            return result
+        except Exception as e:
+            print(f"❌ Async database read error: {e}")
+            raise
+
+    async def async_execute_transaction(self, operations):
+        """Async wrapper for transaction operations"""
+        import asyncio
+        try:
+            result = await asyncio.to_thread(self.execute_transaction, operations)
+            return result
+        except Exception as e:
+            print(f"❌ Async transaction error: {e}")
+            raise
+
+    async def async_character_exists(self, user_id):
+        """Async check if a character exists"""
+        return await self.async_execute_read_query(
+            "SELECT 1 FROM characters WHERE user_id = %s",
+            (user_id,),
+            fetch='one'
+        ) is not None
+
+    async def async_get_character_location(self, user_id):
+        """Async get character's current location"""
+        result = await self.async_execute_read_query(
+            "SELECT current_location FROM characters WHERE user_id = %s",
+            (user_id,),
+            fetch='one'
+        )
+        return result[0] if result else None
+
+    async def async_get_galaxy_setting(self, setting_name, default_value=None):
+        """Async get a galaxy setting value"""
+        result = await self.async_execute_read_query(
+            "SELECT setting_value FROM galaxy_settings WHERE setting_name = %s",
+            (setting_name,),
+            fetch='one'
+        )
+        return result[0] if result else default_value
+
+    async def async_set_galaxy_setting(self, setting_name, setting_value):
+        """Async set a galaxy setting value using PostgreSQL UPSERT"""
+        await self.async_execute_query(
+            """INSERT INTO galaxy_settings (setting_name, setting_value, updated_at)
+               VALUES (%s, %s, NOW())
+               ON CONFLICT (setting_name) 
+               DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = NOW()""",
+            (setting_name, setting_value)
+        )
+
+    # ASYNC CONNECTION MANAGEMENT & CIRCUIT BREAKER PATTERNS
+    def __init_async_management(self):
+        """Initialize async connection management"""
+        self._operation_count = 0
+        self._failed_operations = 0
+        self._circuit_breaker_open = False
+        self._last_failure_time = 0
+        self._circuit_breaker_timeout = 60  # Reset after 60 seconds
+        self._max_failure_rate = 0.5  # 50% failure rate triggers circuit breaker
+        self._max_concurrent_ops = 10  # Limit concurrent async operations
+        self._active_async_ops = 0
+        import asyncio
+        self._async_semaphore = asyncio.Semaphore(self._max_concurrent_ops)
+
+    async def async_execute_with_circuit_breaker(self, operation_func, *args, **kwargs):
+        """Execute async database operation with circuit breaker and timeout protection"""
+        import asyncio
+        import time
+        
+        # Initialize async management if not done
+        if not hasattr(self, '_circuit_breaker_open'):
+            self.__init_async_management()
+
+        # Check circuit breaker
+        current_time = time.time()
+        if self._circuit_breaker_open:
+            if current_time - self._last_failure_time > self._circuit_breaker_timeout:
+                print("🔄 Circuit breaker reset - attempting database operation")
+                self._circuit_breaker_open = False
+                self._failed_operations = 0
+                self._operation_count = 0
+            else:
+                raise RuntimeError("Database circuit breaker is open - operations temporarily disabled")
+
+        # Limit concurrent operations to prevent pool exhaustion
+        async with self._async_semaphore:
+            self._active_async_ops += 1
+            try:
+                # Apply timeout to prevent infinite blocking
+                timeout_seconds = kwargs.pop('timeout', 30)  # Default 30 second timeout
+                
+                result = await asyncio.wait_for(
+                    operation_func(*args, **kwargs),
+                    timeout=timeout_seconds
+                )
+                
+                # Track successful operation
+                self._operation_count += 1
+                return result
+                
+            except asyncio.TimeoutError:
+                self._failed_operations += 1
+                self._last_failure_time = current_time
+                print(f"❌ Database operation timed out after {timeout_seconds}s")
+                raise RuntimeError(f"Database operation timed out after {timeout_seconds}s")
+                
+            except Exception as e:
+                self._failed_operations += 1
+                self._last_failure_time = current_time
+                
+                # Check if we should open circuit breaker
+                if self._operation_count > 0:
+                    failure_rate = self._failed_operations / self._operation_count
+                    if failure_rate >= self._max_failure_rate and self._operation_count >= 5:
+                        self._circuit_breaker_open = True
+                        print(f"🚨 Database circuit breaker OPEN - failure rate: {failure_rate:.1%}")
+                
+                raise
+            finally:
+                self._active_async_ops -= 1
+
+    async def async_safe_execute_query(self, query, params=None, fetch=None, many=False, timeout=15):
+        """Safe async query execution with circuit breaker and timeout"""
+        return await self.async_execute_with_circuit_breaker(
+            self.async_execute_query, query, params, fetch, many, timeout=timeout
+        )
+
+    async def async_safe_execute_read_query(self, query, params=None, fetch='all', timeout=10):
+        """Safe async read query execution with circuit breaker and timeout"""
+        return await self.async_execute_with_circuit_breaker(
+            self.async_execute_read_query, query, params, fetch, timeout=timeout
+        )
+
+    async def async_heartbeat_safe_query(self, query, params=None, fetch=None, timeout=5):
+        """Ultra-fast async query execution for heartbeat-critical operations"""
+        # Use very short timeout for operations that must not block Discord heartbeat
+        return await self.async_execute_with_circuit_breaker(
+            self.async_execute_read_query, query, params, fetch, timeout=timeout
+        )
+
+    def get_circuit_breaker_status(self):
+        """Get current circuit breaker and connection status"""
+        if not hasattr(self, '_circuit_breaker_open'):
+            self.__init_async_management()
+            
+        return {
+            "circuit_breaker_open": self._circuit_breaker_open,
+            "operation_count": self._operation_count,
+            "failed_operations": self._failed_operations,
+            "failure_rate": self._failed_operations / max(self._operation_count, 1),
+            "active_async_ops": self._active_async_ops,
+            "max_concurrent_ops": self._max_concurrent_ops
+        }
+
+    # DATABASE HEALTH MONITORING AND METRICS
+    def __init_health_monitoring(self):
+        """Initialize database health monitoring"""
+        import time
+        self._health_metrics = {
+            'total_queries': 0,
+            'successful_queries': 0,
+            'failed_queries': 0,
+            'avg_query_time': 0.0,
+            'last_health_check': time.time(),
+            'connection_pool_health': 'unknown',
+            'recent_query_times': [],
+            'slowest_query_time': 0.0,
+            'heartbeat_failures': 0,
+            'last_heartbeat_failure': 0
+        }
+        self._health_check_interval = 30  # Check health every 30 seconds
+        
+    def _record_query_metrics(self, query_time: float, success: bool):
+        """Record metrics for a database query"""
+        if not hasattr(self, '_health_metrics'):
+            self.__init_health_monitoring()
+        
+        self._health_metrics['total_queries'] += 1
+        
+        if success:
+            self._health_metrics['successful_queries'] += 1
+        else:
+            self._health_metrics['failed_queries'] += 1
+        
+        # Track query times
+        self._health_metrics['recent_query_times'].append(query_time)
+        
+        # Keep only last 100 query times
+        if len(self._health_metrics['recent_query_times']) > 100:
+            self._health_metrics['recent_query_times'].pop(0)
+        
+        # Update averages
+        if self._health_metrics['recent_query_times']:
+            self._health_metrics['avg_query_time'] = sum(self._health_metrics['recent_query_times']) / len(self._health_metrics['recent_query_times'])
+            self._health_metrics['slowest_query_time'] = max(self._health_metrics['recent_query_times'])
+
+    def _record_heartbeat_failure(self):
+        """Record a Discord heartbeat failure due to database operations"""
+        if not hasattr(self, '_health_metrics'):
+            self.__init_health_monitoring()
+        
+        import time
+        self._health_metrics['heartbeat_failures'] += 1
+        self._health_metrics['last_heartbeat_failure'] = time.time()
+
+    async def perform_health_check(self):
+        """Perform comprehensive database health check"""
+        if not hasattr(self, '_health_metrics'):
+            self.__init_health_monitoring()
+        
+        import time
+        start_time = time.time()
+        
+        health_status = {
+            'overall_health': 'unknown',
+            'connection_pool_status': 'unknown',
+            'query_performance': 'unknown',
+            'circuit_breaker_status': 'unknown',
+            'metrics': {},
+            'warnings': [],
+            'errors': []
+        }
+        
+        try:
+            # Test basic connectivity with heartbeat-safe query
+            test_query_start = time.time()
+            result = await self.async_heartbeat_safe_query(
+                "SELECT 1 as health_check", 
+                timeout=3
+            )
+            test_query_time = time.time() - test_query_start
+            
+            if result and result[0] == 1:
+                health_status['connection_pool_status'] = 'healthy'
+            else:
+                health_status['connection_pool_status'] = 'degraded'
+                health_status['warnings'].append("Basic connectivity test failed")
+            
+            # Record the health check query metrics
+            self._record_query_metrics(test_query_time, True)
+            
+        except Exception as e:
+            health_status['connection_pool_status'] = 'unhealthy'
+            health_status['errors'].append(f"Connectivity test failed: {e}")
+            self._record_query_metrics(time.time() - start_time, False)
+        
+        # Check query performance
+        if self._health_metrics['avg_query_time'] > 5.0:
+            health_status['query_performance'] = 'slow'
+            health_status['warnings'].append(f"Average query time is {self._health_metrics['avg_query_time']:.2f}s")
+        elif self._health_metrics['avg_query_time'] > 1.0:
+            health_status['query_performance'] = 'degraded'
+        else:
+            health_status['query_performance'] = 'good'
+        
+        # Check circuit breaker status
+        circuit_breaker_status = self.get_circuit_breaker_status()
+        if circuit_breaker_status['circuit_breaker_open']:
+            health_status['circuit_breaker_status'] = 'open'
+            health_status['errors'].append("Circuit breaker is open")
+        elif circuit_breaker_status['failure_rate'] > 0.2:
+            health_status['circuit_breaker_status'] = 'degraded'
+            health_status['warnings'].append(f"High failure rate: {circuit_breaker_status['failure_rate']:.1%}")
+        else:
+            health_status['circuit_breaker_status'] = 'healthy'
+        
+        # Determine overall health
+        if health_status['errors']:
+            health_status['overall_health'] = 'critical'
+        elif health_status['warnings']:
+            health_status['overall_health'] = 'degraded'
+        else:
+            health_status['overall_health'] = 'healthy'
+        
+        # Update metrics
+        self._health_metrics['last_health_check'] = time.time()
+        health_status['metrics'] = self._health_metrics.copy()
+        
+        return health_status
+
+    def get_database_metrics(self):
+        """Get current database performance metrics"""
+        if not hasattr(self, '_health_metrics'):
+            self.__init_health_monitoring()
+        
+        # Get connection pool status
+        pool_status = self.get_pool_status()
+        
+        # Combine all metrics
+        return {
+            'health_metrics': self._health_metrics,
+            'pool_status': pool_status,
+            'circuit_breaker': self.get_circuit_breaker_status() if hasattr(self, '_circuit_breaker_open') else None
+        }
