@@ -1416,6 +1416,30 @@ class ChannelManager:
             )
             print(f"⏱️ Home query took {time.time() - query_start:.2f}s")
             
+            # Fallback query: Find channels in locations table that aren't in guild_location_channels
+            # This catches Earth and other "orphaned" channels
+            query_start = time.time()
+            orphaned_channels = self.db.execute_read_query(
+                '''SELECT l.location_id, l.channel_id, l.name
+                   FROM locations l
+                   WHERE l.channel_id IS NOT NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM guild_location_channels glc 
+                       WHERE glc.location_id = l.location_id 
+                       AND glc.guild_id = %s
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM characters c 
+                       WHERE c.current_location = l.location_id 
+                       AND c.is_logged_in = true 
+                       AND c.guild_id = %s
+                   )
+                   LIMIT 1''',  # Find orphaned channels like Earth
+                (guild.id, guild.id),
+                fetch='all'
+            )
+            print(f"⏱️ Orphaned channels query took {time.time() - query_start:.2f}s")
+            
         except Exception as e:
             print(f"⚠️ Database timeout in cleanup query: {e}")
             return  # Skip cleanup if database is busy
@@ -1495,6 +1519,37 @@ class ChannelManager:
                     )
                 except Exception as e:
                     print(f"❌ Failed to delete home channel for {home_name}: {e}")
+            
+            # Yield between deletions
+            await asyncio.sleep(0.5)
+        
+        # Clean up orphaned channels (like Earth that aren't in guild_location_channels)
+        for location_id, channel_id, location_name in orphaned_channels:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                try:
+                    # Check for travelers like the normal location cleanup
+                    travelers_coming = self.db.execute_read_query(
+                        "SELECT COUNT(*) FROM travel_sessions WHERE destination_location = %s AND status = 'traveling'",
+                        (location_id,),
+                        fetch='one'
+                    )[0]
+                    
+                    if travelers_coming == 0:
+                        await channel.delete(reason="Automated cleanup - orphaned location channel")
+                        print(f"🧹 Auto-cleaned orphaned channel #{channel.name} for {location_name}")
+                        cleaned_count += 1
+                        
+                        # Clear from main locations table since it's not in guild tracking
+                        self.db.execute_query(
+                            "UPDATE locations SET channel_id = NULL WHERE location_id = %s",
+                            (location_id,)
+                        )
+                    else:
+                        print(f"⏭️ Skipped {location_name} - travelers incoming ({travelers_coming})")
+                        
+                except Exception as e:
+                    print(f"❌ Failed to delete orphaned channel for {location_name}: {e}")
             
             # Yield between deletions
             await asyncio.sleep(0.5)
