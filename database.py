@@ -2273,3 +2273,67 @@ class Database:
             'pool_status': pool_status,
             'circuit_breaker': self.get_circuit_breaker_status() if hasattr(self, '_circuit_breaker_open') else None
         }
+
+    def execute_webmap_query(self, query, params=None, fetch='all'):
+        """Execute a query for web map with dict format results (not converted to tuples)"""
+        if self._shutdown:
+            raise RuntimeError("Database is shutting down")
+            
+        max_retries = 3
+        retry_delay = 0.1
+        
+        for attempt in range(max_retries):
+            conn = None
+            try:
+                with self.lock:
+                    conn = self.get_connection()
+                    cursor = None
+                    try:
+                        cursor = conn.cursor()
+                        
+                        # Set query timeout to 15 seconds for web map queries
+                        cursor.execute("SET statement_timeout = '15s'")
+                        
+                        if params:
+                            cursor.execute(query, params)
+                        else:
+                            cursor.execute(query)
+                        
+                        # Handle different fetch types - keep as RealDictRow for JSON serialization
+                        result = None
+                        if fetch == 'one':
+                            result = cursor.fetchone()
+                            # Convert to dict for JSON serialization
+                            if result:
+                                result = dict(result) if hasattr(result, 'keys') else result
+                        elif fetch == 'all':
+                            result = cursor.fetchall()
+                            # Convert to list of dicts for JSON serialization
+                            if result:
+                                result = [dict(row) if hasattr(row, 'keys') else row for row in result]
+                        
+                        # Record successful query
+                        if hasattr(self, '_record_query_metrics'):
+                            self._record_query_metrics(0.1, True)
+                        
+                        return result
+                        
+                    finally:
+                        if cursor:
+                            cursor.close()
+                        self._close_connection(conn)
+                        
+            except Exception as e:
+                if hasattr(self, '_record_query_metrics'):
+                    self._record_query_metrics(0.1, False)
+                    
+                if attempt < max_retries - 1:
+                    print(f"❌ Web map query attempt {attempt + 1} failed: {e}, retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    print(f"❌ Web map query failed after {max_retries} attempts: {e}")
+                    raise
+        
+        return None

@@ -6698,12 +6698,12 @@ class SubLocationServiceView(discord.ui.View):
         engineering_skill = char_info[0]
         
         # Engineering skill check
-        skill_check = random.randint(1, 20) + engineering_skill
-        success_threshold = 12
+        skill_check = random.randint(1, 100) + engineering_skill
+        success_threshold = 50
         
         if skill_check >= success_threshold:
             # Success - award credits and XP
-            credit_reward = random.randint(100, 300)
+            credit_reward = random.randint(10, 50)
             xp_reward = random.randint(10, 20)
             
             self.db.execute_query(
@@ -8117,12 +8117,12 @@ class SubLocationServiceView(discord.ui.View):
         navigation_skill = char_info[0]
         
         # Navigation skill check
-        skill_check = random.randint(1, 20) + navigation_skill
-        success_threshold = 14
+        skill_check = random.randint(1, 100) + navigation_skill
+        success_threshold = 50
         
         if skill_check >= success_threshold:
             # Success - award credits and XP
-            credit_reward = random.randint(50, 150)
+            credit_reward = random.randint(15, 20)
             xp_reward = random.randint(15, 25)
             
             self.db.execute_query(
@@ -8184,31 +8184,31 @@ class SubLocationServiceView(discord.ui.View):
             {
                 "title": "Derelict Sector Transit",
                 "description": "A traveler plans to cross through a derelict sector with scattered debris and potential pirate activity.",
-                "high_risk_outcome": ("Correctly identified extreme danger - avoid at all costs", 150, 20),
+                "high_risk_outcome": ("Correctly identified extreme danger - avoid at all costs", 45, 20),
                 "low_risk_outcome": ("Underestimated hazards - dangerous recommendation made", -50, 5)
             },
             {
                 "title": "Peak Traffic Corridor",
                 "description": "A merchant convoy wants to use a busy trade corridor during peak shipping season.",
-                "high_risk_outcome": ("Identified traffic congestion risks and delays", 100, 15),
+                "high_risk_outcome": ("Identified traffic congestion risks and delays", 20, 15),
                 "low_risk_outcome": ("Missed traffic complications - poor timing advice given", -25, 8)
             },
             {
                 "title": "New Colony Route",
                 "description": "A family wishes to travel to a recently established colony with limited infrastructure.",
-                "high_risk_outcome": ("Recognized supply chain and safety risks", 125, 18),
+                "high_risk_outcome": ("Recognized supply chain and safety risks", 35, 18),
                 "low_risk_outcome": ("Overlooked infrastructure limitations", -40, 6)
             },
             {
                 "title": "Faction Border Crossing",
                 "description": "A trader needs to cross contested territory between two rival factions.",
-                "high_risk_outcome": ("Correctly assessed political tensions and patrol risks", 175, 22),
+                "high_risk_outcome": ("Correctly assessed political tensions and patrol risks", 55, 22),
                 "low_risk_outcome": ("Underestimated diplomatic complications", -60, 7)
             },
             {
                 "title": "Emergency Medical Transport",
                 "description": "A medical transport requires the fastest possible route, time is critical.",
-                "high_risk_outcome": ("Properly balanced speed vs safety for medical emergency", 140, 19),
+                "high_risk_outcome": ("Properly balanced speed vs safety for medical emergency", 40, 19),
                 "low_risk_outcome": ("Poor risk-benefit analysis for critical transport", -45, 9)
             }
         ]
@@ -8216,7 +8216,7 @@ class SubLocationServiceView(discord.ui.View):
         scenario = random.choice(scenarios)
         
         # Determine if player makes good assessment (70% chance for basic success)
-        assessment_success = random.random() < 0.7
+        assessment_success = random.random() < 0.5
         
         if assessment_success:
             outcome_text, credit_change, xp_reward = scenario["high_risk_outcome"]

@@ -93,7 +93,7 @@ class WebMapCog(commands.Cog):
     async def _refresh_cache(self):
         """Refresh all cached data"""
         # Get locations with explicit column names, ordered by type priority then by name for consistency
-        locations_data = self.db.execute_query(
+        locations_data = self.db.execute_webmap_query(
             """SELECT l.location_id, l.name, l.location_type, l.x_coordinate, l.y_coordinate,
                       l.system_name, l.wealth_level, l.population, l.description, l.faction,
                       lo.owner_id, lo.docking_fee, c.name as owner_name
@@ -116,25 +116,25 @@ class WebMapCog(commands.Cog):
         locations = {}
         for loc in locations_data:
             try:
-                loc_id = loc[0] if loc[0] is not None else 0
+                loc_id = loc.get('location_id') if loc.get('location_id') is not None else 0
                 if loc_id == 0:  # Skip invalid location IDs
                     print(f"Skipping invalid location with ID 0: {loc}")
                     continue
                     
                 locations[loc_id] = {
                     'id': loc_id,
-                    'name': loc[1],
-                    'type': loc[2],
-                    'x': float(loc[3]) if loc[3] is not None else 0.0,
-                    'y': float(loc[4]) if loc[4] is not None else 0.0,
-                    'system': loc[5],
-                    'wealth': loc[6],
-                    'population': loc[7],
-                    'description': loc[8],
-                    'faction': loc[9] if loc[9] else 'Independent',
-                    'owner_id': loc[10],
-                    'owner_name': loc[12] if len(loc) > 12 and loc[12] else None,
-                    'docking_fee': loc[11] if loc[11] else 0,
+                    'name': loc.get('name'),
+                    'type': loc.get('location_type'),
+                    'x': float(loc.get('x_coordinate')) if loc.get('x_coordinate') is not None else 0.0,
+                    'y': float(loc.get('y_coordinate')) if loc.get('y_coordinate') is not None else 0.0,
+                    'system': loc.get('system_name'),
+                    'wealth': loc.get('wealth_level'),
+                    'population': loc.get('population'),
+                    'description': loc.get('description'),
+                    'faction': loc.get('faction') if loc.get('faction') else 'Independent',
+                    'owner_id': loc.get('owner_id'),
+                    'owner_name': loc.get('owner_name'),
+                    'docking_fee': loc.get('docking_fee') if loc.get('docking_fee') else 0,
                     'stability': 75
                 }
             except Exception as e:
@@ -143,7 +143,7 @@ class WebMapCog(commands.Cog):
                 continue
         
         # Get corridors
-        corridors_data = self.db.execute_query(
+        corridors_data = self.db.execute_webmap_query(
             """SELECT corridor_id, origin_location, destination_location, 
                       name, travel_time, danger_level, corridor_type
                FROM corridors
@@ -154,17 +154,17 @@ class WebMapCog(commands.Cog):
         corridors = []
         for corr in corridors_data:
             corridors.append({
-                'id': corr[0],
-                'origin': corr[1],
-                'destination': corr[2],
-                'name': corr[3],
-                'travel_time': corr[4],
-                'danger_level': corr[5],
-                'corridor_type': corr[6]
+                'id': corr.get('corridor_id'),
+                'origin': corr.get('origin_location'),
+                'destination': corr.get('destination_location'),
+                'name': corr.get('name'),
+                'travel_time': corr.get('travel_time'),
+                'danger_level': corr.get('danger_level'),
+                'corridor_type': corr.get('corridor_type')
             })
         
         # Get active players - Only show currently logged in characters
-        players_data = self.db.execute_query(
+        players_data = self.db.execute_webmap_query(
             """SELECT c.user_id, c.name, c.current_location, c.money,
                       t.corridor_id, t.start_time, t.end_time,
                       l.name as location_name, l.x_coordinate, l.y_coordinate,
@@ -179,26 +179,27 @@ class WebMapCog(commands.Cog):
         players = {}
         for player in players_data:
             try:
-                players[player[0]] = {
-                    'id': player[0],
-                    'name': player[1],
-                    'location': player[2],
-                    'location_name': player[7],
-                    'x': float(player[8]) if player[8] is not None else 0.0,
-                    'y': float(player[9]) if player[9] is not None else 0.0,
-                    'credits': player[3],
-                    'traveling': player[4] is not None,
-                    'corridor_id': player[4],
-                    'travel_progress': self._calculate_travel_progress(player[5], player[6]) if player[4] else 0,
-                    'level': player[10] if player[10] else 1,
-                    'experience': player[11] if player[11] else 0
+                user_id = player.get('user_id')
+                players[user_id] = {
+                    'id': user_id,
+                    'name': player.get('name'),
+                    'location': player.get('current_location'),
+                    'location_name': player.get('location_name'),
+                    'x': float(player.get('x_coordinate')) if player.get('x_coordinate') is not None else 0.0,
+                    'y': float(player.get('y_coordinate')) if player.get('y_coordinate') is not None else 0.0,
+                    'credits': player.get('money'),
+                    'traveling': player.get('corridor_id') is not None,
+                    'corridor_id': player.get('corridor_id'),
+                    'travel_progress': self._calculate_travel_progress(player.get('start_time'), player.get('end_time')) if player.get('corridor_id') else 0,
+                    'level': player.get('level') if player.get('level') else 1,
+                    'experience': player.get('experience') if player.get('experience') else 0
                 }
             except Exception as e:
-                print(f"Error parsing player {player[0] if player else 'unknown'}: {e}")
+                print(f"Error parsing player {user_id if 'user_id' in locals() else 'unknown'}: {e}")
                 continue
         
         # Get dynamic NPCs
-        npcs_data = self.db.execute_query(
+        npcs_data = self.db.execute_webmap_query(
             """SELECT n.npc_id, n.name, n.callsign, n.current_location,
                       n.destination_location, n.travel_start_time, n.travel_duration,
                       n.alignment, n.is_alive, l.name as location_name,
@@ -212,25 +213,26 @@ class WebMapCog(commands.Cog):
         npcs = {}
         for npc in npcs_data:
             try:
-                npcs[npc[0]] = {
-                    'id': npc[0],
-                    'name': npc[1],
-                    'callsign': npc[2],
-                    'location': npc[3],
-                    'location_name': npc[9],
-                    'x': float(npc[10]) if npc[10] is not None else 0.0,
-                    'y': float(npc[11]) if npc[11] is not None else 0.0,
-                    'destination': npc[4],
-                    'traveling': npc[4] is not None,
-                    'travel_progress': self._calculate_npc_travel_progress(npc[5], npc[6]) if npc[4] else 0,
-                    'alignment': npc[7]
+                npc_id = npc.get('npc_id')
+                npcs[npc_id] = {
+                    'id': npc_id,
+                    'name': npc.get('name'),
+                    'callsign': npc.get('callsign'),
+                    'location': npc.get('current_location'),
+                    'location_name': npc.get('location_name'),
+                    'x': float(npc.get('x_coordinate')) if npc.get('x_coordinate') is not None else 0.0,
+                    'y': float(npc.get('y_coordinate')) if npc.get('y_coordinate') is not None else 0.0,
+                    'destination': npc.get('destination_location'),
+                    'traveling': npc.get('destination_location') is not None,
+                    'travel_progress': self._calculate_npc_travel_progress(npc.get('travel_start_time'), npc.get('travel_duration')) if npc.get('destination_location') else 0,
+                    'alignment': npc.get('alignment')
                 }
             except Exception as e:
-                print(f"Error parsing NPC {npc[0] if npc else 'unknown'}: {e}")
+                print(f"Error parsing NPC {npc_id if 'npc_id' in locals() else 'unknown'}: {e}")
                 continue
         
         # Get recent news from GalacticNewsCog's news_queue table
-        news_data = self.db.execute_query(
+        news_data = self.db.execute_webmap_query(
             """SELECT title, description, location_id, scheduled_delivery, news_type
                FROM news_queue
                WHERE is_delivered = true
@@ -242,12 +244,12 @@ class WebMapCog(commands.Cog):
         news = []
         for item in news_data:
             news.append({
-                'title': item[0],
-                'content': item[1],
-                'location_id': item[2],
-                'timestamp': item[3],
-                'news_type': item[4],
-                'game_date': self._convert_to_game_date(item[3])
+                'title': item.get('title'),
+                'content': item.get('description'),
+                'location_id': item.get('location_id'),
+                'timestamp': item.get('scheduled_delivery'),
+                'news_type': item.get('news_type'),
+                'game_date': self._convert_to_game_date(item.get('scheduled_delivery'))
             })
         
         # Get galaxy info and current time
@@ -568,60 +570,99 @@ class WebMapCog(commands.Cog):
     
     async def handle_index(self, request):
         """Serve the landing page"""
-        html_content = self.get_landing_html()
-        return web.Response(text=html_content, content_type='text/html')
+        try:
+            html_content = self.get_landing_html()
+            return web.Response(text=html_content, content_type='text/html')
+        except Exception as e:
+            print(f"❌ Error in handle_index: {e}")
+            return web.Response(text=f"Error loading page: {str(e)}", status=500)
     
     async def handle_map(self, request):
         """Serve the map page"""
-        html_content = self.get_map_html()
-        return web.Response(text=html_content, content_type='text/html')
+        try:
+            html_content = self.get_map_html()
+            return web.Response(text=html_content, content_type='text/html')
+        except Exception as e:
+            print(f"❌ Error in handle_map: {e}")
+            return web.Response(text=f"Error loading map: {str(e)}", status=500)
     
     async def handle_wiki(self, request):
         """Serve the wiki page"""
-        html_content = self.get_wiki_html()
-        return web.Response(text=html_content, content_type='text/html')
+        try:
+            html_content = self.get_wiki_html()
+            return web.Response(text=html_content, content_type='text/html')
+        except Exception as e:
+            print(f"❌ Error in handle_wiki: {e}")
+            return web.Response(text=f"Error loading wiki: {str(e)}", status=500)
     
     async def handle_api_map_data(self, request):
         """API endpoint for map data"""
-        return web.json_response(self.cache)
+        try:
+            return web.json_response(self.cache)
+        except Exception as e:
+            print(f"❌ Error in handle_api_map_data: {e}")
+            return web.json_response({'error': 'Internal server error', 'message': str(e)}, status=500)
     
     async def handle_api_wiki_data(self, request):
         """API endpoint for wiki data"""
-        wiki_data = await self._compile_wiki_data()
-        return web.json_response(wiki_data)
+        try:
+            wiki_data = await self._compile_wiki_data()
+            return web.json_response(wiki_data)
+        except Exception as e:
+            print(f"❌ Error in handle_api_wiki_data: {e}")
+            return web.json_response({'error': 'Internal server error', 'message': str(e)}, status=500)
     
     async def handle_api_rich_presence(self, request):
         """API endpoint for Rich Presence character data"""
         try:
-            user_id = int(request.match_info['user_id'])
-        except (ValueError, KeyError):
-            return web.json_response({'error': 'Invalid user ID'}, status=400)
-        
-        # Get character data for Rich Presence
-        char_data = self.db.execute_query(
-            """SELECT c.name, c.current_location, c.is_logged_in, c.level, c.money,
-                      c.location_status, c.login_time, l.name as location_name,
-                      l.location_type, t.corridor_id, t.start_time, t.end_time,
-                      dest_l.name as destination_name, dest_l.location_type as destination_type,
-                      cor.travel_time, cor.fuel_cost, cor.danger_level,
-                      j.title as current_job_title, j.description as current_job_description
-               FROM characters c
-               LEFT JOIN locations l ON c.current_location = l.location_id
-               LEFT JOIN travel_sessions t ON c.user_id = t.user_id AND t.status = 'traveling'
-               LEFT JOIN corridors cor ON t.corridor_id = cor.corridor_id
-               LEFT JOIN locations dest_l ON cor.destination_location = dest_l.location_id
-               LEFT JOIN job_tracking jt ON c.user_id = jt.user_id AND c.current_location = jt.start_location
-               LEFT JOIN jobs j ON jt.job_id = j.job_id
-               WHERE c.user_id = %s""",
-            (user_id,),
-            fetch='one'
-        )
-        
-        if not char_data:
-            return web.json_response({'error': 'Character not found'}, status=404)
-        
-        # Parse character data
-        name, current_location, is_logged_in, level, money, location_status, login_time, location_name, location_type, corridor_id, travel_start, travel_end, destination_name, destination_type, travel_time_seconds, fuel_cost, danger_level, current_job_title, current_job_description = char_data
+            try:
+                user_id = int(request.match_info['user_id'])
+            except (ValueError, KeyError):
+                return web.json_response({'error': 'Invalid user ID'}, status=400)
+            
+            # Get character data for Rich Presence
+            char_data = self.db.execute_webmap_query(
+                """SELECT c.name, c.current_location, c.is_logged_in, c.level, c.money,
+                          c.location_status, c.login_time, l.name as location_name,
+                          l.location_type, t.corridor_id, t.start_time, t.end_time,
+                          dest_l.name as destination_name, dest_l.location_type as destination_type,
+                          cor.travel_time, cor.fuel_cost, cor.danger_level,
+                          j.title as current_job_title, j.description as current_job_description
+                   FROM characters c
+                   LEFT JOIN locations l ON c.current_location = l.location_id
+                   LEFT JOIN travel_sessions t ON c.user_id = t.user_id AND t.status = 'traveling'
+                   LEFT JOIN corridors cor ON t.corridor_id = cor.corridor_id
+                   LEFT JOIN locations dest_l ON cor.destination_location = dest_l.location_id
+                   LEFT JOIN job_tracking jt ON c.user_id = jt.user_id AND c.current_location = jt.start_location
+                   LEFT JOIN jobs j ON jt.job_id = j.job_id
+                   WHERE c.user_id = %s""",
+                (user_id,),
+                fetch='one'
+            )
+            
+            if not char_data:
+                return web.json_response({'error': 'Character not found'}, status=404)
+            
+            # Parse character data from dictionary
+            name = char_data.get('name')
+            current_location = char_data.get('current_location')
+            is_logged_in = char_data.get('is_logged_in')
+            level = char_data.get('level')
+            money = char_data.get('money')
+            location_status = char_data.get('location_status')
+            login_time = char_data.get('login_time')
+            location_name = char_data.get('location_name')
+            location_type = char_data.get('location_type')
+            corridor_id = char_data.get('corridor_id')
+            travel_start = char_data.get('start_time')
+            travel_end = char_data.get('end_time')
+            destination_name = char_data.get('destination_name')
+            destination_type = char_data.get('destination_type')
+            travel_time_seconds = char_data.get('travel_time')
+            fuel_cost = char_data.get('fuel_cost')
+            danger_level = char_data.get('danger_level')
+            current_job_title = char_data.get('current_job_title')
+            current_job_description = char_data.get('current_job_description')
                 
         # Define location type emojis and prefixes
         location_emojis = {
@@ -747,6 +788,10 @@ class WebMapCog(commands.Cog):
         }
         
         return web.json_response(presence_data)
+        
+        except Exception as e:
+            print(f"❌ Error in handle_api_rich_presence: {e}")
+            return web.json_response({'error': 'Internal server error', 'message': str(e)}, status=500)
     
     async def _compile_wiki_data(self):
         """Compile comprehensive wiki data"""
@@ -769,7 +814,7 @@ class WebMapCog(commands.Cog):
             if current_time_obj:
                 current_time = self.time_system.format_ingame_datetime(current_time_obj)
         # Get detailed location information - removed tech_level and stability
-        locations = self.db.execute_query(
+        locations = self.db.execute_webmap_query(
             """SELECT l.location_id, l.name, l.location_type, l.x_coordinate, l.y_coordinate,
                       l.system_name, l.wealth_level, l.population, l.description, l.faction,
                       COUNT(DISTINCT c.user_id) as player_count,
@@ -784,7 +829,7 @@ class WebMapCog(commands.Cog):
         )
         
         # Get route information - removed stability
-        routes = self.db.execute_query(
+        routes = self.db.execute_webmap_query(
             """SELECT c.corridor_id, c.origin_location, c.destination_location, c.name,
                       c.travel_time, c.danger_level,
                       ol.name as origin_name, dl.name as dest_name,
@@ -798,7 +843,7 @@ class WebMapCog(commands.Cog):
         )
         
         # Get player information - only existing columns, only recent logins
-        players = self.db.execute_query(
+        players = self.db.execute_webmap_query(
             """SELECT c.user_id, c.name, c.current_location, c.money,
                       c.level, c.experience, c.alignment,
                       l.name as location_name, s.name as ship_name
@@ -811,7 +856,7 @@ class WebMapCog(commands.Cog):
         )
         
         # Get dynamic NPC information
-        dynamic_npcs = self.db.execute_query(
+        dynamic_npcs = self.db.execute_webmap_query(
             """SELECT n.npc_id, n.name, n.callsign, n.age, n.ship_name, n.ship_type,
                       n.current_location, n.credits, n.alignment, n.combat_rating,
                       l.name as location_name
@@ -823,7 +868,7 @@ class WebMapCog(commands.Cog):
         )
         
         # Get location logs
-        location_logs = self.db.execute_query(
+        location_logs = self.db.execute_webmap_query(
             """SELECT ll.log_id, ll.location_id, ll.author_id, ll.author_name, 
                       ll.message, ll.posted_at, l.name as location_name
                FROM location_logs ll
@@ -849,18 +894,18 @@ class WebMapCog(commands.Cog):
         formatted = []
         for loc in locations:
             formatted.append({
-                'id': loc[0],
-                'name': loc[1],
-                'type': loc[2],
-                'system': loc[5],
-                'wealth': loc[6],
-                'population': loc[7],
-                'description': loc[8],
-                'faction': loc[9],
+                'id': loc.get('location_id'),
+                'name': loc.get('name'),
+                'type': loc.get('location_type'),
+                'system': loc.get('system_name'),
+                'wealth': loc.get('wealth_level'),
+                'population': loc.get('population'),
+                'description': loc.get('description'),
+                'faction': loc.get('faction'),
                 'stability': 75,  # Default since column doesn't exist
-                'player_count': loc[10],
-                'static_npc_count': loc[11],
-                'dynamic_npc_count': loc[12]
+                'player_count': loc.get('player_count'),
+                'static_npc_count': loc.get('static_npc_count'),
+                'dynamic_npc_count': loc.get('dynamic_npc_count')
             })
         return formatted
 
@@ -869,17 +914,17 @@ class WebMapCog(commands.Cog):
         formatted = []
         for route in routes:
             formatted.append({
-                'id': route[0],
-                'origin': route[1],
-                'destination': route[2],
-                'name': route[3],
-                'travel_time': route[4],
-                'danger_level': route[5],
+                'id': route.get('corridor_id'),
+                'origin': route.get('origin_location'),
+                'destination': route.get('destination_location'),
+                'name': route.get('name'),
+                'travel_time': route.get('travel_time'),
+                'danger_level': route.get('danger_level'),
                 'stability': 90,  # Default since column doesn't exist
-                'origin_name': route[6],
-                'dest_name': route[7],
-                'origin_system': route[8],
-                'dest_system': route[9]
+                'origin_name': route.get('origin_name'),
+                'dest_name': route.get('dest_name'),
+                'origin_system': route.get('origin_system'),
+                'dest_system': route.get('dest_system')
             })
         return formatted
 
@@ -888,15 +933,15 @@ class WebMapCog(commands.Cog):
         formatted = []
         for player in players:
             formatted.append({
-                'id': player[0],
-                'name': player[1],
-                'location': player[2],
-                'credits': player[3],
-                'level': player[4] if player[4] else 1,
-                'experience': player[5] if player[5] else 0,
-                'alignment': player[6] if player[6] else 'neutral',
-                'location_name': player[7],
-                'ship_name': player[8],
+                'id': player.get('user_id'),
+                'name': player.get('name'),
+                'location': player.get('current_location'),
+                'credits': player.get('money'),
+                'level': player.get('level') if player.get('level') else 1,
+                'experience': player.get('experience') if player.get('experience') else 0,
+                'alignment': player.get('alignment') if player.get('alignment') else 'neutral',
+                'location_name': player.get('location_name'),
+                'ship_name': player.get('ship_name'),
                 # Default values for non-existent stats
                 'total_distance': 0,
                 'locations_visited': 0,
@@ -912,17 +957,17 @@ class WebMapCog(commands.Cog):
         formatted = []
         for npc in npcs:
             formatted.append({
-                'id': npc[0],
-                'name': npc[1],
-                'callsign': npc[2],
-                'age': npc[3],
-                'ship_name': npc[4],
-                'ship_type': npc[5],
-                'location': npc[6],
-                'credits': npc[7],
-                'alignment': npc[8],
-                'combat_rating': npc[9],
-                'location_name': npc[10]
+                'id': npc.get('npc_id'),
+                'name': npc.get('name'),
+                'callsign': npc.get('callsign'),
+                'age': npc.get('age'),
+                'ship_name': npc.get('ship_name'),
+                'ship_type': npc.get('ship_type'),
+                'location': npc.get('current_location'),
+                'credits': npc.get('credits'),
+                'alignment': npc.get('alignment'),
+                'combat_rating': npc.get('combat_rating'),
+                'location_name': npc.get('location_name')
             })
         return formatted
 
@@ -931,13 +976,13 @@ class WebMapCog(commands.Cog):
         formatted = []
         for log in logs:
             formatted.append({
-                'id': log[0],
-                'location_id': log[1],
-                'location_name': log[6],
-                'character_name': log[3],
-                'action': log[4],
-                'timestamp': log[5],
-                'game_date': self._convert_to_game_date(log[5])
+                'id': log.get('log_id'),
+                'location_id': log.get('location_id'),
+                'location_name': log.get('location_name'),
+                'character_name': log.get('author_name'),
+                'action': log.get('message'),
+                'timestamp': log.get('posted_at'),
+                'game_date': self._convert_to_game_date(log.get('posted_at'))
             })
         return formatted
     
