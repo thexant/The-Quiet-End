@@ -1262,15 +1262,17 @@ class ChannelManager:
             (current_time, location_id)
         )
     
-    async def cleanup_transit_channel(self, channel_id: int, delay_seconds: int = 30):
+    async def cleanup_transit_channel(self, channel_id: int, delay_seconds: int = 60):
         """
         Clean up a transit channel after a delay
         
         Args:
             channel_id: The ID of the transit channel to delete
-            delay_seconds: How long to wait before deleting (default 30 seconds)
+            delay_seconds: How long to wait before deleting (default 60 seconds)
         """
         import asyncio
+        
+        print(f"🔄 Scheduling cleanup for transit channel {channel_id} in {delay_seconds} seconds...")
         
         # Wait for the specified delay
         await asyncio.sleep(delay_seconds)
@@ -1280,9 +1282,13 @@ class ChannelManager:
         if channel:
             try:
                 await channel.delete(reason="Transit completed - automated cleanup")
-                print(f"🗑️ Cleaned up transit channel #{channel.name}")
+                print(f"🗑️ Successfully cleaned up transit channel #{channel.name} (ID: {channel_id})")
             except Exception as e:
-                print(f"❌ Failed to delete transit channel: {e}")
+                print(f"❌ Failed to delete transit channel {channel_id}: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"⚠️ Transit channel {channel_id} not found during cleanup (may have been deleted already)")
                 
     async def give_user_location_access(self, user: discord.Member, location_id: int, send_arrival_notification: bool = True) -> bool:
         """Give a user access to a location's channel, creating it if necessary"""

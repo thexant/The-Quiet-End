@@ -1360,8 +1360,11 @@ class TravelConfirmView(discord.ui.View):
 
             # Cleanup transit channel
             if transit_chan:
-                await transit_chan.send(f"🚀 Arrived at **{dest_name}**! Journey complete.")
-                await travel_cog.channel_mgr.cleanup_transit_channel(transit_chan.id, delay_seconds=30)
+                try:
+                    await transit_chan.send(f"🚀 Arrived at **{dest_name}**! Journey complete.")
+                    await travel_cog.channel_mgr.cleanup_transit_channel(transit_chan.id, delay_seconds=60)
+                except Exception as e:
+                    print(f"❌ Failed to cleanup transit channel {transit_chan.id}: {e}")
         
         self.bot.loop.create_task(complete_travel())
     
@@ -1644,8 +1647,11 @@ class TravelConfirmView(discord.ui.View):
         except:
             pass
         
-        # Schedule channel cleanup
-        asyncio.create_task(channel_manager.cleanup_transit_channel(transit_channel.id, 30))
+        # Schedule channel cleanup - use bot loop for proper task lifecycle management
+        try:
+            self.bot.loop.create_task(channel_manager.cleanup_transit_channel(transit_channel.id, 60))
+        except Exception as e:
+            print(f"❌ Failed to schedule transit channel cleanup: {e}")
     
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_travel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -5316,10 +5322,7 @@ class TQEOverviewView(discord.ui.View):
             await interaction.response.send_message("This is not your panel!", ephemeral=True)
             return
         
-        # Force a manual update first (same as job_status command)
-        econ_cog = self.bot.get_cog('EconomyCog')
-        if econ_cog:
-            await econ_cog._manual_job_update(interaction.user.id)
+        # Job status check - display current status without advancing time
         
         # Get job info (same logic as job_status command)
         job_info = self.bot.db.execute_query(

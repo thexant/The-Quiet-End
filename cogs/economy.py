@@ -2835,8 +2835,7 @@ class EconomyCog(commands.Cog):
 
     @job_group.command(name="status", description="Check your current job status")
     async def job_status(self, interaction: discord.Interaction):
-        # FORCE a manual update first
-        await self._manual_job_update(interaction.user.id)
+        # Check current job status without advancing time
         
         # Fetch active job with status - INCLUDE destination_location_id and unloading_started_at
         job_info = self.db.execute_query(

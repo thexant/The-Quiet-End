@@ -1625,7 +1625,7 @@ class NPCJobSelectView(discord.ui.View):
                 '''INSERT INTO jobs 
                    (location_id, title, description, reward_money, required_skill, min_skill_level,
                     danger_level, duration_minutes, expires_at, is_taken, taken_by, taken_at, job_status, destination_location_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, 'active', %s)''',
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, true, %s, %s, 'active', %s)''',
                 (char_location_id, title, desc, reward_money, required_skill, min_skill_level, danger_level, 
                  duration_minutes, expire_time.isoformat(), interaction.user.id, unique_timestamp, destination_location_id)
             )
