@@ -94,10 +94,9 @@ class WebMapCog(commands.Cog):
     async def _refresh_cache(self):
         """Refresh all cached data"""
         print("🔄 Starting web map cache refresh...")
-        try:
-            # Get locations with explicit column names, ordered by type priority then by name for consistency
-            print("📍 Fetching locations data...")
-            locations_data = self.db.execute_webmap_query(
+        # Get locations with explicit column names, ordered by type priority then by name for consistency
+        print("📍 Fetching locations data...")
+        locations_data = self.db.execute_webmap_query(
             """SELECT l.location_id, l.name, l.location_type, l.x_coordinate, l.y_coordinate,
                       l.system_name, l.wealth_level, l.population, l.description, l.faction,
                       lo.owner_id, lo.docking_fee, c.name as owner_name
@@ -146,11 +145,11 @@ class WebMapCog(commands.Cog):
                 print(f"Location data: {loc}")
                 continue
         
-            print(f"✅ Found {len(locations_data)} locations")
-            
-            # Get corridors
-            print("🚀 Fetching corridors data...")
-            corridors_data = self.db.execute_webmap_query(
+        print(f"✅ Found {len(locations_data)} locations")
+        
+        # Get corridors
+        print("🚀 Fetching corridors data...")
+        corridors_data = self.db.execute_webmap_query(
             """SELECT corridor_id, origin_location, destination_location, 
                       name, travel_time, danger_level, corridor_type
                FROM corridors
@@ -170,11 +169,11 @@ class WebMapCog(commands.Cog):
                 'corridor_type': corr.get('corridor_type')
             })
         
-            print(f"✅ Found {len(corridors_data)} corridors")
-            
-            # Get active players - Only show currently logged in characters
-            print("👥 Fetching players data...")
-            players_data = self.db.execute_webmap_query(
+        print(f"✅ Found {len(corridors_data)} corridors")
+        
+        # Get active players - Only show currently logged in characters
+        print("👥 Fetching players data...")
+        players_data = self.db.execute_webmap_query(
             """SELECT c.user_id, c.name, c.current_location, c.money,
                       t.corridor_id, t.start_time, t.end_time,
                       l.name as location_name, l.x_coordinate, l.y_coordinate,
@@ -208,11 +207,11 @@ class WebMapCog(commands.Cog):
                 print(f"Error parsing player {user_id if 'user_id' in locals() else 'unknown'}: {e}")
                 continue
         
-            print(f"✅ Found {len(players_data)} players")
-            
-            # Get dynamic NPCs
-            print("🤖 Fetching NPCs data...")
-            npcs_data = self.db.execute_webmap_query(
+        print(f"✅ Found {len(players_data)} players")
+        
+        # Get dynamic NPCs
+        print("🤖 Fetching NPCs data...")
+        npcs_data = self.db.execute_webmap_query(
             """SELECT n.npc_id, n.name, n.callsign, n.current_location,
                       n.destination_location, n.travel_start_time, n.travel_duration,
                       n.alignment, n.is_alive, l.name as location_name,
@@ -291,32 +290,17 @@ class WebMapCog(commands.Cog):
                 current_time = self.time_system.format_ingame_datetime(current_time_obj)
         
         # Update cache with timestamp
-            self.cache = {
-                'locations': locations,
-                'corridors': corridors,
-                'players': players,
-                'npcs': npcs,
-                'news': news,
-                'galaxy_info': galaxy_info,
-                'current_time': current_time,
-                'last_update': datetime.now().isoformat()
-            }
-            print("✅ Web map cache refresh completed successfully")
-            
-        except Exception as e:
-            print(f"❌ Critical error in web map cache refresh: {e}")
-            print(f"Cache refresh error: {traceback.format_exc()}")
-            # Set a minimal cache to prevent total failure
-            self.cache = {
-                'locations': {},
-                'corridors': [],
-                'players': {},
-                'npcs': {},
-                'news': [],
-                'galaxy_info': {},
-                'current_time': None,
-                'last_update': datetime.now().isoformat()
-            }
+        self.cache = {
+            'locations': locations,
+            'corridors': corridors,
+            'players': players,
+            'npcs': npcs,
+            'news': news,
+            'galaxy_info': galaxy_info,
+            'current_time': current_time,
+            'last_update': datetime.now().isoformat()
+        }
+        print("✅ Web map cache refresh completed successfully")
     
     def _calculate_travel_progress(self, start_time, end_time):
         """Calculate travel progress as percentage"""
