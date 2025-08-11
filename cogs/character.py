@@ -2822,7 +2822,7 @@ class CharacterCog(commands.Cog):
             '''SELECT p.amount, f.name, f.emoji
                FROM faction_payouts p
                JOIN factions f ON p.faction_id = f.faction_id
-               WHERE p.user_id = %s AND p.collected = 0''',
+               WHERE p.user_id = %s AND p.collected = false''',
             (user_id,),
             fetch='all'
         )
