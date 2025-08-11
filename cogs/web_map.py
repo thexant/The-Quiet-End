@@ -664,130 +664,130 @@ class WebMapCog(commands.Cog):
             current_job_title = char_data.get('current_job_title')
             current_job_description = char_data.get('current_job_description')
                 
-        # Define location type emojis and prefixes
-        location_emojis = {
-            'colony': '🏭',
-            'space_station': '🛰️',
-            'outpost': '🛤️',
-            'gate': '🚪'
-        }
-        
-        location_prefixes = {
-            'colony': 'Colony',
-            'space_station': 'Station',
-            'outpost': 'Outpost',
-            'gate': 'Gate'
-        }
-        
-        # Determine current status for Rich Presence
-        if not is_logged_in:
-            status = "Offline"
-            details = "Not currently playing"
-            state = ""
-        elif corridor_id:  # Currently traveling
-            status = "Traveling"
-            details = f"{name} - Level {level or 1}"
+            # Define location type emojis and prefixes
+            location_emojis = {
+                'colony': '🏭',
+                'space_station': '🛰️',
+                'outpost': '🛤️',
+                'gate': '🚪'
+            }
             
-            # Enhanced travel state with destination emoji and route info
-            if destination_name and destination_type:
-                dest_emoji = location_emojis.get(destination_type, '🌌')
-                state = f"🚀 Traveling to {dest_emoji} {destination_name}"
-            elif destination_name:
-                state = f"🚀 Traveling to {destination_name}"
-            else:
-                state = "🚀 In transit"
-        else:  # At a location
-            status = "Online"
-            details = f"{name} - Level {level or 1}"
+            location_prefixes = {
+                'colony': 'Colony',
+                'space_station': 'Station',
+                'outpost': 'Outpost',
+                'gate': 'Gate'
+            }
             
-            # Enhanced location state with emoji and job info
-            if location_name and location_type:
-                emoji = location_emojis.get(location_type, '🌌')
-                prefix = location_prefixes.get(location_type, '')
+            # Determine current status for Rich Presence
+            if not is_logged_in:
+                status = "Offline"
+                details = "Not currently playing"
+                state = ""
+            elif corridor_id:  # Currently traveling
+                status = "Traveling"
+                details = f"{name} - Level {level or 1}"
                 
-                if current_job_title:
-                    state = f"💼 {current_job_title} at {emoji} {location_name}"
+                # Enhanced travel state with destination emoji and route info
+                if destination_name and destination_type:
+                    dest_emoji = location_emojis.get(destination_type, '🌌')
+                    state = f"🚀 Traveling to {dest_emoji} {destination_name}"
+                elif destination_name:
+                    state = f"🚀 Traveling to {destination_name}"
                 else:
-                    state = f"At {emoji} {location_name}"
-            elif location_name:
-                if current_job_title:
-                    state = f"💼 {current_job_title} at {location_name}"
-                else:
-                    state = f"At {location_name}"
-            else:
-                state = "In space"
-        
-        # Calculate timestamp for Discord presence
-        timestamp = None
-        if login_time and is_logged_in:
-            try:
-                from datetime import datetime
-                if isinstance(login_time, str) and login_time:
-                    timestamp = int(safe_datetime_parse(login_time).timestamp())
-                elif hasattr(login_time, 'timestamp'):
-                    timestamp = int(login_time.timestamp())
-            except:
-                pass
-        elif travel_start and corridor_id:
-            try:
-                from datetime import datetime
-                if isinstance(travel_start, str) and travel_start:
-                    timestamp = int(safe_datetime_parse(travel_start).timestamp())
-                elif hasattr(travel_start, 'timestamp'):
-                    timestamp = int(travel_start.timestamp())
-            except:
-                pass
-        
-        # Calculate travel progress if traveling
-        travel_progress = None
-        travel_time_remaining = None
-        if corridor_id and travel_start and travel_time_seconds:
-            from datetime import datetime, timedelta
-            try:
-                if isinstance(travel_start, str) and travel_start:
-                    start_time = safe_datetime_parse(travel_start)
-                elif hasattr(travel_start, 'strftime'):
-                    start_time = travel_start
-                else:
-                    return result
+                    state = "🚀 In transit"
+            else:  # At a location
+                status = "Online"
+                details = f"{name} - Level {level or 1}"
                 
-                current_time = datetime.utcnow()
-                elapsed_minutes = (current_time - start_time).total_seconds() / 60
-                travel_time_minutes = travel_time_seconds / 60  # Convert seconds to minutes
-                travel_time_remaining = max(0, travel_time_minutes - elapsed_minutes)
-                travel_progress = min(100, (elapsed_minutes / travel_time_minutes) * 100)
-            except:
-                pass
-        
-        presence_data = {
-            'status': status,
-            'details': details,
-            'state': state,
-            'timestamp': timestamp,
-            'is_online': bool(is_logged_in),
-            'is_traveling': bool(corridor_id),
-            'character_name': name,
-            'level': level or 1,
-            'credits': money or 0,
-            'location': location_name,
-            # Enhanced location information
-            'location_type': location_type,
-            'location_emoji': location_emojis.get(location_type, '🌌') if location_type else None,
-            # Travel information
-            'destination_name': destination_name,
-            'destination_type': destination_type,
-            'destination_emoji': location_emojis.get(destination_type, '🌌') if destination_type else None,
-            'travel_time_minutes': travel_time_seconds / 60 if travel_time_seconds else None,
-            'travel_time_remaining': travel_time_remaining,
-            'travel_progress': travel_progress,
-            'fuel_cost': fuel_cost,
-            'danger_level': danger_level,
-            # Job information
-            'current_job_title': current_job_title,
-            'current_job_description': current_job_description
-        }
-        
-        return web.json_response(presence_data)
+                # Enhanced location state with emoji and job info
+                if location_name and location_type:
+                    emoji = location_emojis.get(location_type, '🌌')
+                    prefix = location_prefixes.get(location_type, '')
+                    
+                    if current_job_title:
+                        state = f"💼 {current_job_title} at {emoji} {location_name}"
+                    else:
+                        state = f"At {emoji} {location_name}"
+                elif location_name:
+                    if current_job_title:
+                        state = f"💼 {current_job_title} at {location_name}"
+                    else:
+                        state = f"At {location_name}"
+                else:
+                    state = "In space"
+            
+            # Calculate timestamp for Discord presence
+            timestamp = None
+            if login_time and is_logged_in:
+                try:
+                    from datetime import datetime
+                    if isinstance(login_time, str) and login_time:
+                        timestamp = int(safe_datetime_parse(login_time).timestamp())
+                    elif hasattr(login_time, 'timestamp'):
+                        timestamp = int(login_time.timestamp())
+                except:
+                    pass
+            elif travel_start and corridor_id:
+                try:
+                    from datetime import datetime
+                    if isinstance(travel_start, str) and travel_start:
+                        timestamp = int(safe_datetime_parse(travel_start).timestamp())
+                    elif hasattr(travel_start, 'timestamp'):
+                        timestamp = int(travel_start.timestamp())
+                except:
+                    pass
+            
+            # Calculate travel progress if traveling
+            travel_progress = None
+            travel_time_remaining = None
+            if corridor_id and travel_start and travel_time_seconds:
+                from datetime import datetime, timedelta
+                try:
+                    if isinstance(travel_start, str) and travel_start:
+                        start_time = safe_datetime_parse(travel_start)
+                    elif hasattr(travel_start, 'strftime'):
+                        start_time = travel_start
+                    else:
+                        return result
+                    
+                    current_time = datetime.utcnow()
+                    elapsed_minutes = (current_time - start_time).total_seconds() / 60
+                    travel_time_minutes = travel_time_seconds / 60  # Convert seconds to minutes
+                    travel_time_remaining = max(0, travel_time_minutes - elapsed_minutes)
+                    travel_progress = min(100, (elapsed_minutes / travel_time_minutes) * 100)
+                except:
+                    pass
+            
+            presence_data = {
+                'status': status,
+                'details': details,
+                'state': state,
+                'timestamp': timestamp,
+                'is_online': bool(is_logged_in),
+                'is_traveling': bool(corridor_id),
+                'character_name': name,
+                'level': level or 1,
+                'credits': money or 0,
+                'location': location_name,
+                # Enhanced location information
+                'location_type': location_type,
+                'location_emoji': location_emojis.get(location_type, '🌌') if location_type else None,
+                # Travel information
+                'destination_name': destination_name,
+                'destination_type': destination_type,
+                'destination_emoji': location_emojis.get(destination_type, '🌌') if destination_type else None,
+                'travel_time_minutes': travel_time_seconds / 60 if travel_time_seconds else None,
+                'travel_time_remaining': travel_time_remaining,
+                'travel_progress': travel_progress,
+                'fuel_cost': fuel_cost,
+                'danger_level': danger_level,
+                # Job information
+                'current_job_title': current_job_title,
+                'current_job_description': current_job_description
+            }
+            
+            return web.json_response(presence_data)
         
         except Exception as e:
             print(f"❌ Error in handle_api_rich_presence: {e}")
