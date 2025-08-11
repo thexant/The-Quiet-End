@@ -2762,6 +2762,28 @@ class AdminCog(commands.Cog):
     
     # ... (keep all your other existing admin commands)
 
+    @admin_group.command(name="migrate_npc_table", description="Create missing npc_job_completions table")
+    async def migrate_npc_table(self, interaction: discord.Interaction):
+        
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Run the migration
+            success = self.bot.db.migrate_npc_job_completions_table()
+            
+            if success:
+                await interaction.followup.send("✅ Database migration completed successfully! The npc_job_completions table has been created.", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ Migration failed. Check console logs for details.", ephemeral=True)
+                
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error during migration: {str(e)}", ephemeral=True)
+            print(f"Migration command error: {e}")
+
 class EmergencyResetView(discord.ui.View):
     def __init__(self, bot, admin_user_id: int):
         super().__init__(timeout=30)
@@ -3026,28 +3048,6 @@ class ServerResetConfirmView(discord.ui.View):
             return
         
         await interaction.response.send_message("Server reset cancelled. No changes were made.", ephemeral=True)
-
-    @admin_group.command(name="migrate_npc_table", description="Create missing npc_job_completions table")
-    async def migrate_npc_table(self, interaction: discord.Interaction):
-        
-        if not await self.bot.is_owner(interaction.user):
-            await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
-            return
-        
-        await interaction.response.defer(ephemeral=True)
-        
-        try:
-            # Run the migration
-            success = self.bot.db.migrate_npc_job_completions_table()
-            
-            if success:
-                await interaction.followup.send("✅ Database migration completed successfully! The npc_job_completions table has been created.", ephemeral=True)
-            else:
-                await interaction.followup.send("❌ Migration failed. Check console logs for details.", ephemeral=True)
-                
-        except Exception as e:
-            await interaction.followup.send(f"❌ Error during migration: {str(e)}", ephemeral=True)
-            print(f"Migration command error: {e}")
 
 
         
