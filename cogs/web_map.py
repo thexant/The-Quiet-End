@@ -84,7 +84,8 @@ class WebMapCog(commands.Cog):
         try:
             await self._refresh_cache()
         except Exception as e:
-            print(f"Error updating web map cache: {e}")
+            print(f"❌ Error updating web map cache: {e}")
+            print(f"Web map cache error: {traceback.format_exc()}")
     
     @update_cache.before_loop
     async def before_update_cache(self):
@@ -92,8 +93,11 @@ class WebMapCog(commands.Cog):
     
     async def _refresh_cache(self):
         """Refresh all cached data"""
-        # Get locations with explicit column names, ordered by type priority then by name for consistency
-        locations_data = self.db.execute_webmap_query(
+        print("🔄 Starting web map cache refresh...")
+        try:
+            # Get locations with explicit column names, ordered by type priority then by name for consistency
+            print("📍 Fetching locations data...")
+            locations_data = self.db.execute_webmap_query(
             """SELECT l.location_id, l.name, l.location_type, l.x_coordinate, l.y_coordinate,
                       l.system_name, l.wealth_level, l.population, l.description, l.faction,
                       lo.owner_id, lo.docking_fee, c.name as owner_name
@@ -142,8 +146,11 @@ class WebMapCog(commands.Cog):
                 print(f"Location data: {loc}")
                 continue
         
-        # Get corridors
-        corridors_data = self.db.execute_webmap_query(
+            print(f"✅ Found {len(locations_data)} locations")
+            
+            # Get corridors
+            print("🚀 Fetching corridors data...")
+            corridors_data = self.db.execute_webmap_query(
             """SELECT corridor_id, origin_location, destination_location, 
                       name, travel_time, danger_level, corridor_type
                FROM corridors
@@ -163,8 +170,11 @@ class WebMapCog(commands.Cog):
                 'corridor_type': corr.get('corridor_type')
             })
         
-        # Get active players - Only show currently logged in characters
-        players_data = self.db.execute_webmap_query(
+            print(f"✅ Found {len(corridors_data)} corridors")
+            
+            # Get active players - Only show currently logged in characters
+            print("👥 Fetching players data...")
+            players_data = self.db.execute_webmap_query(
             """SELECT c.user_id, c.name, c.current_location, c.money,
                       t.corridor_id, t.start_time, t.end_time,
                       l.name as location_name, l.x_coordinate, l.y_coordinate,
@@ -198,8 +208,11 @@ class WebMapCog(commands.Cog):
                 print(f"Error parsing player {user_id if 'user_id' in locals() else 'unknown'}: {e}")
                 continue
         
-        # Get dynamic NPCs
-        npcs_data = self.db.execute_webmap_query(
+            print(f"✅ Found {len(players_data)} players")
+            
+            # Get dynamic NPCs
+            print("🤖 Fetching NPCs data...")
+            npcs_data = self.db.execute_webmap_query(
             """SELECT n.npc_id, n.name, n.callsign, n.current_location,
                       n.destination_location, n.travel_start_time, n.travel_duration,
                       n.alignment, n.is_alive, l.name as location_name,
@@ -231,8 +244,11 @@ class WebMapCog(commands.Cog):
                 print(f"Error parsing NPC {npc_id if 'npc_id' in locals() else 'unknown'}: {e}")
                 continue
         
-        # Get recent news from GalacticNewsCog's news_queue table
-        news_data = self.db.execute_webmap_query(
+            print(f"✅ Found {len(npcs_data)} NPCs")
+            
+            # Get recent news from GalacticNewsCog's news_queue table
+            print("📰 Fetching news data...")
+            news_data = self.db.execute_webmap_query(
             """SELECT title, description, location_id, scheduled_delivery, news_type
                FROM news_queue
                WHERE is_delivered = true
@@ -251,9 +267,12 @@ class WebMapCog(commands.Cog):
                 'news_type': item.get('news_type'),
                 'game_date': self._convert_to_game_date(item.get('scheduled_delivery'))
             })
-        
-        # Get galaxy info and current time
-        galaxy_info_data = self.time_system.get_galaxy_info()
+            
+            print(f"✅ Found {len(news_data)} news items")
+            
+            # Get galaxy info and current time
+            print("🌌 Getting galaxy info...")
+            galaxy_info_data = self.time_system.get_galaxy_info()
         galaxy_info = {}
         current_time = None
         
@@ -272,16 +291,32 @@ class WebMapCog(commands.Cog):
                 current_time = self.time_system.format_ingame_datetime(current_time_obj)
         
         # Update cache with timestamp
-        self.cache = {
-            'locations': locations,
-            'corridors': corridors,
-            'players': players,
-            'npcs': npcs,
-            'news': news,
-            'galaxy_info': galaxy_info,
-            'current_time': current_time,
-            'last_update': datetime.now().isoformat()
-        }
+            self.cache = {
+                'locations': locations,
+                'corridors': corridors,
+                'players': players,
+                'npcs': npcs,
+                'news': news,
+                'galaxy_info': galaxy_info,
+                'current_time': current_time,
+                'last_update': datetime.now().isoformat()
+            }
+            print("✅ Web map cache refresh completed successfully")
+            
+        except Exception as e:
+            print(f"❌ Critical error in web map cache refresh: {e}")
+            print(f"Cache refresh error: {traceback.format_exc()}")
+            # Set a minimal cache to prevent total failure
+            self.cache = {
+                'locations': {},
+                'corridors': [],
+                'players': {},
+                'npcs': {},
+                'news': [],
+                'galaxy_info': {},
+                'current_time': None,
+                'last_update': datetime.now().isoformat()
+            }
     
     def _calculate_travel_progress(self, start_time, end_time):
         """Calculate travel progress as percentage"""
@@ -570,20 +605,26 @@ class WebMapCog(commands.Cog):
     
     async def handle_index(self, request):
         """Serve the landing page"""
+        print("📄 handle_index called")
         try:
             html_content = self.get_landing_html()
+            print("✅ Landing HTML generated successfully")
             return web.Response(text=html_content, content_type='text/html')
         except Exception as e:
             print(f"❌ Error in handle_index: {e}")
+            print(f"Index error: {traceback.format_exc()}")
             return web.Response(text=f"Error loading page: {str(e)}", status=500)
     
     async def handle_map(self, request):
         """Serve the map page"""
+        print("🗺️ handle_map called")
         try:
             html_content = self.get_map_html()
+            print("✅ Map HTML generated successfully")
             return web.Response(text=html_content, content_type='text/html')
         except Exception as e:
             print(f"❌ Error in handle_map: {e}")
+            print(f"Map error: {traceback.format_exc()}")
             return web.Response(text=f"Error loading map: {str(e)}", status=500)
     
     async def handle_wiki(self, request):
@@ -597,10 +638,13 @@ class WebMapCog(commands.Cog):
     
     async def handle_api_map_data(self, request):
         """API endpoint for map data"""
+        print("🔗 handle_api_map_data called")
         try:
+            print("✅ Returning cached map data")
             return web.json_response(self.cache)
         except Exception as e:
             print(f"❌ Error in handle_api_map_data: {e}")
+            print(f"API map data error: {traceback.format_exc()}")
             return web.json_response({'error': 'Internal server error', 'message': str(e)}, status=500)
     
     async def handle_api_wiki_data(self, request):
