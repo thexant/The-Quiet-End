@@ -1974,6 +1974,15 @@ class EconomyCog(commands.Cog):
             "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
             (exp_gain, interaction.user.id)
         )
+        
+        # Create the response embed FIRST (before faction_data check)
+        embed = discord.Embed(
+            title="✅ Job Completed Successfully!",
+            description=f"**{title}** has been completed!",
+            color=0x00ff00
+        )
+        
+        # Check faction data and add field if applicable
         faction_data = self.db.execute_query(
             '''SELECT f.faction_id, f.name, f.emoji
                FROM faction_members fm
@@ -1995,12 +2004,6 @@ class EconomyCog(commands.Cog):
                 value=f"{faction_data[2]} +{faction_bonus:,} credits to {faction_data[1]}",
                 inline=False
             )
-        # Create the response embed
-        embed = discord.Embed(
-            title="✅ Job Completed Successfully!",
-            description=f"**{title}** has been completed!",
-            color=0x00ff00
-        )
         
         # Convert to intuitive display (invert the roll display)
         # Internal: roll <= success_chance means success
