@@ -1653,7 +1653,7 @@ class NPCJobSelectView(discord.ui.View):
             # Record completion for tracking
             self.bot.db.execute_in_transaction(
                 conn,
-                "INSERT INTO npc_job_completions (job_id, user_id) VALUES (%s, %s)",
+                "INSERT INTO npc_job_completions (job_id, completed_by) VALUES (%s, %s)",
                 (job_id, interaction.user.id)
             )
             

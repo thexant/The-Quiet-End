@@ -1854,3 +1854,26 @@ class Database:
         except Exception as e:
             print(f"❌ Database integrity check failed: {e}")
             return False
+
+    def migrate_npc_job_completions_table(self):
+        """Migration method to add missing npc_job_completions table"""
+        try:
+            print("🔄 Running migration: Creating npc_job_completions table...")
+            
+            # Create the table if it doesn't exist
+            create_table_sql = '''CREATE TABLE IF NOT EXISTS npc_job_completions (
+                completion_id SERIAL PRIMARY KEY,
+                job_id INTEGER NOT NULL,
+                completed_by BIGINT NOT NULL,
+                completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (job_id) REFERENCES jobs (job_id),
+                FOREIGN KEY (completed_by) REFERENCES characters (user_id)
+            )'''
+            
+            self.execute_query(create_table_sql)
+            print("✅ Migration completed: npc_job_completions table created successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Migration failed: {e}")
+            return False
