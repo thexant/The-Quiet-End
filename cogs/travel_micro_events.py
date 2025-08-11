@@ -417,9 +417,11 @@ class TravelMicroEventsCog(commands.Cog):
                 description=f"Your {skill_name} skills proved adequate for the challenge.",
                 color=0x00ff00
             )
+            # Convert to D&D style display: higher rolls = better
+            target_needed = 101 - success_rate
             embed.add_field(
                 name="Success Check", 
-                value=f"🎯 {success_rate}% chance (Rolled {roll})",
+                value=f"🎯 Need {target_needed}+ (Rolled {roll}) - SUCCESS!",
                 inline=True
             )
             embed.add_field(
@@ -512,9 +514,11 @@ class TravelMicroEventsCog(commands.Cog):
             description=f"Your {event_data['skill']} check wasn't enough.",
             color=0xff4444
         )
+        # Convert to D&D style display: higher rolls = better
+        target_needed = 101 - success_rate
         embed.add_field(
             name="Failure Check",
-            value=f"🎯 {success_rate}% chance (Rolled {roll})",
+            value=f"🎯 Need {target_needed}+ (Rolled {roll}) - FAILED!",
             inline=True
         )
         embed.add_field(

@@ -1918,6 +1918,49 @@ class Database:
             print(f"❌ Migration failed: {e}")
             return False
 
+    def migrate_missing_sub_location_tables(self):
+        """Migration method to add missing sub_locations and character_identity tables"""
+        try:
+            print("🔄 Running migration: Creating sub_locations and character_identity tables...")
+            
+            # Create the sub_locations table if it doesn't exist
+            create_sub_locations_sql = '''CREATE TABLE IF NOT EXISTS sub_locations (
+                sub_location_id SERIAL PRIMARY KEY,
+                parent_location_id BIGINT NOT NULL,
+                name TEXT NOT NULL,
+                sub_type TEXT NOT NULL,
+                description TEXT,
+                thread_id BIGINT,
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (parent_location_id) REFERENCES locations (location_id)
+            )'''
+            
+            self.execute_query(create_sub_locations_sql)
+            print("✅ sub_locations table created successfully")
+            
+            # Create the character_identity table if it doesn't exist
+            create_identity_sql = '''CREATE TABLE IF NOT EXISTS character_identity (
+                user_id BIGINT PRIMARY KEY,
+                biography TEXT,
+                birth_month INTEGER,
+                birth_day INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES characters (user_id) ON DELETE CASCADE
+            )'''
+            
+            self.execute_query(create_identity_sql)
+            print("✅ character_identity table created successfully")
+            
+            print("✅ Migration completed successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Migration failed: {e}")
+            return False
+
     # ASYNC DATABASE WRAPPERS - Prevent blocking Discord event loop
     async def async_execute_query(self, query, params=None, fetch=None, many=False):
         """Async wrapper for execute_query to prevent blocking the event loop"""

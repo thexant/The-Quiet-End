@@ -2904,8 +2904,8 @@ class AdminCog(commands.Cog):
     
     # ... (keep all your other existing admin commands)
 
-    @admin_group.command(name="migrate_npc_table", description="Create missing npc_job_completions table")
-    async def migrate_npc_table(self, interaction: discord.Interaction):
+    @admin_group.command(name="create_missing_tables", description="Create missing sub_locations and character_identity tables")
+    async def create_missing_tables(self, interaction: discord.Interaction):
         
         if not await self.bot.is_owner(interaction.user):
             await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
@@ -2915,10 +2915,10 @@ class AdminCog(commands.Cog):
         
         try:
             # Run the migration
-            success = self.bot.db.migrate_npc_job_completions_table()
+            success = self.bot.db.migrate_missing_sub_location_tables()
             
             if success:
-                await interaction.followup.send("✅ Database migration completed successfully! The npc_job_completions table has been created.", ephemeral=True)
+                await interaction.followup.send("✅ Database migration completed successfully! The sub_locations and character_identity tables have been created.", ephemeral=True)
             else:
                 await interaction.followup.send("❌ Migration failed. Check console logs for details.", ephemeral=True)
                 
