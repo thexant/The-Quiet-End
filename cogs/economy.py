@@ -1645,8 +1645,8 @@ class EconomyCog(commands.Cog):
             )
             
             # Clean up job
-            self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
             self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, user_id))
+            self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
             self.notified_jobs.discard(job_id)  # Clean up notification tracking
             
             # Try to notify user
@@ -1706,8 +1706,8 @@ class EconomyCog(commands.Cog):
         )
         
         # Clean up
-        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
         self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, interaction.user.id))
+        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
         self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         embed = discord.Embed(
@@ -1845,8 +1845,8 @@ class EconomyCog(commands.Cog):
             )
             
             # Clean up job
-            self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
             self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, user_id))
+            self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
             self.notified_jobs.discard(job_id)  # Clean up notification tracking
             
             # Send completion notification
@@ -1896,8 +1896,8 @@ class EconomyCog(commands.Cog):
         )
         
         # Clean up
-        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
         self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, interaction.user.id))
+        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
         self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         embed = discord.Embed(
@@ -2053,8 +2053,8 @@ class EconomyCog(commands.Cog):
                     embed.add_field(name="⚖️ Reputation Change", value=f"**{karma_text}** with local faction", inline=True)
         
         # Clean up job from the database
-        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
         self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, interaction.user.id))
+        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
         
         # Check for level up
         char_cog = self.bot.get_cog('CharacterCog')
@@ -2080,8 +2080,8 @@ class EconomyCog(commands.Cog):
         )
         
         # Clean up
-        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
         self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, interaction.user.id))
+        self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
         self.notified_jobs.discard(job_id)  # Clean up notification tracking
         
         embed = discord.Embed(
