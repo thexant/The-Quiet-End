@@ -1117,6 +1117,8 @@ class Database:
                 min_skill_level INTEGER DEFAULT 0,
                 danger_level INTEGER DEFAULT 0,
                 duration_minutes INTEGER DEFAULT 30,
+                max_completions INTEGER DEFAULT 0,
+                current_completions INTEGER DEFAULT 0,
                 is_available BOOLEAN DEFAULT true,
                 expires_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1856,22 +1858,36 @@ class Database:
             return False
 
     def migrate_npc_job_completions_table(self):
-        """Migration method to add missing npc_job_completions table"""
+        """Migration method to add missing npc_job_completions table and npc_jobs columns"""
         try:
-            print("🔄 Running migration: Creating npc_job_completions table...")
+            print("🔄 Running migration: Creating npc_job_completions table and updating npc_jobs...")
             
-            # Create the table if it doesn't exist
+            # Create the npc_job_completions table if it doesn't exist
             create_table_sql = '''CREATE TABLE IF NOT EXISTS npc_job_completions (
                 completion_id SERIAL PRIMARY KEY,
                 job_id INTEGER NOT NULL,
                 completed_by BIGINT NOT NULL,
                 completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (job_id) REFERENCES jobs (job_id),
+                FOREIGN KEY (job_id) REFERENCES npc_jobs (job_id),
                 FOREIGN KEY (completed_by) REFERENCES characters (user_id)
             )'''
             
             self.execute_query(create_table_sql)
-            print("✅ Migration completed: npc_job_completions table created successfully")
+            print("✅ npc_job_completions table created successfully")
+            
+            # Add missing columns to npc_jobs table if they don't exist
+            print("🔄 Adding missing columns to npc_jobs table...")
+            
+            add_columns_sql = [
+                "ALTER TABLE npc_jobs ADD COLUMN IF NOT EXISTS max_completions INTEGER DEFAULT 0",
+                "ALTER TABLE npc_jobs ADD COLUMN IF NOT EXISTS current_completions INTEGER DEFAULT 0"
+            ]
+            
+            for sql in add_columns_sql:
+                self.execute_query(sql)
+                print(f"✅ Column added: {sql.split('ADD COLUMN IF NOT EXISTS ')[1].split(' ')[0]}")
+            
+            print("✅ Migration completed successfully")
             return True
             
         except Exception as e:
