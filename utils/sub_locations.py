@@ -6759,260 +6759,9 @@ class SubLocationServiceView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    async def _handle_book_passage(self, interaction: discord.Interaction, char_name: str):
-        """Handle travel services - route navigation challenge"""
-        import random
-        
-        # Get character's navigation skill
-        char_info = self.db.execute_query(
-            "SELECT navigation FROM characters WHERE user_id = %s",
-            (interaction.user.id,),
-            fetch='one'
-        )
-        
-        if not char_info:
-            await interaction.response.send_message("Character not found!", ephemeral=True)
-            return
-        
-        navigation_skill = char_info[0]
-        
-        # Navigation skill check
-        skill_check = random.randint(1, 20) + navigation_skill
-        success_threshold = 14
-        
-        if skill_check >= success_threshold:
-            # Success - award credits and XP
-            credit_reward = random.randint(50, 150)
-            xp_reward = random.randint(15, 25)
-            
-            self.db.execute_query(
-                "UPDATE characters SET money = money + %s, experience = experience + %s WHERE user_id = %s",
-                (credit_reward, xp_reward, interaction.user.id)
-            )
-            
-            advanced_routes = [
-                "Optimal fuel-efficient corridor sequence identified",
-                "High-traffic avoidance route calculated successfully",
-                "Express lane permissions secured through connections",
-                "Hazard-free path mapped using updated sensor data",
-                "Priority routing discovered through trade network analysis"
-            ]
-            
-            embed = discord.Embed(
-                title="🎯 Route Navigation Challenge - Success!",
-                description=f"**{char_name}** demonstrates exceptional navigation expertise during route planning.",
-                color=0x00ff00
-            )
-            embed.add_field(name="🧠 Skill Check", value=f"Navigation: {skill_check} (Success!)", inline=True)
-            embed.add_field(name="✨ Achievement", value=random.choice(advanced_routes), inline=False)
-            embed.add_field(name="💰 Navigation Fee", value=f"+{credit_reward} credits", inline=True)
-            embed.add_field(name="📚 Experience", value=f"+{xp_reward} XP", inline=True)
-        else:
-            # Failure - basic outcome with small XP
-            xp_reward = random.randint(5, 10)
-            
-            self.db.execute_query(
-                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
-                (xp_reward, interaction.user.id)
-            )
-            
-            basic_outcomes = [
-                "Standard route information provided from public databases",
-                "Basic corridor maps accessed, but nothing special found",
-                "Routine travel advisory received with standard warnings",
-                "Common knowledge routes documented for reference",
-                "Public transit schedules reviewed without insights"
-            ]
-            
-            embed = discord.Embed(
-                title="🗺️ Route Navigation Challenge",
-                description=f"**{char_name}** attempts navigation planning but struggles with complex route optimization.",
-                color=0x4169E1
-            )
-            embed.add_field(name="🧠 Skill Check", value=f"Navigation: {skill_check} (Basic Result)", inline=True)
-            embed.add_field(name="📋 Outcome", value=random.choice(basic_outcomes), inline=False)
-            embed.add_field(name="📚 Experience", value=f"+{xp_reward} XP (learning experience)", inline=True)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=False)
-
-    async def _handle_travel_insurance(self, interaction: discord.Interaction, char_name: str):
-        """Handle travel services - risk assessment protocol"""
-        import random
-        
-        # Present risk assessment scenarios
-        scenarios = [
-            {
-                "title": "Derelict Sector Transit",
-                "description": "A traveler plans to cross through a derelict sector with scattered debris and potential pirate activity.",
-                "high_risk_outcome": ("Correctly identified extreme danger - avoid at all costs", 150, 20),
-                "low_risk_outcome": ("Underestimated hazards - dangerous recommendation made", -50, 5)
-            },
-            {
-                "title": "Peak Traffic Corridor",
-                "description": "A merchant convoy wants to use a busy trade corridor during peak shipping season.",
-                "high_risk_outcome": ("Identified traffic congestion risks and delays", 100, 15),
-                "low_risk_outcome": ("Missed traffic complications - poor timing advice given", -25, 8)
-            },
-            {
-                "title": "New Colony Route",
-                "description": "A family wishes to travel to a recently established colony with limited infrastructure.",
-                "high_risk_outcome": ("Recognized supply chain and safety risks", 125, 18),
-                "low_risk_outcome": ("Overlooked infrastructure limitations", -40, 6)
-            },
-            {
-                "title": "Faction Border Crossing",
-                "description": "A trader needs to cross contested territory between two rival factions.",
-                "high_risk_outcome": ("Correctly assessed political tensions and patrol risks", 175, 22),
-                "low_risk_outcome": ("Underestimated diplomatic complications", -60, 7)
-            },
-            {
-                "title": "Emergency Medical Transport",
-                "description": "A medical transport requires the fastest possible route, time is critical.",
-                "high_risk_outcome": ("Properly balanced speed vs safety for medical emergency", 140, 19),
-                "low_risk_outcome": ("Poor risk-benefit analysis for critical transport", -45, 9)
-            }
-        ]
-        
-        scenario = random.choice(scenarios)
-        
-        # Determine if player makes good assessment (70% chance for basic success)
-        assessment_success = random.random() < 0.7
-        
-        if assessment_success:
-            outcome_text, credit_change, xp_reward = scenario["high_risk_outcome"]
-            color = 0x00ff00
-            status_icon = "✅"
-            result_type = "Accurate Assessment"
-        else:
-            outcome_text, credit_change, xp_reward = scenario["low_risk_outcome"]
-            color = 0xff8c00 if credit_change < 0 else 0x4169E1
-            status_icon = "⚠️" if credit_change < 0 else "📋"
-            result_type = "Missed Risks" if credit_change < 0 else "Basic Assessment"
-        
-        # Apply changes
-        if credit_change != 0:
-            self.db.execute_query(
-                "UPDATE characters SET money = money + %s, experience = experience + %s WHERE user_id = %s",
-                (credit_change, xp_reward, interaction.user.id)
-            )
-        else:
-            self.db.execute_query(
-                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
-                (xp_reward, interaction.user.id)
-            )
-        
-        embed = discord.Embed(
-            title=f"{status_icon} Risk Assessment Protocol - {result_type}",
-            description=f"**{char_name}** analyzes a travel risk scenario for insurance evaluation.",
-            color=color
-        )
-        embed.add_field(name="📋 Scenario", value=f"**{scenario['title']}**", inline=False)
-        embed.add_field(name="📖 Details", value=scenario['description'], inline=False)
-        embed.add_field(name="🎯 Assessment Result", value=outcome_text, inline=False)
-        
-        if credit_change > 0:
-            embed.add_field(name="💰 Consultation Fee", value=f"+{credit_change} credits", inline=True)
-        elif credit_change < 0:
-            embed.add_field(name="💸 Assessment Error", value=f"{credit_change} credits", inline=True)
-        
-        embed.add_field(name="📚 Experience", value=f"+{xp_reward} XP", inline=True)
-        
-        if assessment_success:
-            embed.add_field(name="💼 Professional Status", value="Risk analysis expertise demonstrated", inline=False)
-        else:
-            embed.add_field(name="💼 Learning Experience", value="Valuable lessons learned from challenging scenario", inline=False)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=False)
-
-class EmergencySupplySelectView(discord.ui.View):
-    def __init__(self, db, user_id: int, money: int, emergency_items: list):
-        super().__init__(timeout=180)
-        self.db = db
-        self.user_id = user_id
-        self.money = money
-        
-        if emergency_items:
-            options = []
-            for item_name, base_cost, description, final_cost in emergency_items[:25]:
-                can_afford = "✅" if money >= final_cost else "❌"
-                options.append(
-                    discord.SelectOption(
-                        label=f"{item_name} - {final_cost:,} credits",
-                        description=f"{can_afford} {description[:65]}{'...' if len(description) > 65 else ''}",
-                        value=item_name,
-                        emoji="📦"
-                    )
-                )
-            
-            if options:
-                select = discord.ui.Select(placeholder="Choose emergency supplies to purchase...", options=options)
-                select.callback = self.item_selected
-                self.add_item(select)
-    
-    async def item_selected(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This is not your supply cache interface!", ephemeral=True)
-            return
-        
-        item_name = interaction.data['values'][0]
-        
-        # Find the selected item with its pricing
-        emergency_items = [
-            ("Emergency Rations", 12, "Vacuum-sealed survival food for extended journeys"),
-            ("Basic Med Kit", 85, "Basic medical supplies for treating injuries"),
-            ("Fuel Cell", 50, "Portable fuel container for ship refueling"),
-            ("Hull Patch", 95, "Emergency patch for minor hull breaches"),
-            ("Filtered Water", 8, "Clean water for consumption during long trips"),
-            ("Painkillers", 25, "Standard pain relief medication")
-        ]
-        
-        selected_item = None
-        for name, base_cost, desc in emergency_items:
-            if name == item_name:
-                selected_item = (name, base_cost, desc)
-                break
-        
-        if not selected_item:
-            await interaction.response.send_message("Item not found!", ephemeral=True)
-            return
-        
-        # Calculate final price with location modifiers
-        current_location = self.db.execute_query(
-            "SELECT current_location FROM characters WHERE user_id = %s",
-            (interaction.user.id,),
-            fetch='one'
-        )[0]
-        
-        wealth_level = self.db.execute_query(
-            "SELECT wealth_level FROM locations WHERE location_id = %s",
-            (current_location,),
-            fetch='one'
-        )[0] if current_location else 1
-        
-        markup_multiplier = 1.1 + (wealth_level * 0.05)
-        final_cost = max(1, int(selected_item[1] * markup_multiplier))
-        
-        # Create purchase confirmation view
-        view = EmergencySupplyPurchaseView(self.db, self.user_id, selected_item, final_cost)
-        
-        embed = discord.Embed(
-            title="📦 Confirm Purchase",
-            description=f"Purchase **{selected_item[0]}** from the emergency supply cache%s",
-            color=0x4682b4
-        )
-        embed.add_field(name="📋 Item", value=selected_item[2], inline=False)
-        embed.add_field(name="💰 Cost", value=f"{final_cost:,} credits", inline=True)
-        embed.add_field(name="🏦 Your Money", value=f"{self.money:,} credits", inline=True)
-        
-        if self.money < final_cost:
-            embed.add_field(name="❌ Insufficient Funds", value=f"You need {final_cost - self.money:,} more credits", inline=False)
-            view = None  # Disable purchase buttons
-        
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
     async def _handle_emergency_cache(self, interaction: discord.Interaction, char_name: str, money: int):
         """Handle emergency supply cache at traveler services - user selection interface"""
-        
+
         # Emergency supplies available at convenience prices (slightly higher than normal)
         emergency_items_base = [
             ("Emergency Rations", 12, "Vacuum-sealed survival food for extended journeys"),
@@ -7022,56 +6771,56 @@ class EmergencySupplySelectView(discord.ui.View):
             ("Filtered Water", 8, "Clean water for consumption during long trips"),
             ("Painkillers", 25, "Standard pain relief medication")
         ]
-        
+
         # Get current location for economic modifiers
         current_location = self.db.execute_query(
             "SELECT current_location FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )[0]
-        
+
         # Apply location wealth modifiers (convenience pricing)
         wealth_level = self.db.execute_query(
             "SELECT wealth_level FROM locations WHERE location_id = %s",
             (current_location,),
             fetch='one'
         )[0] if current_location else 1
-        
+
         # Emergency cache has convenience markup (10-35% higher based on location)
         markup_multiplier = 1.1 + (wealth_level * 0.05)
-        
+
         # Calculate final prices for all items
         emergency_items_with_prices = []
         for item_name, base_cost, description in emergency_items_base:
             final_cost = max(1, int(base_cost * markup_multiplier))
             emergency_items_with_prices.append((item_name, base_cost, description, final_cost))
-        
+
         # Create selection view
         view = EmergencySupplySelectView(self.db, interaction.user.id, money, emergency_items_with_prices)
-        
+
         embed = discord.Embed(
             title="📦 Emergency Supply Cache",
             description=f"**{char_name}** accesses the automated emergency supply dispenser.\nSelect items to purchase from the dropdown below.",
             color=0x4682b4
         )
-        
+
         # Add available items as embed fields
         item_list = []
         for item_name, base_cost, description, final_cost in emergency_items_with_prices:
             can_afford = "✅" if money >= final_cost else "❌"
             item_list.append(f"{can_afford} **{item_name}** - {final_cost:,} credits")
-        
+
         embed.add_field(
             name="🛒 Available Supplies",
             value="\n".join(item_list),
             inline=False
         )
-        
+
         embed.add_field(name="💰 Your Credits", value=f"{money:,}", inline=True)
         embed.add_field(name="💡 Convenience Markup", value=f"+{int((markup_multiplier - 1) * 100)}%", inline=True)
-        
+
         embed.set_footer(text="Use the dropdown menu below to select and purchase items.")
-        
+
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     async def _handle_social_activities(self, interaction: discord.Interaction, char_name: str):
@@ -7721,21 +7470,21 @@ class EmergencySupplySelectView(discord.ui.View):
     async def _handle_inspect_cargo(self, interaction: discord.Interaction, char_name: str):
         """Handle cargo inspection service"""
         import random
-        
+
         # Get character data for money check
         char_info = self.db.execute_query(
             "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
-        
+
         if not char_info:
             await interaction.response.send_message("Character data not found.", ephemeral=False)
             return
-        
+
         money = char_info[0]
         cost = 50
-        
+
         if money < cost:
             embed = discord.Embed(
                 title="❌ Insufficient Credits",
@@ -7746,13 +7495,13 @@ class EmergencySupplySelectView(discord.ui.View):
             embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-        
+
         # Deduct cost
         self.db.execute_query(
             "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
-        
+
         inspection_results = [
             "All cargo containers verified - no contraband detected",
             "Manifest records match physical inventory - inspection passed",
@@ -7760,7 +7509,7 @@ class EmergencySupplySelectView(discord.ui.View):
             "Standard freight inspection complete - cleared for transit",
             "Documentation verified - all items within legal parameters"
         ]
-        
+
         inspection_details = [
             "Scanner arrays analyze each container's contents",
             "Automated systems cross-reference manifest data",
@@ -7768,10 +7517,10 @@ class EmergencySupplySelectView(discord.ui.View):
             "Weight and volume measurements confirm accuracy",
             "Digital signatures validate cargo authentication"
         ]
-        
+
         result = random.choice(inspection_results)
         detail = random.choice(inspection_details)
-        
+
         embed = discord.Embed(
             title="📦 Cargo Inspection Complete",
             description=f"**{char_name}** submits cargo for mandatory inspection.",
@@ -7782,27 +7531,27 @@ class EmergencySupplySelectView(discord.ui.View):
         embed.add_field(name="📋 Status", value="Cleared for interstellar transport", inline=False)
         embed.add_field(name="💰 Inspection Fee", value=f"{cost} credits", inline=True)
         embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
-        
+
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_file_manifest(self, interaction: discord.Interaction, char_name: str):
         """Handle filing manifest paperwork"""
         import random
-        
+
         # Get character data for money check
         char_info = self.db.execute_query(
             "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
-        
+
         if not char_info:
             await interaction.response.send_message("Character data not found.", ephemeral=False)
             return
-        
+
         money = char_info[0]
         cost = 25
-        
+
         if money < cost:
             embed = discord.Embed(
                 title="❌ Insufficient Credits",
@@ -7813,13 +7562,13 @@ class EmergencySupplySelectView(discord.ui.View):
             embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-        
+
         # Deduct cost
         self.db.execute_query(
             "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (cost, interaction.user.id)
         )
-        
+
         manifest_types = [
             "Standard Freight Manifest - Form CF-2847",
             "Hazardous Materials Declaration - Form HM-1205",
@@ -7827,19 +7576,19 @@ class EmergencySupplySelectView(discord.ui.View):
             "High-Value Goods Manifest - Form HV-7432",
             "Perishable Goods Declaration - Form PG-5618"
         ]
-        
+
         filing_details = [
             "Digital signatures applied to all documentation",
-            "Biometric verification stamps cargo authenticity", 
+            "Biometric verification stamps cargo authenticity",
             "Automated systems update galactic freight database",
             "Cross-referenced with customs and excise records",
             "Blockchain verification ensures document integrity"
         ]
-        
+
         manifest_type = random.choice(manifest_types)
         filing_detail = random.choice(filing_details)
         reference_number = f"MF-{random.randint(100000, 999999)}"
-        
+
         embed = discord.Embed(
             title="📄 Manifest Filing Complete",
             description=f"**{char_name}** files official cargo manifest paperwork.",
@@ -7851,27 +7600,27 @@ class EmergencySupplySelectView(discord.ui.View):
         embed.add_field(name="✅ Status", value="Filed and registered in galactic database", inline=False)
         embed.add_field(name="💰 Filing Fee", value=f"{cost} credits", inline=True)
         embed.add_field(name="🏦 Remaining", value=f"{money - cost} credits", inline=True)
-        
+
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_pay_transit_fee(self, interaction: discord.Interaction, char_name: str):
         """Handle transit fee payment"""
         import random
-        
+
         # Get character data for money check
         char_info = self.db.execute_query(
             "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
-        
+
         if not char_info:
             await interaction.response.send_message("Character data not found.", ephemeral=False)
             return
-        
+
         money = char_info[0]
         base_cost = 75
-        
+
         # Random surcharge system
         surcharge_types = [
             ("Standard Rate", 0),
@@ -7880,10 +7629,10 @@ class EmergencySupplySelectView(discord.ui.View):
             ("Priority Lane Access", 35),
             ("Express Processing", 20)
         ]
-        
+
         surcharge_name, surcharge_amount = random.choice(surcharge_types)
         total_cost = base_cost + surcharge_amount
-        
+
         if money < total_cost:
             # Offer basic transit option
             basic_cost = base_cost
@@ -7909,24 +7658,24 @@ class EmergencySupplySelectView(discord.ui.View):
                 )
                 embed.add_field(name="💰 Required", value=f"{basic_cost} credits (basic transit)", inline=True)
                 embed.add_field(name="🏦 Available", value=f"{money} credits", inline=True)
-            
+
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-        
+
         # Deduct full cost
         self.db.execute_query(
             "UPDATE characters SET money = money - %s WHERE user_id = %s",
             (total_cost, interaction.user.id)
         )
-        
+
         processing_benefits = [
             "Priority lane access granted",
-            "Expedited customs processing", 
+            "Expedited customs processing",
             "VIP lounge access included",
             "Express boarding privileges",
             "Premium service tier activated"
         ]
-        
+
         gate_assignments = [
             "Gate Alpha-7 (Premium Corridor)",
             "Gate Beta-12 (Express Lane)",
@@ -7934,11 +7683,11 @@ class EmergencySupplySelectView(discord.ui.View):
             "Gate Delta-9 (VIP Terminal)",
             "Gate Epsilon-5 (Fast Track)"
         ]
-        
+
         benefit = random.choice(processing_benefits)
         gate = random.choice(gate_assignments)
         transit_id = f"TF-{random.randint(1000000, 9999999)}"
-        
+
         embed = discord.Embed(
             title="🎫 Transit Fee Payment Complete",
             description=f"**{char_name}** successfully pays transit corridor fees.",
@@ -7950,33 +7699,33 @@ class EmergencySupplySelectView(discord.ui.View):
         embed.add_field(name="🆔 Transit ID", value=transit_id, inline=True)
         embed.add_field(name="💰 Total Fee", value=f"{total_cost} credits", inline=True)
         embed.add_field(name="🏦 Remaining", value=f"{money - total_cost} credits", inline=True)
-        
+
         if surcharge_amount > 0:
-            embed.add_field(name="📊 Fee Breakdown", 
-                           value=f"Base: {base_cost} + {surcharge_name}: {surcharge_amount}", 
+            embed.add_field(name="📊 Fee Breakdown",
+                           value=f"Base: {base_cost} + {surcharge_name}: {surcharge_amount}",
                            inline=False)
-        
+
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     # Hull Cleaning Bay handlers
     async def _handle_hull_cleaning(self, interaction: discord.Interaction, char_name: str):
         """Handle full hull cleaning service"""
         import random
-        
+
         char_data = self.db.execute_query(
             "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
-        
+
         if not char_data:
             embed = discord.Embed(title="🧽 Hull Cleaning Bay - 75C", description="Character data not found.", color=0xff0000)
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-        
+
         money = char_data[0]
         cost = 75
-        
+
         if money < cost:
             embed = discord.Embed(
                 title="❌ Insufficient Credits",
@@ -7988,9 +7737,9 @@ class EmergencySupplySelectView(discord.ui.View):
             embed.add_field(name="ℹ️ Service Details", value="Complete hull cleaning removes all debris, micro-meteorite damage, and spatial contamination.", inline=False)
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-        
+
         self.db.execute_query("UPDATE characters SET money = money - %s WHERE user_id = %s", (cost, interaction.user.id))
-        
+
         cleaning_outcomes = [
             "Micro-meteorite scarring polished to pristine condition",
             "Nebula particulates completely removed from hull plating",
@@ -7998,7 +7747,7 @@ class EmergencySupplySelectView(discord.ui.View):
             "Deep space debris extraction and surface restoration",
             "Quantum field contamination neutralized and cleaned"
         ]
-        
+
         embed = discord.Embed(
             title="🧽 Hull Cleaning Complete",
             description=f"**{char_name}**, your vessel has undergone comprehensive hull restoration.",
@@ -8009,23 +7758,23 @@ class EmergencySupplySelectView(discord.ui.View):
         embed.add_field(name="💰 Service Cost", value=f"{cost} credits", inline=True)
         embed.add_field(name="🏦 Remaining Credits", value=f"{money - cost}", inline=True)
         embed.add_field(name="📋 Technical Notes", value="Hull integrity optimized • External sensors recalibrated • Protective coating renewed", inline=False)
-        
+
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_radiation_scrub(self, interaction: discord.Interaction, char_name: str):
         """Handle radiation decontamination service"""
         import random
-        
+
         char_data = self.db.execute_query("SELECT money FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')
-        
+
         if not char_data:
             embed = discord.Embed(title="☢️ Radiation Decontamination - 50C", description="Character data not found.", color=0xff0000)
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-        
+
         money = char_data[0]
         cost = 50
-        
+
         if money < cost:
             embed = discord.Embed(
                 title="❌ Insufficient Credits",
@@ -8037,12 +7786,12 @@ class EmergencySupplySelectView(discord.ui.View):
             embed.add_field(name="⚠️ Service Details", value="Specialized radiation scrubbing removes harmful isotopic contamination from hull surfaces.", inline=False)
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-        
+
         self.db.execute_query("UPDATE characters SET money = money - %s WHERE user_id = %s", (cost, interaction.user.id))
-        
+
         radiation_sources = ["Pulsar proximity contamination", "Solar flare particle exposure", "Quantum tunnel radiation residue", "Asteroid belt radioactive dust", "Neutron star field contamination", "Cosmic ray bombardment traces"]
         decon_methods = ["Ion beam neutralization protocol", "Electromagnetic field purging sequence", "Molecular disintegration chambers", "Quantum flux stabilization process", "Particle beam decontamination sweep"]
-        
+
         embed = discord.Embed(
             title="☢️ Radiation Scrub Complete",
             description=f"**{char_name}**, your vessel has been successfully decontaminated.",
@@ -8054,23 +7803,23 @@ class EmergencySupplySelectView(discord.ui.View):
         embed.add_field(name="💰 Service Cost", value=f"{cost} credits", inline=True)
         embed.add_field(name="🏦 Remaining Credits", value=f"{money - cost}", inline=True)
         embed.add_field(name="🛡️ Safety Certification", value="Hull cleared for standard corridor transit • Crew exposure risk eliminated", inline=False)
-        
+
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_basic_decon(self, interaction: discord.Interaction, char_name: str):
         """Handle basic decontamination service"""
         import random
-        
+
         char_data = self.db.execute_query("SELECT money FROM characters WHERE user_id = %s", (interaction.user.id,), fetch='one')
-        
+
         if not char_data:
             embed = discord.Embed(title="🛡️ Basic Decontamination - 30C", description="Character data not found.", color=0xff0000)
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-        
+
         money = char_data[0]
         cost = 30
-        
+
         if money < cost:
             embed = discord.Embed(
                 title="❌ Insufficient Credits",
@@ -8082,12 +7831,12 @@ class EmergencySupplySelectView(discord.ui.View):
             embed.add_field(name="ℹ️ Service Details", value="Standard decontamination removes common space debris and surface contaminants.", inline=False)
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-        
+
         self.db.execute_query("UPDATE characters SET money = money - %s WHERE user_id = %s", (cost, interaction.user.id))
-        
+
         basic_contaminants = ["Standard space dust accumulation", "Atmospheric entry burn residue", "Docking bay particulate matter", "Common stellar wind deposits", "Navigation beacon interference particles"]
         cleaning_procedures = ["Automated spray wash cycle", "Sonic vibration cleaning", "Electrostatic dust removal", "Pressure wash and rinse sequence", "Standard decontamination protocol"]
-        
+
         embed = discord.Embed(
             title="🛡️ Basic Decontamination Complete",
             description=f"**{char_name}**, your vessel has received standard cleaning services.",
@@ -8099,7 +7848,7 @@ class EmergencySupplySelectView(discord.ui.View):
         embed.add_field(name="💰 Service Cost", value=f"{cost} credits", inline=True)
         embed.add_field(name="🏦 Remaining Credits", value=f"{money - cost}", inline=True)
         embed.add_field(name="📋 Service Notes", value="Basic cleaning completed • Routine maintenance recommended after extended travel", inline=False)
-        
+
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _handle_baby_care_station(self, interaction: discord.Interaction, char_name: str):
@@ -8280,14 +8029,14 @@ class EmergencySupplySelectView(discord.ui.View):
             color=0x4682b4
         )
         await interaction.response.send_message(embed=embed, ephemeral=False)
-    
+
     async def _handle_slot_machine(self, interaction: discord.Interaction, char_name: str, money: int):
         """Handle slot machine gambling game"""
         casino_cog = self.bot.get_cog('CasinoCog')
         if not casino_cog:
             await interaction.response.send_message("❌ Casino games are currently unavailable.", ephemeral=True)
             return
-        
+
         view = casino_cog.create_slot_machine_view(interaction.user.id)
         embed = discord.Embed(
             title="🎰 Slot Machine",
@@ -8306,14 +8055,14 @@ class EmergencySupplySelectView(discord.ui.View):
         )
         embed.set_footer(text="⚠️ Gamble responsibly! The house always has an edge.")
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
+
     async def _handle_blackjack(self, interaction: discord.Interaction, char_name: str, money: int):
         """Handle blackjack gambling game"""
         casino_cog = self.bot.get_cog('CasinoCog')
         if not casino_cog:
             await interaction.response.send_message("❌ Casino games are currently unavailable.", ephemeral=True)
             return
-        
+
         view = casino_cog.create_blackjack_view(interaction.user.id)
         embed = discord.Embed(
             title="🃏 Blackjack",
@@ -8328,14 +8077,14 @@ class EmergencySupplySelectView(discord.ui.View):
         )
         embed.set_footer(text="⚠️ Gamble responsibly! The house always has an edge.")
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
+
     async def _handle_dice_roll(self, interaction: discord.Interaction, char_name: str, money: int):
         """Handle dice roll gambling game"""
         casino_cog = self.bot.get_cog('CasinoCog')
         if not casino_cog:
             await interaction.response.send_message("❌ Casino games are currently unavailable.", ephemeral=True)
             return
-        
+
         view = casino_cog.create_dice_game_view(interaction.user.id)
         embed = discord.Embed(
             title="🎲 Dice Roll",
@@ -8350,16 +8099,268 @@ class EmergencySupplySelectView(discord.ui.View):
         embed.set_footer(text="⚠️ Gamble responsibly! The house always has an edge.")
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+    async def _handle_book_passage(self, interaction: discord.Interaction, char_name: str):
+        """Handle travel services - route navigation challenge"""
+        import random
+        
+        # Get character's navigation skill
+        char_info = self.db.execute_query(
+            "SELECT navigation FROM characters WHERE user_id = %s",
+            (interaction.user.id,),
+            fetch='one'
+        )
+        
+        if not char_info:
+            await interaction.response.send_message("Character not found!", ephemeral=True)
+            return
+        
+        navigation_skill = char_info[0]
+        
+        # Navigation skill check
+        skill_check = random.randint(1, 20) + navigation_skill
+        success_threshold = 14
+        
+        if skill_check >= success_threshold:
+            # Success - award credits and XP
+            credit_reward = random.randint(50, 150)
+            xp_reward = random.randint(15, 25)
+            
+            self.db.execute_query(
+                "UPDATE characters SET money = money + %s, experience = experience + %s WHERE user_id = %s",
+                (credit_reward, xp_reward, interaction.user.id)
+            )
+            
+            advanced_routes = [
+                "Optimal fuel-efficient corridor sequence identified",
+                "High-traffic avoidance route calculated successfully",
+                "Express lane permissions secured through connections",
+                "Hazard-free path mapped using updated sensor data",
+                "Priority routing discovered through trade network analysis"
+            ]
+            
+            embed = discord.Embed(
+                title="🎯 Route Navigation Challenge - Success!",
+                description=f"**{char_name}** demonstrates exceptional navigation expertise during route planning.",
+                color=0x00ff00
+            )
+            embed.add_field(name="🧠 Skill Check", value=f"Navigation: {skill_check} (Success!)", inline=True)
+            embed.add_field(name="✨ Achievement", value=random.choice(advanced_routes), inline=False)
+            embed.add_field(name="💰 Navigation Fee", value=f"+{credit_reward} credits", inline=True)
+            embed.add_field(name="📚 Experience", value=f"+{xp_reward} XP", inline=True)
+        else:
+            # Failure - basic outcome with small XP
+            xp_reward = random.randint(5, 10)
+            
+            self.db.execute_query(
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
+                (xp_reward, interaction.user.id)
+            )
+            
+            basic_outcomes = [
+                "Standard route information provided from public databases",
+                "Basic corridor maps accessed, but nothing special found",
+                "Routine travel advisory received with standard warnings",
+                "Common knowledge routes documented for reference",
+                "Public transit schedules reviewed without insights"
+            ]
+            
+            embed = discord.Embed(
+                title="🗺️ Route Navigation Challenge",
+                description=f"**{char_name}** attempts navigation planning but struggles with complex route optimization.",
+                color=0x4169E1
+            )
+            embed.add_field(name="🧠 Skill Check", value=f"Navigation: {skill_check} (Basic Result)", inline=True)
+            embed.add_field(name="📋 Outcome", value=random.choice(basic_outcomes), inline=False)
+            embed.add_field(name="📚 Experience", value=f"+{xp_reward} XP (learning experience)", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    async def _handle_travel_insurance(self, interaction: discord.Interaction, char_name: str):
+        """Handle travel services - risk assessment protocol"""
+        import random
+        
+        # Present risk assessment scenarios
+        scenarios = [
+            {
+                "title": "Derelict Sector Transit",
+                "description": "A traveler plans to cross through a derelict sector with scattered debris and potential pirate activity.",
+                "high_risk_outcome": ("Correctly identified extreme danger - avoid at all costs", 150, 20),
+                "low_risk_outcome": ("Underestimated hazards - dangerous recommendation made", -50, 5)
+            },
+            {
+                "title": "Peak Traffic Corridor",
+                "description": "A merchant convoy wants to use a busy trade corridor during peak shipping season.",
+                "high_risk_outcome": ("Identified traffic congestion risks and delays", 100, 15),
+                "low_risk_outcome": ("Missed traffic complications - poor timing advice given", -25, 8)
+            },
+            {
+                "title": "New Colony Route",
+                "description": "A family wishes to travel to a recently established colony with limited infrastructure.",
+                "high_risk_outcome": ("Recognized supply chain and safety risks", 125, 18),
+                "low_risk_outcome": ("Overlooked infrastructure limitations", -40, 6)
+            },
+            {
+                "title": "Faction Border Crossing",
+                "description": "A trader needs to cross contested territory between two rival factions.",
+                "high_risk_outcome": ("Correctly assessed political tensions and patrol risks", 175, 22),
+                "low_risk_outcome": ("Underestimated diplomatic complications", -60, 7)
+            },
+            {
+                "title": "Emergency Medical Transport",
+                "description": "A medical transport requires the fastest possible route, time is critical.",
+                "high_risk_outcome": ("Properly balanced speed vs safety for medical emergency", 140, 19),
+                "low_risk_outcome": ("Poor risk-benefit analysis for critical transport", -45, 9)
+            }
+        ]
+        
+        scenario = random.choice(scenarios)
+        
+        # Determine if player makes good assessment (70% chance for basic success)
+        assessment_success = random.random() < 0.7
+        
+        if assessment_success:
+            outcome_text, credit_change, xp_reward = scenario["high_risk_outcome"]
+            color = 0x00ff00
+            status_icon = "✅"
+            result_type = "Accurate Assessment"
+        else:
+            outcome_text, credit_change, xp_reward = scenario["low_risk_outcome"]
+            color = 0xff8c00 if credit_change < 0 else 0x4169E1
+            status_icon = "⚠️" if credit_change < 0 else "📋"
+            result_type = "Missed Risks" if credit_change < 0 else "Basic Assessment"
+        
+        # Apply changes
+        if credit_change != 0:
+            self.db.execute_query(
+                "UPDATE characters SET money = money + %s, experience = experience + %s WHERE user_id = %s",
+                (credit_change, xp_reward, interaction.user.id)
+            )
+        else:
+            self.db.execute_query(
+                "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
+                (xp_reward, interaction.user.id)
+            )
+        
+        embed = discord.Embed(
+            title=f"{status_icon} Risk Assessment Protocol - {result_type}",
+            description=f"**{char_name}** analyzes a travel risk scenario for insurance evaluation.",
+            color=color
+        )
+        embed.add_field(name="📋 Scenario", value=f"**{scenario['title']}**", inline=False)
+        embed.add_field(name="📖 Details", value=scenario['description'], inline=False)
+        embed.add_field(name="🎯 Assessment Result", value=outcome_text, inline=False)
+        
+        if credit_change > 0:
+            embed.add_field(name="💰 Consultation Fee", value=f"+{credit_change} credits", inline=True)
+        elif credit_change < 0:
+            embed.add_field(name="💸 Assessment Error", value=f"{credit_change} credits", inline=True)
+        
+        embed.add_field(name="📚 Experience", value=f"+{xp_reward} XP", inline=True)
+        
+        if assessment_success:
+            embed.add_field(name="💼 Professional Status", value="Risk analysis expertise demonstrated", inline=False)
+        else:
+            embed.add_field(name="💼 Learning Experience", value="Valuable lessons learned from challenging scenario", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+class EmergencySupplySelectView(discord.ui.View):
+    def __init__(self, db, user_id: int, money: int, emergency_items: list):
+        super().__init__(timeout=180)
+        self.db = db
+        self.user_id = user_id
+        self.money = money
+        
+        if emergency_items:
+            options = []
+            for item_name, base_cost, description, final_cost in emergency_items[:25]:
+                can_afford = "✅" if money >= final_cost else "❌"
+                options.append(
+                    discord.SelectOption(
+                        label=f"{item_name} - {final_cost:,} credits",
+                        description=f"{can_afford} {description[:65]}{'...' if len(description) > 65 else ''}",
+                        value=item_name,
+                        emoji="📦"
+                    )
+                )
+            
+            if options:
+                select = discord.ui.Select(placeholder="Choose emergency supplies to purchase...", options=options)
+                select.callback = self.item_selected
+                self.add_item(select)
+    
+    async def item_selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your supply cache interface!", ephemeral=True)
+            return
+        
+        item_name = interaction.data['values'][0]
+        
+        # Find the selected item with its pricing
+        emergency_items = [
+            ("Emergency Rations", 12, "Vacuum-sealed survival food for extended journeys"),
+            ("Basic Med Kit", 85, "Basic medical supplies for treating injuries"),
+            ("Fuel Cell", 50, "Portable fuel container for ship refueling"),
+            ("Hull Patch", 95, "Emergency patch for minor hull breaches"),
+            ("Filtered Water", 8, "Clean water for consumption during long trips"),
+            ("Painkillers", 25, "Standard pain relief medication")
+        ]
+        
+        selected_item = None
+        for name, base_cost, desc in emergency_items:
+            if name == item_name:
+                selected_item = (name, base_cost, desc)
+                break
+        
+        if not selected_item:
+            await interaction.response.send_message("Item not found!", ephemeral=True)
+            return
+        
+        # Calculate final price with location modifiers
+        current_location = self.db.execute_query(
+            "SELECT current_location FROM characters WHERE user_id = %s",
+            (interaction.user.id,),
+            fetch='one'
+        )[0]
+        
+        wealth_level = self.db.execute_query(
+            "SELECT wealth_level FROM locations WHERE location_id = %s",
+            (current_location,),
+            fetch='one'
+        )[0] if current_location else 1
+        
+        markup_multiplier = 1.1 + (wealth_level * 0.05)
+        final_cost = max(1, int(selected_item[1] * markup_multiplier))
+        
+        # Create purchase confirmation view
+        view = EmergencySupplyPurchaseView(self.db, self.user_id, selected_item, final_cost)
+        
+        embed = discord.Embed(
+            title="📦 Confirm Purchase",
+            description=f"Purchase **{selected_item[0]}** from the emergency supply cache%s",
+            color=0x4682b4
+        )
+        embed.add_field(name="📋 Item", value=selected_item[2], inline=False)
+        embed.add_field(name="💰 Cost", value=f"{final_cost:,} credits", inline=True)
+        embed.add_field(name="🏦 Your Money", value=f"{self.money:,} credits", inline=True)
+        
+        if self.money < final_cost:
+            embed.add_field(name="❌ Insufficient Funds", value=f"You need {final_cost - self.money:,} more credits", inline=False)
+            view = None  # Disable purchase buttons
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
 
 class NavigationPuzzleView(discord.ui.View):
     """Interactive view for navigation puzzles in stellar charts"""
-    
+
     def __init__(self, bot, char_name: str, puzzle: dict):
         super().__init__(timeout=120)
         self.bot = bot
         self.char_name = char_name
         self.puzzle = puzzle
-        
+
         # Add option buttons
         for i, option in enumerate(puzzle["options"]):
             button = discord.ui.Button(
@@ -8369,32 +8370,32 @@ class NavigationPuzzleView(discord.ui.View):
             )
             button.callback = self.create_callback(i)
             self.add_item(button)
-    
+
     def create_callback(self, option_index):
         async def callback(interaction: discord.Interaction):
             await self.handle_choice(interaction, option_index)
         return callback
-    
+
     async def handle_choice(self, interaction: discord.Interaction, choice: int):
         """Handle navigation puzzle choice"""
         import random
-        
+
         correct_choice = self.puzzle["correct"]
         is_correct = choice == correct_choice
-        
+
         # Get user's character info
         char_info = self.bot.db.execute_query(
             "SELECT money FROM characters WHERE user_id = %s",
             (interaction.user.id,),
             fetch='one'
         )
-        
+
         if not char_info:
             await interaction.response.send_message("Character not found!", ephemeral=True)
             return
-        
+
         money = char_info[0]
-        
+
         if is_correct:
             # Award credits for correct answer
             reward = random.randint(150, 300)
@@ -8402,7 +8403,7 @@ class NavigationPuzzleView(discord.ui.View):
                 "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (reward, interaction.user.id)
             )
-            
+
             embed = discord.Embed(
                 title="✅ Navigation Success!",
                 description=f"**{self.char_name}** {self.puzzle['success_msg']}",
@@ -8410,7 +8411,7 @@ class NavigationPuzzleView(discord.ui.View):
             )
             embed.add_field(name="💰 Reward", value=f"{reward:,} credits", inline=True)
             embed.add_field(name="💳 Balance", value=f"{money + reward:,} credits", inline=True)
-            
+
         else:
             # Small consolation reward for participation
             consolation = random.randint(25, 75)
@@ -8418,7 +8419,7 @@ class NavigationPuzzleView(discord.ui.View):
                 "UPDATE characters SET money = money + %s WHERE user_id = %s",
                 (consolation, interaction.user.id)
             )
-            
+
             embed = discord.Embed(
                 title="❌ Navigation Challenge",
                 description=f"**{self.char_name}** {self.puzzle['fail_msg']}",
@@ -8426,11 +8427,11 @@ class NavigationPuzzleView(discord.ui.View):
             )
             embed.add_field(name="💰 Consolation", value=f"{consolation:,} credits", inline=True)
             embed.add_field(name="💳 Balance", value=f"{money + consolation:,} credits", inline=True)
-        
+
         # Disable all buttons after choice
         for item in self.children:
             item.disabled = True
-        
+
         await interaction.response.edit_message(embed=embed, view=self)
 
 
