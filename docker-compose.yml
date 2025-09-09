@@ -45,7 +45,7 @@ services:
     
     # Optional: Expose port if web interface is used
     ports:
-      - "8090"
+      - "8090:8090"
     
     # Health check
     healthcheck:
