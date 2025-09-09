@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
 Discord RPG Bot Setup Script
-Configures bot token, web map settings, and database path
+Configures bot token and web map settings
 """
 
 import os
 import re
-import sys
 import shutil
 from datetime import datetime
 
@@ -14,14 +13,12 @@ from datetime import datetime
 DEFAULTS = {
     'bot_token': 'YOUR_TOKEN_HERE',
     'web_auto_start': False,
-    'web_auto_start_time': 30,  # Changed from 'web_auto_start_delay' to match config.py
-    'db_path': 'thequietend.db'
+    'web_auto_start_time': 30  # Changed from 'web_auto_start_delay' to match config.py
 }
 
 class BotSetup:
     def __init__(self):
         self.config_file = 'config.py'
-        self.database_file = 'database.py'
         self.backup_dir = 'setup_backups'
         
     def create_backup(self, filepath):
@@ -64,20 +61,6 @@ class BotSetup:
                     
             except Exception as e:
                 print(f"⚠️ Error reading config.py: {e}")
-        
-        # Read database.py
-        if os.path.exists(self.database_file):
-            try:
-                with open(self.database_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                # Extract db_path
-                db_match = re.search(r'db_path\s*=\s*"([^"]+)"', content)
-                if db_match:
-                    current['db_path'] = db_match.group(1)
-                    
-            except Exception as e:
-                print(f"⚠️ Error reading database.py: {e}")
         
         return current
     
@@ -130,35 +113,6 @@ class BotSetup:
             
         except Exception as e:
             print(f"❌ Error updating config.py: {e}")
-            return False
-    
-    def update_database_py(self, db_path):
-        """Update database.py with new database path"""
-        if not os.path.exists(self.database_file):
-            print("❌ database.py not found!")
-            return False
-        
-        self.create_backup(self.database_file)
-        
-        try:
-            with open(self.database_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            # Update db_path in the __init__ method
-            content = re.sub(
-                r'(def __init__\s*\(\s*self\s*,\s*db_path\s*=\s*)"[^"]+"',
-                rf'\1"{db_path}"',
-                content
-            )
-            
-            with open(self.database_file, 'w', encoding='utf-8') as f:
-                f.write(content)
-            
-            print("✅ database.py updated successfully!")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error updating database.py: {e}")
             return False
     
     def get_user_input(self, prompt, current_value, value_type='str', allow_skip=True):
@@ -220,7 +174,6 @@ class BotSetup:
         print(f"  Bot Token: {'***' + current['bot_token'][-10:] if len(current['bot_token']) > 10 and current['bot_token'] != DEFAULTS['bot_token'] else current['bot_token']}")
         print(f"  Web Map Auto-Start: {current['web_auto_start']}")
         print(f"  Web Map Start Time: {current['web_auto_start_time']} seconds")
-        print(f"  Database Path: {current['db_path']}")
         
         # Ask if user wants to reset to defaults
         print("\n" + "=" * 60)
@@ -264,23 +217,12 @@ class BotSetup:
                 'int'
             )
             
-            # Database Path
-            print("\n" + "=" * 60)
-            print("💾 DATABASE CONFIGURATION")
-            print("Examples: 'rpg_game.db', 'data/game.db', 'C:/bots/rpg.db'")
-            new_config['db_path'] = self.get_user_input(
-                "Enter Database Path:",
-                new_config['db_path'],
-                'str'
-            )
-        
         # Confirm changes
         print("\n" + "=" * 60)
         print("📋 NEW CONFIGURATION:")
         print(f"  Bot Token: {'***' + new_config['bot_token'][-10:] if len(new_config['bot_token']) > 10 and new_config['bot_token'] != DEFAULTS['bot_token'] else new_config['bot_token']}")
         print(f"  Web Map Auto-Start: {new_config['web_auto_start']}")
         print(f"  Web Map Start Time: {new_config['web_auto_start_time']} seconds")
-        print(f"  Database Path: {new_config['db_path']}")
         
         print("\n" + "=" * 60)
         confirm = self.get_user_input(
@@ -308,9 +250,6 @@ class BotSetup:
             success = False
         
         # Update database.py
-        if not self.update_database_py(new_config['db_path']):
-            success = False
-        
         # Final status
         print("\n" + "=" * 60)
         if success:

@@ -1,5 +1,5 @@
 LOAD DATABASE
-    FROM sqlite:///home/vetaso/The-Quiet-End/data/THEQUIETEND.db
+    FROM sqlite:///data/THEQUIETEND.db
     INTO postgresql://thequietend_user:thequietend_pass@localhost/thequietend_db?host=/tmp
 
 WITH include drop, create tables, create indexes, reset sequences

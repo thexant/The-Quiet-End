@@ -98,7 +98,7 @@ After deployment, your directory should look like this:
 
 ## Database Persistence
 
-The bot's SQLite database is stored in the `./data/` directory on your host system and mounted into the container. This ensures your bot's data persists even when the container is recreated.
+PostgreSQL data is stored in the Docker volume `postgres_data`, ensuring your database persists even when the containers are recreated.
 
 ## Monitoring
 

@@ -7,6 +7,7 @@ DEV.db
 /setup_backups
 /utils/__pycache__
 /cogs/__pycache__
+__pycache__/
 
 web/static/css/wiki.css
 /web

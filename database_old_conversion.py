@@ -13,7 +13,6 @@ class Database:
     def __init__(self, db_url=None):
         # PostgreSQL connection string
         self.db_url = db_url or os.getenv('DATABASE_URL', 'postgresql://thequietend_user:thequietend_pass@localhost/thequietend_db?host=/tmp')
-        self.db_path = "postgresql://thequietend_db"  # Compatibility attribute for old SQLite code
         self.lock = threading.Lock()
         self._shutdown = False
         
