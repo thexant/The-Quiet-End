@@ -2,6 +2,10 @@
 
 This guide will help you set up PostgreSQL for The Quiet End bot, making it easily transferable to other systems.
 
+> **Note:** PostgreSQL is the only supported database backend. Legacy SQLite helpers have been
+> removed, and the PostgreSQL data directory (`pg_data/`) is created on demand and excluded from
+> version control.
+
 ## ✅ **ISSUE RESOLVED**
 
 The connection error `connection to server on socket "/tmp/.s.PGSQL.5432" failed` has been fixed with:
@@ -44,6 +48,7 @@ brew install postgresql
 ### 2. Initialize and Start PostgreSQL
 ```bash
 # Initialize database (if pg_data doesn't exist)
+# The `pg_data/` directory is generated locally and remains untracked by Git.
 initdb -D ./pg_data --auth-local=trust --auth-host=md5
 
 # Start PostgreSQL server
@@ -107,17 +112,12 @@ pg_ctl status -D ./pg_data
 
 To transfer this setup to another system:
 
-1. **Copy the entire project directory** (including `pg_data/`)
-2. **Install PostgreSQL** on the new system
-3. **Run the setup script**: `./start_postgres.sh --bot`
+1. **Create a backup** using `./deploy.sh backup` or `pg_dump -U thequietend_user thequietend_db > backup.sql`.
+2. **Install PostgreSQL** on the new system and run `./start_postgres.sh` to provision the cluster.
+3. **Restore your backup** with `psql` or `pg_restore`, then start the bot using `./start_postgres.sh --bot` if desired.
 
-The setup script will:
-- Check PostgreSQL installation
-- Initialize database if needed  
-- Start PostgreSQL server
-- Create user/database if needed
-- Test connection
-- Start the bot
+This workflow keeps environment-specific data out of source control while ensuring you can
+reproduce the database quickly on a new host.
 
 ## 🐛 Troubleshooting
 
@@ -131,6 +131,7 @@ The setup script will:
 
 3. **"Connection refused"**
    - PostgreSQL server is not running: `pg_ctl start -D ./pg_data`
+   - Confirm the `pg_data/` directory exists locally (it should not be committed to Git).
 
 4. **"Database does not exist"**
    - Run the setup script: `./start_postgres.sh`
@@ -162,5 +163,5 @@ Expected output:
 - `start_postgres.sh` - Main setup script
 - `test_connection.py` - Connection test utility
 - `database.py` - Database abstraction layer with SQL conversion
-- `pg_data/` - PostgreSQL data directory
+- `pg_data/` - PostgreSQL data directory (created locally; excluded from Git)
 - `POSTGRESQL_SETUP.md` - This documentation
