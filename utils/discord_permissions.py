@@ -59,14 +59,11 @@ def build_tqe_overwrites(
 
     overwrites: Dict[discord.abc.Snowflake, discord.PermissionOverwrite] = dict(base_overwrites or {})
 
-    if not grant_role:
-        return overwrites
-
     tqe_role = get_tqe_role(bot, guild)
     if tqe_role is None:
         return overwrites
 
-    # Ensure @everyone is hidden
+    # Ensure @everyone is hidden when a TQE role is configured
     default_overwrite = overwrites.get(guild.default_role, discord.PermissionOverwrite())
     if channel_type == "category":
         default_overwrite.view_channel = False
@@ -79,6 +76,9 @@ def build_tqe_overwrites(
         default_overwrite.read_messages = False
         default_overwrite.send_messages = False
     overwrites[guild.default_role] = default_overwrite
+
+    if not grant_role:
+        return overwrites
 
     # Allow the TQE role to access the channel/category
     role_overwrite = overwrites.get(tqe_role, discord.PermissionOverwrite())
