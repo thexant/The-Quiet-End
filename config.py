@@ -6,9 +6,18 @@ Modify these values to customize your server experience
 
 import os
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - fallback if dependency missing
+    def load_dotenv(*args, **kwargs):
+        return None
+
+# Load environment variables from .env if present
+load_dotenv()
+
 # Bot Configuration
 BOT_CONFIG = {
-    'token': os.getenv('DISCORD_TOKEN', 'YOUR_BOT_TOKEN'),  # Use environment variable for security
+    'token': os.getenv('DISCORD_TOKEN'),  # Load from .env or environment; None if unset
     'command_prefix': os.getenv('COMMAND_PREFIX', '!'),     # Prefix for text commands (slash commands don't use this)
     'description': 'A 27th century sci-fi RPG',
     'activity_name': 'With Physics',

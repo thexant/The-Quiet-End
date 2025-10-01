@@ -12,33 +12,24 @@ This guide explains how to deploy the Discord RPG Bot using Docker on a VPS with
 
 1. **Clone/Upload the bot files to your VPS**
 
-2. **Make the deployment script executable:**
+2. **Run the interactive setup to create/update `.env`:**
+   ```bash
+   python setup.py
+   ```
+
+   The setup script guides you through entering your `DISCORD_TOKEN`, `COMMAND_PREFIX`, `ACTIVITY_NAME`, and optional guild/database settings. It writes everything to the `.env` file so the bot and Docker compose pick them up automatically.
+
+3. **Make the deployment script executable (first run only):**
    ```bash
    chmod +x deploy.sh
    ```
 
-3. **Start the bot (this will create a .env template):**
+4. **Start the bot:**
    ```bash
    ./deploy.sh start
    ```
 
-4. **Edit the .env file with your credentials:**
-   ```bash
-   nano .env
-   ```
-   
-   Fill in your actual values:
-   ```env
-   DISCORD_TOKEN=your_actual_bot_token_here
-   COMMAND_PREFIX=!
-   ACTIVITY_NAME=Entropy
-   # ALLOWED_GUILD_ID=your_actual_guild_id_here  # Optional: uncomment to restrict to single guild
-   ```
-
-5. **Restart the bot to apply changes:**
-   ```bash
-   ./deploy.sh restart
-   ```
+   You can re-run `python setup.py` any time to change credentials, then restart the bot with `./deploy.sh restart` to apply updates.
 
 ## Available Commands
 
