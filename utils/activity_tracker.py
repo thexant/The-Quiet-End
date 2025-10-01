@@ -110,14 +110,12 @@ class ActivityTracker:
                 for user_id in completed_users:
                     del self.warning_tasks[user_id]
                 
-                # Find users who have been inactive for 1 hour
-                one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+                # Find users who have been inactive for 1 hour based on database server time
                 inactive_users = self.db.execute_query(
-                    '''SELECT user_id, name FROM characters 
-                       WHERE is_logged_in = true 
-                       AND last_activity < %s
+                    '''SELECT user_id, name FROM characters
+                       WHERE is_logged_in = true
+                       AND last_activity < (CURRENT_TIMESTAMP - INTERVAL '1 hour')
                        AND user_id NOT IN (SELECT user_id FROM afk_warnings WHERE is_active = true)''',
-                    (one_hour_ago,),
                     fetch='all'
                 )
                 
