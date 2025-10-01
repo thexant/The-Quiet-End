@@ -236,26 +236,29 @@ class WebMapCog(commands.Cog):
                     'y': float(npc.get('y_coordinate')) if npc.get('y_coordinate') is not None else 0.0,
                     'destination': npc.get('destination_location'),
                     'traveling': npc.get('destination_location') is not None,
-                    'travel_progress': self._calculate_npc_travel_progress(npc.get('travel_start_time'), npc.get('travel_duration')) if npc.get('destination_location') else 0,
+                    'travel_progress': self._calculate_npc_travel_progress(
+                        npc.get('travel_start_time'),
+                        npc.get('travel_duration')
+                    ) if npc.get('destination_location') else 0,
                     'alignment': npc.get('alignment')
                 }
             except Exception as e:
                 print(f"Error parsing NPC {npc_id if 'npc_id' in locals() else 'unknown'}: {e}")
                 continue
-        
-            print(f"✅ Found {len(npcs_data)} NPCs")
-            
-            # Get recent news from GalacticNewsCog's news_queue table
-            print("📰 Fetching news data...")
-            news_data = self.db.execute_webmap_query(
+
+        print(f"✅ Found {len(npcs_data)} NPCs")
+
+        # Get recent news from GalacticNewsCog's news_queue table
+        print("📰 Fetching news data...")
+        news_data = self.db.execute_webmap_query(
             """SELECT title, description, location_id, scheduled_delivery, news_type
                FROM news_queue
                WHERE is_delivered = true
                ORDER BY scheduled_delivery DESC
                LIMIT 20""",
             fetch='all'
-        )
-        
+        ) or []
+
         news = []
         for item in news_data:
             news.append({
@@ -266,15 +269,15 @@ class WebMapCog(commands.Cog):
                 'news_type': item.get('news_type'),
                 'game_date': self._convert_to_game_date(item.get('scheduled_delivery'))
             })
-            
-            print(f"✅ Found {len(news_data)} news items")
-            
-            # Get galaxy info and current time
-            print("🌌 Getting galaxy info...")
-            galaxy_info_data = self.time_system.get_galaxy_info()
+
+        print(f"✅ Found {len(news_data)} news items")
+
+        # Get galaxy info and current time
+        print("🌌 Getting galaxy info...")
+        galaxy_info_data = self.time_system.get_galaxy_info()
         galaxy_info = {}
         current_time = None
-        
+
         if galaxy_info_data:
             galaxy_name, start_date, time_scale, time_started_at, created_at, is_paused, time_paused_at, current_ingame, is_manually_paused = galaxy_info_data
             current_time_obj = self.time_system.calculate_current_ingame_time()
