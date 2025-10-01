@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
 import re
 from utils.ship_activities import ShipActivityManager, ShipActivityView
+from utils.discord_permissions import build_tqe_overwrites
 
 class ChannelManager:
     """
@@ -222,10 +223,18 @@ class ChannelManager:
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False)
             }
-            
+
             # Give access to requesting user if provided
             if requesting_user:
                 overwrites[requesting_user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+            # Allow configured TQE role to access public location channels
+            overwrites = build_tqe_overwrites(
+                self.bot,
+                guild,
+                base_overwrites=overwrites,
+                channel_type="text",
+            )
             
             # Find or create category for home channels
             category = await self._get_or_create_home_category(guild)
@@ -587,7 +596,15 @@ class ChannelManager:
             # Give access to requesting user if provided
             if requesting_user:
                 overwrites[requesting_user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-            
+
+            # Allow members with the configured TQE role to access shared location channels
+            overwrites = build_tqe_overwrites(
+                self.bot,
+                guild,
+                base_overwrites=overwrites,
+                channel_type="text",
+            )
+
             # Find or create category for location channels
             category = await self.get_or_create_location_category(guild, loc_type)
             
@@ -699,9 +716,16 @@ class ChannelManager:
         
         # Create new category if it doesn't exist
         try:
+            category_overwrites = build_tqe_overwrites(
+                self.bot,
+                guild,
+                channel_type="category",
+            )
+            create_kwargs = {"overwrites": category_overwrites} if category_overwrites else {}
             category = await guild.create_category(
                 category_name,
-                reason=f"Auto-created category for {location_type} locations"
+                reason=f"Auto-created category for {location_type} locations",
+                **create_kwargs,
             )
             return category
         except Exception as e:
@@ -1785,9 +1809,16 @@ class ChannelManager:
                 
                 if not category:
                     try:
+                        category_overwrites = build_tqe_overwrites(
+                            self.bot,
+                            guild,
+                            channel_type="category",
+                        )
+                        create_kwargs = {"overwrites": category_overwrites} if category_overwrites else {}
                         category = await guild.create_category(
                             '🚀 IN TRANSIT',
-                            reason="Transit category for corridor travel"
+                            reason="Transit category for corridor travel",
+                            **create_kwargs,
                         )
                     except Exception:
                         pass  # Continue without category

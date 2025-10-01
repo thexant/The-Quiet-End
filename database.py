@@ -363,6 +363,7 @@ class Database:
                 residences_category_id BIGINT,
                 galactic_updates_channel_id BIGINT,
                 status_voice_channel_id BIGINT,
+                tqe_role_id BIGINT,
                 max_location_channels INTEGER DEFAULT 50,
                 channel_timeout_hours INTEGER DEFAULT 48,
                 auto_cleanup_enabled BOOLEAN DEFAULT true,

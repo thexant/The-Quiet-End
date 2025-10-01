@@ -1497,6 +1497,7 @@ class Database:
                 FOREIGN KEY (destination_location) REFERENCES locations (location_id)
             )''',
             '''ALTER TABLE server_config ADD COLUMN status_voice_channel_id INTEGER''',
+            '''ALTER TABLE server_config ADD COLUMN tqe_role_id INTEGER''',
             # NPC inventory for trading
             '''CREATE TABLE IF NOT EXISTS npc_inventory (
                 item_id INTEGER PRIMARY KEY AUTOINCREMENT,

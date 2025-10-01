@@ -12,6 +12,8 @@ import math
 from discord.app_commands import Choice
 from typing import Optional, List
 
+from utils.discord_permissions import build_tqe_overwrites, get_tqe_role
+
 
 
 class AdminCog(commands.Cog):
@@ -20,7 +22,256 @@ class AdminCog(commands.Cog):
         self.db = bot.db
     
     admin_group = app_commands.Group(name="admin", description="Administrative commands")
-    
+
+
+    @app_commands.command(name="tqerole", description="Configure the TQE role used to gate bot categories and channels")
+    @app_commands.describe(
+        role="Existing role to grant access to The Quiet End channels",
+        clear="Remove the configured role so channels are public again",
+    )
+    async def tqe_role(
+        self,
+        interaction: discord.Interaction,
+        role: Optional[discord.Role] = None,
+        clear: bool = False,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This command can only be used inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        has_manage_guild = interaction.user.guild_permissions.manage_guild
+        if not has_manage_guild and not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message(
+                "You need the **Manage Server** permission to configure the TQE role.",
+                ephemeral=True,
+            )
+            return
+
+        if clear and role is not None:
+            await interaction.response.send_message(
+                "Please either provide a role or set `clear` to true, not both.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        existing_role = get_tqe_role(self.bot, interaction.guild)
+        previous_role = existing_role
+
+        if clear:
+            self.db.execute_query(
+                '''INSERT INTO server_config (guild_id, tqe_role_id)
+                   VALUES (%s, %s)
+                   ON CONFLICT (guild_id) DO UPDATE SET tqe_role_id = EXCLUDED.tqe_role_id, updated_at = NOW()''',
+                (interaction.guild.id, None),
+            )
+
+            await self._apply_tqe_visibility(interaction.guild, None, previous_role=previous_role)
+
+            if previous_role:
+                message = (
+                    f"Removed {previous_role.mention} as the TQE role. Bot categories are visible to everyone again."
+                )
+            else:
+                message = "No TQE role was configured, so nothing changed."
+
+            await interaction.followup.send(message, ephemeral=True)
+            return
+
+        target_role = role
+        created_role = False
+
+        if target_role is None:
+            if existing_role:
+                target_role = existing_role
+            else:
+                desired_name = "TQE Player"
+                target_role = discord.utils.get(interaction.guild.roles, name=desired_name)
+
+                if target_role is None:
+                    try:
+                        target_role = await interaction.guild.create_role(
+                            name=desired_name,
+                            mentionable=True,
+                            reason="Configure TQE access role",
+                        )
+                        created_role = True
+                    except discord.Forbidden:
+                        await interaction.followup.send(
+                            "I don't have permission to create roles. Please create one manually and rerun the command.",
+                            ephemeral=True,
+                        )
+                        return
+                    except discord.HTTPException as exc:
+                        await interaction.followup.send(
+                            f"Couldn't create the TQE role: {exc}",
+                            ephemeral=True,
+                        )
+                        return
+
+        if target_role is None:
+            await interaction.followup.send(
+                "I couldn't determine which role to use. Please specify a role.",
+                ephemeral=True,
+            )
+            return
+
+        bot_member = interaction.guild.me
+        if bot_member and bot_member.top_role <= target_role:
+            await interaction.followup.send(
+                "Move my top role above the chosen TQE role so I can manage channel permissions.",
+                ephemeral=True,
+            )
+            return
+
+        self.db.execute_query(
+            '''INSERT INTO server_config (guild_id, tqe_role_id)
+               VALUES (%s, %s)
+               ON CONFLICT (guild_id) DO UPDATE SET tqe_role_id = EXCLUDED.tqe_role_id, updated_at = NOW()''',
+            (interaction.guild.id, target_role.id),
+        )
+
+        await self._apply_tqe_visibility(
+            interaction.guild,
+            target_role,
+            previous_role=previous_role if previous_role and previous_role.id != target_role.id else None,
+        )
+
+        if created_role:
+            response = f"Created {target_role.mention} and restricted bot categories to members with this role."
+        elif previous_role and previous_role.id == target_role.id:
+            response = f"Refreshed permissions for {target_role.mention}."
+        else:
+            response = f"Updated the TQE role to {target_role.mention}."
+
+        await interaction.followup.send(response, ephemeral=True)
+
+    async def _apply_tqe_visibility(
+        self,
+        guild: discord.Guild,
+        role: Optional[discord.Role],
+        *,
+        previous_role: Optional[discord.Role] = None,
+    ) -> None:
+        """Apply the configured TQE visibility rules to known categories and channels."""
+
+        if guild is None:
+            return
+
+        config = self.db.execute_query(
+            '''SELECT colony_category_id, station_category_id, outpost_category_id, gate_category_id,
+                      transit_category_id, ship_interiors_category_id, residences_category_id,
+                      galactic_updates_channel_id, status_voice_channel_id
+               FROM server_config WHERE guild_id = %s''',
+            (guild.id,),
+            fetch='one',
+        )
+
+        if not config:
+            return
+
+        (
+            colony_cat,
+            station_cat,
+            outpost_cat,
+            gate_cat,
+            transit_cat,
+            ship_cat,
+            residences_cat,
+            news_channel_id,
+            status_voice_channel_id,
+        ) = config
+
+        # Avoid removing the role we are about to add back
+        effective_previous = None
+        if previous_role and (role is None or previous_role.id != role.id):
+            effective_previous = previous_role
+
+        category_ids = [
+            colony_cat,
+            station_cat,
+            outpost_cat,
+            gate_cat,
+            transit_cat,
+            ship_cat,
+            residences_cat,
+        ]
+
+        for category_id in category_ids:
+            category = guild.get_channel(category_id) if category_id else None
+            if not isinstance(category, discord.CategoryChannel):
+                continue
+
+            overwrites = dict(category.overwrites)
+            if effective_previous:
+                overwrites.pop(effective_previous, None)
+
+            if role:
+                updated = build_tqe_overwrites(
+                    self.bot,
+                    guild,
+                    base_overwrites=overwrites,
+                    channel_type="category",
+                )
+            else:
+                overwrites.pop(guild.default_role, None)
+                updated = overwrites
+
+            try:
+                await category.edit(overwrites=updated or None)
+            except Exception as exc:
+                print(f"⚠️ Failed to update permissions for category {category_id}: {exc}")
+
+        if news_channel_id:
+            news_channel = guild.get_channel(news_channel_id)
+            if isinstance(news_channel, discord.TextChannel):
+                overwrites = dict(news_channel.overwrites)
+                if effective_previous:
+                    overwrites.pop(effective_previous, None)
+
+                if role:
+                    updated = build_tqe_overwrites(
+                        self.bot,
+                        guild,
+                        base_overwrites=overwrites,
+                        channel_type="text",
+                    )
+                else:
+                    overwrites.pop(guild.default_role, None)
+                    updated = overwrites
+
+                try:
+                    await news_channel.edit(overwrites=updated or None)
+                except Exception as exc:
+                    print(f"⚠️ Failed to update permissions for channel {news_channel_id}: {exc}")
+
+        if status_voice_channel_id:
+            voice_channel = guild.get_channel(status_voice_channel_id)
+            if isinstance(voice_channel, discord.VoiceChannel):
+                overwrites = dict(voice_channel.overwrites)
+                if effective_previous:
+                    overwrites.pop(effective_previous, None)
+
+                if role:
+                    updated = build_tqe_overwrites(
+                        self.bot,
+                        guild,
+                        base_overwrites=overwrites,
+                        channel_type="voice",
+                    )
+                else:
+                    overwrites.pop(guild.default_role, None)
+                    updated = overwrites
+
+                try:
+                    await voice_channel.edit(overwrites=updated or None)
+                except Exception as exc:
+                    print(f"⚠️ Failed to update permissions for voice channel {status_voice_channel_id}: {exc}")
+
     
     @admin_group.command(name="afk", description="Trigger AFK warning for a player")
     @app_commands.describe(player="Player to send AFK warning to")
@@ -122,9 +373,16 @@ class AdminCog(commands.Cog):
                 print(f"Found existing main galaxy category: {main_galaxy_category.id}")
             else:
                 try:
+                    category_overwrites = build_tqe_overwrites(
+                        self.bot,
+                        interaction.guild,
+                        channel_type="category",
+                    )
+                    category_kwargs = {"overwrites": category_overwrites} if category_overwrites else {}
                     main_galaxy_category = await interaction.guild.create_category(
                         main_category_name,
-                        reason="Setup - main galaxy category"
+                        reason="Setup - main galaxy category",
+                        **category_kwargs
                     )
                     created_categories = [f"🆕 Created main: {main_category_name}"]
                     print(f"Created new main galaxy category: {main_galaxy_category.id}")
@@ -167,10 +425,18 @@ class AdminCog(commands.Cog):
             # If still no news channel, create one
             if not news_channel:
                 try:
+                    channel_overwrites = build_tqe_overwrites(
+                        self.bot,
+                        interaction.guild,
+                        base_overwrites=dict(main_galaxy_category.overwrites),
+                        channel_type="text",
+                    )
+                    channel_kwargs = {"overwrites": channel_overwrites} if channel_overwrites else {}
                     news_channel = await main_galaxy_category.create_text_channel(
                         news_channel_name,
                         topic="INFORMATION SYSTEM UPLINK",
-                        reason="CONNECTING TO GNN DATA SERVERS..."
+                        reason="CONNECTING TO GNN DATA SERVERS...",
+                        **channel_kwargs
                     )
                     created_categories.append(f"🆕 Created news channel: {news_channel_name}")
                     print(f"Created new news channel: {news_channel.id}")
@@ -224,19 +490,25 @@ class AdminCog(commands.Cog):
             # If still no status channel, create one
             if not status_voice_channel:
                 try:
-                    # Set permissions to deny connection for non-admins
-                    overwrites = {
-                        interaction.guild.default_role: discord.PermissionOverwrite(connect=False),
+                    base_voice_overwrites = {
+                        interaction.guild.default_role: discord.PermissionOverwrite(connect=False, view_channel=False),
                     }
-                    
+                    voice_overwrites = build_tqe_overwrites(
+                        self.bot,
+                        interaction.guild,
+                        base_overwrites=base_voice_overwrites,
+                        channel_type="voice",
+                    )
+                    voice_kwargs = {"overwrites": voice_overwrites} if voice_overwrites else {}
+
                     status_voice_channel = await main_galaxy_category.create_voice_channel(
                         status_channel_name,
-                        overwrites=overwrites,
-                        reason="RPG Bot setup - status voice channel"
+                        reason="RPG Bot setup - status voice channel",
+                        **voice_kwargs
                     )
                     created_categories.append(f"🆕 Created status voice channel")
                     print(f"Created new status voice channel: {status_voice_channel.id}")
-                    
+
                 except Exception as e:
                     created_categories.append(f"❌ Failed to create status voice channel: {e}")
             
@@ -293,10 +565,17 @@ class AdminCog(commands.Cog):
                             pass  # Ignore if we can't reposition
                 else:
                     try:
+                        category_overwrites = build_tqe_overwrites(
+                            self.bot,
+                            interaction.guild,
+                            channel_type="category",
+                        )
+                        category_kwargs = {"overwrites": category_overwrites} if category_overwrites else {}
                         new_category = await interaction.guild.create_category(
                             cat_name,
                             position=main_galaxy_category.position + len(categories) + 1,
-                            reason="RPG Bot setup - location categories"
+                            reason="RPG Bot setup - location categories",
+                            **category_kwargs
                         )
                         categories[cat_type] = new_category.id
                         created_categories.append(f"🆕 Created: {cat_name}")
@@ -305,9 +584,9 @@ class AdminCog(commands.Cog):
                         categories[cat_type] = None
             
             self.db.execute_query(
-                '''INSERT INTO server_config 
-                   (guild_id, colony_category_id, station_category_id, outpost_category_id, 
-                    gate_category_id, transit_category_id, ship_interiors_category_id, residences_category_id, galactic_updates_channel_id, 
+                '''INSERT INTO server_config
+                   (guild_id, colony_category_id, station_category_id, outpost_category_id,
+                    gate_category_id, transit_category_id, ship_interiors_category_id, residences_category_id, galactic_updates_channel_id,
                     status_voice_channel_id, setup_completed)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true)
                    ON CONFLICT (guild_id) DO UPDATE SET
@@ -335,7 +614,11 @@ class AdminCog(commands.Cog):
                     status_voice_channel.id if status_voice_channel else None
                 )
             )
-            
+
+            tqe_role = get_tqe_role(self.bot, interaction.guild)
+            if tqe_role:
+                await self._apply_tqe_visibility(interaction.guild, tqe_role)
+
             # Create setup complete embed
             embed = discord.Embed(
                 title="✅ Server Setup Complete!",
