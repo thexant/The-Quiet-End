@@ -13,3 +13,9 @@ web/static/css/wiki.css
 /web
 cogs/web_map.py.bkp
 beta2.db
+database_sqlite_backup.py
+database_old_conversion.py
+migration.load
+THEQUIETEND.db
+data/THEQUIETEND.db
+pg_data/
