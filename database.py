@@ -37,6 +37,36 @@ class Database:
                 application_name='TheQuietEnd_Bot'
             )
             print("[OK] PostgreSQL connection pool created")
+        except psycopg2.OperationalError as e:
+            error_lines = [
+                "❌ Failed to create connection pool: PostgreSQL refused the connection.",
+                "",  # Blank line for readability
+                "This usually means the PostgreSQL server is not running or not reachable.",
+                "Quick fixes:",
+                "  • Make sure PostgreSQL is installed and the service is running.",
+            ]
+
+            if os.name == 'nt':
+                error_lines.extend([
+                    "  • Open the Windows Services panel and start the 'postgresql' service,",
+                    "    or run 'pg_ctl start -D path\\to\\pg_data' if you installed the bundled server.",
+                ])
+            else:
+                error_lines.extend([
+                    "  • Run './start_postgres.sh --bot' from the project directory to launch the",
+                    "    bundled PostgreSQL server and start the bot automatically.",
+                    "  • Or manually start PostgreSQL with 'pg_ctl start -D ./pg_data'.",
+                ])
+
+            error_lines.extend([
+                "",  # Another blank line
+                "For detailed setup instructions see POSTGRESQL_SETUP.md.",
+                f"Original error: {e}",
+            ])
+
+            friendly_message = "\n".join(error_lines)
+            print(friendly_message)
+            raise RuntimeError(friendly_message) from e
         except Exception as e:
             print(f"❌ Failed to create connection pool: {e}")
             raise
