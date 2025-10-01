@@ -78,6 +78,20 @@ def build_tqe_overwrites(
     overwrites[guild.default_role] = default_overwrite
 
     if not grant_role:
+        # Explicitly deny the TQE role access so category-level permissions
+        # don't leak into private channels.
+        role_overwrite = overwrites.get(tqe_role, discord.PermissionOverwrite())
+        if channel_type == "category":
+            role_overwrite.view_channel = False
+        elif channel_type == "voice":
+            role_overwrite.view_channel = False
+            role_overwrite.connect = False
+            role_overwrite.speak = False
+        else:  # text channel
+            role_overwrite.view_channel = False
+            role_overwrite.read_messages = False
+            role_overwrite.send_messages = False
+        overwrites[tqe_role] = role_overwrite
         return overwrites
 
     # Allow the TQE role to access the channel/category
