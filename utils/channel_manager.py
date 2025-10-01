@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
 import re
 from utils.ship_activities import ShipActivityManager, ShipActivityView
-from utils.discord_permissions import build_tqe_overwrites
+from utils.discord_permissions import build_tqe_overwrites, get_tqe_role
 
 class ChannelManager:
     """
@@ -27,9 +27,17 @@ class ChannelManager:
         
         # Track active location messages to clean them up
         self._active_location_messages = {}  # {user_id: {location_id: message_id}}
-        
+
         # Start background cleanup task
         self._start_background_cleanup()
+
+    def _member_has_tqe_access(self, member: discord.Member) -> bool:
+        """Return True if the member is allowed to view TQE channels."""
+        tqe_role = get_tqe_role(self.bot, member.guild)
+        if tqe_role is None:
+            # No opt-in role configured, allow all members
+            return True
+        return tqe_role in member.roles
     
     def _start_background_cleanup(self):
         """Start the background cleanup task"""
@@ -225,15 +233,16 @@ class ChannelManager:
             }
 
             # Give access to requesting user if provided
-            if requesting_user:
+            if requesting_user and self._member_has_tqe_access(requesting_user):
                 overwrites[requesting_user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
-            # Allow configured TQE role to access public location channels
+            # Apply TQE role visibility rules without exposing the channel globally
             overwrites = build_tqe_overwrites(
                 self.bot,
                 guild,
                 base_overwrites=overwrites,
                 channel_type="text",
+                grant_role=False,
             )
             
             # Find or create category for home channels
@@ -460,6 +469,9 @@ class ChannelManager:
     
     async def give_user_home_access(self, user: discord.Member, home_id: int) -> bool:
         """Give a user access to a home's channel"""
+        if not self._member_has_tqe_access(user):
+            return False
+
         home_channel = self.db.execute_query(
             "SELECT channel_id FROM home_interiors WHERE home_id = %s",
             (home_id,),
@@ -592,17 +604,18 @@ class ChannelManager:
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False)
             }
-            
-            # Give access to requesting user if provided
-            if requesting_user:
+
+            # Give access to requesting user if provided and opted in
+            if requesting_user and self._member_has_tqe_access(requesting_user):
                 overwrites[requesting_user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
-            # Allow members with the configured TQE role to access shared location channels
+            # Apply TQE role visibility rules without exposing the channel globally
             overwrites = build_tqe_overwrites(
                 self.bot,
                 guild,
                 base_overwrites=overwrites,
                 channel_type="text",
+                grant_role=False,
             )
 
             # Find or create category for location channels
@@ -1316,6 +1329,9 @@ class ChannelManager:
                 
     async def give_user_location_access(self, user: discord.Member, location_id: int, send_arrival_notification: bool = True) -> bool:
         """Give a user access to a location's channel, creating it if necessary"""
+        if not self._member_has_tqe_access(user):
+            return False
+
         try:
             # Call get_or_create_location_channel with correct 3 parameters
             channel = await self.get_or_create_location_channel(user.guild, location_id, user)
@@ -2209,6 +2225,9 @@ class ChannelManager:
 
     async def restore_user_location_on_login(self, user: discord.Member, location_id: int) -> bool:
         """Restore or create location access when a user logs in"""
+        if not self._member_has_tqe_access(user):
+            return False
+
         # Simply call get_or_create_location_channel with the correct 3 parameters
         channel = await self.get_or_create_location_channel(user.guild, location_id, user)
         if not channel:
@@ -2666,6 +2685,9 @@ class ChannelManager:
 
     async def give_user_ship_access(self, user: discord.Member, ship_id: int) -> bool:
         """Give a user access to a ship's channel"""
+        if not self._member_has_tqe_access(user):
+            return False
+
         ship_info = self.db.execute_query(
             "SELECT channel_id FROM ships WHERE ship_id = %s",
             (ship_id,),
