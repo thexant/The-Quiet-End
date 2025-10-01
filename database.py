@@ -12,7 +12,18 @@ import os
 class Database:
     def __init__(self, db_url=None):
         # PostgreSQL connection string
-        self.db_url = db_url or os.getenv('DATABASE_URL', 'postgresql://thequietend_user:thequietend_pass@localhost/thequietend_db?host=/tmp')
+        if db_url:
+            self.db_url = db_url
+        else:
+            env_url = os.getenv('DATABASE_URL')
+            if env_url:
+                self.db_url = env_url
+            else:
+                if os.name == 'nt':
+                    # Windows does not support the default Unix domain socket path used by PostgreSQL
+                    self.db_url = 'postgresql://thequietend_user:thequietend_pass@localhost:5432/thequietend_db'
+                else:
+                    self.db_url = 'postgresql://thequietend_user:thequietend_pass@localhost/thequietend_db?host=/tmp'
         self.lock = threading.Lock()
         self._shutdown = False
         
