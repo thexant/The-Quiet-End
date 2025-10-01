@@ -31,7 +31,7 @@ services:
     
     # Environment variables
     environment:
-      - DISCORD_TOKEN=MTM5MTk4NjEzMzEzODY3MzY5NA.G1coX_.qRv1hxW-E_IhRJw3dORCgyi6uuY_T7OdaGyBQE
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
       - COMMAND_PREFIX=${COMMAND_PREFIX:-!}
       - ACTIVITY_NAME=${ACTIVITY_NAME:-Entropy}
       - ALLOWED_GUILD_ID=${ALLOWED_GUILD_ID:-}  # Optional: leave empty for multi-server support

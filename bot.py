@@ -8,18 +8,23 @@ import logging
 from utils.activity_tracker import ActivityTracker
 import random
 from utils.income_calculator import HomeIncomeCalculator
-from config import ALLOWED_GUILD_ID
+
 # Try to load configuration
 try:
-    from config import BOT_CONFIG, DISCORD_CONFIG
-    BOT_TOKEN = BOT_CONFIG.get('token', 'YOUR_BOT_TOKEN')
-    COMMAND_PREFIX = BOT_CONFIG.get('command_prefix', '!')
-    ACTIVITY_NAME = BOT_CONFIG.get('activity_name', 'in the void of space')
+    from config import BOT_CONFIG, DISCORD_CONFIG, ALLOWED_GUILD_ID
 except ImportError:
-    print("⚠️ config.py not found, using defaults")
-    BOT_TOKEN = os.getenv('DISCORD_TOKEN', 'YOUR_BOT_TOKEN')
-    COMMAND_PREFIX = '!'
-    ACTIVITY_NAME = 'in the void of space'
+    print("⚠️ config.py not found, loading defaults from environment")
+    BOT_CONFIG = {
+        'token': os.getenv('DISCORD_TOKEN'),
+        'command_prefix': os.getenv('COMMAND_PREFIX', '!'),
+        'activity_name': os.getenv('ACTIVITY_NAME', 'in the void of space'),
+    }
+    DISCORD_CONFIG = {}
+    ALLOWED_GUILD_ID = None
+
+BOT_TOKEN = BOT_CONFIG.get('token')
+COMMAND_PREFIX = BOT_CONFIG.get('command_prefix', '!')
+ACTIVITY_NAME = BOT_CONFIG.get('activity_name', 'in the void of space')
 
 # Bot setup
 intents = discord.Intents.default()
@@ -1036,9 +1041,9 @@ bot = RPGBot()
 
 if __name__ == "__main__":
     # Check if token is configured
-    if BOT_TOKEN == 'YOUR_BOT_TOKEN' or not BOT_TOKEN or BOT_TOKEN.strip() == '':
+    if not BOT_TOKEN or not BOT_TOKEN.strip():
         print("❌ Bot token not configured!")
-        print("📝 Please edit config.py or set DISCORD_TOKEN environment variable")
+        print("📝 Please set DISCORD_TOKEN in your .env file.")
         print("🔗 Get a token from: https://discord.com/developers/applications")
     else:
         print("🎮 Starting Discord RPG Bot...")

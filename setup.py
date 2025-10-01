@@ -1,280 +1,230 @@
 #!/usr/bin/env python3
 """
 Discord RPG Bot Setup Script
-Configures bot token and web map settings
+Configures credentials and basic runtime settings via the .env file.
 """
 
-import os
-import re
-import shutil
+from __future__ import annotations
+
+from collections import OrderedDict
 from datetime import datetime
+from pathlib import Path
+from typing import Dict
 
-# Default values
-DEFAULTS = {
-    'bot_token': 'YOUR_TOKEN_HERE',
-    'web_auto_start': False,
-    'web_auto_start_time': 30  # Changed from 'web_auto_start_delay' to match config.py
-}
+ENV_FILE = Path('.env')
+BACKUP_DIR = Path('setup_backups')
 
-class BotSetup:
-    def __init__(self):
-        self.config_file = 'config.py'
-        self.backup_dir = 'setup_backups'
-        
-    def create_backup(self, filepath):
-        """Create a backup of the file before modifying"""
-        if os.path.exists(filepath):
-            if not os.path.exists(self.backup_dir):
-                os.makedirs(self.backup_dir)
-            
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            backup_name = f"{os.path.basename(filepath)}.{timestamp}.bak"
-            backup_path = os.path.join(self.backup_dir, backup_name)
-            
-            shutil.copy2(filepath, backup_path)
-            print(f"✅ Backup created: {backup_path}")
-    
-    def read_current_config(self):
-        """Read current configuration values"""
-        current = DEFAULTS.copy()
-        
-        # Read config.py
-        if os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                # Extract bot token
-                token_match = re.search(r"'token':\s*'([^']*)'", content)
-                if token_match:
-                    current['bot_token'] = token_match.group(1)
-                
-                # Extract web auto start
-                auto_start_match = re.search(r"'auto_start':\s*(True|False)", content)
-                if auto_start_match:
-                    current['web_auto_start'] = auto_start_match.group(1) == 'True'
-                
-                # Extract auto start time (corrected from auto_start_delay)
-                time_match = re.search(r"'auto_start_time':\s*(\d+)", content)
-                if time_match:
-                    current['web_auto_start_time'] = int(time_match.group(1))
-                    
-            except Exception as e:
-                print(f"⚠️ Error reading config.py: {e}")
-        
-        return current
-    
-    def update_config_py(self, token, auto_start, time):
-        """Update config.py with new values"""
-        if not os.path.exists(self.config_file):
-            print("❌ config.py not found!")
-            return False
-        
-        self.create_backup(self.config_file)
-        
+DEFAULTS: OrderedDict[str, str] = OrderedDict(
+    [
+        ('DISCORD_TOKEN', ''),
+        ('COMMAND_PREFIX', '!'),
+        ('ACTIVITY_NAME', 'Entropy'),
+        ('ALLOWED_GUILD_ID', ''),
+        (
+            'DATABASE_URL',
+            'postgresql://thequietend_user:thequietend_pass@postgres:5432/thequietend_db',
+        ),
+    ]
+)
+
+
+class EnvSetup:
+    def __init__(self) -> None:
+        self.additional_entries: Dict[str, str] = {}
+
+    def create_backup(self, filepath: Path) -> None:
+        """Create a timestamped backup of the .env file."""
+        if not filepath.exists():
+            return
+
+        BACKUP_DIR.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_name = f"{filepath.name}.{timestamp}.bak"
+        backup_path = BACKUP_DIR / backup_name
+        backup_path.write_text(filepath.read_text(encoding='utf-8'), encoding='utf-8')
+        print(f"✅ Backup created: {backup_path}")
+
+    def read_env(self) -> Dict[str, str]:
+        """Load existing values from the .env file, falling back to defaults."""
+        values: Dict[str, str] = DEFAULTS.copy()
+        self.additional_entries = {}
+
+        if not ENV_FILE.exists():
+            return values
+
         try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
-            # Process line by line for more precise control
-            for i, line in enumerate(lines):
-                # Update token
-                if "'token':" in line:
-                    lines[i] = re.sub(r"'token':\s*'[^']*'", f"'token': '{token}'", line)
-                
-                # Update auto_start
-                elif "'auto_start':" in line and 'auto_start_time' not in line:
-                    auto_start_str = 'True' if auto_start else 'False'
-                    lines[i] = re.sub(r"'auto_start':\s*(True|False)", f"'auto_start': {auto_start_str}", line)
-                
-                # Update auto_start_time - handle this very carefully
-                elif "'auto_start_time':" in line:
-                    # Find the position of the colon after 'auto_start_time'
-                    key_end = line.find("'auto_start_time':") + len("'auto_start_time':")
-                    # Find the comma after the value
-                    comma_pos = line.find(',', key_end)
-                    
-                    if comma_pos != -1:
-                        # Preserve the spacing and comment
-                        before_key = line[:key_end]
-                        after_comma = line[comma_pos:]
-                        # Reconstruct the line with the new value
-                        lines[i] = f"{before_key} {time}{after_comma}"
-                    else:
-                        # No comma found, just replace the number
-                        lines[i] = re.sub(r"'auto_start_time':\s*\d+", f"'auto_start_time': {time}", line)
-            
-            # Write back the modified content
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                f.writelines(lines)
-            
-            print("✅ config.py updated successfully!")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error updating config.py: {e}")
-            return False
-    
-    def get_user_input(self, prompt, current_value, value_type='str', allow_skip=True):
-        """Get user input with validation"""
-        if value_type == 'bool':
-            current_display = 'True' if current_value else 'False'
+            for line in ENV_FILE.read_text(encoding='utf-8').splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#') or '=' not in line:
+                    continue
+
+                key, raw_value = line.split('=', 1)
+                key = key.strip()
+                value = raw_value.strip()
+
+                if key in values:
+                    values[key] = value
+                else:
+                    self.additional_entries[key] = value
+        except Exception as exc:
+            print(f"⚠️ Error reading {ENV_FILE}: {exc}")
+
+        return values
+
+    def mask_token(self, token: str) -> str:
+        if not token:
+            return '<not set>'
+        return f"***{token[-10:]}" if len(token) > 10 else token
+
+    def get_user_input(self, prompt: str, current_value: str, allow_empty: bool = True) -> str:
+        print(f"\n{prompt}")
+        print(f"Current value: {current_value if current_value else '<not set>'}")
+        if allow_empty:
+            print("Press Enter to keep the current value or type a new one:")
         else:
-            current_display = current_value
-        
-        if allow_skip:
-            print(f"\n{prompt}")
-            print(f"Current value: {current_display}")
-            print("Press Enter to keep current value, or type new value:")
-        else:
-            print(f"\n{prompt}")
-            
-        user_input = input("> ").strip()
-        
-        if not user_input and allow_skip:
+            print("Enter a new value:")
+
+        value = input("> ").strip()
+        if not value and allow_empty:
             return current_value
-        
-        if value_type == 'bool':
-            if user_input.lower() in ['true', 't', 'yes', 'y', '1']:
+        return value
+
+    def confirm(self, prompt: str, default: bool = True) -> bool:
+        default_str = 'Y/n' if default else 'y/N'
+        while True:
+            choice = input(f"{prompt} ({default_str}): ").strip().lower()
+            if not choice:
+                return default
+            if choice in {'y', 'yes'}:
                 return True
-            elif user_input.lower() in ['false', 'f', 'no', 'n', '0']:
+            if choice in {'n', 'no'}:
                 return False
-            else:
-                print("⚠️ Invalid input. Please enter True/False")
-                return self.get_user_input(prompt, current_value, value_type, allow_skip)
-        
-        elif value_type == 'int':
-            try:
-                value = int(user_input)
-                # Ensure time value is positive
-                if value <= 0:
-                    print("⚠️ Invalid input. Please enter a positive number")
-                    return self.get_user_input(prompt, current_value, value_type, allow_skip)
-                return value
-            except ValueError:
-                print("⚠️ Invalid input. Please enter a number")
-                return self.get_user_input(prompt, current_value, value_type, allow_skip)
-        
-        return user_input
-    
-    def run(self):
-        """Main setup process"""
+            print("⚠️ Please answer yes or no.")
+
+    def write_env(self, values: Dict[str, str]) -> None:
+        """Write updated values to the .env file."""
+        self.create_backup(ENV_FILE)
+
+        lines = [
+            "# Discord Bot Configuration",
+            f"DISCORD_TOKEN={values['DISCORD_TOKEN']}",
+            f"COMMAND_PREFIX={values['COMMAND_PREFIX']}",
+            f"ACTIVITY_NAME={values['ACTIVITY_NAME']}",
+        ]
+
+        if values['ALLOWED_GUILD_ID']:
+            lines.append(f"ALLOWED_GUILD_ID={values['ALLOWED_GUILD_ID']}")
+        else:
+            lines.append("# ALLOWED_GUILD_ID=your_guild_id_here  # Optional: Set to restrict to single guild")
+
+        lines.extend(
+            [
+                "",
+                "# Database URL for PostgreSQL connection",
+                f"DATABASE_URL={values['DATABASE_URL']}",
+            ]
+        )
+
+        if self.additional_entries:
+            lines.extend(["", "# Additional environment values"])
+            for key, value in self.additional_entries.items():
+                lines.append(f"{key}={value}")
+
+        ENV_FILE.write_text("\n".join(lines) + "\n", encoding='utf-8')
+        print(f"✅ Updated {ENV_FILE}")
+
+    def run(self) -> None:
         print("=" * 60)
         print("🚀 DISCORD RPG BOT SETUP")
         print("=" * 60)
-        print("\nThis script will help you configure your bot.")
-        print("Press Enter to keep current values, or type new values.")
+        print("\nThis script configures your .env file for the bot.")
+        print("Press Enter to keep existing values or type new ones.")
         print("\n" + "=" * 60)
-        
-        # Read current configuration
-        current = self.read_current_config()
-        
-        # Show current configuration
+
+        values = self.read_env()
+
         print("\n📋 CURRENT CONFIGURATION:")
-        print(f"  Bot Token: {'***' + current['bot_token'][-10:] if len(current['bot_token']) > 10 and current['bot_token'] != DEFAULTS['bot_token'] else current['bot_token']}")
-        print(f"  Web Map Auto-Start: {current['web_auto_start']}")
-        print(f"  Web Map Start Time: {current['web_auto_start_time']} seconds")
-        
-        # Ask if user wants to reset to defaults
-        print("\n" + "=" * 60)
-        reset = self.get_user_input(
-            "Do you want to reset all values to defaults? (yes/no)",
-            False,
-            'bool',
-            False
+        print(f"  Bot Token: {self.mask_token(values['DISCORD_TOKEN'])}")
+        print(f"  Command Prefix: {values['COMMAND_PREFIX'] or '<not set>'}")
+        print(f"  Activity Name: {values['ACTIVITY_NAME'] or '<not set>'}")
+        print(
+            "  Allowed Guild ID: "
+            + (values['ALLOWED_GUILD_ID'] or 'None (bot can join any guild)')
         )
-        
+        print(f"  Database URL: {values['DATABASE_URL']}")
+
+        print("\n" + "=" * 60)
+        reset = self.confirm("Reset all values to defaults?", default=False)
+
         if reset:
-            new_config = DEFAULTS.copy()
+            new_values = DEFAULTS.copy()
+            self.additional_entries = {}
             print("\n✅ Values reset to defaults")
         else:
-            # Get new values, starting with the current configuration
-            new_config = current.copy()
-            
-            # Bot Token
+            new_values = values.copy()
+
             print("\n" + "=" * 60)
             print("📝 BOT TOKEN CONFIGURATION")
             print("Get your token from: https://discord.com/developers/applications")
-            new_config['bot_token'] = self.get_user_input(
-                "Enter Bot Token:",
-                new_config['bot_token'],
-                'str'
+            new_values['DISCORD_TOKEN'] = self.get_user_input(
+                "Enter Bot Token:", new_values['DISCORD_TOKEN'], allow_empty=False
             )
-            
-            # Web Map Auto-Start
+
             print("\n" + "=" * 60)
-            print("🗺️ WEB MAP CONFIGURATION")
-            new_config['web_auto_start'] = self.get_user_input(
-                "Enable Web Map Auto-Start? (true/false):",
-                new_config['web_auto_start'],
-                'bool'
+            print("⚙️ BOT BEHAVIOUR SETTINGS")
+            new_values['COMMAND_PREFIX'] = self.get_user_input(
+                "Command prefix (used for text commands):", new_values['COMMAND_PREFIX']
             )
-            
-            # Auto-Start Time - Always allow updating this value
-            new_config['web_auto_start_time'] = self.get_user_input(
-                "Web Map Start Time (seconds after bot startup):",
-                new_config['web_auto_start_time'],
-                'int'
+            new_values['ACTIVITY_NAME'] = self.get_user_input(
+                "Activity status text:", new_values['ACTIVITY_NAME']
             )
-            
-        # Confirm changes
+            new_values['ALLOWED_GUILD_ID'] = self.get_user_input(
+                "Limit the bot to a single guild ID (leave blank for all guilds):",
+                new_values['ALLOWED_GUILD_ID'],
+            )
+
+            print("\n" + "=" * 60)
+            print("🗄️ DATABASE SETTINGS")
+            new_values['DATABASE_URL'] = self.get_user_input(
+                "Database URL for the bot:", new_values['DATABASE_URL']
+            )
+
         print("\n" + "=" * 60)
         print("📋 NEW CONFIGURATION:")
-        print(f"  Bot Token: {'***' + new_config['bot_token'][-10:] if len(new_config['bot_token']) > 10 and new_config['bot_token'] != DEFAULTS['bot_token'] else new_config['bot_token']}")
-        print(f"  Web Map Auto-Start: {new_config['web_auto_start']}")
-        print(f"  Web Map Start Time: {new_config['web_auto_start_time']} seconds")
-        
-        print("\n" + "=" * 60)
-        confirm = self.get_user_input(
-            "Apply these changes? (yes/no)",
-            True,
-            'bool',
-            False
+        print(f"  Bot Token: {self.mask_token(new_values['DISCORD_TOKEN'])}")
+        print(f"  Command Prefix: {new_values['COMMAND_PREFIX'] or '<not set>'}")
+        print(f"  Activity Name: {new_values['ACTIVITY_NAME'] or '<not set>'}")
+        print(
+            "  Allowed Guild ID: "
+            + (new_values['ALLOWED_GUILD_ID'] or 'None (bot can join any guild)')
         )
-        
-        if not confirm:
+        print(f"  Database URL: {new_values['DATABASE_URL']}")
+
+        print("\n" + "=" * 60)
+        if not self.confirm("Apply these changes?", default=True):
             print("\n❌ Setup cancelled. No changes were made.")
             return
-        
-        # Apply changes
+
         print("\n🔄 Applying changes...")
-        
-        success = True
-        
-        # Update config.py
-        if not self.update_config_py(
-            new_config['bot_token'],
-            new_config['web_auto_start'],
-            new_config['web_auto_start_time']
-        ):
-            success = False
-        
-        # Update database.py
-        # Final status
+        self.write_env(new_values)
+
         print("\n" + "=" * 60)
-        if success:
-            print("✅ SETUP COMPLETE!")
-            print("\nYour bot is now configured. You can run bot.py to start!")
-            if new_config['bot_token'] == DEFAULTS['bot_token']:
-                print("\n⚠️ WARNING: You haven't set a valid bot token yet!")
-                print("   The bot won't start until you set a real token.")
-        else:
-            print("❌ SETUP FAILED!")
-            print("\nSome files could not be updated. Check the error messages above.")
-            print("Backups of original files are saved in 'setup_backups' folder.")
-        
-        print("\n" + "=" * 60)
+        print("✅ SETUP COMPLETE!")
+        print("Your credentials and settings are saved to .env.")
+        if not new_values['DISCORD_TOKEN']:
+            print("\n⚠️ WARNING: You haven't set a bot token yet!")
+            print("   The bot won't start until DISCORD_TOKEN is configured.")
+        print("\nYou can now start the bot with python bot.py or via Docker.")
+        print("=" * 60)
+
 
 if __name__ == "__main__":
     try:
-        setup = BotSetup()
-        setup.run()
+        EnvSetup().run()
     except KeyboardInterrupt:
         print("\n\n❌ Setup cancelled by user.")
-    except Exception as e:
-        print(f"\n\n❌ Unexpected error: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    print("\nPress Enter to exit...")
-    input()
+    except Exception as exc:
+        print(f"\n\n❌ Unexpected error: {exc}")
+        raise
+    finally:
+        input("\nPress Enter to exit...")

@@ -43,7 +43,7 @@ ACTIVITY_NAME=Entropy
 # Database URL for PostgreSQL connection
 DATABASE_URL=postgresql://thequietend_user:thequietend_pass@postgres:5432/thequietend_db
 EOF
-        print_warning "Please edit .env file with your bot token and guild ID before running the bot!"
+        print_warning "Run 'python setup.py' to populate the .env file with your bot token before starting."
         exit 1
     fi
 }
