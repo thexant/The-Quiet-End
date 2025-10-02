@@ -2977,7 +2977,8 @@ class GalaxyGeneratorCog(commands.Cog):
             return results
         
         # Get details for affected gates
-        gate_placeholders = ','.join('%s' * len(affected_gate_ids))
+        # Build a proper comma-separated placeholder list for parameterized queries
+        gate_placeholders = ','.join(['%s'] * len(affected_gate_ids))
         affected_gates = self.db.execute_query(
             f"SELECT location_id, name FROM locations WHERE location_id IN ({gate_placeholders}) AND location_type = 'gate' AND gate_status = 'active'",
             affected_gate_ids,
@@ -5833,7 +5834,7 @@ class GalaxyGeneratorCog(commands.Cog):
             if corridor_ids:
                 self.db.execute_query(
                     "UPDATE corridors SET last_shift = NOW() WHERE corridor_id IN ({})".format(
-                        ','.join('%s' * len(corridor_ids))
+                        ','.join(['%s'] * len(corridor_ids))
                     ),
                     corridor_ids
                 )
