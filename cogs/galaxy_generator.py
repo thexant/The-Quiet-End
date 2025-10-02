@@ -5974,18 +5974,38 @@ class GalaxyGeneratorCog(commands.Cog):
             
             # Build redistribution batch operations
             for deactivate_corridor, activate_corridor in redistribution_pairs:
+                if not deactivate_corridor or len(deactivate_corridor) < 4:
+                    print("⚠️ Skipping malformed corridor in redistribution (missing endpoints)")
+                    continue
+
+                deactivate_id = deactivate_corridor[0]
+                deactivate_origin = deactivate_corridor[2] if len(deactivate_corridor) > 2 else None
+                deactivate_dest = deactivate_corridor[3] if len(deactivate_corridor) > 3 else None
+
+                if deactivate_origin is None or deactivate_dest is None:
+                    print(f"⚠️ Skipping corridor {deactivate_id} due to missing origin/destination data")
+                    continue
+
                 # Deactivate old corridor
-                if not self._would_isolate_location(deactivate_corridor[0], deactivate_corridor[2], deactivate_corridor[3]):
+                if not self._would_isolate_location(deactivate_id, deactivate_origin, deactivate_dest):
                     batch_operations.append(
-                        ("UPDATE corridors SET is_active = false, last_shift = NOW() WHERE corridor_id = %s", 
-                         (deactivate_corridor[0],), 'deactivate', deactivate_corridor)
+                        ("UPDATE corridors SET is_active = false, last_shift = NOW() WHERE corridor_id = %s",
+                         (deactivate_id,), 'deactivate', deactivate_corridor)
                     )
-                    
+
                     # Activate replacement corridor if available
-                    if activate_corridor:
+                    if activate_corridor and len(activate_corridor) >= 4:
+                        activate_id = activate_corridor[0]
+                        activate_origin = activate_corridor[2] if len(activate_corridor) > 2 else None
+                        activate_dest = activate_corridor[3] if len(activate_corridor) > 3 else None
+
+                        if activate_origin is None or activate_dest is None:
+                            print(f"⚠️ Skipping activation for corridor {activate_id} due to missing origin/destination data")
+                            continue
+
                         batch_operations.append(
-                            ("UPDATE corridors SET is_active = true, last_shift = NOW() WHERE corridor_id = %s", 
-                             (activate_corridor[0],), 'activate', activate_corridor)
+                            ("UPDATE corridors SET is_active = true, last_shift = NOW() WHERE corridor_id = %s",
+                             (activate_id,), 'activate', activate_corridor)
                         )
             
             # Yield control to prevent database locks during preparation
@@ -6190,22 +6210,26 @@ class GalaxyGeneratorCog(commands.Cog):
                 try:
                     # Execute query with quick commit to release database lock
                     self.db.execute_query(query, params)
-                    
+
+                    corridor_name = corridor[1] if corridor and len(corridor) > 1 else 'Unknown Corridor'
+                    origin_id = corridor[2] if corridor and len(corridor) > 2 else None
+                    dest_id = corridor[3] if corridor and len(corridor) > 3 else None
+
                     if operation_type == 'deactivate':
                         results['deactivated'] += 1
                         # MEMORY LEAK FIX: Limit set size to prevent unbounded growth
-                        if len(results['affected_locations']) < 1000:  # Maximum 1000 locations
-                            results['affected_locations'].add(corridor[2])
-                            results['affected_locations'].add(corridor[3])
-                        print(f"🔴 Deactivated corridor: {corridor[1]}")
+                        if len(results['affected_locations']) < 1000 and origin_id and dest_id:  # Maximum 1000 locations
+                            results['affected_locations'].add(origin_id)
+                            results['affected_locations'].add(dest_id)
+                        print(f"🔴 Deactivated corridor: {corridor_name}")
                     elif operation_type == 'activate':
                         results['activated'] += 1
                         # MEMORY LEAK FIX: Limit set size to prevent unbounded growth
-                        if len(results['affected_locations']) < 1000:  # Maximum 1000 locations
-                            results['affected_locations'].add(corridor[2])
-                            results['affected_locations'].add(corridor[3])
-                        print(f"🟢 Activated corridor: {corridor[1]}")
-                    
+                        if len(results['affected_locations']) < 1000 and origin_id and dest_id:  # Maximum 1000 locations
+                            results['affected_locations'].add(origin_id)
+                            results['affected_locations'].add(dest_id)
+                        print(f"🟢 Activated corridor: {corridor_name}")
+
                     # Yield after EVERY single database operation
                     await asyncio.sleep(0.01)
                     
@@ -6219,20 +6243,28 @@ class GalaxyGeneratorCog(commands.Cog):
         # Simulate gate movements for gates affected by corridor shifts
         affected_gates = set()
         for _, _, operation_type, corridor in operations:
-            # Add both endpoints of deactivated corridors
+            if not corridor or len(corridor) < 4:
+                continue
+
+            origin_id = corridor[2]
+            dest_id = corridor[3]
+
+            if origin_id is None and dest_id is None:
+                continue
+
             origin_loc = self.db.execute_query(
-                "SELECT location_type FROM locations WHERE location_id = %s", 
-                (corridor[2],), fetch='one'
-            )
+                "SELECT location_type FROM locations WHERE location_id = %s",
+                (origin_id,), fetch='one'
+            ) if origin_id is not None else None
             dest_loc = self.db.execute_query(
-                "SELECT location_type FROM locations WHERE location_id = %s", 
-                (corridor[3],), fetch='one'
-            )
-            
-            if origin_loc and origin_loc[0] == 'gate':
-                affected_gates.add(corridor[2])
-            if dest_loc and dest_loc[0] == 'gate':
-                affected_gates.add(corridor[3])
+                "SELECT location_type FROM locations WHERE location_id = %s",
+                (dest_id,), fetch='one'
+            ) if dest_id is not None else None
+
+            if origin_loc and len(origin_loc) > 0 and origin_loc[0] == 'gate':
+                affected_gates.add(origin_id)
+            if dest_loc and len(dest_loc) > 0 and dest_loc[0] == 'gate':
+                affected_gates.add(dest_id)
         
         if affected_gates:
             gate_results = await self._simulate_gate_movements_for_affected(list(affected_gates), intensity)
