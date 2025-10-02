@@ -9,7 +9,7 @@ import aiohttp
 from aiohttp import web
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os
 from typing import Optional, Dict, Any, List
 import socket
@@ -387,6 +387,18 @@ class WebMapCog(commands.Cog):
                 return dt.strftime("%d-%m-%Y %H:%M ISST")
         except:
             return "Unknown Date"
+
+    def _serialize_for_json(self, data):
+        """Recursively convert data into JSON-serializable structures."""
+        if isinstance(data, dict):
+            return {key: self._serialize_for_json(value) for key, value in data.items()}
+        if isinstance(data, list):
+            return [self._serialize_for_json(item) for item in data]
+        if isinstance(data, (datetime, date)):
+            return data.isoformat()
+        if isinstance(data, timedelta):
+            return data.total_seconds()
+        return data
     
     def _calculate_historical_ingame_time(self, time_system, historical_real_time):
         """Calculate what the in-game time was at a given historical real time"""
@@ -628,7 +640,8 @@ class WebMapCog(commands.Cog):
         print("🔗 handle_api_map_data called")
         try:
             print("✅ Returning cached map data")
-            return web.json_response(self.cache)
+            safe_cache = self._serialize_for_json(self.cache)
+            return web.json_response(safe_cache)
         except Exception as e:
             print(f"❌ Error in handle_api_map_data: {e}")
             print(f"API map data error: {traceback.format_exc()}")
