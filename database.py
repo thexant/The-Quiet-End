@@ -26,6 +26,8 @@ class Database:
                     self.db_url = 'postgresql://thequietend_user:thequietend_pass@localhost/thequietend_db?host=/tmp'
         self.lock = threading.Lock()
         self._shutdown = False
+        self._active_connections = set()
+        self._connection_lock = threading.Lock()
         
         # Create connection pool
         try:
@@ -1534,7 +1536,16 @@ class Database:
         # Close connection pool
         try:
             if hasattr(self, 'connection_pool') and self.connection_pool:
+                with self._connection_lock:
+                    active = len(self._active_connections)
+                if active:
+                    print(f"⏳ Waiting for {active} connection(s) to return to the pool before shutdown...")
+
                 self.connection_pool.closeall()
+
+                with self._connection_lock:
+                    self._active_connections.clear()
+
                 print("✅ Connection pool closed")
         except Exception as e:
             print(f"⚠️ Error closing connection pool: {e}")
@@ -1564,6 +1575,8 @@ class Database:
         
         try:
             conn = self.connection_pool.getconn()
+            with self._connection_lock:
+                self._active_connections.add(conn)
             return conn
         except Exception as e:
             print(f"❌ Error getting connection from pool: {e}")
@@ -1572,6 +1585,8 @@ class Database:
     def _close_connection(self, conn):
         """Return a connection to the pool"""
         try:
+            with self._connection_lock:
+                self._active_connections.discard(conn)
             self.connection_pool.putconn(conn)
         except Exception as e:
             print(f"⚠️ Error returning connection to pool: {e}")
@@ -1579,6 +1594,11 @@ class Database:
                 conn.close()
             except:
                 pass
+
+    def get_active_connection_count(self):
+        """Get the current number of active connections in the pool"""
+        with self._connection_lock:
+            return len(self._active_connections)
 
     def execute_read_query(self, query, params=None, fetch='all'):
         """Execute a read-only query without acquiring the main lock"""
