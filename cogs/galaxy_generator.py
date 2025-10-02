@@ -5937,6 +5937,24 @@ class GalaxyGeneratorCog(commands.Cog):
         await asyncio.sleep(0.02)  # Increased yield time
         
         # Execute different shift types based on selection
+        def _is_valid_corridor(row: tuple) -> bool:
+            return bool(row) and len(row) >= 4
+
+        # Guard against malformed corridor rows returned from legacy data or
+        # partial migrations. These would otherwise raise IndexError when we
+        # access specific tuple positions later in the shift pipeline.
+        valid_active = [c for c in active_corridors if _is_valid_corridor(c)]
+        valid_dormant = [c for c in dormant_corridors if _is_valid_corridor(c)]
+
+        if len(valid_active) != len(active_corridors) or len(valid_dormant) != len(dormant_corridors):
+            print(
+                f"⚠️ Skipped {len(active_corridors) - len(valid_active)} invalid active corridors and "
+                f"{len(dormant_corridors) - len(valid_dormant)} invalid dormant corridors during shift"
+            )
+
+        active_corridors = valid_active
+        dormant_corridors = valid_dormant
+
         if shift_type in ["mixed", "shuffle"]:
             # NEW FEATURE: Destination shuffling for active corridors
             await self._shuffle_corridor_destinations(active_corridors, intensity, results)
@@ -6286,8 +6304,14 @@ class GalaxyGeneratorCog(commands.Cog):
         
         if not active_corridors:
             return
-        
-        
+
+        # Strip out any malformed corridor tuples before processing to avoid
+        # tuple index errors while we access origin/destination positions.
+        active_corridors = [c for c in active_corridors if c and len(c) >= 4]
+        if not active_corridors:
+            print("⚠️ No valid corridors available for destination shuffling")
+            return
+
         # Progress tracking for large operations
         start_time = time.time()
         
@@ -6323,10 +6347,19 @@ class GalaxyGeneratorCog(commands.Cog):
             return
             
         # Select random corridors to shuffle
-        corridors_to_shuffle_list = random.sample(active_corridors, corridors_to_shuffle)
-        
+        corridors_to_shuffle_list = random.sample(active_corridors, min(corridors_to_shuffle, len(active_corridors)))
+
+        # Double-check the sampled corridors contain the expected columns
+        corridors_to_shuffle_list = [c for c in corridors_to_shuffle_list if c and len(c) >= 4]
+        if not corridors_to_shuffle_list:
+            print("⚠️ Corridor shuffle aborted - sampled corridors missing endpoint data")
+            return
+
         # OPTIMIZATION: Pre-fetch ALL origin location data in one bulk query
-        origin_ids = [corridor[2] for corridor in corridors_to_shuffle_list]  # corridor[2] is origin_location
+        origin_ids = [corridor[2] for corridor in corridors_to_shuffle_list if len(corridor) > 2]
+        if not origin_ids:
+            print("⚠️ Corridor shuffle aborted - unable to collect origin IDs")
+            return
         origin_ids_str = ','.join(map(str, origin_ids))
         
         origin_data = {}
@@ -6629,6 +6662,12 @@ class GalaxyGeneratorCog(commands.Cog):
     async def _calculate_smart_redistribution(self, active_corridors, dormant_corridors, target_deactivations, target_activations):
         """Calculate conservation-based corridor redistribution pairs to maintain connectivity"""
         
+        # Remove any malformed corridor tuples before processing. If we keep
+        # them around, accessing indexes like c[0] would raise IndexError and
+        # break the redistribution flow.
+        active_corridors = [c for c in active_corridors if c and len(c) >= 4]
+        dormant_corridors = [c for c in dormant_corridors if c and len(c) >= 4]
+
         redistribution_pairs = []
         used_dormant = set()
         
