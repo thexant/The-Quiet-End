@@ -2466,6 +2466,19 @@ class CharacterCog(commands.Cog):
         self.db.execute_query("DELETE FROM character_identity WHERE user_id = %s", (user_id,))
         self.db.execute_query("DELETE FROM character_inventory WHERE user_id = %s", (user_id,))
         self.db.execute_query("DELETE FROM inventory WHERE owner_id = %s", (user_id,))
+
+        # Release any NPC marriages or assignments tied to this character so they can interact with other players
+        self.db.execute_query(
+            """UPDATE npc_relationships
+                   SET married = false,
+                       married_at = NULL
+                 WHERE user_id = %s AND married = true""",
+            (user_id,),
+        )
+        self.db.execute_query(
+            "DELETE FROM npc_job_assignments WHERE user_id = %s",
+            (user_id,),
+        )
         
         # Handle ship exchange listings - transfer to location inventory before deleting ships
         await self._handle_ship_exchange_death_cleanup(user_id)
