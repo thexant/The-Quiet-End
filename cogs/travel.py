@@ -210,17 +210,44 @@ class TravelCog(commands.Cog):
             await interaction.response.send_message("You are not currently traveling.", ephemeral=True)
             return
         
-        # Extract session data
-        session_id, _, user_id, origin_loc, dest_loc, corridor_id, temp_channel_id, start_time, end_time, status = session[:10]  # group_id removed
-        corridor_name = session[10]
-        dest_name = session[11]
-        
+        # Extract session data using actual column order from travel_sessions
+        (
+            session_id,
+            user_id,
+            origin_loc,
+            dest_loc,
+            corridor_id,
+            temp_channel_id,
+            start_time,
+            estimated_arrival,
+            status,
+            session_type,
+            last_event_time,
+            end_time,
+            corridor_name,
+            dest_name,
+        ) = session
+
         # Parse timestamps and make them timezone-aware
         start_dt = safe_datetime_parse(start_time)
+        if start_dt is None:
+            await interaction.response.send_message(
+                "Travel session data is incomplete (missing start time). Please contact an administrator.",
+                ephemeral=True,
+            )
+            return
         if start_dt.tzinfo is None:
             start_dt = start_dt.replace(tzinfo=timezone.utc)
-        
-        end_dt = safe_datetime_parse(end_time)
+
+        # Use recorded end_time, falling back to estimated arrival if necessary
+        end_time_value = end_time if end_time is not None else estimated_arrival
+        end_dt = safe_datetime_parse(end_time_value)
+        if end_dt is None:
+            await interaction.response.send_message(
+                "Travel session data is incomplete (missing arrival time). Please contact an administrator.",
+                ephemeral=True,
+            )
+            return
         if end_dt.tzinfo is None:
             end_dt = end_dt.replace(tzinfo=timezone.utc)
         
