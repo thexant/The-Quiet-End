@@ -820,23 +820,32 @@ class NPCCog(commands.Cog):
         else:
             # Middle wealth locations are more mixed
             return random.choices(["loyal", "neutral", "bandit"], weights=[0.3, 0.4, 0.3])[0]
-    async def spawn_dynamic_npc(self, start_location: int, destination_location: int = None, start_traveling: bool = True) -> Optional[int]:
+    async def spawn_dynamic_npc(
+        self,
+        start_location: int,
+        destination_location: int = None,
+        start_traveling: bool = True,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None
+    ) -> Optional[int]:
         """Spawn a single dynamic NPC with combat stats"""
-        
+
         # Validate start location exists
         location_exists = self.db.execute_query(
             "SELECT location_id FROM locations WHERE location_id = %s",
             (start_location,),
             fetch='one'
         )
-        
+
         if not location_exists:
             print(f"⚠️ Cannot spawn dynamic NPC: location {start_location} does not exist")
             return None
-        
+
         # Generate basic NPC data
-        name_tuple = generate_npc_name()
-        name = f"{name_tuple[0]} {name_tuple[1]}" if isinstance(name_tuple, tuple) else str(name_tuple)
+        random_first, random_last = generate_npc_name()
+        resolved_first = first_name.strip() if first_name and first_name.strip() else random_first
+        resolved_last = last_name.strip() if last_name and last_name.strip() else random_last
+        name = " ".join(part for part in [resolved_first, resolved_last] if part)
         callsign = self._generate_unique_callsign()
         age = random.randint(25, 65)
         ship_name = generate_ship_name()
@@ -942,9 +951,15 @@ class NPCCog(commands.Cog):
         except Exception as e:
             print(f"❌ Failed to create dynamic NPC: {e}")
             return None
-    async def create_dynamic_npc(self, start_location: int = None, start_traveling: bool = None) -> Optional[int]:
+    async def create_dynamic_npc(
+        self,
+        start_location: int = None,
+        start_traveling: bool = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None
+    ) -> Optional[int]:
         """Create a single dynamic NPC at a random or specified location"""
-        
+
         if start_location is None:
             # Pick a random major location (not a gate) as starting point
             major_locations = self.db.execute_query(
@@ -961,7 +976,12 @@ class NPCCog(commands.Cog):
         if start_traveling is None:
             start_traveling = random.random() < 0.4
         
-        return await self.spawn_dynamic_npc(start_location, start_traveling=start_traveling)
+        return await self.spawn_dynamic_npc(
+            start_location,
+            start_traveling=start_traveling,
+            first_name=first_name,
+            last_name=last_name
+        )
     def _generate_unique_callsign(self) -> str:
         """Generate a unique callsign for dynamic NPCs"""
         while True:

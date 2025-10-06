@@ -1610,17 +1610,26 @@ class CreationCog(commands.Cog):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     
     @creation_group.command(name="dynamic_npc", description="Manually spawn a dynamic NPC")
-    async def spawn_dynamic_npc(self, interaction: discord.Interaction):
+    @app_commands.describe(
+        first_name="Optional first name for the NPC",
+        last_name="Optional last name for the NPC"
+    )
+    async def spawn_dynamic_npc(
+        self,
+        interaction: discord.Interaction,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None
+    ):
         if not await self.bot.is_owner(interaction.user):
             await interaction.response.send_message("Bot owner permissions required.", ephemeral=True)
             return
-        
+
         npc_cog = self.bot.get_cog('NPCCog')
         if not npc_cog:
             await interaction.response.send_message("NPC system not available!", ephemeral=True)
             return
-        
-        npc_id = await npc_cog.create_dynamic_npc()
+
+        npc_id = await npc_cog.create_dynamic_npc(first_name=first_name, last_name=last_name)
         if npc_id:
             npc_info = self.db.execute_query(
                 "SELECT name, callsign, ship_name FROM dynamic_npcs WHERE npc_id = %s",
