@@ -8,6 +8,7 @@ Uses NetworkX for layout generation and Pillow for rendering.
 import os
 import random
 import math
+from collections import Counter
 from typing import Dict, List, Tuple, Optional, Set
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import networkx as nx
@@ -621,14 +622,9 @@ class HolographicFloorplanGenerator:
     def generate_layout_graph(self, location_type: str, sub_locations: List[Dict], 
                             location_data: Dict) -> nx.Graph:
         """Generate NetworkX graph representing the facility layout"""
-        # Select from multiple layout configs for variety
-        available_configs = self.layout_configs.get(location_type, self.layout_configs['outpost'])
-        if isinstance(available_configs, list):
-            random.seed(location_data['location_id'])  # Deterministic selection
-            config = random.choice(available_configs)
-        else:
-            config = available_configs
-        
+        # Select from multiple layout configs using thematic weighting for variety
+        config = self._select_layout_config(location_type, location_data, sub_locations)
+
         random.seed(location_data['location_id'])  # Deterministic generation
         
         # First, create background rooms appropriate for location type
@@ -681,6 +677,133 @@ class HolographicFloorplanGenerator:
             return self._generate_modular_ship_layout(graph, all_rooms, config, location_data)
         else:
             return self._generate_generic_layout(graph, all_rooms, config, location_data)
+
+    def _select_layout_config(self, location_type: str, location_data: Dict,
+                              sub_locations: List[Dict]) -> Dict:
+        """Select a layout configuration using thematic weighting for improved coherence"""
+        normalized_type = (location_type or '').lower()
+        normalized_type = {
+            'station': 'space_station',
+            'space station': 'space_station',
+            'colony': 'colony',
+            'settlement': 'colony',
+            'hub': 'space_station',
+        }.get(normalized_type, normalized_type)
+
+        available_configs = self.layout_configs.get(normalized_type, self.layout_configs['outpost'])
+
+        # Handle legacy single-config structures
+        if not isinstance(available_configs, list):
+            return available_configs
+
+        wealth = location_data.get('wealth_level', 3) or 3
+        population = location_data.get('population', 0) or 0
+        faction = (location_data.get('faction') or '').lower()
+        description = (location_data.get('description') or '').lower()
+        is_derelict = bool(location_data.get('is_derelict'))
+        type_counts = Counter(room['type'] for room in sub_locations)
+
+        weights: List[float] = []
+        for config in available_configs:
+            style = config.get('style')
+            weight = 1.0
+
+            if normalized_type == 'colony':
+                if wealth >= 4:
+                    if style == 'district_grid':
+                        weight += 2.5
+                    elif style == 'orbital_ring':
+                        weight += 1.5
+                if wealth <= 2:
+                    if style == 'industrial_complex':
+                        weight += 2.0
+                    elif style == 'sprawling_sectors':
+                        weight += 1.0
+                if population >= 180 and style in {'district_grid', 'sprawling_sectors'}:
+                    weight += 1.2
+                if population <= 80 and style == 'industrial_complex':
+                    weight += 0.8
+                if faction == 'loyalist' and style in {'district_grid', 'orbital_ring'}:
+                    weight += 1.3
+                if 'ring' in description or 'orbital' in description:
+                    if style == 'orbital_ring':
+                        weight += 1.7
+                if 'industrial' in description and style == 'industrial_complex':
+                    weight += 1.5
+                if (type_counts['engineering'] + type_counts['power'] + type_counts['maintenance']) >= max(2, len(sub_locations) // 3):
+                    if style == 'industrial_complex':
+                        weight += 1.4
+                if is_derelict:
+                    if style in {'industrial_complex', 'sprawling_sectors'}:
+                        weight += 1.2
+                    if style == 'district_grid':
+                        weight *= 0.6
+
+            elif normalized_type == 'space_station':
+                if population >= 80 and style in {'radial_hub', 'rotating_habitat'}:
+                    weight += 1.5
+                if population <= 40 and style in {'modular_sections', 'vertical_tower'}:
+                    weight += 0.8
+                if wealth >= 4 and style in {'radial_hub', 'rotating_habitat'}:
+                    weight += 1.2
+                if faction == 'loyalist' and style == 'radial_hub':
+                    weight += 1.0
+                if 'tower' in description or 'spire' in description or 'vertical' in description:
+                    if style == 'vertical_tower':
+                        weight += 2.0
+                if (type_counts['docking'] + type_counts['hangar']) >= max(2, len(sub_locations) // 4):
+                    if style in {'radial_hub', 'rotating_habitat'}:
+                        weight += 1.0
+                if (type_counts['research'] + type_counts['lab']) >= max(1, len(sub_locations) // 4):
+                    if style in {'rotating_habitat', 'modular_sections'}:
+                        weight += 1.1
+                if is_derelict:
+                    if style in {'modular_sections'}:
+                        weight += 1.3
+                    if style in {'radial_hub', 'rotating_habitat'}:
+                        weight *= 0.7
+
+            elif normalized_type == 'outpost':
+                if population >= 10 and style == 'linear_modules':
+                    weight += 1.2
+                if population <= 5 and style == 'compact_cluster':
+                    weight += 1.0
+                if (type_counts['security'] + type_counts['control'] + type_counts['admin']) >= max(2, len(sub_locations) // 3):
+                    if style == 'fortified_compound':
+                        weight += 2.0
+                if 'relay' in description or 'listening' in description or 'communications' in description:
+                    if style == 'linear_modules':
+                        weight += 1.1
+                if is_derelict:
+                    if style == 'compact_cluster':
+                        weight += 1.5
+                    if style == 'fortified_compound':
+                        weight *= 0.75
+
+            elif normalized_type == 'gate':
+                if faction == 'loyalist' and style == 'gate_complex':
+                    weight += 1.5
+                if 'research' in description or type_counts['research']:
+                    if style == 'research_facility':
+                        weight += 2.0
+                if (type_counts['security'] + type_counts['control']) >= max(1, len(sub_locations) // 3):
+                    if style == 'monitoring_station':
+                        weight += 1.2
+                if is_derelict:
+                    if style == 'monitoring_station':
+                        weight += 1.0
+                    if style == 'gate_complex':
+                        weight *= 0.7
+
+            # Ensure weight never drops to zero or negative
+            weights.append(max(weight, 0.1))
+
+        rng = random.Random(location_data['location_id'])
+        try:
+            return rng.choices(available_configs, weights=weights, k=1)[0]
+        except ValueError:
+            # Fall back to uniform choice if weights are invalid
+            return rng.choice(available_configs)
     
     def _generate_background_rooms(self, location_type: str, location_data: Dict, existing_sub_locations: List[Dict]) -> List[Dict]:
         """Generate background rooms appropriate for each location type, avoiding conflicts with existing sub-locations"""
