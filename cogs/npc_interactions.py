@@ -8,6 +8,88 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from utils.item_config import ItemConfig
 
+
+RELATIONSHIP_FIELD_NAME = "💍 Relationship Status"
+
+
+def get_relationship_emoji(score: int, married: bool) -> str:
+    """Return the heart/relationship emoji for the given score and marriage state."""
+    if married:
+        return " 💍"
+    if score >= 100:
+        return " 💕"
+    if score >= 75:
+        return " ❤️"
+    return ""
+
+
+def fetch_npc_marriages(db, npc_id: int, npc_type: str) -> List[Dict[str, Optional[str]]]:
+    """Fetch marriage records for an NPC, including character names."""
+    marriages: List[Dict[str, Optional[str]]] = []
+    rows = db.execute_query(
+        '''SELECT user_id FROM npc_relationships
+           WHERE npc_id = %s AND npc_type = %s AND married = true''',
+        (npc_id, npc_type),
+        fetch='all'
+    )
+
+    if not rows:
+        return marriages
+
+    seen_ids = set()
+    ordered_ids: List[int] = []
+    for row in rows:
+        if not row:
+            continue
+        user_id = row[0]
+        if user_id is None or user_id in seen_ids:
+            continue
+        seen_ids.add(user_id)
+        ordered_ids.append(user_id)
+
+    if not ordered_ids:
+        return marriages
+
+    placeholders = ','.join(['%s'] * len(ordered_ids))
+    name_rows = db.execute_query(
+        f"SELECT user_id, COALESCE(name, '') FROM characters WHERE user_id IN ({placeholders})",
+        tuple(ordered_ids),
+        fetch='all'
+    )
+
+    name_map = {row[0]: row[1] for row in (name_rows or [])}
+
+    for user_id in ordered_ids:
+        display_name = name_map.get(user_id)
+        if not display_name:
+            display_name = f"Traveler #{user_id}"
+        marriages.append({'user_id': user_id, 'name': display_name})
+
+    return marriages
+
+
+def format_marriage_text(marriages: List[Dict[str, Optional[str]]]) -> Optional[str]:
+    """Return formatted text describing marriages for embed display."""
+    if not marriages:
+        return None
+
+    names: List[str] = []
+    for marriage in marriages:
+        name = marriage.get('name')
+        if not name:
+            user_id = marriage.get('user_id')
+            name = f"Traveler #{user_id}" if user_id is not None else "Unknown Traveler"
+        names.append(name)
+
+    if not names:
+        return None
+
+    if len(names) == 1:
+        return f"Married to **{names[0]}**"
+
+    formatted_names = ', '.join(f"**{name}**" for name in names)
+    return f"Married to {formatted_names}"
+
 class NPCInteractionsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -1214,9 +1296,10 @@ class NPCSelectView(discord.ui.View):
         
         npc_type, npc_id = interaction.data['values'][0].split('_', 1)
         npc_id = int(npc_id)
-        
-        view = NPCActionView(self.bot, self.user_id, npc_id, npc_type)
-        
+
+        npc_name = None
+        embed: Optional[discord.Embed] = None
+
         if npc_type == "static":
             npc_info = self.bot.db.execute_query(
                 "SELECT name, occupation, personality, trade_specialty FROM static_npcs WHERE npc_id = %s",
@@ -1225,6 +1308,7 @@ class NPCSelectView(discord.ui.View):
             )
             if npc_info:
                 name, occupation, personality, trade_specialty = npc_info
+                npc_name = name
                 embed = discord.Embed(
                     title=f"👤 Talking to {name}",
                     description=f"**{name}** is a {occupation} who is {personality}.",
@@ -1244,27 +1328,177 @@ class NPCSelectView(discord.ui.View):
             )
             if npc_info:
                 name, ship_name, ship_type = npc_info
+                npc_name = name
                 embed = discord.Embed(
                     title=f"👤 Talking to {name}",
                     description=f"**{name}** is the captain of {ship_name}, a {ship_type}.",
                     color=0x6c5ce7
                 )
-        
+
+        if not embed or not npc_name:
+            await interaction.response.send_message("Unable to load this NPC right now.", ephemeral=True)
+            return
+
+        relationship_row = self.bot.db.execute_query(
+            '''SELECT relationship_score, married FROM npc_relationships
+               WHERE npc_id = %s AND npc_type = %s AND user_id = %s''',
+            (npc_id, npc_type, self.user_id),
+            fetch='one'
+        )
+
+        relationship_state = {
+            "score": relationship_row[0] if relationship_row and relationship_row[0] is not None else 0,
+            "married": bool(relationship_row[1]) if relationship_row else False,
+        }
+
+        relationship_emoji = get_relationship_emoji(
+            relationship_state["score"],
+            relationship_state["married"]
+        )
+        embed.title = f"👤 Talking to {npc_name}{relationship_emoji}"
+
+        npc_marriages = fetch_npc_marriages(self.bot.db, npc_id, npc_type)
+        marriage_text = format_marriage_text(npc_marriages)
+        if marriage_text:
+            embed.add_field(
+                name=RELATIONSHIP_FIELD_NAME,
+                value=marriage_text,
+                inline=False
+            )
+
         embed.add_field(
             name="Available Actions",
             value="• 💼 View available jobs\n• 🛒 Browse trade inventory\n• 💬 General conversation",
             inline=False
         )
-        
+
+        player_marriages = self.bot.db.execute_query(
+            '''SELECT npc_id, npc_type FROM npc_relationships
+               WHERE user_id = %s AND married = true''',
+            (self.user_id,),
+            fetch='all'
+        ) or []
+
+        view = NPCActionView(
+            self.bot,
+            self.user_id,
+            npc_id,
+            npc_type,
+            npc_name,
+            relationship_state,
+            player_marriages,
+            npc_marriages,
+        )
+
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 class NPCActionView(discord.ui.View):
-    def __init__(self, bot, user_id: int, npc_id: int, npc_type: str):
+    def __init__(
+        self,
+        bot,
+        user_id: int,
+        npc_id: int,
+        npc_type: str,
+        npc_name: str,
+        relationship_state: Optional[Dict[str, object]] = None,
+        player_marriages: Optional[List[tuple]] = None,
+        npc_marriages: Optional[List[Dict[str, Optional[str]]]] = None,
+    ):
         super().__init__(timeout=120)
         self.bot = bot
         self.user_id = user_id
         self.npc_id = npc_id
         self.npc_type = npc_type
+        self.npc_name = npc_name
+        self.relationship_state: Dict[str, object] = relationship_state or {"score": 0, "married": False}
+        self.player_marriages: List[tuple] = player_marriages or []
+        self.player_has_marriage = bool(self.player_marriages)
+        self.npc_marriages: List[Dict[str, Optional[str]]] = npc_marriages or []
+        self.propose_button: Optional[discord.ui.Button] = None
+        self._setup_proposal_button()
+
+    def _setup_proposal_button(self) -> None:
+        if not self._should_allow_proposal():
+            return
+
+        self.propose_button = discord.ui.Button(label="Propose", style=discord.ButtonStyle.danger)
+        self.propose_button.callback = self.propose_to_npc  # type: ignore
+        self.add_item(self.propose_button)
+
+    def _should_allow_proposal(self) -> bool:
+        score = self.relationship_state.get("score", 0)
+        married = bool(self.relationship_state.get("married"))
+        npc_taken = bool(self.npc_marriages)
+        player_married_elsewhere = any(
+            marriage[0] != self.npc_id or marriage[1] != self.npc_type for marriage in self.player_marriages
+        )
+        return score >= 100 and not married and not npc_taken and not player_married_elsewhere
+
+    def _ensure_proposal_button_state(self) -> None:
+        if self.propose_button:
+            if self._should_allow_proposal():
+                self.propose_button.disabled = False
+                self.propose_button.label = "Propose"
+            else:
+                self.propose_button.disabled = True
+        elif self._should_allow_proposal():
+            self._setup_proposal_button()
+
+    def _load_player_marriages(self) -> List[tuple]:
+        rows = self.bot.db.execute_query(
+            '''SELECT npc_id, npc_type FROM npc_relationships
+               WHERE user_id = %s AND married = true''',
+            (self.user_id,),
+            fetch='all'
+        )
+        self.player_marriages = rows or []
+        self.player_has_marriage = bool(self.player_marriages)
+        return self.player_marriages
+
+    def _load_npc_marriages(self) -> List[Dict[str, Optional[str]]]:
+        self.npc_marriages = fetch_npc_marriages(self.bot.db, self.npc_id, self.npc_type)
+        return self.npc_marriages
+
+    def _format_marriage_text(self) -> Optional[str]:
+        return format_marriage_text(self.npc_marriages)
+
+    def _relationship_emoji(self) -> str:
+        score = self.relationship_state.get("score", 0)
+        married = bool(self.relationship_state.get("married"))
+        return get_relationship_emoji(score, married)
+
+    def _build_updated_embed(self, original_embed: discord.Embed) -> discord.Embed:
+        embed_dict = original_embed.to_dict()
+        embed_dict['title'] = f"👤 Talking to {self.npc_name}{self._relationship_emoji()}"
+
+        fields = []
+        available_index = None
+        for field in embed_dict.get('fields', []):
+            if field.get('name') == RELATIONSHIP_FIELD_NAME:
+                continue
+            fields.append(field)
+            if field.get('name') == "Available Actions":
+                available_index = len(fields) - 1
+
+        marriage_text = self._format_marriage_text()
+        if marriage_text:
+            marriage_field = {
+                'name': RELATIONSHIP_FIELD_NAME,
+                'value': marriage_text,
+                'inline': False
+            }
+            if available_index is not None:
+                fields.insert(available_index, marriage_field)
+            else:
+                fields.append(marriage_field)
+
+        embed_dict['fields'] = fields
+        return discord.Embed.from_dict(embed_dict)
+
+    async def _update_interaction(self, interaction: discord.Interaction, content: str) -> None:
+        original_embed = interaction.message.embeds[0] if interaction.message and interaction.message.embeds else discord.Embed()
+        updated_embed = self._build_updated_embed(original_embed)
+        await interaction.response.edit_message(content=content, embed=updated_embed, view=self)
     
     @discord.ui.button(label="Converse", style=discord.ButtonStyle.secondary, emoji="💬")
     async def general_conversation(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1275,6 +1509,119 @@ class NPCActionView(discord.ui.View):
         npc_cog = self.bot.get_cog('NPCInteractionsCog')
         if npc_cog:
             await npc_cog._handle_general_conversation(interaction, self.npc_id, self.npc_type)
+
+    async def propose_to_npc(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your interaction!", ephemeral=True)
+            return
+
+        relationship_row = self.bot.db.execute_query(
+            '''SELECT relationship_score, married FROM npc_relationships
+               WHERE npc_id = %s AND npc_type = %s AND user_id = %s''',
+            (self.npc_id, self.npc_type, self.user_id),
+            fetch='one'
+        )
+
+        if relationship_row:
+            score, married = relationship_row
+            self.relationship_state['score'] = score if score is not None else 0
+            self.relationship_state['married'] = bool(married)
+        else:
+            self.relationship_state['score'] = self.relationship_state.get('score', 0)
+            self.relationship_state['married'] = False
+
+        player_marriages = self._load_player_marriages()
+        npc_marriages = self._load_npc_marriages()
+
+        player_married_to_npc = any(
+            marriage[0] == self.npc_id and marriage[1] == self.npc_type for marriage in player_marriages
+        )
+        other_player_marriages = [
+            marriage for marriage in player_marriages
+            if not (marriage[0] == self.npc_id and marriage[1] == self.npc_type)
+        ]
+        npc_married_user_ids = [marriage['user_id'] for marriage in npc_marriages]
+
+        if self.relationship_state.get('married') or player_married_to_npc:
+            if self.propose_button:
+                self.propose_button.disabled = True
+                self.propose_button.label = "Married"
+            await self._update_interaction(interaction, "You're already married to this NPC.")
+            return
+
+        if other_player_marriages:
+            if self.propose_button:
+                self.propose_button.disabled = True
+            await self._update_interaction(interaction, "You are already married to someone else.")
+            return
+
+        if npc_married_user_ids:
+            if self.propose_button:
+                self.propose_button.disabled = True
+            await self._update_interaction(interaction, "This NPC is already married to someone else.")
+            return
+
+        score = self.relationship_state.get('score', 0) or 0
+        if score < 100:
+            self._ensure_proposal_button_state()
+            await self._update_interaction(interaction, "You need at least 100 relationship points to propose.")
+            return
+
+        acceptance_chance = max(0, min(100, 50 + score - 100))
+        roll = random.randint(1, 100)
+
+        original_embed = interaction.message.embeds[0] if interaction.message and interaction.message.embeds else discord.Embed()
+
+        if roll <= acceptance_chance:
+            score_for_update = max(score, 110)
+            self.bot.db.execute_query(
+                '''INSERT INTO npc_relationships (npc_id, npc_type, user_id, relationship_score, married, married_at)
+                   VALUES (%s, %s, %s, %s, true, NOW())
+                   ON CONFLICT (npc_id, npc_type, user_id)
+                   DO UPDATE SET married = true, married_at = EXCLUDED.married_at,
+                                 relationship_score = GREATEST(npc_relationships.relationship_score, EXCLUDED.relationship_score)''',
+                (self.npc_id, self.npc_type, self.user_id, score_for_update)
+            )
+
+            player_name_row = self.bot.db.execute_query(
+                "SELECT COALESCE(name, '') FROM characters WHERE user_id = %s",
+                (self.user_id,),
+                fetch='one'
+            )
+            player_name = player_name_row[0] if player_name_row and player_name_row[0] else interaction.user.display_name
+
+            self.relationship_state['married'] = True
+            self.relationship_state['score'] = score_for_update
+            self.player_marriages = [(self.npc_id, self.npc_type)]
+            self.player_has_marriage = True
+            self._load_npc_marriages()
+            updated = False
+            for marriage in self.npc_marriages:
+                if marriage['user_id'] == self.user_id:
+                    marriage['name'] = player_name
+                    updated = True
+            if not updated:
+                self.npc_marriages.append({'user_id': self.user_id, 'name': player_name})
+
+            if self.propose_button:
+                self.propose_button.disabled = True
+                self.propose_button.label = "Married"
+
+            updated_embed = self._build_updated_embed(original_embed)
+            success_message = (
+                f"💍 {self.npc_name} happily accepts your proposal! "
+                f"Acceptance chance: {acceptance_chance}% (roll {roll})."
+            )
+            await interaction.response.edit_message(content=success_message, embed=updated_embed, view=self)
+            return
+
+        self._ensure_proposal_button_state()
+        failure_message = (
+            f"💔 {self.npc_name} gently declines your proposal. "
+            f"Acceptance chance was {acceptance_chance}% (roll {roll})."
+        )
+        updated_embed = self._build_updated_embed(original_embed)
+        await interaction.response.edit_message(content=failure_message, embed=updated_embed, view=self)
     @discord.ui.button(label="View Jobs", style=discord.ButtonStyle.primary, emoji="💼")
     async def view_jobs(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
