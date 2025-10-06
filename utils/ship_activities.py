@@ -1,7 +1,7 @@
 # utils/ship_activities.py
 import discord
 import random
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from datetime import datetime
 from utils.leave_button import UniversalLeaveView
 
@@ -215,10 +215,56 @@ class ShipActivityView(discord.ui.View):
             )
             return
         
-        # Choose random action from available actions
-        action = random.choice(activity_data['actions'])
-        
-        # Route to appropriate handler
+        # Resolve the interacting character's name
+        char_name = self._resolve_character_name(interaction.user.id)
+        if char_name:
+            self.char_name = char_name
+
+        actions = activity_data.get('actions', [])
+
+        # If multiple actions exist, present the action selection view
+        if len(actions) > 1:
+            intro_embed = discord.Embed(
+                title=f"{activity_data['icon']} {activity_data['name']}",
+                description=(
+                    f"*{self.char_name} approaches the {activity_data['name'].lower()}.*\n"
+                    "Select how to interact using the buttons below."
+                ),
+                color=0x5865F2
+            )
+
+            action_view = ShipActivityActionView(self, activity_data)
+            await interaction.response.send_message(embed=intro_embed, view=action_view)
+            return
+
+        # Choose random action from available actions when only one option exists
+        if actions:
+            action = random.choice(actions)
+            await self._invoke_action_handler(interaction, activity_data, action)
+        else:
+            await interaction.response.send_message(
+                "No actions available for this activity.",
+                ephemeral=True
+            )
+
+    def _resolve_character_name(self, user_id: int) -> str:
+        """Resolve the character name associated with a Discord user."""
+        result = self.db.execute_query(
+            "SELECT name FROM characters WHERE user_id = %s",
+            (user_id,),
+            fetch='one'
+        )
+        if result and result[0]:
+            return result[0]
+        return self.char_name
+
+    async def _invoke_action_handler(self, interaction: discord.Interaction, activity_data: Dict, action: str):
+        """Invoke the appropriate handler for a selected action."""
+        # Update the character name for this interaction
+        char_name = self._resolve_character_name(interaction.user.id)
+        if char_name:
+            self.char_name = char_name
+
         handler_method = getattr(self, f"_handle_{action}", None)
         if handler_method:
             await handler_method(interaction, activity_data)
@@ -529,11 +575,41 @@ class ShipActivityView(discord.ui.View):
 
 class ShipActivityButton(discord.ui.Button):
     """Individual activity button for ships"""
-    
+
     def __init__(self, activity_type: str, **kwargs):
         super().__init__(**kwargs)
         self.activity_type = activity_type
-    
+
     async def callback(self, interaction: discord.Interaction):
         view = self.view
         await view.handle_activity(interaction, self.activity_type)
+
+
+class ShipActivityActionView(discord.ui.View):
+    """View presenting available actions for a ship activity."""
+
+    def __init__(self, parent_view: ShipActivityView, activity_data: Dict):
+        super().__init__(timeout=300)
+        self.parent_view = parent_view
+        self.activity_data = activity_data
+
+        for action in activity_data.get('actions', []):
+            button = ShipActivityActionButton(action)
+            self.add_item(button)
+
+    async def handle_action(self, interaction: discord.Interaction, action: str):
+        await self.parent_view._invoke_action_handler(interaction, self.activity_data, action)
+
+
+class ShipActivityActionButton(discord.ui.Button):
+    """Button representing a specific ship activity action."""
+
+    def __init__(self, action: str):
+        label = action.replace('_', ' ').title()
+        super().__init__(label=label, style=discord.ButtonStyle.primary)
+        self.action = action
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        await view.handle_action(interaction, self.action)
+
