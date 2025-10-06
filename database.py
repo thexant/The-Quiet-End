@@ -1178,6 +1178,34 @@ class Database:
                 FOREIGN KEY (job_id) REFERENCES npc_jobs (job_id),
                 FOREIGN KEY (completed_by) REFERENCES characters (user_id)
             )''',
+
+            # NPC relationship tracking table
+            '''CREATE TABLE IF NOT EXISTS npc_relationships (
+                relationship_id SERIAL PRIMARY KEY,
+                npc_id INTEGER NOT NULL,
+                npc_type TEXT NOT NULL,
+                user_id BIGINT NOT NULL,
+                relationship_score INTEGER DEFAULT 0,
+                married BOOLEAN DEFAULT false,
+                married_at TIMESTAMP,
+                UNIQUE (npc_id, npc_type, user_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )''',
+
+            # NPC job assignment tracking table
+            '''CREATE TABLE IF NOT EXISTS npc_job_assignments (
+                assignment_id SERIAL PRIMARY KEY,
+                job_id INTEGER NOT NULL,
+                npc_job_id INTEGER,
+                npc_id INTEGER NOT NULL,
+                npc_type TEXT NOT NULL,
+                user_id BIGINT NOT NULL,
+                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (job_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                FOREIGN KEY (npc_job_id) REFERENCES npc_jobs (job_id),
+                FOREIGN KEY (job_id) REFERENCES jobs (job_id)
+            )''',
             
             # Galactic history table
             '''CREATE TABLE IF NOT EXISTS galactic_history (
@@ -1874,7 +1902,74 @@ class Database:
             fetch='one'
         )
         return result[0] if result else None
-    
+
+    def get_npc_relationship(self, npc_id: int, npc_type: str, user_id: int) -> Optional[Dict[str, Any]]:
+        """Fetch a single NPC relationship row"""
+        row = self.execute_query(
+            """SELECT npc_id, npc_type, user_id, relationship_score, married, married_at
+               FROM npc_relationships
+               WHERE npc_id = %s AND npc_type = %s AND user_id = %s""",
+            (npc_id, npc_type, user_id),
+            fetch='one'
+        )
+
+        if not row:
+            return None
+
+        keys = ("npc_id", "npc_type", "user_id", "relationship_score", "married", "married_at")
+        return dict(zip(keys, row))
+
+    def upsert_npc_relationship(
+        self,
+        npc_id: int,
+        npc_type: str,
+        user_id: int,
+        relationship_score: Optional[int] = None,
+        married: Optional[bool] = None,
+        married_at: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        """Insert or update an NPC relationship row and return the resulting record"""
+
+        existing = self.get_npc_relationship(npc_id, npc_type, user_id)
+
+        if existing:
+            if relationship_score is None:
+                relationship_score = existing["relationship_score"]
+            if married is None:
+                married = existing["married"]
+            if married_at is None:
+                married_at = existing.get("married_at")
+        else:
+            if relationship_score is None:
+                relationship_score = 0
+            if married is None:
+                married = False
+
+        if not married:
+            married_at = None
+
+        row = self.execute_query(
+            """INSERT INTO npc_relationships (npc_id, npc_type, user_id, relationship_score, married, married_at)
+               VALUES (%s, %s, %s, %s, %s, %s)
+               ON CONFLICT (npc_id, npc_type, user_id)
+               DO UPDATE SET relationship_score = EXCLUDED.relationship_score,
+                             married = EXCLUDED.married,
+                             married_at = EXCLUDED.married_at
+               RETURNING npc_id, npc_type, user_id, relationship_score, married, married_at""",
+            (npc_id, npc_type, user_id, relationship_score, married, married_at),
+            fetch='one'
+        )
+
+        keys = ("npc_id", "npc_type", "user_id", "relationship_score", "married", "married_at")
+        return dict(zip(keys, row)) if row else {
+            "npc_id": npc_id,
+            "npc_type": npc_type,
+            "user_id": user_id,
+            "relationship_score": relationship_score,
+            "married": married,
+            "married_at": married_at
+        }
+
     def get_active_location_effects(self, location_id: int):
         """Get all active effects for a location"""
         # First clean up expired effects
@@ -1946,7 +2041,7 @@ class Database:
         """Migration method to add missing npc_job_completions table and npc_jobs columns"""
         try:
             print("🔄 Running migration: Creating npc_job_completions table and updating npc_jobs...")
-            
+
             # Create the npc_job_completions table if it doesn't exist
             create_table_sql = '''CREATE TABLE IF NOT EXISTS npc_job_completions (
                 completion_id SERIAL PRIMARY KEY,
@@ -1956,7 +2051,7 @@ class Database:
                 FOREIGN KEY (job_id) REFERENCES npc_jobs (job_id),
                 FOREIGN KEY (completed_by) REFERENCES characters (user_id)
             )'''
-            
+
             self.execute_query(create_table_sql)
             print("✅ npc_job_completions table created successfully")
             
@@ -1975,6 +2070,47 @@ class Database:
             print("✅ Migration completed successfully")
             return True
             
+        except Exception as e:
+            print(f"❌ Migration failed: {e}")
+            return False
+
+    def migrate_npc_relationship_tables(self):
+        """Ensure npc_relationships and npc_job_assignments tables exist on legacy installs"""
+        try:
+            print("🔄 Running migration: Ensuring npc_relationships and npc_job_assignments tables exist...")
+
+            relationship_sql = '''CREATE TABLE IF NOT EXISTS npc_relationships (
+                relationship_id SERIAL PRIMARY KEY,
+                npc_id INTEGER NOT NULL,
+                npc_type TEXT NOT NULL,
+                user_id BIGINT NOT NULL,
+                relationship_score INTEGER DEFAULT 0,
+                married BOOLEAN DEFAULT false,
+                married_at TIMESTAMP,
+                UNIQUE (npc_id, npc_type, user_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )'''
+
+            assignments_sql = '''CREATE TABLE IF NOT EXISTS npc_job_assignments (
+                assignment_id SERIAL PRIMARY KEY,
+                job_id INTEGER NOT NULL,
+                npc_job_id INTEGER,
+                npc_id INTEGER NOT NULL,
+                npc_type TEXT NOT NULL,
+                user_id BIGINT NOT NULL,
+                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (job_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                FOREIGN KEY (npc_job_id) REFERENCES npc_jobs (job_id),
+                FOREIGN KEY (job_id) REFERENCES jobs (job_id)
+            )'''
+
+            self.execute_query(relationship_sql)
+            self.execute_query(assignments_sql)
+
+            print("✅ npc_relationships and npc_job_assignments tables are ready")
+            return True
+
         except Exception as e:
             print(f"❌ Migration failed: {e}")
             return False
