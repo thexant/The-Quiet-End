@@ -2193,7 +2193,61 @@ class EconomyCog(commands.Cog):
                 
     async def _complete_job_immediately(self, interaction: discord.Interaction, job_id: int, title: str, reward: int, roll: int, success_chance: int, job_type: str):
         """Complete a job immediately with full reward, experience, skill, and karma effects."""
-        # Give full reward
+        base_reward = reward
+        final_reward = reward
+        relationship_field_value = None
+        relationship_bonus_note = None
+
+        # Check for NPC assignment bonus logic
+        assignment = self.db.execute_query(
+            '''SELECT npc_id, npc_type, user_id
+               FROM npc_job_assignments
+               WHERE job_id = %s''',
+            (job_id,),
+            fetch='one'
+        )
+
+        if assignment and assignment[2] == interaction.user.id:
+            npc_id, npc_type, _ = assignment
+            relationship_increase = random.randint(5, 10)
+            relationship_row = self.db.execute_query(
+                '''INSERT INTO npc_relationships (npc_id, npc_type, user_id, relationship_score)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (npc_id, npc_type, user_id)
+                   DO UPDATE SET relationship_score = npc_relationships.relationship_score + EXCLUDED.relationship_score
+                   RETURNING relationship_score''',
+                (npc_id, npc_type, interaction.user.id, relationship_increase),
+                fetch='one'
+            )
+
+            new_relationship_score = relationship_row[0] if relationship_row else relationship_increase
+            relationship_field_value = (
+                f"Relationship with this NPC increased by **{relationship_increase}**. "
+                f"Current score: **{new_relationship_score}**."
+            )
+
+            if new_relationship_score >= 25:
+                relationship_bonus = max(1, int(base_reward * 0.05))
+                final_reward += relationship_bonus
+                relationship_bonus_note = (
+                    f"Trusted connection bonus unlocked! +{relationship_bonus:,} credits (5% extra)."
+                )
+
+            # Cap proposal bonus logic for future thresholds and ensure normal jobs skip this branch
+            self.db.execute_query(
+                "DELETE FROM npc_job_assignments WHERE job_id = %s",
+                (job_id,)
+            )
+        elif assignment:
+            # Assignment exists but doesn't belong to this user; remove to avoid stale records
+            self.db.execute_query(
+                "DELETE FROM npc_job_assignments WHERE job_id = %s",
+                (job_id,)
+            )
+
+        reward = final_reward
+
+        # Give full reward (including any relationship bonus)
         self.db.execute_query(
             "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (reward, interaction.user.id)
@@ -2243,13 +2297,18 @@ class EconomyCog(commands.Cog):
         displayed_roll = 100 - roll + 1  # Invert the roll for display
         
         embed.add_field(
-            name="🎲 Success Roll", 
-            value=f"Rolled **{displayed_roll}** (needed {failure_threshold+1}+)", 
+            name="🎲 Success Roll",
+            value=f"Rolled **{displayed_roll}** (needed {failure_threshold+1}+)",
             inline=True
         )
         embed.add_field(name="💰 Reward", value=f"{reward:,} credits", inline=True)
         embed.add_field(name="⭐ Experience", value=f"+{exp_gain} EXP", inline=True)
         embed.add_field(name="📋 Job Type", value=job_type.title(), inline=True)
+
+        if relationship_field_value:
+            embed.add_field(name="🤝 NPC Relationship", value=relationship_field_value, inline=False)
+        if relationship_bonus_note:
+            embed.add_field(name="💞 Trusted Bonus", value=relationship_bonus_note, inline=False)
         
         # 15% chance for skill improvement
         if random.random() < 0.15:
@@ -2295,19 +2354,31 @@ class EconomyCog(commands.Cog):
             "UPDATE characters SET money = money + %s WHERE user_id = %s",
             (partial, interaction.user.id)
         )
-        
+
         # Small experience consolation
         exp_gain = random.randint(5, 15)
         self.db.execute_query(
             "UPDATE characters SET experience = experience + %s WHERE user_id = %s",
             (exp_gain, interaction.user.id)
         )
-        
+
+        # Clean up any NPC assignment without granting relationship progress
+        assignment = self.db.execute_query(
+            "SELECT assignment_id FROM npc_job_assignments WHERE job_id = %s",
+            (job_id,),
+            fetch='one'
+        )
+        if assignment:
+            self.db.execute_query(
+                "DELETE FROM npc_job_assignments WHERE job_id = %s",
+                (job_id,)
+            )
+
         # Clean up
         self.db.execute_query("DELETE FROM job_tracking WHERE job_id = %s AND user_id = %s", (job_id, interaction.user.id))
         self.db.execute_query("DELETE FROM jobs WHERE job_id = %s", (job_id,))
         self.notified_jobs.discard(job_id)  # Clean up notification tracking
-        
+
         embed = discord.Embed(
             title="❌ Job Failed",
             description=f"**{title}** was not completed successfully",

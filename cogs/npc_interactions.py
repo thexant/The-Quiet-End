@@ -1633,16 +1633,30 @@ class NPCJobSelectView(discord.ui.View):
             # Get the job_id we just inserted using our unique identifiers
             new_job_id = self.bot.db.execute_in_transaction(
                 conn,
-                '''SELECT job_id FROM jobs 
+                '''SELECT job_id FROM jobs
                    WHERE taken_by = %s AND taken_at = %s AND title = %s
                    ORDER BY job_id DESC LIMIT 1''',
                 (interaction.user.id, unique_timestamp, title),
                 fetch='one'
             )[0]
 
+            # Track this specific NPC assignment for relationship handling
+            self.bot.db.execute_in_transaction(
+                conn,
+                '''INSERT INTO npc_job_assignments (job_id, npc_job_id, npc_id, npc_type, user_id)
+                   VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (job_id) DO UPDATE
+                   SET npc_job_id = EXCLUDED.npc_job_id,
+                       npc_id = EXCLUDED.npc_id,
+                       npc_type = EXCLUDED.npc_type,
+                       user_id = EXCLUDED.user_id,
+                       assigned_at = CURRENT_TIMESTAMP''',
+                (new_job_id, job_id, self.npc_id, self.npc_type, interaction.user.id)
+            )
+
             # Create tracking record for all jobs (with 0 duration for transport jobs)
             tracking_duration = 0 if is_transport_job else duration_minutes
-            
+
             self.bot.db.execute_in_transaction(
                 conn,
                 '''INSERT INTO job_tracking (job_id, user_id, start_location, required_duration, time_at_location, last_location_check)
