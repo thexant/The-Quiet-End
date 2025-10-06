@@ -1558,6 +1558,32 @@ class Database:
                 FOREIGN KEY (user_id) REFERENCES characters (user_id)
             )''',
 
+            '''CREATE TABLE IF NOT EXISTS npc_relationships (
+                relationship_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                npc_id INTEGER NOT NULL,
+                npc_type TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                relationship_score INTEGER DEFAULT 0,
+                married BOOLEAN DEFAULT 0,
+                married_at TIMESTAMP,
+                UNIQUE(npc_id, npc_type, user_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id)
+            )''',
+
+            '''CREATE TABLE IF NOT EXISTS npc_job_assignments (
+                assignment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                npc_job_id INTEGER,
+                npc_id INTEGER NOT NULL,
+                npc_type TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(job_id),
+                FOREIGN KEY (user_id) REFERENCES characters (user_id),
+                FOREIGN KEY (npc_job_id) REFERENCES npc_jobs (npc_job_id),
+                FOREIGN KEY (job_id) REFERENCES jobs (job_id)
+            )''',
+
             # Enhanced NPC inventory for trading
             '''CREATE TABLE IF NOT EXISTS npc_trade_inventory (
                 trade_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
