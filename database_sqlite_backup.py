@@ -1581,7 +1581,7 @@ class Database:
                 UNIQUE(job_id),
                 FOREIGN KEY (user_id) REFERENCES characters (user_id),
                 FOREIGN KEY (npc_job_id) REFERENCES npc_jobs (npc_job_id),
-                FOREIGN KEY (job_id) REFERENCES jobs (job_id)
+                FOREIGN KEY (job_id) REFERENCES jobs (job_id) ON DELETE CASCADE
             )''',
 
             # Enhanced NPC inventory for trading
