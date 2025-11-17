@@ -2153,6 +2153,23 @@ class AdminCog(commands.Cog):
         """Perform the actual reset operation, including channel cleanup for full/galaxy resets"""
         reset_counts = {}
 
+        # Discover which tables actually exist to avoid failures when legacy names are referenced
+        try:
+            existing_table_rows = self.db.execute_query(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+                fetch='all'
+            ) or []
+            existing_tables = {row[0] for row in existing_table_rows}
+        except Exception as e:
+            print(f"⚠️ Could not retrieve table list from information_schema: {e}")
+            existing_tables = set()
+
+        def filter_existing(tables: list[str]) -> list[str]:
+            return [table for table in tables if table in existing_tables]
+
+        def table_exists(table: str) -> bool:
+            return table in existing_tables
+
         if reset_type == "full":
             # For full reset, we need to clear EVERYTHING
             # Get counts of all tables before deletion
@@ -2192,26 +2209,30 @@ class AdminCog(commands.Cog):
                 "endgame_config", "endgame_evacuations"
             ]
             
-            # Count rows in each table
-            for table in all_tables:
+            # Count rows in each existing table
+            for table in filter_existing(all_tables):
                 try:
                     count = self.db.execute_query(f"SELECT COUNT(*) FROM {table}", fetch='one')[0]
                     if count > 0:
                         reset_counts[table] = count
-                except:
-                    pass  # Table might not exist
-            
+                except Exception as e:
+                    print(f"⚠️ Could not count rows for {table}: {e}")
+
             # Get location channels before deletion
-            location_channels = self.db.execute_query(
-                "SELECT channel_id FROM locations WHERE channel_id IS NOT NULL",
-                fetch='all'
-            )
-            
+            location_channels = []
+            if table_exists("locations"):
+                location_channels = self.db.execute_query(
+                    "SELECT channel_id FROM locations WHERE channel_id IS NOT NULL",
+                    fetch='all'
+                ) or []
+
             # Get temporary travel channels
-            temp_channels = self.db.execute_query(
-                "SELECT DISTINCT temp_channel_id FROM travel_sessions WHERE temp_channel_id IS NOT NULL",
-                fetch='all'
-            )
+            temp_channels = []
+            if table_exists("travel_sessions"):
+                temp_channels = self.db.execute_query(
+                    "SELECT DISTINCT temp_channel_id FROM travel_sessions WHERE temp_channel_id IS NOT NULL",
+                    fetch='all'
+                ) or []
             
             # Clear all tables in reverse dependency order
             # This order is important to avoid foreign key constraint issues
@@ -2220,11 +2241,10 @@ class AdminCog(commands.Cog):
                 "afk_warnings", "search_cooldowns", "user_location_panels", "active_beacons",
                 "pvp_cooldowns", "pending_robberies", "pvp_combat_states", "pvp_opt_outs",
                 "combat_encounters", "combat_states",
-                "group_votes", "group_vote_sessions", "group_invites", "group_ships",
                 "ship_activities", "ship_customizations", "ship_upgrades", "player_ships",
                 "character_inventory", "character_experience", "character_reputation", "character_identity",
                 "home_invitations", "home_market_listings", "home_interiors", "home_activities",
-                "location_storage", "location_income_log", "location_access_control", 
+                "location_storage", "location_income_log", "location_access_control",
                 "location_upgrades", "location_ownership", "economic_events", "location_economy",
                 "location_logs", "location_items", "location_homes",
                 "npc_job_completions", "npc_jobs", "npc_trade_inventory", "npc_inventory",
@@ -2238,6 +2258,8 @@ class AdminCog(commands.Cog):
                 "endgame_evacuations", "endgame_config",
                 "galaxy_settings", "galaxy_info"
             ]
+
+            tables_to_clear_in_order = filter_existing(tables_to_clear_in_order)
             
             # PostgreSQL always enforces foreign key constraints
             # No need to disable/enable them like in SQLite
@@ -2298,25 +2320,32 @@ class AdminCog(commands.Cog):
             
             # ————— Character data —————
             if reset_type in ["characters"]:
-                reset_counts["Characters"] = self.db.execute_query(
-                    "SELECT COUNT(*) FROM characters", fetch='one'
-                )[0]
-                reset_counts["Ships"] = self.db.execute_query(
-                    "SELECT COUNT(*) FROM ships", fetch='one'
-                )[0]
-                reset_counts["Inventory Items"] = self.db.execute_query(
-                    "SELECT COUNT(*) FROM inventory", fetch='one'
-                )[0]
+                if table_exists("characters"):
+                    reset_counts["Characters"] = self.db.execute_query(
+                        "SELECT COUNT(*) FROM characters", fetch='one'
+                    )[0]
+                if table_exists("ships"):
+                    reset_counts["Ships"] = self.db.execute_query(
+                        "SELECT COUNT(*) FROM ships", fetch='one'
+                    )[0]
+                if table_exists("inventory"):
+                    reset_counts["Inventory Items"] = self.db.execute_query(
+                        "SELECT COUNT(*) FROM inventory", fetch='one'
+                    )[0]
 
                 # Delete in proper order to avoid foreign key issues using transaction
                 try:
                     character_tables = [
-                        "logbook_entries", "character_identity", "character_reputation", 
+                        "logbook_entries", "character_identity", "character_reputation",
                         "character_experience", "character_inventory", "characters", "ships", "inventory"
                     ]
-                    transaction_operations = [(f"TRUNCATE TABLE {table} CASCADE", None) for table in character_tables]
-                    self.db.execute_transaction(transaction_operations)
-                    print("🗑️ Character data cleared successfully")
+                    character_tables = filter_existing(character_tables)
+                    if character_tables:
+                        transaction_operations = [(f"TRUNCATE TABLE {table} CASCADE", None) for table in character_tables]
+                        self.db.execute_transaction(transaction_operations)
+                        print("🗑️ Character data cleared successfully")
+                    else:
+                        print("ℹ️ No character tables found to truncate")
                 except Exception as e:
                     print(f"⚠️ TRUNCATE failed for character data, using DELETE: {e}")
                     # Fallback to individual deletes
@@ -2481,17 +2510,24 @@ class AdminCog(commands.Cog):
 
             # ————— Travel data —————
             if reset_type in ["travel"]:
-                reset_counts["Travel Sessions"] = self.db.execute_query(
-                    "SELECT COUNT(*) FROM travel_sessions", fetch='one'
-                )[0]
+                if table_exists("travel_sessions"):
+                    reset_counts["Travel Sessions"] = self.db.execute_query(
+                        "SELECT COUNT(*) FROM travel_sessions", fetch='one'
+                    )[0]
+                else:
+                    reset_counts["Travel Sessions"] = 0
 
-                temp_channels = self.db.execute_query(
-                    "SELECT DISTINCT temp_channel_id FROM travel_sessions WHERE temp_channel_id IS NOT NULL",
-                    fetch='all'
-                )
+                temp_channels = []
+                if table_exists("travel_sessions"):
+                    temp_channels = self.db.execute_query(
+                        "SELECT DISTINCT temp_channel_id FROM travel_sessions WHERE temp_channel_id IS NOT NULL",
+                        fetch='all'
+                    ) or []
 
-                self.db.execute_query("DELETE FROM travel_sessions")
-                self.db.execute_query("DELETE FROM corridor_events")
+                if table_exists("travel_sessions"):
+                    self.db.execute_query("DELETE FROM travel_sessions")
+                if table_exists("corridor_events"):
+                    self.db.execute_query("DELETE FROM corridor_events")
 
                 temp_deleted = 0
                 for (channel_id,) in temp_channels:
