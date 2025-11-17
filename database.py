@@ -1204,7 +1204,7 @@ class Database:
                 UNIQUE (job_id),
                 FOREIGN KEY (user_id) REFERENCES characters (user_id),
                 FOREIGN KEY (npc_job_id) REFERENCES npc_jobs (job_id),
-                FOREIGN KEY (job_id) REFERENCES jobs (job_id)
+                FOREIGN KEY (job_id) REFERENCES jobs (job_id) ON DELETE CASCADE
             )''',
             
             # Galactic history table
@@ -1419,7 +1419,10 @@ class Database:
             except Exception as e:
                 # Ignore column addition errors (they might already exist)
                 pass
-        
+
+        # Ensure npc job assignments clean up when related jobs are deleted
+        self.migrate_npc_job_assignment_cascade()
+
         # Create indexes for performance
         indexes = [
             'CREATE INDEX IF NOT EXISTS idx_characters_location ON characters(current_location)',
@@ -2037,6 +2040,63 @@ class Database:
             print(f"❌ Database integrity check failed: {e}")
             return False
 
+    def migrate_npc_job_assignment_cascade(self):
+        """Ensure npc_job_assignments.job_id cascades on delete"""
+        try:
+            print("🔄 Running migration: Ensuring npc_job_assignments.job_id cascades on delete...")
+
+            # Verify the table exists before modifying constraints
+            table_check = self.execute_query(
+                "SELECT to_regclass('public.npc_job_assignments')",
+                fetch='one'
+            )
+
+            if not table_check or table_check[0] is None:
+                print("ℹ️ npc_job_assignments table not found - skipping cascade migration")
+                return False
+
+            constraint_info = self.execute_query(
+                """
+                SELECT
+                    tc.constraint_name,
+                    rc.delete_rule
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    AND tc.constraint_schema = kcu.constraint_schema
+                JOIN information_schema.referential_constraints rc
+                    ON rc.constraint_name = tc.constraint_name
+                    AND rc.constraint_schema = tc.constraint_schema
+                WHERE tc.table_name = 'npc_job_assignments'
+                    AND tc.constraint_type = 'FOREIGN KEY'
+                    AND kcu.column_name = 'job_id'
+                """,
+                fetch='one'
+            )
+
+            constraint_name = constraint_info[0] if constraint_info else None
+            delete_rule = constraint_info[1] if constraint_info else None
+
+            if delete_rule == 'CASCADE':
+                print("✅ npc_job_assignments.job_id already cascades on delete")
+                return True
+
+            if constraint_name:
+                self.execute_query(f"ALTER TABLE npc_job_assignments DROP CONSTRAINT {constraint_name}")
+                print(f"ℹ️ Dropped existing constraint {constraint_name} on npc_job_assignments.job_id")
+
+            self.execute_query(
+                "ALTER TABLE npc_job_assignments "
+                "ADD CONSTRAINT npc_job_assignments_job_id_fkey "
+                "FOREIGN KEY (job_id) REFERENCES jobs (job_id) ON DELETE CASCADE"
+            )
+            print("✅ Updated npc_job_assignments.job_id to cascade on delete")
+            return True
+
+        except Exception as e:
+            print(f"❌ Migration failed: {e}")
+            return False
+
     def migrate_npc_job_completions_table(self):
         """Migration method to add missing npc_job_completions table and npc_jobs columns"""
         try:
@@ -2102,7 +2162,7 @@ class Database:
                 UNIQUE (job_id),
                 FOREIGN KEY (user_id) REFERENCES characters (user_id),
                 FOREIGN KEY (npc_job_id) REFERENCES npc_jobs (job_id),
-                FOREIGN KEY (job_id) REFERENCES jobs (job_id)
+                FOREIGN KEY (job_id) REFERENCES jobs (job_id) ON DELETE CASCADE
             )'''
 
             self.execute_query(relationship_sql)
