@@ -639,10 +639,24 @@ class EventsCog(commands.Cog):
     async def cleanup_tasks(self):
         """Regular cleanup of expired data"""
         try:
-            # Cleanup expired jobs
-            expired_jobs = self.db.execute_query(
-                "DELETE FROM jobs WHERE expires_at < NOW()"
-            )
+            # Cleanup expired jobs and related records within a single transaction
+            expired_job_cleanup = [
+                # Remove dependent rows first to maintain referential integrity
+                (
+                    "DELETE FROM npc_job_assignments WHERE job_id IN (SELECT job_id FROM jobs WHERE expires_at < NOW())",
+                    None,
+                ),
+                (
+                    "DELETE FROM job_tracking WHERE job_id IN (SELECT job_id FROM jobs WHERE expires_at < NOW())",
+                    None,
+                ),
+                (
+                    "DELETE FROM jobs WHERE expires_at < NOW()",
+                    None,
+                ),
+            ]
+
+            self.db.execute_transaction(expired_job_cleanup)
             
             # Cleanup old travel sessions
             self.db.execute_query(
