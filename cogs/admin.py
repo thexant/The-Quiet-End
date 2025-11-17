@@ -2159,7 +2159,33 @@ class AdminCog(commands.Cog):
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
                 fetch='all'
             ) or []
-            existing_tables = {row[0] for row in existing_table_rows}
+            existing_tables = set()
+
+            for row in existing_table_rows:
+                table_name = None
+
+                if isinstance(row, dict):
+                    table_name = row.get("table_name") or row.get("TABLE_NAME")
+                elif hasattr(row, "get"):
+                    # Some cursor implementations use mappings with attribute access
+                    try:
+                        table_name = row.get("table_name") or row.get("TABLE_NAME")
+                    except Exception:
+                        pass
+
+                # Fallback for tuple/list rows
+                if table_name is None and hasattr(row, "__getitem__"):
+                    try:
+                        table_name = row[0]
+                    except Exception:
+                        pass
+
+                if table_name:
+                    existing_tables.add(table_name)
+                else:
+                    print(f"⚠️ Skipping table row without name key: {row}")
+
+            print(f"ℹ️ Discovered {len(existing_tables)} tables in public schema")
         except Exception as e:
             print(f"⚠️ Could not retrieve table list from information_schema: {e}")
             existing_tables = set()
@@ -2260,7 +2286,12 @@ class AdminCog(commands.Cog):
             ]
 
             tables_to_clear_in_order = filter_existing(tables_to_clear_in_order)
-            
+
+            print(
+                f"ℹ️ Reset will attempt to clear {len(tables_to_clear_in_order)} tables "
+                f"out of {len(existing_tables)} discovered"
+            )
+
             # PostgreSQL always enforces foreign key constraints
             # No need to disable/enable them like in SQLite
             
