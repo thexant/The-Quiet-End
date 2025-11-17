@@ -2148,12 +2148,9 @@ class AdminCog(commands.Cog):
             "travel": "• All active journeys have been cancelled\n• Players may need to relocate manually",
         }
         return steps.get(reset_type, "Reset complete.")
-    
-    async def _perform_reset(self, guild: discord.Guild, reset_type: str) -> dict:
-        """Perform the actual reset operation, including channel cleanup for full/galaxy resets"""
-        reset_counts = {}
 
-        # Discover which tables actually exist to avoid failures when legacy names are referenced
+    def _discover_existing_tables(self) -> set[str]:
+        """Return a set of existing table names in the public schema."""
         try:
             existing_table_rows = self.db.execute_query(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
@@ -2167,13 +2164,11 @@ class AdminCog(commands.Cog):
                 if isinstance(row, dict):
                     table_name = row.get("table_name") or row.get("TABLE_NAME")
                 elif hasattr(row, "get"):
-                    # Some cursor implementations use mappings with attribute access
                     try:
                         table_name = row.get("table_name") or row.get("TABLE_NAME")
                     except Exception:
                         pass
 
-                # Fallback for tuple/list rows
                 if table_name is None and hasattr(row, "__getitem__"):
                     try:
                         table_name = row[0]
@@ -2182,13 +2177,18 @@ class AdminCog(commands.Cog):
 
                 if table_name:
                     existing_tables.add(table_name)
-                else:
-                    print(f"⚠️ Skipping table row without name key: {row}")
 
-            print(f"ℹ️ Discovered {len(existing_tables)} tables in public schema")
+            return existing_tables
         except Exception as e:
             print(f"⚠️ Could not retrieve table list from information_schema: {e}")
-            existing_tables = set()
+            return set()
+
+    async def _perform_reset(self, guild: discord.Guild, reset_type: str) -> dict:
+        """Perform the actual reset operation, including channel cleanup for full/galaxy resets"""
+        reset_counts = {}
+
+        # Discover which tables actually exist to avoid failures when legacy names are referenced
+        existing_tables = self._discover_existing_tables()
 
         def filter_existing(tables: list[str]) -> list[str]:
             return [table for table in tables if table in existing_tables]
@@ -2203,38 +2203,38 @@ class AdminCog(commands.Cog):
                 # Character related
                 "characters", "character_identity", "character_reputation", "character_experience",
                 "character_inventory", "afk_warnings", "search_cooldowns",
-                
+
                 # Ship related
                 "ships", "ship_upgrades", "ship_customizations", "ship_activities", "player_ships",
-                
+
                 # Location related
                 "locations", "corridors", "location_items", "location_logs", "location_homes",
                 "home_activities", "home_interiors", "home_market_listings", "home_invitations",
                 "location_economy", "economic_events", "location_ownership", "location_upgrades",
                 "location_access_control", "location_income_log", "location_storage", "sub_locations",
-                
+
                 # NPC related
-                "static_npcs", "dynamic_npcs", "npc_respawn_queue", "npc_inventory", 
+                "static_npcs", "dynamic_npcs", "npc_respawn_queue", "npc_inventory",
                 "npc_trade_inventory", "npc_jobs", "npc_job_completions",
-                
+
                 # Economy related
                 "jobs", "job_tracking", "shop_items", "inventory", "black_markets", "black_market_items",
-                
+
                 # Group related
-                
+
                 # Combat related
-                "combat_states", "combat_encounters", "pvp_opt_outs", "pvp_combat_states", 
+                "combat_states", "combat_encounters", "pvp_opt_outs", "pvp_combat_states",
                 "pvp_cooldowns", "pending_robberies",
-                
+
                 # Travel related
                 "travel_sessions", "corridor_events", "active_beacons",
-                
+
                 # System related
-                "repeaters", "user_location_panels", "logbook_entries", "news_queue", 
+                "repeaters", "user_location_panels", "logbook_entries", "news_queue",
                 "galactic_history", "game_panels", "galaxy_info", "galaxy_settings",
                 "endgame_config", "endgame_evacuations"
             ]
-            
+
             # Count rows in each existing table
             for table in filter_existing(all_tables):
                 try:
@@ -2259,7 +2259,7 @@ class AdminCog(commands.Cog):
                     "SELECT DISTINCT temp_channel_id FROM travel_sessions WHERE temp_channel_id IS NOT NULL",
                     fetch='all'
                 ) or []
-            
+
             # Clear all tables in reverse dependency order
             # This order is important to avoid foreign key constraint issues
             tables_to_clear_in_order = [
@@ -2291,39 +2291,33 @@ class AdminCog(commands.Cog):
                 f"ℹ️ Reset will attempt to clear {len(tables_to_clear_in_order)} tables "
                 f"out of {len(existing_tables)} discovered"
             )
-
             # PostgreSQL always enforces foreign key constraints
             # No need to disable/enable them like in SQLite
-            
+
             # Delete all data using a transaction for atomicity
             try:
-                # Use database transaction to ensure all-or-nothing behavior
                 transaction_operations = []
                 for table in tables_to_clear_in_order:
-                    # Use TRUNCATE for better performance and foreign key handling
                     transaction_operations.append((f"TRUNCATE TABLE {table} CASCADE", None))
-                
-                # Execute all truncations in a single transaction
+
                 self.db.execute_transaction(transaction_operations)
                 print("🗑️ All tables cleared successfully")
-                
+
             except Exception as e:
                 print(f"⚠️ TRUNCATE failed, falling back to individual DELETE operations: {e}")
-                # Fallback: delete tables one by one
                 for table in tables_to_clear_in_order:
                     try:
                         self.db.execute_query(f"DELETE FROM {table}")
                         print(f"✅ Cleared {table}")
                     except Exception as e2:
                         print(f"❌ Could not clear table {table}: {e2}")
-                        # Continue with other tables
-            
+
             # PostgreSQL always enforces foreign key constraints
             # No need to disable/enable them like in SQLite
-            
+
             # PostgreSQL doesn't use WAL checkpoints via PRAGMA
             # Database changes are automatically persisted
-            
+
             # Delete Discord channels
             channels_deleted = 0
             for (channel_id,) in location_channels:
@@ -2334,7 +2328,7 @@ class AdminCog(commands.Cog):
                         channels_deleted += 1
                     except:
                         pass
-            
+
             for (channel_id,) in temp_channels:
                 channel = guild.get_channel(channel_id)
                 if channel:
@@ -2343,9 +2337,9 @@ class AdminCog(commands.Cog):
                         channels_deleted += 1
                     except:
                         pass
-            
+
             reset_counts["Discord Channels"] = channels_deleted
-            
+
         else:
             # Handle other reset types (unchanged from original)
             
@@ -3457,13 +3451,14 @@ class ServerResetConfirmView(discord.ui.View):
             # Clear galaxy settings
             admin_cog.db.execute_query("DELETE FROM galaxy_settings")
             admin_cog.db.execute_query("DELETE FROM galaxy_info")
-            
+
             # Clear any remaining tables that might not be in _perform_reset
+            existing_tables = admin_cog._discover_existing_tables()
             additional_tables_to_clear = [
-                "game_panels", "news_queue", "galactic_history", 
+                "game_panels", "news_queue", "galactic_history",
                 "endgame_config", "endgame_evacuations", "active_beacons",
                 "afk_warnings", "search_cooldowns", "user_location_panels",
-                "pvp_opt_outs", "pvp_combat_states", "pvp_cooldowns", 
+                "pvp_opt_outs", "pvp_combat_states", "pvp_cooldowns",
                 "pending_robberies", "character_inventory", "ship_activities",
                 "player_ships", "repeaters", "corridor_events", "logbook_entries",
                 "character_reputation", "character_experience", "character_identity",
@@ -3478,6 +3473,8 @@ class ServerResetConfirmView(discord.ui.View):
                 "group_vote_sessions", "group_votes", "group_ships",
                 "job_tracking", "ship_upgrades", "ship_customizations"
             ]
+
+            additional_tables_to_clear = [table for table in additional_tables_to_clear if table in existing_tables]
 
             for table in additional_tables_to_clear:
                 try:
