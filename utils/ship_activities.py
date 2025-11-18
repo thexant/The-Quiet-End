@@ -4,6 +4,7 @@ import random
 from typing import List, Dict
 from datetime import datetime
 from utils.leave_button import UniversalLeaveView
+from utils.npc_data import get_random_radio_message
 
 class ShipActivityManager:
     """Manages interactive activities available on player ships"""
@@ -465,6 +466,47 @@ class ShipActivityView(discord.ui.View):
 
         await interaction.response.send_message(embed=embed)
 
+    async def _handle_monitor_chatter(self, interaction, activity_data):
+        """Handle passively monitoring local radio chatter"""
+        radio_cog = self.bot.get_cog('RadioCog')
+
+        if random.random() < 0.75:
+            embed = discord.Embed(
+                title=f"{activity_data['icon']} Communications Station",
+                description=(
+                    f"*{self.char_name} lets the comms idle, but there's nothing "
+                    "but static across every band.*"
+                ),
+                color=0x546e7a
+            )
+            await interaction.response.send_message(embed=embed)
+            return
+
+        raw_message = get_random_radio_message()
+        degraded_message = raw_message
+
+        if radio_cog:
+            degradation_distance = random.randint(2, 7)
+            corridor_type = random.choice(["normal", "ungated"])
+            degraded_message = radio_cog._degrade_message(raw_message, degradation_distance, corridor_type)
+        else:
+            # Fallback simple corruption if radio helper isn't available
+            degraded_message = ''.join(
+                char if random.random() > 0.35 else random.choice(['~', '#', '%', '*', ' '])
+                for char in raw_message
+            )
+
+        embed = discord.Embed(
+            title=f"{activity_data['icon']} Communications Station",
+            description=(
+                f"*{self.char_name} tunes into scattered comms chatter.*\n"
+                f"""\n"{degraded_message}"""
+            ),
+            color=0x7f8c8d
+        )
+
+        await interaction.response.send_message(embed=embed)
+
     async def _handle_send_transmission(self, interaction, activity_data):
         """Handle sending a radio transmission via the communications station."""
 
@@ -594,7 +636,6 @@ class ShipActivityView(discord.ui.View):
             'inventory_check': "updates the cargo manifest",
             'tune_engines': "makes minor adjustments to engine parameters",
             'power_management': "optimizes power distribution",
-            'monitor_chatter': "listens to local communications",
             'practice_skills': "practices various skills",
             'hobby_time': "spends time on a personal hobby",
             'health_check': "runs a basic health diagnostic",
