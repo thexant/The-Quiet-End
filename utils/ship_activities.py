@@ -462,8 +462,52 @@ class ShipActivityView(discord.ui.View):
             description=f"*{self.char_name} {random.choice(signals)}.*",
             color=0x4682b4
         )
-        
+
         await interaction.response.send_message(embed=embed)
+
+    async def _handle_send_transmission(self, interaction, activity_data):
+        """Handle sending a radio transmission via the communications station."""
+
+        class ShipTransmissionModal(discord.ui.Modal):
+            def __init__(self, bot):
+                super().__init__(title="📡 Communications Station")
+                self.bot = bot
+
+                self.message = discord.ui.TextInput(
+                    label="Message to Transmit",
+                    placeholder="Enter your transmission...",
+                    style=discord.TextStyle.paragraph,
+                    required=True,
+                    max_length=1000
+                )
+
+                self.add_item(self.message)
+
+            async def on_submit(self, modal_interaction: discord.Interaction):
+                radio_cog = self.bot.get_cog('RadioCog')
+                if not radio_cog:
+                    await modal_interaction.response.send_message(
+                        "Radio system unavailable.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Reuse the full radio send logic (callsign assignment, degradation, propagation)
+                await radio_cog.radio_send.callback(
+                    radio_cog,
+                    modal_interaction,
+                    self.message.value
+                )
+
+        radio_cog = self.bot.get_cog('RadioCog')
+        if not radio_cog:
+            await interaction.response.send_message(
+                "Radio system unavailable.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(ShipTransmissionModal(self.bot))
     
     async def _handle_exercise(self, interaction, activity_data):
         """Handle exercise activities"""
@@ -550,7 +594,6 @@ class ShipActivityView(discord.ui.View):
             'inventory_check': "updates the cargo manifest",
             'tune_engines': "makes minor adjustments to engine parameters",
             'power_management': "optimizes power distribution",
-            'send_transmission': "sends a routine status update",
             'monitor_chatter': "listens to local communications",
             'practice_skills': "practices various skills",
             'hobby_time': "spends time on a personal hobby",
