@@ -1411,16 +1411,16 @@ class ChannelManager:
                    WHERE glc.guild_id = %s
                    AND (glc.channel_last_active IS NULL OR glc.channel_last_active < %s)
                    AND NOT EXISTS (
-                       SELECT 1 FROM characters c 
-                       WHERE c.current_location = l.location_id 
-                       AND c.is_logged_in = true 
+                       SELECT 1 FROM characters c
+                       WHERE c.current_location = l.location_id
+                       AND c.is_logged_in = true
                        AND c.guild_id = %s
                    )
-                   LIMIT 1''',  # Reduced to 1 to minimize processing time
-                (guild.id, cutoff_time, guild.id),
+                   LIMIT %s''',
+                (guild.id, cutoff_time, guild.id, self.cleanup_batch_size),
                 fetch='all'
             )
-            
+
             # Also check for empty ship channels with read-only query
             query_start = time.time()
             empty_ship_channels = self.db.execute_read_query(
@@ -1428,14 +1428,15 @@ class ChannelManager:
                    FROM ships s
                    WHERE s.channel_id IS NOT NULL
                    AND NOT EXISTS (
-                       SELECT 1 FROM characters c 
-                       WHERE c.current_ship_id = s.ship_id 
+                       SELECT 1 FROM characters c
+                       WHERE c.current_ship_id = s.ship_id
                        AND c.is_logged_in = true
                    )
-                   LIMIT 1''',  # Reduced to 1 to minimize processing time
+                   LIMIT %s''',
+                (self.cleanup_batch_size,),
                 fetch='all'
             )
-            
+
             # Also check for empty home channels with read-only query
             query_start = time.time()
             empty_home_channels = self.db.execute_read_query(
@@ -1444,11 +1445,12 @@ class ChannelManager:
                    JOIN location_homes lh ON hi.home_id = lh.home_id
                    WHERE hi.channel_id IS NOT NULL
                    AND NOT EXISTS (
-                       SELECT 1 FROM characters c 
-                       WHERE c.current_home_id = lh.home_id 
+                       SELECT 1 FROM characters c
+                       WHERE c.current_home_id = lh.home_id
                        AND c.is_logged_in = true
                    )
-                   LIMIT 1''',  # Reduced to 1 to minimize processing time
+                   LIMIT %s''',
+                (self.cleanup_batch_size,),
                 fetch='all'
             )
             
