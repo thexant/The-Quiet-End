@@ -621,7 +621,6 @@ class ShipActivityView(discord.ui.View):
     async def _handle_generic_activity(self, interaction, activity_data, action):
         """Generic handler for activities without specific implementations"""
         action_descriptions = {
-            'plot_course': "plots potential routes to distant systems",
             'scan_area': "scans the surrounding space for anomalies",
             'watch_movie': "watches an old Earth classic on the entertainment system",
             'listen_music': "plays some music throughout the ship",
@@ -653,8 +652,180 @@ class ShipActivityView(discord.ui.View):
             description=f"*{self.char_name} {description}.*",
             color=0x808080
         )
-        
+
         await interaction.response.send_message(embed=embed)
+
+    async def _handle_plot_course(self, interaction, activity_data):
+        """Handle plotting a navigation course using TravelCog helpers."""
+
+        travel_cog = self.bot.get_cog('TravelCog')
+        if not travel_cog:
+            await interaction.response.send_message(
+                "❌ Travel systems are offline right now. Please try again later.",
+                ephemeral=True
+            )
+            return
+
+        class PlotCourseModal(discord.ui.Modal):
+            def __init__(self, parent_view: "ShipActivityView", travel_cog):
+                super().__init__(title="Plot Course")
+                self.parent_view = parent_view
+                self.travel_cog = travel_cog
+                self.destination = discord.ui.TextInput(
+                    label="Destination",
+                    placeholder="Enter a location name (e.g., Helios Station)",
+                    required=True,
+                )
+                self.add_item(self.destination)
+
+            async def on_submit(self, modal_interaction: discord.Interaction):
+                destination = self.destination.value.strip()
+                db = self.parent_view.db
+
+                # Verify login status
+                login_status = db.execute_query(
+                    "SELECT is_logged_in FROM characters WHERE user_id = %s",
+                    (modal_interaction.user.id,),
+                    fetch='one'
+                )
+
+                if not login_status or not login_status[0]:
+                    await modal_interaction.response.send_message(
+                        "❌ You must be logged in to plot routes! Use the game panel to login first.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Verify current location
+                char_location = db.execute_query(
+                    "SELECT current_location FROM characters WHERE user_id = %s",
+                    (modal_interaction.user.id,),
+                    fetch='one'
+                )
+
+                if not char_location or not char_location[0]:
+                    await modal_interaction.response.send_message(
+                        "❌ You must be at a location to plot routes. Complete your current travel first.",
+                        ephemeral=True
+                    )
+                    return
+
+                current_location_id = char_location[0]
+
+                await modal_interaction.response.defer(ephemeral=True, thinking=True)
+
+                try:
+                    # Destination resolution with fuzzy matching
+                    destination_matches = db.execute_query(
+                        "SELECT location_id, name, location_type FROM locations WHERE name LIKE %s ORDER BY name",
+                        (f"%{destination}%",),
+                        fetch='all'
+                    )
+
+                    if not destination_matches:
+                        await modal_interaction.followup.send(
+                            f"❌ No location found matching '{destination}'. Try a different search term.",
+                            ephemeral=True
+                        )
+                        return
+
+                    # Handle multiple matches
+                    if len(destination_matches) > 1:
+                        exact_match = None
+                        for match in destination_matches:
+                            if match[1].lower() == destination.lower():
+                                exact_match = match
+                                break
+
+                        if exact_match:
+                            destination_matches = [exact_match]
+                        else:
+                            if len(destination_matches) > 10:
+                                destination_matches = destination_matches[:10]
+
+                            options_text = []
+                            for loc_id, name, loc_type in destination_matches:
+                                type_emoji = {
+                                    'colony': '🏭',
+                                    'space_station': '🛰️',
+                                    'outpost': '🛤️',
+                                    'gate': '🚪'
+                                }.get(loc_type, '📍')
+                                options_text.append(f"{type_emoji} **{name}** ({loc_type})")
+
+                            embed = discord.Embed(
+                                title="🔍 Multiple Locations Found",
+                                description=f"Found {len(destination_matches)} locations matching '{destination}':",
+                                color=0xffaa00
+                            )
+                            embed.add_field(
+                                name="Matches",
+                                value="\n".join(options_text),
+                                inline=False
+                            )
+                            embed.add_field(
+                                name="💡 Tip",
+                                value="Try a more specific search term, or use the exact location name.",
+                                inline=False
+                            )
+
+                            await modal_interaction.followup.send(embed=embed, ephemeral=True)
+                            return
+
+                    destination_id, dest_name, _ = destination_matches[0]
+
+                    if destination_id == current_location_id:
+                        current_name = db.execute_query(
+                            "SELECT name FROM locations WHERE location_id = %s",
+                            (current_location_id,),
+                            fetch='one'
+                        )[0]
+
+                        await modal_interaction.followup.send(
+                            f"❌ You are already at **{current_name}**!",
+                            ephemeral=True
+                        )
+                        return
+
+                    # Calculate route using TravelCog helper
+                    route = await self.travel_cog._calculate_shortest_route(current_location_id, destination_id)
+
+                    if not route:
+                        current_name = db.execute_query(
+                            "SELECT name FROM locations WHERE location_id = %s",
+                            (current_location_id,),
+                            fetch='one'
+                        )[0]
+
+                        embed = discord.Embed(
+                            title="🚫 No Route Available",
+                            description=f"No available route from **{current_name}** to **{dest_name}**.",
+                            color=0xff4444
+                        )
+                        embed.add_field(
+                            name="⏳ Try Again Later",
+                            value="Corridor networks change over time. Wait for corridor shifts and try again.",
+                            inline=False
+                        )
+                        embed.add_field(
+                            name="💡 Alternative Options",
+                            value="• Check `/travel routes` for current available routes\n• Travel to intermediate locations first\n• Wait for automatic corridor shifts",
+                            inline=False
+                        )
+
+                        await modal_interaction.followup.send(embed=embed, ephemeral=True)
+                        return
+
+                    await self.travel_cog._send_route_embeds(modal_interaction, route, dest_name)
+
+                except Exception as e:
+                    print(f"❌ Error in navigation console plot course: {e}")
+                    await modal_interaction.followup.send(
+                        "❌ An error occurred while calculating the route. Please try again.",
+                        ephemeral=True
+                    )
+
+        await interaction.response.send_modal(PlotCourseModal(self, travel_cog))
 
 
 class ShipActivityButton(discord.ui.Button):
